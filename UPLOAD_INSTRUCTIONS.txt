@@ -1,0 +1,11 @@
+EWS phone upload package
+
+1. Extract this ZIP on your Android phone.
+2. Open github.com/citadel-AI-EWS/EWS in Chrome.
+3. If needed, enable Desktop site in Chrome.
+4. Tap Add file -> Upload files -> choose your files.
+5. Select ALL files from this extracted folder.
+6. Commit message: Initial public release of EWS
+7. Commit directly to main.
+
+After this initial upload, ChatGPT can read the repository and monitor activity. Direct code pushes from normal ChatGPT GitHub connection remain read-only; write/push requires Codex or another Git client.
