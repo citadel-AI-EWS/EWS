@@ -1,11 +1,10 @@
-EWS phone upload package
+TEST PACKAGE — DO NOT REPLACE THE PUBLIC CLIENT RELEASE YET
 
-1. Extract this ZIP on your Android phone.
-2. Open github.com/citadel-AI-EWS/EWS in Chrome.
-3. If needed, enable Desktop site in Chrome.
-4. Tap Add file -> Upload files -> choose your files.
-5. Select ALL files from this extracted folder.
-6. Commit message: Initial public release of EWS
-7. Commit directly to main.
+Archive name: Test.zip
+Folder inside archive: Test/
 
-After this initial upload, ChatGPT can read the repository and monitor activity. Direct code pushes from normal ChatGPT GitHub connection remain read-only; write/push requires Codex or another Git client.
+Recommended GitHub handling for now:
+- Keep this as a test package/snapshot.
+- Do not point the production Cloudflare site to this TEST build until AWS Controller deployment and authentication are verified.
+
+When ready for AWS, use AWS CloudShell. Do not install anything on your phone/computer.
