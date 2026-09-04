@@ -1,0 +1,343 @@
+import json
+import os
+import hmac
+import logging
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict
+
+import boto3
+
+VERSION = os.getenv("VERSION", "0.3.0-test")
+STATE_TABLE = os.environ["STATE_TABLE"]
+ADMIN_SECRET_ARN = os.environ["ADMIN_SECRET_ARN"]
+ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "*")
+PROJECT_STACK_ROLE_ARN = os.environ["PROJECT_STACK_ROLE_ARN"]
+WORKER_SUBNET_ID = os.environ["WORKER_SUBNET_ID"]
+WORKER_SECURITY_GROUP_ID = os.environ["WORKER_SECURITY_GROUP_ID"]
+WORKER_INSTANCE_TYPE = os.getenv("WORKER_INSTANCE_TYPE", "t3.micro")
+PROJECT_TEMPLATE_FILE = os.getenv("PROJECT_TEMPLATE_FILE", "project_stack.yaml")
+
+log = logging.getLogger()
+log.setLevel(logging.INFO)
+
+dynamodb = boto3.resource("dynamodb")
+table = dynamodb.Table(STATE_TABLE)
+secrets = boto3.client("secretsmanager")
+sts = boto3.client("sts")
+cfn = boto3.client("cloudformation")
+_cached_admin_token = None
+_cached_project_template = None
+
+PRICING_CATALOG = {
+    "currency": "USD",
+    "region": "eu-central-1",
+    "snapshot_date": "2026-09-04",
+    "mode": "TEST_STATIC_SNAPSHOT",
+    "controller": {
+        "secrets_manager_secret_month_usd": 0.40,
+        "cloudformation_extra_fee_usd": 0.0,
+        "low_activity_monthly_estimate_usd_min": 0.40,
+        "low_activity_monthly_estimate_usd_max": 2.00,
+        "lambda_free_tier_note": "Up to 1M requests and 400,000 GB-seconds/month where the AWS account is eligible; verify current AWS terms.",
+        "api_gateway_note": "Request-based pricing; expected to be negligible at TEST traffic volumes."
+    },
+    "worker": {
+        "instance_type": "t3.micro",
+        "hourly_compute_usd": 0.012,
+        "monthly_compute_730h_usd": 8.76,
+        "gp3_storage_gb": 8,
+        "gp3_storage_month_usd": 0.76,
+        "estimated_first_hour_usd": 0.0131
+    },
+    "excluded": [
+        "taxes",
+        "data transfer",
+        "public IPv4 if later enabled",
+        "snapshots/backups beyond this TEST design",
+        "other AWS services added later"
+    ],
+    "warning": "TEST estimate only. Actual AWS billing can differ. Replace this static snapshot with AWS Price List API before production billing."
+}
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def response(status: int, body: Dict[str, Any], event: Dict[str, Any] | None = None):
+    origin = ((event or {}).get("headers") or {}).get("origin") or ((event or {}).get("headers") or {}).get("Origin")
+    cors_origin = ALLOWED_ORIGIN if ALLOWED_ORIGIN == "*" or origin == ALLOWED_ORIGIN else ALLOWED_ORIGIN
+    return {
+        "statusCode": status,
+        "headers": {
+            "content-type": "application/json",
+            "access-control-allow-origin": cors_origin,
+            "access-control-allow-headers": "authorization,content-type,x-ews-admin-token",
+            "access-control-allow-methods": "GET,POST,OPTIONS",
+            "cache-control": "no-store",
+        },
+        "body": json.dumps(body, ensure_ascii=False, default=str),
+    }
+
+
+def route_of(event: Dict[str, Any]):
+    context = event.get("requestContext", {})
+    http = context.get("http", {})
+    method = (http.get("method") or event.get("httpMethod") or "GET").upper()
+    path = http.get("path") or event.get("rawPath") or event.get("path") or "/"
+    return method, path.rstrip("/") or "/"
+
+
+def load_admin_token() -> str:
+    global _cached_admin_token
+    if _cached_admin_token:
+        return _cached_admin_token
+    value = secrets.get_secret_value(SecretId=ADMIN_SECRET_ARN).get("SecretString", "")
+    try:
+        parsed = json.loads(value)
+        token = parsed.get("token", "")
+    except json.JSONDecodeError:
+        token = value
+    if not token:
+        raise RuntimeError("Admin token secret is empty")
+    _cached_admin_token = token
+    return token
+
+
+def authorized(event: Dict[str, Any]) -> bool:
+    headers = {str(k).lower(): str(v) for k, v in (event.get("headers") or {}).items()}
+    supplied = headers.get("x-ews-admin-token", "")
+    auth = headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        supplied = auth[7:].strip()
+    return bool(supplied) and hmac.compare_digest(supplied, load_admin_token())
+
+
+def get_state() -> Dict[str, Any]:
+    item = table.get_item(Key={"pk": "CONTROLLER"}).get("Item")
+    return item or {"pk": "CONTROLLER", "controller_state": "PAUSED", "updated_at": None, "updated_by": "safe-default"}
+
+
+def set_state(state: str, actor: str) -> Dict[str, Any]:
+    item = {"pk": "CONTROLLER", "controller_state": state, "updated_at": utc_now(), "updated_by": actor, "version": VERSION}
+    table.put_item(Item=item)
+    log.info(json.dumps({"event": "controller_state_change", **item}))
+    return item
+
+
+def source_actor(event: Dict[str, Any]) -> str:
+    return event.get("requestContext", {}).get("http", {}).get("sourceIp", "architect-web")
+
+
+def parse_json_body(event: Dict[str, Any]) -> Dict[str, Any]:
+    raw = event.get("body") or "{}"
+    if event.get("isBase64Encoded"):
+        import base64
+        raw = base64.b64decode(raw).decode("utf-8")
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def project_id_now() -> str:
+    return "p-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")[:22]
+
+
+def safe_stack_name(project_id: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9-]", "-", project_id).strip("-")
+    clean = clean[:80]
+    if not clean or not clean[0].isalpha():
+        clean = "p-" + clean
+    return "ews-project-" + clean
+
+
+def load_project_template() -> str:
+    global _cached_project_template
+    if _cached_project_template is None:
+        _cached_project_template = Path(__file__).with_name(PROJECT_TEMPLATE_FILE).read_text(encoding="utf-8")
+    return _cached_project_template
+
+
+def project_key(project_id: str) -> str:
+    return "PROJECT#" + project_id
+
+
+def save_project(item: Dict[str, Any]) -> None:
+    table.put_item(Item=item)
+
+
+def get_project(project_id: str) -> Dict[str, Any] | None:
+    return table.get_item(Key={"pk": project_key(project_id)}).get("Item")
+
+
+def create_project_stack(project_id: str, task: str) -> Dict[str, Any]:
+    stack_name = safe_stack_name(project_id)
+    result = cfn.create_stack(
+        StackName=stack_name,
+        TemplateBody=load_project_template(),
+        RoleARN=PROJECT_STACK_ROLE_ARN,
+        Parameters=[
+            {"ParameterKey": "ProjectId", "ParameterValue": project_id},
+            {"ParameterKey": "WorkerSubnetId", "ParameterValue": WORKER_SUBNET_ID},
+            {"ParameterKey": "WorkerSecurityGroupId", "ParameterValue": WORKER_SECURITY_GROUP_ID},
+            {"ParameterKey": "InstanceType", "ParameterValue": WORKER_INSTANCE_TYPE},
+        ],
+        Tags=[
+            {"Key": "EWSManaged", "Value": "true"},
+            {"Key": "EWSMode", "Value": "TEST"},
+            {"Key": "EWSProjectId", "Value": project_id},
+        ],
+        OnFailure="DELETE",
+        EnableTerminationProtection=False,
+    )
+    return {"stack_name": stack_name, "stack_id": result["StackId"]}
+
+
+def stack_status(stack_name: str) -> Dict[str, Any]:
+    stacks = cfn.describe_stacks(StackName=stack_name).get("Stacks", [])
+    if not stacks:
+        return {"stack_status": "UNKNOWN"}
+    s = stacks[0]
+    outputs = {x["OutputKey"]: x.get("OutputValue") for x in s.get("Outputs", [])}
+    return {"stack_status": s.get("StackStatus"), "worker_instance_id": outputs.get("WorkerInstanceId")}
+
+
+def lambda_handler(event, context):
+    method, path = route_of(event)
+
+    if method == "OPTIONS":
+        return response(204, {}, event)
+
+    if method == "GET" and path == "/pricing":
+        return response(200, {"ok": True, "pricing": PRICING_CATALOG}, event)
+
+    if method == "GET" and path == "/health":
+        state = get_state()
+        return response(200, {
+            "ok": True,
+            "service": "ews-controller-test",
+            "version": VERSION,
+            "controller_state": state["controller_state"],
+            "region": os.getenv("AWS_REGION", "unknown"),
+            "time": utc_now(),
+            "provisioning": "cloudformation-test",
+            "direct_ec2_permission": False,
+        }, event)
+
+    # TEST build: every state-changing/project route requires the temporary Architect token.
+    # Production client Apply must use real client authentication (e.g. JWT/Cognito), never this token in public JS.
+    if not authorized(event):
+        return response(401, {"ok": False, "error": "unauthorized", "message": "TEST session token required"}, event)
+
+    if method == "GET" and path == "/controller/status":
+        state = get_state()
+        return response(200, {"ok": True, **state, "version": VERSION, "provisioning": "cloudformation-test"}, event)
+
+    if method == "POST" and path == "/controller/start":
+        return response(200, {"ok": True, **set_state("ENABLED", source_actor(event))}, event)
+
+    if method == "POST" and path == "/controller/stop":
+        return response(200, {"ok": True, **set_state("PAUSED", source_actor(event))}, event)
+
+    if method == "POST" and path == "/controller/aws-check":
+        ident = sts.get_caller_identity()
+        return response(200, {
+            "ok": True,
+            "controller": "ews-controller-test-v0.3",
+            "region": os.getenv("AWS_REGION", "unknown"),
+            "account": ident.get("Account"),
+            "arn": ident.get("Arn"),
+            "provisioning": "CloudFormation execution role",
+            "direct_ec2_permission": False,
+        }, event)
+
+    if method == "POST" and path == "/runs/plan":
+        state = get_state()
+        if state["controller_state"] != "ENABLED":
+            return response(409, {"ok": False, "error": "controller_paused", "message": "Start Controller first"}, event)
+        body = parse_json_body(event)
+        task = str(body.get("task", "")).strip()
+        if not task:
+            return response(400, {"ok": False, "error": "task_required"}, event)
+        return response(200, {
+            "ok": True,
+            "run_id": "plan-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+            "task_received": task[:500],
+            "worker_count": 1,
+            "worker_launch": False,
+            "execution_mode": "PLAN_ONLY",
+            "sandbox": "REQUIRED",
+            "network_default": "OFF",
+            "pricing_snapshot": PRICING_CATALOG,
+            "estimated_first_hour_usd": PRICING_CATALOG["worker"]["estimated_first_hour_usd"],
+        }, event)
+
+    if method == "POST" and path == "/projects/apply":
+        state = get_state()
+        if state["controller_state"] != "ENABLED":
+            return response(409, {"ok": False, "error": "controller_paused", "message": "Start Controller before Apply"}, event)
+        body = parse_json_body(event)
+        task = str(body.get("task", "")).strip()
+        if not task:
+            return response(400, {"ok": False, "error": "task_required"}, event)
+        budget_limit_usd = float(body.get("budget_limit_usd", 1.0) or 1.0)
+        first_hour = PRICING_CATALOG["worker"]["estimated_first_hour_usd"]
+        if budget_limit_usd < first_hour:
+            return response(402, {
+                "ok": False,
+                "error": "budget_too_low",
+                "message": "TEST budget is below the estimated first-hour worker cost",
+                "estimated_first_hour_usd": first_hour,
+                "budget_limit_usd": budget_limit_usd,
+            }, event)
+        project_id = project_id_now()
+        created = create_project_stack(project_id, task)
+        item = {
+            "pk": project_key(project_id),
+            "project_id": project_id,
+            "task": task[:2000],
+            "status": "PROVISIONING",
+            "stack_name": created["stack_name"],
+            "stack_id": created["stack_id"],
+            "created_at": utc_now(),
+            "source": str(body.get("source", "test"))[:100],
+            "worker_count_requested": 1,
+            "network_default": "OFF",
+            "mode": "TEST",
+            "budget_limit_usd": budget_limit_usd,
+            "estimated_first_hour_usd": first_hour,
+            "pricing_snapshot_date": PRICING_CATALOG["snapshot_date"],
+        }
+        save_project(item)
+        log.info(json.dumps({"event": "project_apply", **item}))
+        return response(202, {"ok": True, **item}, event)
+
+    m = re.fullmatch(r"/projects/([A-Za-z0-9._-]+)", path)
+    if method == "GET" and m:
+        project_id = m.group(1)
+        item = get_project(project_id)
+        if not item:
+            return response(404, {"ok": False, "error": "project_not_found"}, event)
+        try:
+            aws = stack_status(item["stack_name"])
+        except Exception as exc:
+            aws = {"stack_status": "LOOKUP_ERROR", "detail": str(exc)[:300]}
+        return response(200, {"ok": True, **item, **aws}, event)
+
+    m = re.fullmatch(r"/projects/([A-Za-z0-9._-]+)/terminate", path)
+    if method == "POST" and m:
+        project_id = m.group(1)
+        item = get_project(project_id)
+        if not item:
+            return response(404, {"ok": False, "error": "project_not_found"}, event)
+        cfn.delete_stack(StackName=item["stack_name"], RoleARN=PROJECT_STACK_ROLE_ARN)
+        item["status"] = "TERMINATING"
+        item["updated_at"] = utc_now()
+        save_project(item)
+        return response(202, {"ok": True, **item}, event)
+
+    return response(404, {"ok": False, "error": "not_found", "path": path, "method": method}, event)
