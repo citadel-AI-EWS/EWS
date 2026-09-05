@@ -1,0 +1,39 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: EWS TEST per-project execution stack - one isolated EC2 worker
+
+Parameters:
+  ProjectId:
+    Type: String
+  WorkerSubnetId:
+    Type: AWS::EC2::Subnet::Id
+  WorkerSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  InstanceType:
+    Type: String
+    Default: t3.micro
+
+Resources:
+  Worker:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref WorkerSubnetId
+      SecurityGroupIds:
+        - !Ref WorkerSecurityGroupId
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+      Tags:
+        - Key: Name
+          Value: !Sub ews-test-${ProjectId}-worker-01
+        - Key: EWSManaged
+          Value: 'true'
+        - Key: EWSMode
+          Value: TEST
+        - Key: EWSProjectId
+          Value: !Ref ProjectId
+
+Outputs:
+  WorkerInstanceId:
+    Value: !Ref Worker

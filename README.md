@@ -6,7 +6,7 @@ EWS (Expert Workspace System) is an experimental architecture and interactive pr
 
 ## What EWS explores
 
-- Client and Architect roles with separate permissions and interfaces
+- Architect-only operational interface; the former client workflow is consolidated into the Architect workspace
 - Dynamic multi-stage task pipelines rather than a fixed number of stages
 - Local AI, Python workers, and hybrid execution modes
 - Isolated sandbox execution with outbound networking disabled by default
@@ -23,7 +23,7 @@ No build step is required.
 
 1. Clone or download the repository.
 2. Open `index.html` in a modern browser.
-3. Switch between Client and Architect views to explore the simulation.
+3. Sign in to the Architect workspace to explore project intake, five-stage pricing, execution, files, sandboxing, operations, and Controller controls.
 
 Some buttons intentionally simulate production workflows. Authentication, cloud infrastructure, billing, WebAuthn, SSH certificates, sandboxing, and real backend actions are represented as UI/architecture concepts unless explicitly implemented.
 
@@ -32,13 +32,14 @@ Some buttons intentionally simulate production workflows. Authentication, cloud 
 ```text
 .
 ├── index.html                    # Current interactive EWS prototype
-├── EWS_PROJECT_SOURCE_CURRENT.html # Preserved current source snapshot
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   └── ROADMAP.md
-├── .github/
-│   ├── ISSUE_TEMPLATE/
-│   └── PULL_REQUEST_TEMPLATE.md
+├── .github/                     # CI, Dependabot, and contribution templates
+├── scripts/                     # Reproducible package and validation commands
+├── OPERATIONS.md                # Test deployment schedule and segment gates
+├── CLOUDFLARE_DEPLOYMENT.md     # Protected TEST-site deployment runbook
+├── wrangler.jsonc               # Canonical Cloudflare Worker/static-assets config
 ├── CONTRIBUTING.md
 ├── CODE_OF_CONDUCT.md
 ├── SECURITY.md

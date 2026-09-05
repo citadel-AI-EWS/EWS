@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.build-controller/
+packaged.yaml
+controller_lambda.zip
+*.zip
+public/
+.dev.vars
+.wrangler/
+node_modules/

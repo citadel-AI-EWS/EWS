@@ -1,0 +1,30 @@
+{
+  "currency": "USD",
+  "region": "eu-central-1",
+  "snapshot_date": "2026-09-04",
+  "mode": "TEST_STATIC_SNAPSHOT",
+  "controller": {
+    "secrets_manager_secret_month_usd": 0.40,
+    "cloudformation_extra_fee_usd": 0.0,
+    "low_activity_monthly_estimate_usd_min": 0.40,
+    "low_activity_monthly_estimate_usd_max": 2.00,
+    "lambda_free_tier_note": "Up to 1M requests and 400,000 GB-seconds/month where the AWS account is eligible; verify current AWS terms.",
+    "api_gateway_note": "Request-based pricing; expected to be negligible at TEST traffic volumes."
+  },
+  "worker": {
+    "instance_type": "t3.micro",
+    "hourly_compute_usd": 0.012,
+    "monthly_compute_730h_usd": 8.76,
+    "gp3_storage_gb": 8,
+    "gp3_storage_month_usd": 0.76,
+    "estimated_first_hour_usd": 0.0131
+  },
+  "excluded": [
+    "taxes",
+    "data transfer",
+    "public IPv4 if later enabled",
+    "snapshots/backups beyond this TEST design",
+    "other AWS services added later"
+  ],
+  "warning": "TEST estimate only. Actual AWS billing can differ. Replace this static snapshot with AWS Price List API before production billing."
+}
