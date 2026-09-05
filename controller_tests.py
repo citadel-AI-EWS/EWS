@@ -72,9 +72,17 @@ class TestPackage(unittest.TestCase):
         self.assertIn("/pricing", code)
         self.assertIn("budget_limit_usd", code)
 
-    def test_test_site_apply_exists(self):
+    def test_architect_only_site_and_price_stage_exist(self):
         html = (ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn("applyProjectFromClient()", html)
+        self.assertNotIn('id="clientLogin"', html)
+        self.assertNotIn('class="client-section', html)
+        self.assertNotIn("loginClient()", html)
+        self.assertNotIn("const clientNav", html)
+        self.assertIn("ARCHITECT ONLY", html)
+        self.assertIn("applyProjectFromArchitect()", html)
+        self.assertIn('id="w5"', html)
+        self.assertIn("calculateProjectPrice()", html)
+        self.assertIn('id="priceGrandTotal"', html)
         self.assertIn("TEST ONLY", html)
 
     def test_html_snapshots_are_identical(self):
