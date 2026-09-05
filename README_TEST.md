@@ -15,6 +15,8 @@ This package is the first EWS test build where the web UI can submit an Apply re
 7. The project stack launches **one `t3.micro` EC2 TEST worker** in an isolated EWS test subnet.
 8. The worker receives **no public IP**, there is **no Internet Gateway/NAT**, and the security group has **no inbound rules**. Network default is therefore effectively OFF for this first worker.
 9. The website can later query the project status through the Controller.
+10. Every TEST project expires after six hours by default (configurable per request from 1–24 hours),
+    and the scheduled cleanup retries CloudFormation deletion every 15 minutes.
 
 ## Important architecture rule
 

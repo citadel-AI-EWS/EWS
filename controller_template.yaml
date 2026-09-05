@@ -1,0 +1,204 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: EWS TEST Controller v0.3 - real per-project CloudFormation provisioning, not for clients
+
+Parameters:
+  AllowedOrigin:
+    Type: String
+    Default: https://citadel-ai.init1.workers.dev
+  WorkerInstanceType:
+    Type: String
+    Default: t3.micro
+
+Resources:
+  TestVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.77.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: ews-test-vpc
+        - Key: EWSManaged
+          Value: 'true'
+
+  TestWorkerSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref TestVpc
+      CidrBlock: 10.77.10.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: ews-test-worker-subnet
+        - Key: EWSManaged
+          Value: 'true'
+
+  TestWorkerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: EWS TEST isolated worker - no ingress, VPC-local egress only
+      VpcId: !Ref TestVpc
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 10.77.0.0/16
+      Tags:
+        - Key: EWSManaged
+          Value: 'true'
+
+  ControllerStateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: EWSManaged
+          Value: 'true'
+        - Key: EWSMode
+          Value: TEST
+
+  ControllerAdminSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Temporary TEST token. Production client authentication must replace this path.
+      GenerateSecretString:
+        SecretStringTemplate: '{"purpose":"EWS TEST Controller"}'
+        GenerateStringKey: token
+        PasswordLength: 48
+        ExcludePunctuation: true
+      Tags:
+        - Key: EWSManaged
+          Value: 'true'
+        - Key: EWSMode
+          Value: TEST
+
+  ProjectStackExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EwsTestProjectEc2Provisioning
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:RunInstances
+                  - ec2:TerminateInstances
+                  - ec2:CreateTags
+                  - ec2:DescribeInstances
+                  - ec2:DescribeImages
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource: arn:aws:ssm:*::parameter/aws/service/ami-amazon-linux-latest/*
+
+  ControllerApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref AllowedOrigin
+        AllowHeaders:
+          - authorization
+          - content-type
+          - x-ews-admin-token
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        MaxAge: 300
+
+  ControllerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: EWS TEST Controller v0.3. Creates only EWS project stacks through a dedicated CloudFormation execution role.
+      CodeUri: controller_lambda.zip
+      Handler: app.lambda_handler
+      Runtime: python3.12
+      MemorySize: 256
+      Timeout: 30
+      Environment:
+        Variables:
+          STATE_TABLE: !Ref ControllerStateTable
+          ADMIN_SECRET_ARN: !Ref ControllerAdminSecret
+          ALLOWED_ORIGIN: !Ref AllowedOrigin
+          VERSION: 0.3.0-test
+          PROJECT_STACK_ROLE_ARN: !GetAtt ProjectStackExecutionRole.Arn
+          WORKER_SUBNET_ID: !Ref TestWorkerSubnet
+          WORKER_SECURITY_GROUP_ID: !Ref TestWorkerSecurityGroup
+          WORKER_INSTANCE_TYPE: !Ref WorkerInstanceType
+          PROJECT_TEMPLATE_FILE: project_stack.yaml
+          PRICING_CATALOG_FILE: pricing_catalog.json
+          PROJECT_TTL_HOURS: 6
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ControllerStateTable
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref ControllerAdminSecret
+            - Effect: Allow
+              Action: sts:GetCallerIdentity
+              Resource: '*'
+            - Effect: Allow
+              Action:
+                - cloudformation:CreateStack
+                - cloudformation:DescribeStacks
+                - cloudformation:DeleteStack
+              Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/ews-project-*/*
+            - Effect: Allow
+              Action: iam:PassRole
+              Resource: !GetAtt ProjectStackExecutionRole.Arn
+              Condition:
+                StringEquals:
+                  iam:PassedToService: cloudformation.amazonaws.com
+      Events:
+        RootApi:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ControllerApi
+            Path: /
+            Method: ANY
+        ApiProxy:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ControllerApi
+            Path: /{proxy+}
+            Method: ANY
+        CleanupSchedule:
+          Type: Schedule
+          Properties:
+            Description: Terminate expired EWS TEST project stacks
+            Enabled: true
+            Schedule: rate(15 minutes)
+
+Outputs:
+  ControllerApiUrl:
+    Value: !Sub https://${ControllerApi}.execute-api.${AWS::Region}.amazonaws.com
+  ControllerAdminSecretArn:
+    Value: !Ref ControllerAdminSecret
+  TestVpcId:
+    Value: !Ref TestVpc
+  TestWorkerSubnetId:
+    Value: !Ref TestWorkerSubnet
+  TestWorkerSecurityGroupId:
+    Value: !Ref TestWorkerSecurityGroup

@@ -2,8 +2,9 @@ import json
 import os
 import hmac
 import logging
+import math
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -18,6 +19,8 @@ WORKER_SUBNET_ID = os.environ["WORKER_SUBNET_ID"]
 WORKER_SECURITY_GROUP_ID = os.environ["WORKER_SECURITY_GROUP_ID"]
 WORKER_INSTANCE_TYPE = os.getenv("WORKER_INSTANCE_TYPE", "t3.micro")
 PROJECT_TEMPLATE_FILE = os.getenv("PROJECT_TEMPLATE_FILE", "project_stack.yaml")
+PRICING_CATALOG_FILE = os.getenv("PRICING_CATALOG_FILE", "pricing_catalog.json")
+PROJECT_TTL_HOURS = min(max(int(os.getenv("PROJECT_TTL_HOURS", "6")), 1), 24)
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
@@ -30,36 +33,7 @@ cfn = boto3.client("cloudformation")
 _cached_admin_token = None
 _cached_project_template = None
 
-PRICING_CATALOG = {
-    "currency": "USD",
-    "region": "eu-central-1",
-    "snapshot_date": "2026-09-04",
-    "mode": "TEST_STATIC_SNAPSHOT",
-    "controller": {
-        "secrets_manager_secret_month_usd": 0.40,
-        "cloudformation_extra_fee_usd": 0.0,
-        "low_activity_monthly_estimate_usd_min": 0.40,
-        "low_activity_monthly_estimate_usd_max": 2.00,
-        "lambda_free_tier_note": "Up to 1M requests and 400,000 GB-seconds/month where the AWS account is eligible; verify current AWS terms.",
-        "api_gateway_note": "Request-based pricing; expected to be negligible at TEST traffic volumes."
-    },
-    "worker": {
-        "instance_type": "t3.micro",
-        "hourly_compute_usd": 0.012,
-        "monthly_compute_730h_usd": 8.76,
-        "gp3_storage_gb": 8,
-        "gp3_storage_month_usd": 0.76,
-        "estimated_first_hour_usd": 0.0131
-    },
-    "excluded": [
-        "taxes",
-        "data transfer",
-        "public IPv4 if later enabled",
-        "snapshots/backups beyond this TEST design",
-        "other AWS services added later"
-    ],
-    "warning": "TEST estimate only. Actual AWS billing can differ. Replace this static snapshot with AWS Price List API before production billing."
-}
+PRICING_CATALOG = json.loads(Path(__file__).with_name(PRICING_CATALOG_FILE).read_text(encoding="utf-8"))
 
 
 def utc_now() -> str:
@@ -206,7 +180,45 @@ def stack_status(stack_name: str) -> Dict[str, Any]:
     return {"stack_status": s.get("StackStatus"), "worker_instance_id": outputs.get("WorkerInstanceId")}
 
 
+def cleanup_expired_projects(now: datetime | None = None) -> Dict[str, int]:
+    """Delete expired TEST stacks; scheduled retries make cleanup eventually consistent."""
+    now_epoch = int((now or datetime.now(timezone.utc)).timestamp())
+    deleted = 0
+    failed = 0
+    scan_kwargs: Dict[str, Any] = {
+        "FilterExpression": "begins_with(pk, :prefix) AND expires_at_epoch <= :now",
+        "ExpressionAttributeValues": {":prefix": "PROJECT#", ":now": now_epoch},
+        "ProjectionExpression": "pk, stack_name, #status",
+        "ExpressionAttributeNames": {"#status": "status"},
+    }
+    while True:
+        page = table.scan(**scan_kwargs)
+        for item in page.get("Items", []):
+            if item.get("status") in {"TERMINATING", "TERMINATED"}:
+                continue
+            try:
+                cfn.delete_stack(StackName=item["stack_name"], RoleARN=PROJECT_STACK_ROLE_ARN)
+                table.update_item(
+                    Key={"pk": item["pk"]},
+                    UpdateExpression="SET #status = :status, updated_at = :updated",
+                    ExpressionAttributeNames={"#status": "status"},
+                    ExpressionAttributeValues={":status": "TERMINATING", ":updated": utc_now()},
+                )
+                deleted += 1
+            except Exception:
+                failed += 1
+                log.exception("scheduled project cleanup failed", extra={"project_key": item.get("pk")})
+        cursor = page.get("LastEvaluatedKey")
+        if not cursor:
+            break
+        scan_kwargs["ExclusiveStartKey"] = cursor
+    return {"expired_stacks_deleted": deleted, "cleanup_failures": failed}
+
+
 def lambda_handler(event, context):
+    if event.get("source") == "aws.events" and event.get("detail-type") == "Scheduled Event":
+        return {"ok": True, **cleanup_expired_projects()}
+
     method, path = route_of(event)
 
     if method == "OPTIONS":
@@ -284,7 +296,15 @@ def lambda_handler(event, context):
         task = str(body.get("task", "")).strip()
         if not task:
             return response(400, {"ok": False, "error": "task_required"}, event)
-        budget_limit_usd = float(body.get("budget_limit_usd", 1.0) or 1.0)
+        raw_budget = body.get("budget_limit_usd", 1.0)
+        if isinstance(raw_budget, bool):
+            return response(400, {"ok": False, "error": "invalid_budget", "message": "budget_limit_usd must be a finite positive number"}, event)
+        try:
+            budget_limit_usd = float(raw_budget)
+        except (TypeError, ValueError):
+            return response(400, {"ok": False, "error": "invalid_budget", "message": "budget_limit_usd must be a finite positive number"}, event)
+        if not math.isfinite(budget_limit_usd) or budget_limit_usd <= 0:
+            return response(400, {"ok": False, "error": "invalid_budget", "message": "budget_limit_usd must be a finite positive number"}, event)
         first_hour = PRICING_CATALOG["worker"]["estimated_first_hour_usd"]
         if budget_limit_usd < first_hour:
             return response(402, {
@@ -294,8 +314,21 @@ def lambda_handler(event, context):
                 "estimated_first_hour_usd": first_hour,
                 "budget_limit_usd": budget_limit_usd,
             }, event)
+        raw_ttl = body.get("ttl_hours", PROJECT_TTL_HOURS)
+        try:
+            if isinstance(raw_ttl, bool) or isinstance(raw_ttl, float) and not raw_ttl.is_integer():
+                raise ValueError
+            if isinstance(raw_ttl, str) and not re.fullmatch(r"[0-9]+", raw_ttl):
+                raise ValueError
+            ttl_hours = int(raw_ttl)
+        except (TypeError, ValueError):
+            return response(400, {"ok": False, "error": "invalid_ttl", "message": "ttl_hours must be an integer from 1 to 24"}, event)
+        if ttl_hours < 1 or ttl_hours > 24:
+            return response(400, {"ok": False, "error": "invalid_ttl", "message": "ttl_hours must be an integer from 1 to 24"}, event)
         project_id = project_id_now()
         created = create_project_stack(project_id, task)
+        created_at = datetime.now(timezone.utc)
+        expires_at = created_at + timedelta(hours=ttl_hours)
         item = {
             "pk": project_key(project_id),
             "project_id": project_id,
@@ -303,7 +336,10 @@ def lambda_handler(event, context):
             "status": "PROVISIONING",
             "stack_name": created["stack_name"],
             "stack_id": created["stack_id"],
-            "created_at": utc_now(),
+            "created_at": created_at.isoformat(),
+            "expires_at": expires_at.isoformat(),
+            "expires_at_epoch": int(expires_at.timestamp()),
+            "ttl_hours": ttl_hours,
             "source": str(body.get("source", "test"))[:100],
             "worker_count_requested": 1,
             "network_default": "OFF",
