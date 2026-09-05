@@ -100,3 +100,13 @@ credentials are available.
 6. Repeat failure injection for duplicate Apply, malformed budget, worker crash, timeout,
    CloudFormation failure, controller restart, and expired/revoked sessions.
 7. Only after these pass, run a small, explicitly authorized XPlace pilot—not a whole-site crawl.
+
+## Current AWS start verdict
+
+Registering a dedicated AWS account is appropriate **only for a controlled TEST deployment now**.
+Do not connect client traffic, accept real customer files, or promise production work yet. Use a
+separate sandbox account with MFA/IAM Identity Center, a strict monthly budget and billing alarms,
+then deploy the Controller and exercise health, authenticated pricing estimate, plan, apply, status,
+TTL cleanup, and manual terminate with synthetic data. A public production launch remains NO-GO
+until the product execution, identity/tenancy, artifact handling, isolation, metering, monitoring,
+and incident-response blockers above are implemented and independently tested.

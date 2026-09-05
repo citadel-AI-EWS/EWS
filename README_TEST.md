@@ -66,3 +66,10 @@ Current TEST snapshot (04.09.2026, USD, eu-central-1):
 - CloudFormation orchestration: **$0 extra fee for standard AWS resources**; resources it creates are still billed.
 
 These values are **estimates, not a billing authority**. Taxes, data transfer, public IPv4 if later enabled, snapshots, and future services are excluded. Before production client billing, replace the static snapshot with the AWS Price List API (or another verified live AWS pricing feed), then apply EWS pricing/margin rules and client-approved budgets.
+
+## Controller-backed project estimate
+
+The Architect pricing stage can call authenticated `POST /pricing/estimate`. The Controller validates
+bounded labor, worker, runtime, storage, and reserve inputs and returns the labor/AWS breakdown using
+the packaged pricing snapshot. The response explicitly sets `is_final_invoice` to `false`: it is a
+reproducible TEST estimate, not the AWS bill or a customer invoice.

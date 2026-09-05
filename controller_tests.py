@@ -82,6 +82,8 @@ class TestPackage(unittest.TestCase):
         self.assertIn("applyProjectFromArchitect()", html)
         self.assertIn('id="w5"', html)
         self.assertIn("calculateProjectPrice()", html)
+        self.assertIn("calculateProjectPriceFromController()", html)
+        self.assertIn("/pricing/estimate", html)
         self.assertIn('id="priceGrandTotal"', html)
         self.assertIn("TEST ONLY", html)
 
@@ -116,6 +118,37 @@ class TestControllerBudgetValidation(unittest.TestCase):
             "body": json.dumps({"task": "xplace sample", "budget_limit_usd": budget}),
         }
         return self.app.lambda_handler(event, None)
+
+    def test_controller_calculates_full_project_price(self):
+        event = {
+            "requestContext": {"http": {"method": "POST", "path": "/pricing/estimate"}},
+            "headers": {},
+            "body": json.dumps({
+                "labor_hours": 10,
+                "labor_rate_usd": 50,
+                "aws_workers": 2,
+                "aws_runtime_hours": 10,
+                "storage_gb": 8,
+                "reserve_usd": 25,
+            }),
+        }
+        result = self.app.lambda_handler(event, None)
+        estimate = json.loads(result["body"])["estimate"]
+        self.assertEqual(result["statusCode"], 200)
+        self.assertAlmostEqual(estimate["breakdown"]["labor_usd"], 500)
+        self.assertAlmostEqual(estimate["breakdown"]["aws_compute_usd"], 0.24)
+        self.assertAlmostEqual(estimate["total_usd"], 525.250411, places=6)
+        self.assertFalse(estimate["is_final_invoice"])
+
+    def test_controller_rejects_invalid_price_inputs(self):
+        for field, value in (("labor_hours", -1), ("labor_rate_usd", "NaN"), ("aws_workers", 1.5), ("aws_workers", True)):
+            with self.subTest(field=field, value=value):
+                body = {"labor_hours": 1, "labor_rate_usd": 1, "aws_workers": 1, "aws_runtime_hours": 1, "storage_gb": 1, "reserve_usd": 0}
+                body[field] = value
+                event = {"requestContext": {"http": {"method": "POST", "path": "/pricing/estimate"}}, "headers": {}, "body": json.dumps(body)}
+                result = self.app.lambda_handler(event, None)
+                self.assertEqual(result["statusCode"], 400)
+                self.assertEqual(json.loads(result["body"])["error"], "invalid_estimate_input")
 
     def test_rejects_non_numeric_budget_without_server_error(self):
         result = self.call_apply("not-a-number")

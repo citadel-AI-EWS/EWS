@@ -180,6 +180,58 @@ def stack_status(stack_name: str) -> Dict[str, Any]:
     return {"stack_status": s.get("StackStatus"), "worker_instance_id": outputs.get("WorkerInstanceId")}
 
 
+def project_price_estimate(body: Dict[str, Any]) -> Dict[str, Any]:
+    limits = {
+        "labor_hours": 100000.0,
+        "labor_rate_usd": 10000.0,
+        "aws_runtime_hours": 8760.0,
+        "storage_gb": 100000.0,
+        "reserve_usd": 10000000.0,
+    }
+    values: Dict[str, float] = {}
+    for field, maximum in limits.items():
+        raw = body.get(field, 0)
+        if isinstance(raw, bool):
+            raise ValueError(f"{field} must be a finite number from 0 to {maximum:g}")
+        try:
+            value = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field} must be a finite number from 0 to {maximum:g}") from exc
+        if not math.isfinite(value) or value < 0 or value > maximum:
+            raise ValueError(f"{field} must be a finite number from 0 to {maximum:g}")
+        values[field] = value
+
+    raw_workers = body.get("aws_workers", 1)
+    if isinstance(raw_workers, bool):
+        raise ValueError("aws_workers must be an integer from 1 to 100")
+    try:
+        workers = int(raw_workers)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("aws_workers must be an integer from 1 to 100") from exc
+    if workers < 1 or workers > 100 or float(raw_workers) != workers:
+        raise ValueError("aws_workers must be an integer from 1 to 100")
+
+    worker = PRICING_CATALOG["worker"]
+    labor = values["labor_hours"] * values["labor_rate_usd"]
+    compute = workers * values["aws_runtime_hours"] * float(worker["hourly_compute_usd"])
+    storage = values["storage_gb"] * (float(worker["gp3_storage_month_usd"]) / float(worker["gp3_storage_gb"])) * (values["aws_runtime_hours"] / 730)
+    total = labor + compute + storage + values["reserve_usd"]
+    return {
+        "currency": PRICING_CATALOG["currency"],
+        "pricing_snapshot_date": PRICING_CATALOG["snapshot_date"],
+        "pricing_mode": PRICING_CATALOG["mode"],
+        "inputs": {**values, "aws_workers": workers},
+        "breakdown": {
+            "labor_usd": round(labor, 6),
+            "aws_compute_usd": round(compute, 6),
+            "aws_storage_usd": round(storage, 6),
+            "reserve_usd": round(values["reserve_usd"], 6),
+        },
+        "total_usd": round(total, 6),
+        "is_final_invoice": False,
+    }
+
+
 def cleanup_expired_projects(now: datetime | None = None) -> Dict[str, int]:
     """Delete expired TEST stacks; scheduled retries make cleanup eventually consistent."""
     now_epoch = int((now or datetime.now(timezone.utc)).timestamp())
@@ -244,6 +296,13 @@ def lambda_handler(event, context):
     # Production client Apply must use real client authentication (e.g. JWT/Cognito), never this token in public JS.
     if not authorized(event):
         return response(401, {"ok": False, "error": "unauthorized", "message": "TEST session token required"}, event)
+
+    if method == "POST" and path == "/pricing/estimate":
+        try:
+            estimate = project_price_estimate(parse_json_body(event))
+        except ValueError as exc:
+            return response(400, {"ok": False, "error": "invalid_estimate_input", "message": str(exc)}, event)
+        return response(200, {"ok": True, "estimate": estimate}, event)
 
     if method == "GET" and path == "/controller/status":
         state = get_state()
