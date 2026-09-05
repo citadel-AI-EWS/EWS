@@ -1,0 +1,13 @@
+{
+  "name": "ews-architect-console",
+  "private": true,
+  "version": "0.3.0",
+  "description": "EWS Architect console and TEST Controller deployment tooling",
+  "scripts": {
+    "build": "bash scripts/build_site.sh",
+    "check:cloudflare": "wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "wrangler": "4.129.0"
+  }
+}

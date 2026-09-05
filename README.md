@@ -38,6 +38,8 @@ Some buttons intentionally simulate production workflows. Authentication, cloud 
 ├── .github/                     # CI, Dependabot, and contribution templates
 ├── scripts/                     # Reproducible package and validation commands
 ├── OPERATIONS.md                # Test deployment schedule and segment gates
+├── CLOUDFLARE_DEPLOYMENT.md     # Protected TEST-site deployment runbook
+├── wrangler.jsonc               # Canonical Cloudflare Worker/static-assets config
 ├── CONTRIBUTING.md
 ├── CODE_OF_CONDUCT.md
 ├── SECURITY.md
