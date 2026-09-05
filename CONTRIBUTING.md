@@ -34,3 +34,10 @@ Changes should preserve these core ideas unless a proposal explicitly argues for
 ## Pull Request review
 
 Maintainers may request changes for security, maintainability, architecture consistency, or unclear production assumptions. Substantial changes should normally begin with an Issue so the design can be discussed first.
+
+## Required validation
+
+Run `scripts/validate.sh` before every commit. Generated deployment ZIP files must not be committed;
+`scripts/package_controller.sh` builds them from canonical sources. For visible UI changes, exercise
+the Architect flow in a browser and update the screenshot only when it documents the current state.
+AWS integration tests must use synthetic data in a dedicated budget-capped non-production account.

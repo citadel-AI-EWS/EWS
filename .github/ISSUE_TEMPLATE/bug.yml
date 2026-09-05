@@ -1,0 +1,23 @@
+name: Bug report
+description: Report a reproducible EWS defect
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe expected and actual behavior without including credentials or client data.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: checks
+    attributes:
+      label: Validation output
+      description: Include relevant sanitized output from scripts/validate.sh.

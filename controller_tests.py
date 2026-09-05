@@ -87,11 +87,10 @@ class TestPackage(unittest.TestCase):
         self.assertIn('id="priceGrandTotal"', html)
         self.assertIn("TEST ONLY", html)
 
-    def test_html_snapshots_are_identical(self):
-        self.assertEqual(
-            (ROOT / "index.html").read_bytes(),
-            (ROOT / "EWS_PROJECT_SOURCE_CURRENT.html").read_bytes(),
-        )
+    def test_no_duplicate_site_snapshot_or_committed_lambda_bundle(self):
+        self.assertFalse((ROOT / "EWS_PROJECT_SOURCE_CURRENT.html").exists())
+        self.assertFalse((ROOT / "controller_lambda.zip").exists())
+        self.assertFalse((ROOT / "Test.zip").exists())
 
 
 class TestControllerBudgetValidation(unittest.TestCase):

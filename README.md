@@ -32,13 +32,12 @@ Some buttons intentionally simulate production workflows. Authentication, cloud 
 ```text
 .
 ├── index.html                    # Current interactive EWS prototype
-├── EWS_PROJECT_SOURCE_CURRENT.html # Preserved current source snapshot
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   └── ROADMAP.md
-├── .github/
-│   ├── ISSUE_TEMPLATE/
-│   └── PULL_REQUEST_TEMPLATE.md
+├── .github/                     # CI, Dependabot, and contribution templates
+├── scripts/                     # Reproducible package and validation commands
+├── OPERATIONS.md                # Test deployment schedule and segment gates
 ├── CONTRIBUTING.md
 ├── CODE_OF_CONDUCT.md
 ├── SECURITY.md

@@ -39,11 +39,10 @@ The TEST site reuses the temporary Architect token stored in browser session sto
 ## Files
 
 - `index.html` — TEST web UI.
-- `EWS_PROJECT_SOURCE_CURRENT.html` — same TEST UI source.
 - `controller_app.py` — Lambda Controller.
 - `controller_template.yaml` — shared TEST control plane/network.
 - `project_stack.yaml` — per-project worker stack.
-- `controller_lambda.zip` — Lambda artifact.
+- `scripts/package_controller.sh` — reproducibly creates the untracked Lambda artifact.
 - `controller_deploy.sh` — CloudShell deployment helper.
 - `controller_tests.py` — local structural tests.
 

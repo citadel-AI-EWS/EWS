@@ -2,3 +2,5 @@ __pycache__/
 *.py[cod]
 .build-controller/
 packaged.yaml
+controller_lambda.zip
+*.zip

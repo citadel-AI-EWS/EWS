@@ -11,15 +11,13 @@ labels the integration as TEST-only and uses a shared Architect token.
 
 ## What was verified
 
-- Both HTML snapshots are byte-identical and load without a build step.
+- The single canonical `index.html` loads without a build step; duplicate site snapshots were removed.
 - The Python source parses, the shell deploy script parses, and the repository test suite runs.
-- The missing CloudFormation templates and pricing manifest referenced by the code/tests are now
-  present. The deployment script now rebuilds `controller_lambda.zip` from the current controller
-  and worker template instead of deploying a stale artifact.
+- CloudFormation templates and the pricing manifest are present. Deployment rebuilds an ignored,
+  temporary `controller_lambda.zip` from canonical sources instead of committing stale binaries.
 - Input validation now rejects text, zero, negative, NaN, and infinite project budgets with a
   controlled HTTP 400 response.
-- `Test.zip` has no archive corruption, but it is an older v0.2 package and must not be treated as
-  the current v0.3 release artifact.
+- The obsolete `Test.zip` and duplicate Lambda/site artifacts were removed.
 
 ## XPlace simulation
 

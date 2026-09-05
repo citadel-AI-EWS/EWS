@@ -17,12 +17,8 @@ if ! aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
     aws s3api create-bucket --bucket "$BUCKET" --region "$REGION" --create-bucket-configuration LocationConstraint="$REGION" >/dev/null
   fi
 fi
-BUILD_DIR="$(mktemp -d)"
-trap 'rm -rf "$BUILD_DIR"' EXIT
-cp controller_app.py "$BUILD_DIR/app.py"
-cp project_stack.yaml "$BUILD_DIR/project_stack.yaml"
-cp pricing_catalog.json "$BUILD_DIR/pricing_catalog.json"
-( cd "$BUILD_DIR" && zip -q -X "$SCRIPT_DIR/controller_lambda.zip" app.py project_stack.yaml pricing_catalog.json )
+"$SCRIPT_DIR/scripts/package_controller.sh" "$SCRIPT_DIR/controller_lambda.zip"
+trap 'rm -f "$SCRIPT_DIR/controller_lambda.zip" "$SCRIPT_DIR/packaged.yaml"' EXIT
 aws cloudformation package --region "$REGION" --template-file controller_template.yaml --s3-bucket "$BUCKET" --output-template-file packaged.yaml
 aws cloudformation deploy --region "$REGION" --template-file packaged.yaml --stack-name "$STACK_NAME" --capabilities CAPABILITY_IAM --parameter-overrides AllowedOrigin="$ORIGIN" --no-fail-on-empty-changeset
 aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK_NAME" --query 'Stacks[0].Outputs' --output table
