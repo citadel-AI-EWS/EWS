@@ -9,8 +9,10 @@ and only after the operator types `DEPLOY_TEST`.
 
 Create the protected GitHub environment `cloudflare-test` and add:
 
-- `CLOUDFLARE_ACCOUNT_ID` — the Cloudflare account ID;
 - `CLOUDFLARE_API_TOKEN` — a narrowly scoped token allowed to deploy only this Worker.
+
+Wrangler discovers the account from the token. `CLOUDFLARE_ACCOUNT_ID` is intentionally not passed,
+which avoids deployment failures caused by a copied Zone ID or an incorrect account identifier.
 
 Do not commit either value. Require environment approval while EWS remains TEST-only. Once configured,
 the workflow validates and deploys without local packaging or manual file copying.
