@@ -15,6 +15,7 @@
     button{width:100%;margin-top:13px;padding:14px;border:0;border-radius:11px;background:#3478f6;color:white;font-size:16px;font-weight:800}
     button.secondary{background:#26334f}button:disabled{opacity:.55}.status{margin-top:16px;padding:13px;border-radius:11px;background:#0b1222;color:#c8d4ef;white-space:pre-wrap;overflow-wrap:anywhere}
     .ok{border-left:4px solid #35d07f}.bad{border-left:4px solid #ff6874}.small{font-size:13px;color:#93a0ba}.hidden{display:none}
+    #missionText{white-space:pre-wrap;overflow-wrap:anywhere}
     code{color:#a8c7ff}ul{color:#b8c1d9;padding-left:20px}li{margin:7px 0}
   </style>
 </head>
@@ -37,6 +38,13 @@
       <button id="heartbeatButton" class="secondary" type="button">Проверить heartbeat</button>
     </section>
 
+    <section id="missionCard" class="card hidden">
+      <strong>Безопасная тестовая миссия</strong>
+      <p id="missionText" class="small">Нажмите кнопку, чтобы проверить назначенные задания.</p>
+      <button id="assignmentButton" class="secondary" type="button">Проверить задания</button>
+      <button id="runMissionButton" class="hidden" type="button">Выполнить тестовую миссию</button>
+    </section>
+
     <div id="status" class="status">Проверяю локальное состояние…</div>
 
     <section class="card">
@@ -56,10 +64,15 @@
     const statusElement = document.getElementById("status");
     const enrollCard = document.getElementById("enrollCard");
     const nodeCard = document.getElementById("nodeCard");
+    const missionCard = document.getElementById("missionCard");
     const nodeIdElement = document.getElementById("nodeId");
+    const missionText = document.getElementById("missionText");
     const tokenInput = document.getElementById("token");
     const enrollButton = document.getElementById("enrollButton");
     const heartbeatButton = document.getElementById("heartbeatButton");
+    const assignmentButton = document.getElementById("assignmentButton");
+    const runMissionButton = document.getElementById("runMissionButton");
+    let activeAssignment = null;
 
     function setStatus(message, kind = "") {
       statusElement.textContent = message;
@@ -120,7 +133,35 @@
     function showNode(identity) {
       enrollCard.classList.add("hidden");
       nodeCard.classList.remove("hidden");
+      missionCard.classList.remove("hidden");
       nodeIdElement.textContent = `Node ID: ${identity.nodeId}`;
+    }
+
+    async function signedRequest(identity, method, path, payload) {
+      const body = payload === undefined ? "" : JSON.stringify(payload);
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const bodyHash = bytesToHex(await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(body)
+      ));
+      const canonical = [method, path, timestamp, bodyHash].join("\n");
+      const signature = await crypto.subtle.sign(
+        "Ed25519",
+        identity.privateKey,
+        new TextEncoder().encode(canonical)
+      );
+      const headers = {
+        "x-node-id": identity.nodeId,
+        "x-node-timestamp": timestamp,
+        "x-node-signature": bytesToBase64Url(signature)
+      };
+      if (body) headers["content-type"] = "application/json";
+
+      return parseResponse(await fetch(path, {
+        method,
+        headers,
+        body: body || undefined
+      }));
     }
 
     async function sendHeartbeat(identity) {
@@ -128,32 +169,10 @@
       setStatus("Подписываю heartbeat…");
       try {
         const path = `/api/v1/nodes/${identity.nodeId}/heartbeat`;
-        const body = JSON.stringify({
+        const data = await signedRequest(identity, "POST", path, {
           agent_version: "browser-test-0.1.0",
           capabilities: []
         });
-        const timestamp = String(Math.floor(Date.now() / 1000));
-        const bodyHash = bytesToHex(await crypto.subtle.digest(
-          "SHA-256",
-          new TextEncoder().encode(body)
-        ));
-        const canonical = ["POST", path, timestamp, bodyHash].join("\n");
-        const signature = await crypto.subtle.sign(
-          "Ed25519",
-          identity.privateKey,
-          new TextEncoder().encode(canonical)
-        );
-
-        const data = await parseResponse(await fetch(path, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-node-id": identity.nodeId,
-            "x-node-timestamp": timestamp,
-            "x-node-signature": bytesToBase64Url(signature)
-          },
-          body
-        }));
         setStatus(`Готово. Подписанный heartbeat принят.\nСтатус: ${data.status}\nВремя: ${data.last_seen_at}`, "ok");
       } catch (error) {
         setStatus(`Heartbeat не прошёл: ${error.message}`, "bad");
@@ -223,9 +242,86 @@
       await sendHeartbeat(identity);
     });
 
+    assignmentButton.addEventListener("click", async () => {
+      assignmentButton.disabled = true;
+      runMissionButton.classList.add("hidden");
+      activeAssignment = null;
+      try {
+        const identity = await storageGet();
+        if (!identity) throw new Error("Локальный ключ не найден.");
+        const path = `/api/v1/nodes/${identity.nodeId}/assignments`;
+        const data = await signedRequest(identity, "GET", path);
+        if (!data.assignments.length) {
+          missionText.textContent = "Новых заданий пока нет.";
+          return;
+        }
+
+        const assignment = data.assignments[0];
+        activeAssignment = assignment;
+        missionText.textContent = [
+          `Название: ${assignment.title}`,
+          `Тип: ${assignment.mission_type}`,
+          `Статус: ${assignment.status}`,
+          `Параметры: ${JSON.stringify(assignment.payload)}`
+        ].join("\n");
+        if (assignment.mission_type === "system_inventory") {
+          runMissionButton.classList.remove("hidden");
+        } else {
+          missionText.textContent += "\nЭтот браузерный узел не выполняет такой тип задания.";
+        }
+      } catch (error) {
+        missionText.textContent = `Задания не получены: ${error.message}`;
+      } finally {
+        assignmentButton.disabled = false;
+      }
+    });
+
+    runMissionButton.addEventListener("click", async () => {
+      if (!activeAssignment || activeAssignment.mission_type !== "system_inventory") return;
+      runMissionButton.disabled = true;
+      assignmentButton.disabled = true;
+      try {
+        const identity = await storageGet();
+        if (!identity) throw new Error("Локальный ключ не найден.");
+        const assignmentId = activeAssignment.assignment_id;
+        await signedRequest(
+          identity,
+          "POST",
+          `/api/v1/nodes/${identity.nodeId}/assignments/${assignmentId}/accept`,
+          {}
+        );
+        const result = await signedRequest(
+          identity,
+          "POST",
+          `/api/v1/nodes/${identity.nodeId}/results`,
+          {
+            assignment_id: assignmentId,
+            outcome: "success",
+            summary: "Safe browser inventory collected",
+            metrics: {
+              language: navigator.language,
+              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+              screen_width: screen.width,
+              screen_height: screen.height,
+              device_pixel_ratio: window.devicePixelRatio
+            }
+          }
+        );
+        missionText.textContent = `Миссия выполнена.\nResult ID: ${result.result.result_id}`;
+        setStatus("Результат миссии подписан и принят Controller.", "ok");
+        activeAssignment = null;
+        runMissionButton.classList.add("hidden");
+      } catch (error) {
+        missionText.textContent = `Миссия не выполнена: ${error.message}`;
+      } finally {
+        runMissionButton.disabled = false;
+        assignmentButton.disabled = false;
+      }
+    });
+
     (async () => {
       try {
-        if (!crypto?.subtle || !indexedDB) {
+        if (!crypto?.subtle || !("indexedDB" in window)) {
           throw new Error("Этот браузер не поддерживает необходимую криптографию.");
         }
         const identity = await storageGet();
