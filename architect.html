@@ -19,6 +19,7 @@
     .item{margin-top:10px;padding:13px;border-radius:13px;background:#0b1222;border-left:4px solid #5b8fff;overflow-wrap:anywhere}.item.ok{border-left-color:#35d07f}.item.warn{border-left-color:#ffb44f}
     .item strong{display:block;margin-bottom:5px}.status{margin-top:15px;padding:13px;border-radius:11px;background:#0b1222;white-space:pre-wrap;overflow-wrap:anywhere}
     .good{border-left:4px solid #35d07f}.bad{border-left:4px solid #ff6874}.muted{color:#93a0ba}.section-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .control-buttons{display:grid;grid-template-columns:1fr 1fr;gap:9px}.control-buttons button{margin-top:10px}.control-buttons .full{grid-column:1/-1}
     @media(max-width:520px){body{padding:17px}.stats{grid-template-columns:1fr}.card{padding:17px}h1{font-size:27px}}
   </style>
 </head>
@@ -49,6 +50,18 @@
       </div>
 
       <section class="card">
+        <h2>Управление узлом</h2>
+        <label for="controlNodeSelect">Узел</label>
+        <select id="controlNodeSelect"></select>
+        <div class="control-buttons">
+          <button id="pauseButton" class="secondary" type="button">Поставить на паузу</button>
+          <button id="resumeButton" class="secondary" type="button">Возобновить</button>
+          <button id="disconnectButton" class="danger full" type="button">Отключить узел</button>
+        </div>
+        <p class="small">Команда подписывается Controller. В TEST узел применит её после проверки управления.</p>
+      </section>
+
+      <section class="card">
         <h2>Создать безопасную миссию</h2>
         <label for="nodeSelect">Узел</label>
         <select id="nodeSelect"></select>
@@ -67,6 +80,11 @@
       <section class="card">
         <div class="section-head"><h2>Узлы</h2><span id="nodesUpdated" class="small"></span></div>
         <div id="nodesList"></div>
+      </section>
+
+      <section class="card">
+        <h2>Команды управления</h2>
+        <div id="commandsList"></div>
       </section>
 
       <section class="card">
@@ -92,10 +110,16 @@
     const logoutButton = document.getElementById("logoutButton");
     const createMissionButton = document.getElementById("createMissionButton");
     const nodeSelect = document.getElementById("nodeSelect");
+    const controlNodeSelect = document.getElementById("controlNodeSelect");
+    const pauseButton = document.getElementById("pauseButton");
+    const resumeButton = document.getElementById("resumeButton");
+    const disconnectButton = document.getElementById("disconnectButton");
     const missionTitle = document.getElementById("missionTitle");
     const expiresHours = document.getElementById("expiresHours");
     const statusElement = document.getElementById("status");
     let architectToken = sessionStorage.getItem("citadel-architect-token") || "";
+    let currentNodes = [];
+    let currentCommands = [];
 
     function setStatus(message, kind = "") {
       statusElement.textContent = message;
@@ -119,15 +143,20 @@
     }
 
     function renderNodes(nodes) {
+      currentNodes = nodes;
       const list = document.getElementById("nodesList");
       list.replaceChildren();
       nodeSelect.replaceChildren();
+      controlNodeSelect.replaceChildren();
       for (const node of nodes) {
         const option = document.createElement("option");
         option.value = node.node_id;
         option.textContent = `${node.hostname} — ${node.status}`;
         option.disabled = node.status === "revoked";
         nodeSelect.appendChild(option);
+
+        const controlOption = option.cloneNode(true);
+        controlNodeSelect.appendChild(controlOption);
 
         const item = document.createElement("div");
         item.className = `item ${node.status === "online" ? "ok" : "warn"}`;
@@ -139,6 +168,34 @@
       }
       if (!nodes.length) addText(list, "p", "Узлы пока не зарегистрированы.", "muted");
       createMissionButton.disabled = ![...nodeSelect.options].some((option) => !option.disabled);
+      updateControlButtons();
+    }
+
+    function updateControlButtons() {
+      const node = currentNodes.find((item) => item.node_id === controlNodeSelect.value);
+      const pending = currentCommands.some((command) =>
+        command.node_id === node?.node_id && ["pending", "accepted"].includes(command.status)
+      );
+      pauseButton.disabled = !node || pending || ["paused", "revoked"].includes(node.status);
+      resumeButton.disabled = !node || pending || node.status !== "paused";
+      disconnectButton.disabled = !node || pending || node.status === "revoked";
+    }
+
+    function renderCommands(commands) {
+      currentCommands = commands;
+      const list = document.getElementById("commandsList");
+      list.replaceChildren();
+      const labels = { pause: "Пауза", resume: "Возобновление", uninstall: "Отключение" };
+      for (const command of commands) {
+        const item = document.createElement("div");
+        item.className = `item ${command.status === "completed" ? "ok" : "warn"}`;
+        addText(item, "strong", `${labels[command.command_type] || command.command_type} — ${command.status}`);
+        addText(item, "div", `Node ID: ${command.node_id}`, "small");
+        addText(item, "div", command.created_at, "small");
+        list.appendChild(item);
+      }
+      if (!commands.length) addText(list, "p", "Команд управления пока нет.", "muted");
+      updateControlButtons();
     }
 
     function renderMissions(missions) {
@@ -180,6 +237,7 @@
       document.getElementById("nodesUpdated").textContent = new Date().toLocaleTimeString();
       renderNodes(data.nodes);
       renderMissions(data.missions);
+      renderCommands(data.commands || []);
       renderAudit(data.audit_events);
       loginCard.classList.add("hidden");
       dashboard.classList.remove("hidden");
@@ -220,6 +278,37 @@
     });
 
     logoutButton.addEventListener("click", () => logout());
+    controlNodeSelect.addEventListener("change", updateControlButtons);
+
+    async function sendControl(commandType) {
+      const nodeId = controlNodeSelect.value;
+      if (!nodeId) return setStatus("Выберите узел.", "bad");
+      const labels = { pause: "паузу", resume: "возобновление", uninstall: "отключение" };
+      for (const button of [pauseButton, resumeButton, disconnectButton]) button.disabled = true;
+      setStatus(`Отправляю команду на ${labels[commandType]}…`);
+      try {
+        const data = await api(`/api/v1/architect/nodes/${encodeURIComponent(nodeId)}/commands`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ command_type: commandType })
+        });
+        setStatus(`Подписанная команда создана.\nCommand ID: ${data.command.command_id}`, "good");
+        await loadDashboard();
+      } catch (error) {
+        setStatus(`Команда не создана: ${error.message}`, "bad");
+        updateControlButtons();
+      }
+    }
+
+    pauseButton.addEventListener("click", () => sendControl("pause"));
+    resumeButton.addEventListener("click", () => sendControl("resume"));
+    disconnectButton.addEventListener("click", () => {
+      const node = currentNodes.find((item) => item.node_id === controlNodeSelect.value);
+      if (!node) return;
+      if (confirm(`Отключить узел ${node.hostname}? После применения команды его локальный ключ будет удалён.`)) {
+        sendControl("uninstall");
+      }
+    });
 
     createMissionButton.addEventListener("click", async () => {
       const title = missionTitle.value.trim();

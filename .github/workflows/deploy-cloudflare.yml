@@ -43,5 +43,7 @@ jobs:
           command: deploy
           secrets: |
             ARCHITECT_TOKEN_HASH
+            CONTROLLER_COMMAND_PRIVATE_JWK
         env:
           ARCHITECT_TOKEN_HASH: ${{ secrets.ARCHITECT_TOKEN_HASH }}
+          CONTROLLER_COMMAND_PRIVATE_JWK: ${{ secrets.CONTROLLER_COMMAND_PRIVATE_JWK }}
