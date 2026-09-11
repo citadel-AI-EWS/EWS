@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>CITADEL — панель архитектора TEST</title>
+  <style>
+    :root{font-family:system-ui,-apple-system,sans-serif;color:#f2f5ff;background:#080c17}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;padding:20px;background:radial-gradient(circle at top,#172441,#080c17 55%)}
+    main{max-width:760px;margin:auto}.brand{color:#8fb5ff;font-size:13px;font-weight:900;letter-spacing:.13em}
+    h1{font-size:29px;line-height:1.15;margin:11px 0}h2{font-size:20px;margin:0 0 15px}p{color:#aeb9d2;line-height:1.45}
+    .card{margin-top:17px;padding:19px;border:1px solid #2b3757;border-radius:18px;background:#11182a;box-shadow:0 18px 55px #0007}
+    label{display:block;margin:12px 0 7px;font-weight:750}input,select{width:100%;padding:13px;border:1px solid #3a496f;border-radius:11px;background:#090e1b;color:#fff;font-size:16px}
+    button{width:100%;margin-top:13px;padding:14px;border:0;border-radius:11px;background:#3478f6;color:#fff;font-size:16px;font-weight:850}
+    button.secondary{background:#273451}button.danger{background:#703542}button:disabled{opacity:.55}.hidden{display:none!important}
+    .toolbar{display:flex;gap:10px}.toolbar button{width:auto;flex:1}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:17px}
+    .stat{padding:14px;border:1px solid #2b3757;border-radius:15px;background:#11182a}.stat b{display:block;font-size:25px}.stat span,.small{font-size:13px;color:#93a0ba}
+    .item{margin-top:10px;padding:13px;border-radius:13px;background:#0b1222;border-left:4px solid #5b8fff;overflow-wrap:anywhere}.item.ok{border-left-color:#35d07f}.item.warn{border-left-color:#ffb44f}
+    .item strong{display:block;margin-bottom:5px}.status{margin-top:15px;padding:13px;border-radius:11px;background:#0b1222;white-space:pre-wrap;overflow-wrap:anywhere}
+    .good{border-left:4px solid #35d07f}.bad{border-left:4px solid #ff6874}.muted{color:#93a0ba}.section-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    @media(max-width:520px){body{padding:17px}.stats{grid-template-columns:1fr}.card{padding:17px}h1{font-size:27px}}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">CITADEL / ARCHITECT / TEST</div>
+    <h1>Панель архитектора</h1>
+    <p>Контролируемое управление узлами и разрешёнными миссиями. Произвольные команды отключены.</p>
+
+    <section id="loginCard" class="card">
+      <h2>Защищённый вход</h2>
+      <label for="token">Секрет архитектора</label>
+      <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="citadel_arch_…">
+      <button id="loginButton" type="button">Войти</button>
+      <p class="small">Секрет хранится только до закрытия этой вкладки.</p>
+    </section>
+
+    <section id="dashboard" class="hidden">
+      <div class="toolbar">
+        <button id="refreshButton" class="secondary" type="button">Обновить</button>
+        <button id="logoutButton" class="danger" type="button">Выйти</button>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><b id="nodeCount">0</b><span>всего узлов</span></div>
+        <div class="stat"><b id="onlineCount">0</b><span>узлов online</span></div>
+        <div class="stat"><b id="missionCount">0</b><span>миссий</span></div>
+      </div>
+
+      <section class="card">
+        <h2>Создать безопасную миссию</h2>
+        <label for="nodeSelect">Узел</label>
+        <select id="nodeSelect"></select>
+        <label for="missionTitle">Название</label>
+        <input id="missionTitle" maxlength="160" value="Проверка системы">
+        <label for="expiresHours">Срок действия</label>
+        <select id="expiresHours">
+          <option value="1">1 час</option>
+          <option value="24" selected>24 часа</option>
+          <option value="72">3 дня</option>
+        </select>
+        <button id="createMissionButton" type="button">Создать и назначить</button>
+        <p class="small">На этом этапе разрешён только безопасный тип <code>system_inventory</code>.</p>
+      </section>
+
+      <section class="card">
+        <div class="section-head"><h2>Узлы</h2><span id="nodesUpdated" class="small"></span></div>
+        <div id="nodesList"></div>
+      </section>
+
+      <section class="card">
+        <h2>Миссии и результаты</h2>
+        <div id="missionsList"></div>
+      </section>
+
+      <section class="card">
+        <h2>Последние события аудита</h2>
+        <div id="auditList"></div>
+      </section>
+    </section>
+
+    <div id="status" class="status">Панель ожидает входа.</div>
+  </main>
+
+  <script>
+    const loginCard = document.getElementById("loginCard");
+    const dashboard = document.getElementById("dashboard");
+    const tokenInput = document.getElementById("token");
+    const loginButton = document.getElementById("loginButton");
+    const refreshButton = document.getElementById("refreshButton");
+    const logoutButton = document.getElementById("logoutButton");
+    const createMissionButton = document.getElementById("createMissionButton");
+    const nodeSelect = document.getElementById("nodeSelect");
+    const missionTitle = document.getElementById("missionTitle");
+    const expiresHours = document.getElementById("expiresHours");
+    const statusElement = document.getElementById("status");
+    let architectToken = sessionStorage.getItem("citadel-architect-token") || "";
+
+    function setStatus(message, kind = "") {
+      statusElement.textContent = message;
+      statusElement.className = `status ${kind}`.trim();
+    }
+
+    function addText(parent, tag, text, className = "") {
+      const element = document.createElement(tag);
+      element.textContent = text;
+      if (className) element.className = className;
+      parent.appendChild(element);
+      return element;
+    }
+
+    async function api(path, options = {}) {
+      const headers = { authorization: `Bearer ${architectToken}`, ...(options.headers || {}) };
+      const response = await fetch(path, { ...options, headers });
+      const data = await response.json().catch(() => ({ error: "invalid_server_response" }));
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      return data;
+    }
+
+    function renderNodes(nodes) {
+      const list = document.getElementById("nodesList");
+      list.replaceChildren();
+      nodeSelect.replaceChildren();
+      for (const node of nodes) {
+        const option = document.createElement("option");
+        option.value = node.node_id;
+        option.textContent = `${node.hostname} — ${node.status}`;
+        option.disabled = node.status === "revoked";
+        nodeSelect.appendChild(option);
+
+        const item = document.createElement("div");
+        item.className = `item ${node.status === "online" ? "ok" : "warn"}`;
+        addText(item, "strong", `${node.hostname} — ${node.status}`);
+        addText(item, "div", `Версия: ${node.agent_version}`, "small");
+        addText(item, "div", `Последняя связь: ${node.last_seen_at}`, "small");
+        addText(item, "div", `Node ID: ${node.node_id}`, "small");
+        list.appendChild(item);
+      }
+      if (!nodes.length) addText(list, "p", "Узлы пока не зарегистрированы.", "muted");
+      createMissionButton.disabled = ![...nodeSelect.options].some((option) => !option.disabled);
+    }
+
+    function renderMissions(missions) {
+      const list = document.getElementById("missionsList");
+      list.replaceChildren();
+      for (const mission of missions) {
+        const item = document.createElement("div");
+        item.className = `item ${mission.status === "completed" ? "ok" : "warn"}`;
+        addText(item, "strong", `${mission.title} — ${mission.status}`);
+        addText(item, "div", `Задание: ${mission.assignment_status || "не назначено"}`, "small");
+        addText(item, "div", `Результат: ${mission.outcome || "ожидается"}`, "small");
+        if (mission.summary) addText(item, "div", mission.summary, "small");
+        addText(item, "div", `Mission ID: ${mission.mission_id}`, "small");
+        list.appendChild(item);
+      }
+      if (!missions.length) addText(list, "p", "Миссий пока нет.", "muted");
+    }
+
+    function renderAudit(events) {
+      const list = document.getElementById("auditList");
+      list.replaceChildren();
+      for (const event of events) {
+        const item = document.createElement("div");
+        item.className = "item";
+        addText(item, "strong", event.action);
+        addText(item, "div", `${event.actor_type}: ${event.actor_id}`, "small");
+        addText(item, "div", event.created_at, "small");
+        list.appendChild(item);
+      }
+      if (!events.length) addText(list, "p", "Событий пока нет.", "muted");
+    }
+
+    async function loadDashboard() {
+      setStatus("Загружаю данные…");
+      const data = await api("/api/v1/architect/overview");
+      document.getElementById("nodeCount").textContent = data.counts.nodes;
+      document.getElementById("onlineCount").textContent = data.counts.online_nodes;
+      document.getElementById("missionCount").textContent = data.counts.missions;
+      document.getElementById("nodesUpdated").textContent = new Date().toLocaleTimeString();
+      renderNodes(data.nodes);
+      renderMissions(data.missions);
+      renderAudit(data.audit_events);
+      loginCard.classList.add("hidden");
+      dashboard.classList.remove("hidden");
+      setStatus("Панель подключена к Controller.", "good");
+    }
+
+    function logout(message = "Сеанс завершён.") {
+      architectToken = "";
+      sessionStorage.removeItem("citadel-architect-token");
+      tokenInput.value = "";
+      dashboard.classList.add("hidden");
+      loginCard.classList.remove("hidden");
+      setStatus(message);
+    }
+
+    loginButton.addEventListener("click", async () => {
+      const token = tokenInput.value.trim();
+      if (!token) return setStatus("Введите секрет архитектора.", "bad");
+      loginButton.disabled = true;
+      architectToken = token;
+      try {
+        await loadDashboard();
+        sessionStorage.setItem("citadel-architect-token", architectToken);
+        tokenInput.value = "";
+      } catch (error) {
+        logout(`Вход не выполнен: ${error.message}`);
+        statusElement.classList.add("bad");
+      } finally {
+        loginButton.disabled = false;
+      }
+    });
+
+    refreshButton.addEventListener("click", async () => {
+      refreshButton.disabled = true;
+      try { await loadDashboard(); }
+      catch (error) { setStatus(`Обновление не выполнено: ${error.message}`, "bad"); }
+      finally { refreshButton.disabled = false; }
+    });
+
+    logoutButton.addEventListener("click", () => logout());
+
+    createMissionButton.addEventListener("click", async () => {
+      const title = missionTitle.value.trim();
+      if (!title) return setStatus("Введите название миссии.", "bad");
+      createMissionButton.disabled = true;
+      setStatus("Создаю миссию и назначаю её узлу…");
+      try {
+        const data = await api("/api/v1/architect/missions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            node_id: nodeSelect.value,
+            title,
+            mission_type: "system_inventory",
+            expires_in_hours: Number(expiresHours.value)
+          })
+        });
+        setStatus(`Миссия создана.\nMission ID: ${data.mission.mission_id}`, "good");
+        missionTitle.value = "Проверка системы";
+        await loadDashboard();
+      } catch (error) {
+        setStatus(`Миссия не создана: ${error.message}`, "bad");
+      } finally {
+        createMissionButton.disabled = false;
+      }
+    });
+
+    if (architectToken) {
+      loadDashboard().catch(() => logout("Сохранённый сеанс недействителен. Войдите снова."));
+    }
+  </script>
+</body>
+</html>
