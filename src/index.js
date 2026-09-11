@@ -10,6 +10,8 @@ const SIGNATURE_WINDOW_SECONDS = 300;
 const ALLOWED_OUTCOMES = new Set(["success", "failed", "partial"]);
 const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
+const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "uninstall"]);
+const CONTROLLER_COMMAND_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0";
 
 class ApiError extends Error {
   constructor(status, code) {
@@ -104,12 +106,82 @@ function bytesToHex(bytes) {
     .join("");
 }
 
+function bytesToBase64Url(bytes) {
+  let binary = "";
+  for (const byte of new Uint8Array(bytes)) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
 async function sha256Hex(value) {
   const digest = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(value)
   );
   return bytesToHex(digest);
+}
+
+function controllerCommandCanonical(commandId, nodeId, commandType, payloadHash, createdAt) {
+  return [
+    "CITADEL-COMMAND-V1",
+    commandId,
+    nodeId,
+    commandType,
+    payloadHash,
+    createdAt
+  ].join("\n");
+}
+
+async function signControllerCommand(env, commandId, nodeId, commandType, payloadJson, createdAt) {
+  const encodedKey = typeof env.CONTROLLER_COMMAND_PRIVATE_JWK === "string"
+    ? env.CONTROLLER_COMMAND_PRIVATE_JWK.trim()
+    : "";
+  let privateJwk;
+  try {
+    privateJwk = JSON.parse(encodedKey);
+  } catch {
+    throw new ApiError(503, "controller_signing_not_configured");
+  }
+
+  if (
+    !privateJwk ||
+    privateJwk.kty !== "OKP" ||
+    privateJwk.crv !== "Ed25519" ||
+    privateJwk.x !== CONTROLLER_COMMAND_PUBLIC_X ||
+    typeof privateJwk.d !== "string"
+  ) {
+    throw new ApiError(503, "controller_signing_not_configured");
+  }
+
+  try {
+    const privateKey = await crypto.subtle.importKey(
+      "jwk",
+      privateJwk,
+      { name: "Ed25519" },
+      false,
+      ["sign"]
+    );
+    const payloadHash = await sha256Hex(payloadJson);
+    const canonical = controllerCommandCanonical(
+      commandId,
+      nodeId,
+      commandType,
+      payloadHash,
+      createdAt
+    );
+    const signature = await crypto.subtle.sign(
+      "Ed25519",
+      privateKey,
+      new TextEncoder().encode(canonical)
+    );
+    return bytesToBase64Url(signature);
+  } catch {
+    throw new ApiError(503, "controller_signing_not_configured");
+  }
 }
 
 function decodeBase64Url(value) {
@@ -392,7 +464,11 @@ async function heartbeat(request, env, nodeId, url) {
 }
 
 async function listAssignments(request, env, nodeId, url) {
-  await authenticateNode(request, env, nodeId, url, "");
+  const node = await authenticateNode(request, env, nodeId, url, "");
+
+  if (node.status === "paused") {
+    return json({ ok: true, node_status: "paused", assignments: [] });
+  }
 
   const query = await env.DB.prepare(`
     SELECT
@@ -423,12 +499,15 @@ async function listAssignments(request, env, nodeId, url) {
     payload: safeJson(row.payload_json, {}),
     payload_json: undefined
   }));
-  return json({ ok: true, assignments });
+  return json({ ok: true, node_status: node.status, assignments });
 }
 
 async function acceptAssignment(request, env, nodeId, assignmentId, url) {
   const bodyText = await readBodyText(request, 1024);
-  await authenticateNode(request, env, nodeId, url, bodyText);
+  const node = await authenticateNode(request, env, nodeId, url, bodyText);
+  if (node.status === "paused") {
+    throw new ApiError(409, "node_paused");
+  }
 
   await env.DB.batch([
     env.DB.prepare(`
@@ -571,7 +650,7 @@ async function submitResult(request, env, nodeId, url) {
 }
 
 async function listCommands(request, env, nodeId, url) {
-  await authenticateNode(request, env, nodeId, url, "");
+  const node = await authenticateNode(request, env, nodeId, url, "");
 
   const query = await env.DB.prepare(`
     SELECT command_id, command_type, payload_json, signature, status, created_at
@@ -586,20 +665,36 @@ async function listCommands(request, env, nodeId, url) {
     payload: safeJson(row.payload_json, {}),
     payload_json: undefined
   }));
-  return json({ ok: true, commands });
+  return json({ ok: true, node_status: node.status, commands });
 }
 
 async function acknowledgeCommand(request, env, nodeId, commandId, url) {
   const bodyText = await readBodyText(request, 8 * 1024);
-  await authenticateNode(request, env, nodeId, url, bodyText);
+  const node = await authenticateNode(request, env, nodeId, url, bodyText);
   const body = parseJsonObject(bodyText);
   const status = requireString(body.status, "status", 16);
   if (!ALLOWED_COMMAND_ACKS.has(status)) {
     throw new ApiError(400, "invalid_command_status");
   }
 
+  const current = await env.DB.prepare(`
+    SELECT command_id, command_type, status
+    FROM commands
+    WHERE command_id = ? AND node_id = ?
+  `).bind(commandId, nodeId).first();
+  if (!current) {
+    throw new ApiError(404, "command_not_found");
+  }
+
+  const transitionAllowed =
+    (current.status === "pending" && ["accepted", "completed", "failed"].includes(status)) ||
+    (current.status === "accepted" && ["completed", "failed"].includes(status));
+  if (!transitionAllowed) {
+    throw new ApiError(409, "invalid_command_transition");
+  }
+
   const detailsJson = JSON.stringify({ status });
-  await env.DB.batch([
+  const statements = [
     env.DB.prepare(`
       UPDATE commands
       SET status = ?,
@@ -609,11 +704,8 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
           END
       WHERE command_id = ?
         AND node_id = ?
-        AND (
-          (status = 'pending' AND ? IN ('accepted', 'completed', 'failed'))
-          OR (status = 'accepted' AND ? IN ('completed', 'failed'))
-        )
-    `).bind(status, status, commandId, nodeId, status, status),
+        AND status = ?
+    `).bind(status, status, commandId, nodeId, current.status),
     env.DB.prepare(`
       INSERT INTO audit_events (
         actor_type, actor_id, action, target_type, target_id, details_json
@@ -621,7 +713,23 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
       SELECT 'node', ?, 'command.acknowledged', 'command', ?, ?
       WHERE changes() = 1
     `).bind(nodeId, commandId, detailsJson)
-  ]);
+  ];
+
+  const nodeStatus = status === "completed"
+    ? { pause: "paused", resume: "online", uninstall: "revoked" }[current.command_type]
+    : null;
+  if (nodeStatus) {
+    statements.push(env.DB.prepare(`
+      UPDATE nodes
+      SET status = ?, last_seen_at = CURRENT_TIMESTAMP
+      WHERE node_id = ?
+    `).bind(nodeStatus, nodeId));
+  }
+
+  const results = await env.DB.batch(statements);
+  if ((results[0]?.meta?.changes || 0) !== 1) {
+    throw new ApiError(409, "invalid_command_transition");
+  }
 
   const command = await env.DB.prepare(`
     SELECT command_id, command_type, status, completed_at
@@ -629,13 +737,7 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
     WHERE command_id = ? AND node_id = ?
   `).bind(commandId, nodeId).first();
 
-  if (!command) {
-    throw new ApiError(404, "command_not_found");
-  }
-  if (command.status !== status) {
-    throw new ApiError(409, "invalid_command_transition");
-  }
-  return json({ ok: true, command });
+  return json({ ok: true, command, node_status: nodeStatus || node.status });
 }
 
 function constantTimeHexEqual(left, right) {
@@ -679,7 +781,7 @@ async function authenticateArchitect(request, env) {
 async function architectOverview(request, env) {
   await authenticateArchitect(request, env);
 
-  const [counts, nodesQuery, missionsQuery, auditQuery] = await Promise.all([
+  const [counts, nodesQuery, missionsQuery, commandsQuery, auditQuery] = await Promise.all([
     env.DB.prepare(
       "SELECT " +
       "(SELECT COUNT(*) FROM nodes) AS nodes, " +
@@ -703,6 +805,10 @@ async function architectOverview(request, env) {
       "ORDER BY m.created_at DESC LIMIT 100"
     ).all(),
     env.DB.prepare(
+      "SELECT command_id, node_id, command_type, status, created_at, completed_at " +
+      "FROM commands ORDER BY created_at DESC LIMIT 50"
+    ).all(),
+    env.DB.prepare(
       "SELECT event_id, actor_type, actor_id, action, target_type, " +
       "target_id, created_at FROM audit_events " +
       "ORDER BY event_id DESC LIMIT 30"
@@ -724,8 +830,80 @@ async function architectOverview(request, env) {
     },
     nodes: nodesQuery.results || [],
     missions,
+    commands: commandsQuery.results || [],
     audit_events: auditQuery.results || []
   });
+}
+
+async function architectCreateCommand(request, env, nodeId) {
+  await authenticateArchitect(request, env);
+  const bodyText = await readBodyText(request, 8 * 1024);
+  const body = parseJsonObject(bodyText);
+  const commandType = requireString(body.command_type, "command_type", 32);
+  if (!ALLOWED_ARCHITECT_COMMAND_TYPES.has(commandType)) {
+    throw new ApiError(400, "command_type_not_allowed");
+  }
+
+  const node = await env.DB.prepare(
+    "SELECT node_id, status FROM nodes WHERE node_id = ?"
+  ).bind(nodeId).first();
+  if (!node) {
+    throw new ApiError(404, "node_not_found");
+  }
+  if (node.status === "revoked") {
+    throw new ApiError(409, "node_revoked");
+  }
+  if (commandType === "pause" && node.status === "paused") {
+    throw new ApiError(409, "node_already_paused");
+  }
+  if (commandType === "resume" && node.status !== "paused") {
+    throw new ApiError(409, "node_not_paused");
+  }
+
+  const pending = await env.DB.prepare(
+    "SELECT command_id FROM commands " +
+    "WHERE node_id = ? AND status IN ('pending', 'accepted') LIMIT 1"
+  ).bind(nodeId).first();
+  if (pending) {
+    throw new ApiError(409, "command_already_pending");
+  }
+
+  const commandId = "command_" + crypto.randomUUID();
+  const payloadJson = "{}";
+  const createdAt = new Date().toISOString();
+  const signature = await signControllerCommand(
+    env,
+    commandId,
+    nodeId,
+    commandType,
+    payloadJson,
+    createdAt
+  );
+  const detailsJson = JSON.stringify({ node_id: nodeId, command_type: commandType });
+
+  await env.DB.batch([
+    env.DB.prepare(
+      "INSERT INTO commands (" +
+      "command_id, node_id, command_type, payload_json, signature, status, created_at" +
+      ") VALUES (?, ?, ?, ?, ?, 'pending', ?)"
+    ).bind(commandId, nodeId, commandType, payloadJson, signature, createdAt),
+    env.DB.prepare(
+      "INSERT INTO audit_events (" +
+      "actor_type, actor_id, action, target_type, target_id, details_json" +
+      ") VALUES ('architect', 'test-console', 'command.created', 'command', ?, ?)"
+    ).bind(commandId, detailsJson)
+  ]);
+
+  return json({
+    ok: true,
+    command: {
+      command_id: commandId,
+      node_id: nodeId,
+      command_type: commandType,
+      status: "pending",
+      created_at: createdAt
+    }
+  }, 201);
 }
 
 async function architectCreateMission(request, env) {
@@ -869,6 +1047,19 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/v1/architect/missions") {
     return request.method === "POST"
       ? architectCreateMission(request, env)
+      : methodNotAllowed(["POST"]);
+  }
+
+  const architectMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/nodes\/([^/]+)\/commands$/
+  );
+  if (architectMatch) {
+    return request.method === "POST"
+      ? architectCreateCommand(
+          request,
+          env,
+          decodeURIComponent(architectMatch[1])
+        )
       : methodNotAllowed(["POST"]);
   }
 
