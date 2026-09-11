@@ -1,10 +1,20 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "citadel-ai",
+  "main": "src/index.js",
   "compatibility_date": "2026-09-05",
   "assets": {
     "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"],
     "html_handling": "force-trailing-slash",
     "not_found_handling": "404-page"
-  }
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "citadel-control",
+      "database_id": "8e7855f0-905d-4ca4-96e7-4df015ada1c7"
+    }
+  ]
 }
