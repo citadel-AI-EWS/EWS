@@ -9,6 +9,7 @@ const MAX_NODE_BODY_BYTES = 64 * 1024;
 const SIGNATURE_WINDOW_SECONDS = 300;
 const ALLOWED_OUTCOMES = new Set(["success", "failed", "partial"]);
 const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
+const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 
 class ApiError extends Error {
   constructor(status, code) {
@@ -637,6 +638,187 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
   return json({ ok: true, command });
 }
 
+function constantTimeHexEqual(left, right) {
+  if (
+    typeof left !== "string" ||
+    typeof right !== "string" ||
+    left.length !== 64 ||
+    right.length !== 64
+  ) {
+    return false;
+  }
+
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return difference === 0;
+}
+
+async function authenticateArchitect(request, env) {
+  const expectedHash = typeof env.ARCHITECT_TOKEN_HASH === "string"
+    ? env.ARCHITECT_TOKEN_HASH.trim().toLowerCase()
+    : "";
+  if (!/^[a-f0-9]{64}$/.test(expectedHash)) {
+    throw new ApiError(503, "architect_auth_not_configured");
+  }
+
+  const authorization = request.headers.get("authorization") || "";
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  const token = match?.[1]?.trim() || "";
+  if (!token || token.length > 512) {
+    throw new ApiError(401, "architect_authentication_required");
+  }
+
+  const actualHash = await sha256Hex(token);
+  if (!constantTimeHexEqual(actualHash, expectedHash)) {
+    throw new ApiError(401, "invalid_architect_token");
+  }
+}
+
+async function architectOverview(request, env) {
+  await authenticateArchitect(request, env);
+
+  const [counts, nodesQuery, missionsQuery, auditQuery] = await Promise.all([
+    env.DB.prepare(
+      "SELECT " +
+      "(SELECT COUNT(*) FROM nodes) AS nodes, " +
+      "(SELECT COUNT(*) FROM nodes WHERE status = 'online') AS online_nodes, " +
+      "(SELECT COUNT(*) FROM missions) AS missions"
+    ).first(),
+    env.DB.prepare(
+      "SELECT node_id, hostname, os_name, os_version, architecture, " +
+      "agent_version, status, cpu_percent, memory_percent, " +
+      "enrolled_at, last_seen_at FROM nodes " +
+      "ORDER BY last_seen_at DESC LIMIT 100"
+    ).all(),
+    env.DB.prepare(
+      "SELECT m.mission_id, m.title, m.mission_type, m.status, " +
+      "m.priority, m.created_at, m.expires_at, a.assignment_id, " +
+      "a.node_id, a.status AS assignment_status, r.result_id, " +
+      "r.outcome, r.summary, r.metrics_json, " +
+      "r.created_at AS result_created_at FROM missions AS m " +
+      "LEFT JOIN assignments AS a ON a.mission_id = m.mission_id " +
+      "LEFT JOIN results AS r ON r.assignment_id = a.assignment_id " +
+      "ORDER BY m.created_at DESC LIMIT 100"
+    ).all(),
+    env.DB.prepare(
+      "SELECT event_id, actor_type, actor_id, action, target_type, " +
+      "target_id, created_at FROM audit_events " +
+      "ORDER BY event_id DESC LIMIT 30"
+    ).all()
+  ]);
+
+  const missions = (missionsQuery.results || []).map((row) => ({
+    ...row,
+    metrics: safeJson(row.metrics_json, {}),
+    metrics_json: undefined
+  }));
+
+  return json({
+    ok: true,
+    counts: {
+      nodes: counts?.nodes || 0,
+      online_nodes: counts?.online_nodes || 0,
+      missions: counts?.missions || 0
+    },
+    nodes: nodesQuery.results || [],
+    missions,
+    audit_events: auditQuery.results || []
+  });
+}
+
+async function architectCreateMission(request, env) {
+  await authenticateArchitect(request, env);
+  const bodyText = await readBodyText(request, 8 * 1024);
+  const body = parseJsonObject(bodyText);
+
+  const nodeId = requireString(body.node_id, "node_id", 128);
+  const title = requireString(body.title, "title", 160);
+  const missionType = body.mission_type === undefined
+    ? "system_inventory"
+    : requireString(body.mission_type, "mission_type", 64);
+  if (!ALLOWED_ARCHITECT_MISSION_TYPES.has(missionType)) {
+    throw new ApiError(400, "mission_type_not_allowed");
+  }
+
+  const priority = body.priority === undefined ? 100 : body.priority;
+  if (!Number.isInteger(priority) || priority < 1 || priority > 1000) {
+    throw new ApiError(400, "invalid_priority");
+  }
+
+  const expiresInHours = body.expires_in_hours === undefined
+    ? 24
+    : body.expires_in_hours;
+  if (!Number.isInteger(expiresInHours) || expiresInHours < 1 || expiresInHours > 168) {
+    throw new ApiError(400, "invalid_expires_in_hours");
+  }
+
+  const node = await env.DB.prepare(
+    "SELECT node_id, status FROM nodes WHERE node_id = ?"
+  ).bind(nodeId).first();
+  if (!node) {
+    throw new ApiError(404, "node_not_found");
+  }
+  if (node.status === "revoked") {
+    throw new ApiError(409, "node_revoked");
+  }
+
+  const missionId = "mission_" + crypto.randomUUID();
+  const assignmentId = "assignment_" + crypto.randomUUID();
+  const payloadJson = JSON.stringify({
+    collect: ["language", "timezone", "screen_size"],
+    network_access: false
+  });
+  const expiresAt = new Date(Date.now() + expiresInHours * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 19)
+    .replace("T", " ");
+  const detailsJson = JSON.stringify({
+    assignment_id: assignmentId,
+    node_id: nodeId,
+    mission_type: missionType
+  });
+
+  await env.DB.batch([
+    env.DB.prepare(
+      "INSERT INTO missions (" +
+      "mission_id, title, role_name, mission_type, payload_json, " +
+      "priority, status, expires_at" +
+      ") VALUES (?, ?, 'architect-test', ?, ?, ?, 'assigned', ?)"
+    ).bind(
+      missionId,
+      title,
+      missionType,
+      payloadJson,
+      priority,
+      expiresAt
+    ),
+    env.DB.prepare(
+      "INSERT INTO assignments (" +
+      "assignment_id, mission_id, node_id, status" +
+      ") VALUES (?, ?, ?, 'assigned')"
+    ).bind(assignmentId, missionId, nodeId),
+    env.DB.prepare(
+      "INSERT INTO audit_events (" +
+      "actor_type, actor_id, action, target_type, target_id, details_json" +
+      ") VALUES ('architect', 'test-console', 'mission.created', 'mission', ?, ?)"
+    ).bind(missionId, detailsJson)
+  ]);
+
+  return json({
+    ok: true,
+    mission: {
+      mission_id: missionId,
+      assignment_id: assignmentId,
+      node_id: nodeId,
+      mission_type: missionType,
+      status: "assigned",
+      expires_at: expiresAt
+    }
+  }, 201);
+}
+
 function apiDescription() {
   return json({
     ok: true,
@@ -676,6 +858,18 @@ async function handleApi(request, env, url) {
         database: "unavailable"
       }, 503);
     }
+  }
+
+  if (url.pathname === "/api/v1/architect/overview") {
+    return request.method === "GET"
+      ? architectOverview(request, env)
+      : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/missions") {
+    return request.method === "POST"
+      ? architectCreateMission(request, env)
+      : methodNotAllowed(["POST"]);
   }
 
   if (url.pathname === "/api/v1") {
