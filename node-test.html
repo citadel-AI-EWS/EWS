@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>CITADEL — первый тестовый узел</title>
+  <style>
+    :root{font-family:system-ui,-apple-system,sans-serif;color:#eef2ff;background:#090d18}
+    *{box-sizing:border-box}body{margin:0;padding:22px;background:radial-gradient(circle at top,#16213c,#090d18 55%);min-height:100vh}
+    main{max-width:620px;margin:auto}.brand{color:#8fb5ff;font-weight:800;letter-spacing:.12em;font-size:13px}
+    h1{font-size:28px;line-height:1.15;margin:12px 0}p{color:#b8c1d9;line-height:1.5}
+    .card{margin-top:18px;padding:20px;border:1px solid #2a3554;border-radius:18px;background:#11182a;box-shadow:0 18px 60px #0008}
+    label{display:block;margin-bottom:8px;font-weight:700}input{width:100%;padding:14px;border:1px solid #3a496f;border-radius:11px;background:#090e1b;color:#fff;font-size:16px}
+    button{width:100%;margin-top:13px;padding:14px;border:0;border-radius:11px;background:#3478f6;color:white;font-size:16px;font-weight:800}
+    button.secondary{background:#26334f}button:disabled{opacity:.55}.status{margin-top:16px;padding:13px;border-radius:11px;background:#0b1222;color:#c8d4ef;white-space:pre-wrap;overflow-wrap:anywhere}
+    .ok{border-left:4px solid #35d07f}.bad{border-left:4px solid #ff6874}.small{font-size:13px;color:#93a0ba}.hidden{display:none}
+    code{color:#a8c7ff}ul{color:#b8c1d9;padding-left:20px}li{margin:7px 0}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">CITADEL / TEST</div>
+    <h1>Первый безопасный узел</h1>
+    <p>Эта страница регистрирует текущий телефон как тестовый узел и проверяет подписанную связь с Controller.</p>
+
+    <section id="enrollCard" class="card">
+      <label for="token">Одноразовый токен регистрации</label>
+      <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="ews_enroll_…">
+      <button id="enrollButton" type="button">Зарегистрировать этот телефон</button>
+      <p class="small">Токен не сохраняется. Приватный ключ остаётся внутри защищённого хранилища браузера.</p>
+    </section>
+
+    <section id="nodeCard" class="card hidden">
+      <strong>Тестовый узел зарегистрирован</strong>
+      <p id="nodeId" class="small"></p>
+      <button id="heartbeatButton" class="secondary" type="button">Проверить heartbeat</button>
+    </section>
+
+    <div id="status" class="status">Проверяю локальное состояние…</div>
+
+    <section class="card">
+      <strong>Ограничения теста</strong>
+      <ul>
+        <li>нет удалённой оболочки и произвольных команд;</li>
+        <li>страница ничего не устанавливает на телефон;</li>
+        <li>heartbeat отправляется только при открытой странице.</li>
+      </ul>
+    </section>
+  </main>
+
+  <script>
+    const STORAGE_DB = "citadel-browser-node-v1";
+    const STORAGE_STORE = "identity";
+    const STORAGE_KEY = "current";
+    const statusElement = document.getElementById("status");
+    const enrollCard = document.getElementById("enrollCard");
+    const nodeCard = document.getElementById("nodeCard");
+    const nodeIdElement = document.getElementById("nodeId");
+    const tokenInput = document.getElementById("token");
+    const enrollButton = document.getElementById("enrollButton");
+    const heartbeatButton = document.getElementById("heartbeatButton");
+
+    function setStatus(message, kind = "") {
+      statusElement.textContent = message;
+      statusElement.className = `status ${kind}`.trim();
+    }
+
+    function openStorage() {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open(STORAGE_DB, 1);
+        request.onupgradeneeded = () => {
+          request.result.createObjectStore(STORAGE_STORE);
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    }
+
+    async function storageGet() {
+      const database = await openStorage();
+      return new Promise((resolve, reject) => {
+        const transaction = database.transaction(STORAGE_STORE, "readonly");
+        const request = transaction.objectStore(STORAGE_STORE).get(STORAGE_KEY);
+        request.onsuccess = () => resolve(request.result || null);
+        request.onerror = () => reject(request.error);
+        transaction.oncomplete = () => database.close();
+      });
+    }
+
+    async function storagePut(value) {
+      const database = await openStorage();
+      return new Promise((resolve, reject) => {
+        const transaction = database.transaction(STORAGE_STORE, "readwrite");
+        transaction.objectStore(STORAGE_STORE).put(value, STORAGE_KEY);
+        transaction.oncomplete = () => { database.close(); resolve(); };
+        transaction.onerror = () => reject(transaction.error);
+      });
+    }
+
+    function bytesToHex(buffer) {
+      return [...new Uint8Array(buffer)]
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("");
+    }
+
+    function bytesToBase64Url(buffer) {
+      const bytes = new Uint8Array(buffer);
+      let binary = "";
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    }
+
+    async function parseResponse(response) {
+      const data = await response.json().catch(() => ({ error: "invalid_server_response" }));
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      return data;
+    }
+
+    function showNode(identity) {
+      enrollCard.classList.add("hidden");
+      nodeCard.classList.remove("hidden");
+      nodeIdElement.textContent = `Node ID: ${identity.nodeId}`;
+    }
+
+    async function sendHeartbeat(identity) {
+      heartbeatButton.disabled = true;
+      setStatus("Подписываю heartbeat…");
+      try {
+        const path = `/api/v1/nodes/${identity.nodeId}/heartbeat`;
+        const body = JSON.stringify({
+          agent_version: "browser-test-0.1.0",
+          capabilities: []
+        });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const bodyHash = bytesToHex(await crypto.subtle.digest(
+          "SHA-256",
+          new TextEncoder().encode(body)
+        ));
+        const canonical = ["POST", path, timestamp, bodyHash].join("\n");
+        const signature = await crypto.subtle.sign(
+          "Ed25519",
+          identity.privateKey,
+          new TextEncoder().encode(canonical)
+        );
+
+        const data = await parseResponse(await fetch(path, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-node-id": identity.nodeId,
+            "x-node-timestamp": timestamp,
+            "x-node-signature": bytesToBase64Url(signature)
+          },
+          body
+        }));
+        setStatus(`Готово. Подписанный heartbeat принят.\nСтатус: ${data.status}\nВремя: ${data.last_seen_at}`, "ok");
+      } catch (error) {
+        setStatus(`Heartbeat не прошёл: ${error.message}`, "bad");
+      } finally {
+        heartbeatButton.disabled = false;
+      }
+    }
+
+    enrollButton.addEventListener("click", async () => {
+      const enrollmentToken = tokenInput.value.trim();
+      if (!enrollmentToken) {
+        setStatus("Сначала вставьте одноразовый токен.", "bad");
+        return;
+      }
+
+      enrollButton.disabled = true;
+      setStatus("Создаю ключ Ed25519 и регистрирую узел…");
+      try {
+        const generated = await crypto.subtle.generateKey(
+          { name: "Ed25519" },
+          true,
+          ["sign", "verify"]
+        );
+        const publicKey = await crypto.subtle.exportKey("jwk", generated.publicKey);
+        const privateJwk = await crypto.subtle.exportKey("jwk", generated.privateKey);
+        const privateKey = await crypto.subtle.importKey(
+          "jwk",
+          privateJwk,
+          { name: "Ed25519" },
+          false,
+          ["sign"]
+        );
+
+        const data = await parseResponse(await fetch("/api/v1/enroll", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            enrollment_token: enrollmentToken,
+            public_key: publicKey,
+            hostname: "android-browser-test",
+            os_name: "Android",
+            os_version: navigator.userAgent.slice(0, 80),
+            architecture: "mobile-browser",
+            agent_version: "browser-test-0.1.0",
+            capabilities: []
+          })
+        }));
+
+        const identity = { nodeId: data.node.node_id, privateKey };
+        await storagePut(identity);
+        tokenInput.value = "";
+        showNode(identity);
+        setStatus("Регистрация выполнена. Проверяю подписанную связь…", "ok");
+        await sendHeartbeat(identity);
+      } catch (error) {
+        setStatus(`Регистрация не выполнена: ${error.message}`, "bad");
+        enrollButton.disabled = false;
+      }
+    });
+
+    heartbeatButton.addEventListener("click", async () => {
+      const identity = await storageGet();
+      if (!identity) {
+        setStatus("Локальный ключ не найден.", "bad");
+        return;
+      }
+      await sendHeartbeat(identity);
+    });
+
+    (async () => {
+      try {
+        if (!crypto?.subtle || !indexedDB) {
+          throw new Error("Этот браузер не поддерживает необходимую криптографию.");
+        }
+        const identity = await storageGet();
+        if (identity) {
+          showNode(identity);
+          setStatus("Локальный тестовый узел найден. Можно проверить heartbeat.", "ok");
+        } else {
+          setStatus("Узел ещё не зарегистрирован.");
+        }
+      } catch (error) {
+        setStatus(error.message, "bad");
+        enrollButton.disabled = true;
+      }
+    })();
+  </script>
+</body>
+</html>
