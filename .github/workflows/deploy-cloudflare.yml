@@ -41,3 +41,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           command: deploy
+          secrets: |
+            ARCHITECT_TOKEN_HASH
+        env:
+          ARCHITECT_TOKEN_HASH: ${{ secrets.ARCHITECT_TOKEN_HASH }}
