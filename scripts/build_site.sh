@@ -3,8 +3,9 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT="${1:-$ROOT/public}"
 rm -rf "$OUTPUT"
-mkdir -p "$OUTPUT"
+mkdir -p "$OUTPUT/node-test"
 cp "$ROOT/index.html" "$OUTPUT/index.html"
+cp "$ROOT/node-test.html" "$OUTPUT/node-test/index.html"
 cat > "$OUTPUT/_headers" <<'HEADERS'
 /*
   Cache-Control: no-store
