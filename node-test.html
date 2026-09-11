@@ -13,7 +13,7 @@
     .card{margin-top:18px;padding:20px;border:1px solid #2a3554;border-radius:18px;background:#11182a;box-shadow:0 18px 60px #0008}
     label{display:block;margin-bottom:8px;font-weight:700}input{width:100%;padding:14px;border:1px solid #3a496f;border-radius:11px;background:#090e1b;color:#fff;font-size:16px}
     button{width:100%;margin-top:13px;padding:14px;border:0;border-radius:11px;background:#3478f6;color:white;font-size:16px;font-weight:800}
-    button.secondary{background:#26334f}button:disabled{opacity:.55}.status{margin-top:16px;padding:13px;border-radius:11px;background:#0b1222;color:#c8d4ef;white-space:pre-wrap;overflow-wrap:anywhere}
+    button.secondary{background:#26334f}button.danger{background:#703542}button:disabled{opacity:.55}.status{margin-top:16px;padding:13px;border-radius:11px;background:#0b1222;color:#c8d4ef;white-space:pre-wrap;overflow-wrap:anywhere}
     .ok{border-left:4px solid #35d07f}.bad{border-left:4px solid #ff6874}.small{font-size:13px;color:#93a0ba}.hidden{display:none}
     #missionText{white-space:pre-wrap;overflow-wrap:anywhere}
     code{color:#a8c7ff}ul{color:#b8c1d9;padding-left:20px}li{margin:7px 0}
@@ -45,6 +45,13 @@
       <button id="runMissionButton" class="hidden" type="button">Выполнить тестовую миссию</button>
     </section>
 
+    <section id="controlCard" class="card hidden">
+      <strong>Управление узлом</strong>
+      <p id="controlText" class="small">Нажмите кнопку, чтобы получить подписанные команды Controller.</p>
+      <button id="commandButton" class="secondary" type="button">Проверить управление</button>
+      <button id="applyCommandButton" class="hidden" type="button">Применить команду</button>
+    </section>
+
     <div id="status" class="status">Проверяю локальное состояние…</div>
 
     <section class="card">
@@ -52,6 +59,8 @@
       <ul>
         <li>нет удалённой оболочки и произвольных команд;</li>
         <li>страница ничего не устанавливает на телефон;</li>
+        <li>управляющие команды проверяются подписью Controller;</li>
+        <li>в TEST команда применяется только после нажатия кнопки;</li>
         <li>heartbeat отправляется только при открытой странице.</li>
       </ul>
     </section>
@@ -61,10 +70,17 @@
     const STORAGE_DB = "citadel-browser-node-v1";
     const STORAGE_STORE = "identity";
     const STORAGE_KEY = "current";
+    const CONTROLLER_COMMAND_PUBLIC_JWK = {
+      kty: "OKP",
+      crv: "Ed25519",
+      x: "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
+    };
+    const ALLOWED_COMMAND_TYPES = new Set(["pause", "resume", "uninstall"]);
     const statusElement = document.getElementById("status");
     const enrollCard = document.getElementById("enrollCard");
     const nodeCard = document.getElementById("nodeCard");
     const missionCard = document.getElementById("missionCard");
+    const controlCard = document.getElementById("controlCard");
     const nodeIdElement = document.getElementById("nodeId");
     const missionText = document.getElementById("missionText");
     const tokenInput = document.getElementById("token");
@@ -72,7 +88,12 @@
     const heartbeatButton = document.getElementById("heartbeatButton");
     const assignmentButton = document.getElementById("assignmentButton");
     const runMissionButton = document.getElementById("runMissionButton");
+    const controlText = document.getElementById("controlText");
+    const commandButton = document.getElementById("commandButton");
+    const applyCommandButton = document.getElementById("applyCommandButton");
     let activeAssignment = null;
+    let activeCommand = null;
+    let nodePaused = false;
 
     function setStatus(message, kind = "") {
       statusElement.textContent = message;
@@ -111,6 +132,16 @@
       });
     }
 
+    async function storageDelete() {
+      const database = await openStorage();
+      return new Promise((resolve, reject) => {
+        const transaction = database.transaction(STORAGE_STORE, "readwrite");
+        transaction.objectStore(STORAGE_STORE).delete(STORAGE_KEY);
+        transaction.oncomplete = () => { database.close(); resolve(); };
+        transaction.onerror = () => reject(transaction.error);
+      });
+    }
+
     function bytesToHex(buffer) {
       return [...new Uint8Array(buffer)]
         .map((byte) => byte.toString(16).padStart(2, "0"))
@@ -124,6 +155,49 @@
       return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
     }
 
+    function base64UrlToBytes(value) {
+      if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) {
+        throw new Error("Некорректная подпись команды.");
+      }
+      const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+      const binary = atob(padded);
+      return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    }
+
+    async function verifyControllerCommand(command, nodeId) {
+      if (!ALLOWED_COMMAND_TYPES.has(command.command_type) || command.node_id && command.node_id !== nodeId) {
+        return false;
+      }
+      const payloadJson = JSON.stringify(command.payload || {});
+      const payloadHash = bytesToHex(await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(payloadJson)
+      ));
+      const canonical = [
+        "CITADEL-COMMAND-V1",
+        command.command_id,
+        nodeId,
+        command.command_type,
+        payloadHash,
+        command.created_at
+      ].join("\n");
+      const publicKey = await crypto.subtle.importKey(
+        "jwk",
+        CONTROLLER_COMMAND_PUBLIC_JWK,
+        { name: "Ed25519" },
+        false,
+        ["verify"]
+      );
+      const signature = base64UrlToBytes(command.signature);
+      return signature.byteLength === 64 && crypto.subtle.verify(
+        "Ed25519",
+        publicKey,
+        signature,
+        new TextEncoder().encode(canonical)
+      );
+    }
+
     async function parseResponse(response) {
       const data = await response.json().catch(() => ({ error: "invalid_server_response" }));
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
@@ -134,7 +208,27 @@
       enrollCard.classList.add("hidden");
       nodeCard.classList.remove("hidden");
       missionCard.classList.remove("hidden");
+      controlCard.classList.remove("hidden");
       nodeIdElement.textContent = `Node ID: ${identity.nodeId}`;
+    }
+
+    function hideNode() {
+      nodeCard.classList.add("hidden");
+      missionCard.classList.add("hidden");
+      controlCard.classList.add("hidden");
+      enrollCard.classList.remove("hidden");
+    }
+
+    function applyNodeStatus(status) {
+      nodePaused = status === "paused";
+      assignmentButton.disabled = nodePaused;
+      if (nodePaused) {
+        activeAssignment = null;
+        runMissionButton.classList.add("hidden");
+        missionText.textContent = "Узел на паузе. Новые миссии временно не выполняются.";
+      } else if (status === "online" && missionText.textContent.includes("на паузе")) {
+        missionText.textContent = "Узел снова активен. Можно проверить назначенные задания.";
+      }
     }
 
     async function signedRequest(identity, method, path, payload) {
@@ -170,9 +264,10 @@
       try {
         const path = `/api/v1/nodes/${identity.nodeId}/heartbeat`;
         const data = await signedRequest(identity, "POST", path, {
-          agent_version: "browser-test-0.1.0",
-          capabilities: []
+          agent_version: "browser-test-0.2.0",
+          capabilities: ["signed_commands_v1"]
         });
+        applyNodeStatus(data.status);
         setStatus(`Готово. Подписанный heartbeat принят.\nСтатус: ${data.status}\nВремя: ${data.last_seen_at}`, "ok");
       } catch (error) {
         setStatus(`Heartbeat не прошёл: ${error.message}`, "bad");
@@ -216,8 +311,8 @@
             os_name: "Android",
             os_version: navigator.userAgent.slice(0, 80),
             architecture: "mobile-browser",
-            agent_version: "browser-test-0.1.0",
-            capabilities: []
+            agent_version: "browser-test-0.2.0",
+            capabilities: ["signed_commands_v1"]
           })
         }));
 
@@ -251,6 +346,8 @@
         if (!identity) throw new Error("Локальный ключ не найден.");
         const path = `/api/v1/nodes/${identity.nodeId}/assignments`;
         const data = await signedRequest(identity, "GET", path);
+        applyNodeStatus(data.node_status);
+        if (data.node_status === "paused") return;
         if (!data.assignments.length) {
           missionText.textContent = "Новых заданий пока нет.";
           return;
@@ -272,7 +369,7 @@
       } catch (error) {
         missionText.textContent = `Задания не получены: ${error.message}`;
       } finally {
-        assignmentButton.disabled = false;
+        assignmentButton.disabled = nodePaused;
       }
     });
 
@@ -315,7 +412,85 @@
         missionText.textContent = `Миссия не выполнена: ${error.message}`;
       } finally {
         runMissionButton.disabled = false;
-        assignmentButton.disabled = false;
+        assignmentButton.disabled = nodePaused;
+      }
+    });
+
+    commandButton.addEventListener("click", async () => {
+      commandButton.disabled = true;
+      applyCommandButton.classList.add("hidden");
+      activeCommand = null;
+      try {
+        const identity = await storageGet();
+        if (!identity) throw new Error("Локальный ключ не найден.");
+        const path = `/api/v1/nodes/${identity.nodeId}/commands`;
+        const data = await signedRequest(identity, "GET", path);
+        applyNodeStatus(data.node_status);
+        if (!data.commands.length) {
+          controlText.textContent = `Новых команд нет. Текущий статус: ${data.node_status}.`;
+          return;
+        }
+
+        const command = data.commands[0];
+        if (!await verifyControllerCommand(command, identity.nodeId)) {
+          throw new Error("Подпись Controller не прошла проверку. Команда отклонена.");
+        }
+
+        const labels = { pause: "Пауза", resume: "Возобновление", uninstall: "Отключение" };
+        activeCommand = command;
+        controlText.textContent = [
+          `Команда: ${labels[command.command_type]}`,
+          `Статус: ${command.status}`,
+          "Подпись Controller проверена."
+        ].join("\n");
+        applyCommandButton.textContent = `Применить: ${labels[command.command_type]}`;
+        applyCommandButton.classList.toggle("danger", command.command_type === "uninstall");
+        applyCommandButton.classList.remove("hidden");
+      } catch (error) {
+        controlText.textContent = `Управление не получено: ${error.message}`;
+        setStatus("Команда управления отклонена.", "bad");
+      } finally {
+        commandButton.disabled = false;
+      }
+    });
+
+    applyCommandButton.addEventListener("click", async () => {
+      if (!activeCommand) return;
+      applyCommandButton.disabled = true;
+      commandButton.disabled = true;
+      try {
+        const identity = await storageGet();
+        if (!identity) throw new Error("Локальный ключ не найден.");
+        const path = `/api/v1/nodes/${identity.nodeId}/commands/${encodeURIComponent(activeCommand.command_id)}/ack`;
+        if (activeCommand.status === "pending") {
+          await signedRequest(identity, "POST", path, { status: "accepted" });
+          activeCommand.status = "accepted";
+        }
+        const completed = await signedRequest(identity, "POST", path, { status: "completed" });
+        const appliedType = activeCommand.command_type;
+        activeCommand = null;
+        applyCommandButton.classList.add("hidden");
+
+        if (appliedType === "uninstall") {
+          await storageDelete();
+          hideNode();
+          controlText.textContent = "Узел отключён.";
+          setStatus("Узел отключён. Локальный ключ удалён.", "ok");
+          return;
+        }
+
+        applyNodeStatus(completed.node_status);
+        const message = appliedType === "pause"
+          ? "Узел поставлен на паузу."
+          : "Работа узла возобновлена.";
+        controlText.textContent = `${message}\nСтатус: ${completed.node_status}`;
+        setStatus("Подписанная команда выполнена и подтверждена Controller.", "ok");
+      } catch (error) {
+        controlText.textContent = `Команда не применена: ${error.message}`;
+        setStatus("Ошибка выполнения команды управления.", "bad");
+      } finally {
+        applyCommandButton.disabled = false;
+        commandButton.disabled = false;
       }
     });
 
