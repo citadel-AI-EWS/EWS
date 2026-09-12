@@ -16,18 +16,18 @@ export async function handleTelemetryRequest(request, env, url = new URL(request
   try {
     if (url.pathname === "/api/v1/architect/logs") {
       return request.method === "GET"
-        ? architectListLogs(request, env, url)
+        ? await architectListLogs(request, env, url)
         : methodNotAllowed(["GET"]);
     }
     if (url.pathname === "/api/v1/architect/logs/stats") {
       return request.method === "GET"
-        ? architectLogStats(request, env)
+        ? await architectLogStats(request, env)
         : methodNotAllowed(["GET"]);
     }
     const match = url.pathname.match(/^\/api\/v1\/nodes\/([^/]+)\/logs$/);
     if (match) {
       return request.method === "POST"
-        ? ingestNodeLogs(request, env, decodeURIComponent(match[1]), url)
+        ? await ingestNodeLogs(request, env, decodeURIComponent(match[1]), url)
         : methodNotAllowed(["POST"]);
     }
     return null;
