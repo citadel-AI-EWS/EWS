@@ -14,7 +14,7 @@
     label{display:block;margin:12px 0 7px;font-weight:750}input,select{width:100%;padding:13px;border:1px solid #3a496f;border-radius:11px;background:#090e1b;color:#fff;font-size:16px}
     button{width:100%;margin-top:13px;padding:14px;border:0;border-radius:11px;background:#3478f6;color:#fff;font-size:16px;font-weight:850}
     button.secondary{background:#273451}button.danger{background:#703542}button:disabled{opacity:.55}.hidden{display:none!important}
-    .toolbar{display:flex;gap:10px}.toolbar button{width:auto;flex:1}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:17px}
+    .toolbar{display:flex;gap:10px;flex-wrap:wrap}.toolbar button{width:auto;flex:1}.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:17px}
     .stat{padding:14px;border:1px solid #2b3757;border-radius:15px;background:#11182a}.stat b{display:block;font-size:25px}.stat span,.small{font-size:13px;color:#93a0ba}
     .item{margin-top:10px;padding:13px;border-radius:13px;background:#0b1222;border-left:4px solid #5b8fff;overflow-wrap:anywhere}.item.ok{border-left-color:#35d07f}.item.warn{border-left-color:#ffb44f}
     .item strong{display:block;margin-bottom:5px}.status{margin-top:15px;padding:13px;border-radius:11px;background:#0b1222;white-space:pre-wrap;overflow-wrap:anywhere}
@@ -49,7 +49,21 @@
         <div class="stat"><b id="onlineCount">0</b><span>узлов online</span></div>
         <div class="stat"><b id="missionCount">0</b><span>миссий</span></div>
         <div class="stat"><b id="reportCount">0</b><span>полных отчётов</span></div>
+        <div class="stat"><b id="sessionCount">0</b><span>контрольных точек</span></div>
       </div>
+
+      <section class="card">
+        <div class="section-head">
+          <h2>Контрольные точки</h2>
+          <button id="refreshSessionsButton" class="secondary" type="button">Обновить</button>
+        </div>
+        <p class="small">Сохраняет рабочее состояние на сервере без секрета входа и без содержимого отчётов.</p>
+        <label for="sessionName">Название</label>
+        <input id="sessionName" maxlength="120" value="Контрольная точка">
+        <button id="saveSessionButton" type="button">Сохранить сессию</button>
+        <div id="storageUsage" class="status">Использование хранилища загружается…</div>
+        <div id="sessionsList"></div>
+      </section>
 
       <section class="card">
         <h2>Управление узлом</h2>
@@ -134,6 +148,10 @@
     const reportDetailMeta = document.getElementById("reportDetailMeta");
     const reportDetailBody = document.getElementById("reportDetailBody");
     const closeReportButton = document.getElementById("closeReportButton");
+    const refreshSessionsButton = document.getElementById("refreshSessionsButton");
+    const saveSessionButton = document.getElementById("saveSessionButton");
+    const sessionName = document.getElementById("sessionName");
+    const storageUsage = document.getElementById("storageUsage");
     const nodeSelect = document.getElementById("nodeSelect");
     const controlNodeSelect = document.getElementById("controlNodeSelect");
     const pauseButton = document.getElementById("pauseButton");
@@ -145,6 +163,8 @@
     let architectToken = sessionStorage.getItem("citadel-architect-token") || "";
     let currentNodes = [];
     let currentCommands = [];
+    let currentReports = [];
+    let activeReportId = null;
 
     function setStatus(message, kind = "") {
       statusElement.textContent = message;
@@ -239,7 +259,147 @@
       if (!missions.length) addText(list, "p", "Миссий пока нет.", "muted");
     }
 
+    function formatBytes(value) {
+      const bytes = Number(value) || 0;
+      if (bytes < 1024) return `${bytes} Б`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КиБ`;
+      return `${(bytes / 1024 / 1024).toFixed(2)} МиБ`;
+    }
+
+    function renderStorageUsage(usage) {
+      const used = (Number(usage.report_bytes) || 0) + (Number(usage.session_bytes) || 0);
+      const percent = usage.safe_d1_target_bytes
+        ? Math.min(100, used / Number(usage.safe_d1_target_bytes) * 100)
+        : 0;
+      storageUsage.textContent = [
+        `Отчёты: ${usage.report_count} · ${formatBytes(usage.report_bytes)}`,
+        `Сессии: ${usage.session_count} · ${formatBytes(usage.session_bytes)}`,
+        `Учтённые данные занимают ${percent.toFixed(3)}% безопасного лимита 400 МиБ`,
+        "Системные таблицы и индексы в эту оценку не входят."
+      ].join("\n");
+      storageUsage.className = `status ${percent >= 90 ? "bad" : percent >= 75 ? "warn" : "good"}`;
+    }
+
+    function renderSessions(sessions) {
+      const list = document.getElementById("sessionsList");
+      list.replaceChildren();
+      for (const session of sessions) {
+        const item = document.createElement("div");
+        item.className = `item ${session.status === "active" ? "ok" : "warn"}`;
+        addText(item, "strong", `${session.name} — ${session.status}`);
+        addText(item, "div", `Версия: ${session.schema_version} · ${formatBytes(session.snapshot_size_bytes)}`, "small");
+        addText(item, "div", `Обновлена: ${session.updated_at}`, "small");
+        const actions = document.createElement("div");
+        actions.className = "toolbar";
+        const restoreButton = addText(actions, "button", "Восстановить", "secondary");
+        restoreButton.type = "button";
+        restoreButton.addEventListener("click", () => restoreSession(session.session_id));
+        const exportButton = addText(actions, "button", "Экспорт", "secondary");
+        exportButton.type = "button";
+        exportButton.addEventListener("click", () => exportSession(session.session_id));
+        const archiveButton = addText(
+          actions,
+          "button",
+          session.status === "active" ? "В архив" : "Вернуть",
+          "secondary"
+        );
+        archiveButton.type = "button";
+        archiveButton.addEventListener("click", () => updateSession(
+          session.session_id,
+          { status: session.status === "active" ? "archived" : "active" }
+        ));
+        const deleteButton = addText(actions, "button", "Удалить", "danger");
+        deleteButton.type = "button";
+        deleteButton.addEventListener("click", () => deleteSession(session));
+        item.appendChild(actions);
+        list.appendChild(item);
+      }
+      if (!sessions.length) addText(list, "p", "Контрольных точек пока нет.", "muted");
+    }
+
+    async function loadSessionsAndUsage() {
+      const [sessions, storage] = await Promise.all([
+        api("/api/v1/architect/sessions?limit=30"),
+        api("/api/v1/architect/storage")
+      ]);
+      renderSessions(sessions.sessions || []);
+      renderStorageUsage(storage.usage || {});
+      document.getElementById("sessionCount").textContent = storage.usage?.session_count || 0;
+      return sessions.sessions || [];
+    }
+
+    function selectExistingOption(select, value) {
+      if (!value) return false;
+      const option = [...select.options].find((item) => item.value === value && !item.disabled);
+      if (!option) return false;
+      select.value = value;
+      return true;
+    }
+
+    async function restoreSession(sessionId) {
+      setStatus("Восстанавливаю контрольную точку…");
+      try {
+        const data = await api(`/api/v1/architect/sessions/${encodeURIComponent(sessionId)}`);
+        const ui = data.session.snapshot?.ui_state || {};
+        selectExistingOption(nodeSelect, ui.selected_node_id);
+        selectExistingOption(controlNodeSelect, ui.selected_control_node_id);
+        updateControlButtons();
+        if (ui.selected_report_id && currentReports.some((report) => report.report_id === ui.selected_report_id)) {
+          await openReport(ui.selected_report_id);
+        }
+        sessionName.value = data.session.name;
+        setStatus(`Контрольная точка «${data.session.name}» восстановлена.`, "good");
+      } catch (error) {
+        setStatus(`Сессия не восстановлена: ${error.message}`, "bad");
+      }
+    }
+
+    async function updateSession(sessionId, changes) {
+      try {
+        await api(`/api/v1/architect/sessions/${encodeURIComponent(sessionId)}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(changes)
+        });
+        await loadSessionsAndUsage();
+        setStatus("Контрольная точка обновлена.", "good");
+      } catch (error) {
+        setStatus(`Контрольная точка не обновлена: ${error.message}`, "bad");
+      }
+    }
+
+    async function exportSession(sessionId) {
+      try {
+        const data = await api(`/api/v1/architect/sessions/${encodeURIComponent(sessionId)}`);
+        const blob = new Blob([JSON.stringify(data.session, null, 2)], {
+          type: "application/json"
+        });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `${data.session.session_id}.json`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+        setStatus(`Контрольная точка «${data.session.name}» экспортирована.`, "good");
+      } catch (error) {
+        setStatus(`Экспорт не выполнен: ${error.message}`, "bad");
+      }
+    }
+
+    async function deleteSession(session) {
+      if (!confirm(`Удалить контрольную точку «${session.name}»?`)) return;
+      try {
+        await api(`/api/v1/architect/sessions/${encodeURIComponent(session.session_id)}`, {
+          method: "DELETE"
+        });
+        await loadSessionsAndUsage();
+        setStatus("Контрольная точка удалена. Действие записано в аудит.", "good");
+      } catch (error) {
+        setStatus(`Контрольная точка не удалена: ${error.message}`, "bad");
+      }
+    }
+
     function renderReports(reports) {
+      currentReports = reports;
       const list = document.getElementById("reportsList");
       list.replaceChildren();
       for (const report of reports) {
@@ -269,6 +429,7 @@
       try {
         const data = await api(`/api/v1/architect/reports/${encodeURIComponent(reportId)}`);
         const report = data.report;
+        activeReportId = report.report_id;
         reportDetailMeta.textContent = [
           `Report ID: ${report.report_id}`,
           `Mission ID: ${report.mission_id}`,
@@ -303,20 +464,25 @@
 
     async function loadDashboard() {
       setStatus("Загружаю данные…");
-      const [data, reports] = await Promise.all([
+      const [data, reports, sessions, storage] = await Promise.all([
         api("/api/v1/architect/overview"),
-        api("/api/v1/architect/reports?limit=50")
+        api("/api/v1/architect/reports?limit=50"),
+        api("/api/v1/architect/sessions?limit=30"),
+        api("/api/v1/architect/storage")
       ]);
       document.getElementById("nodeCount").textContent = data.counts.nodes;
       document.getElementById("onlineCount").textContent = data.counts.online_nodes;
       document.getElementById("missionCount").textContent = data.counts.missions;
       document.getElementById("reportCount").textContent = data.counts.reports;
+      document.getElementById("sessionCount").textContent = data.counts.sessions;
       document.getElementById("nodesUpdated").textContent = new Date().toLocaleTimeString();
       renderNodes(data.nodes);
       renderMissions(data.missions);
       renderCommands(data.commands || []);
       renderAudit(data.audit_events);
       renderReports(reports.reports || []);
+      renderSessions(sessions.sessions || []);
+      renderStorageUsage(storage.usage || {});
       loginCard.classList.add("hidden");
       dashboard.classList.remove("hidden");
       setStatus("Панель подключена к Controller.", "good");
@@ -370,6 +536,46 @@
       reportDetailCard.classList.add("hidden");
       reportDetailMeta.textContent = "";
       reportDetailBody.textContent = "";
+      activeReportId = null;
+    });
+
+    refreshSessionsButton.addEventListener("click", async () => {
+      refreshSessionsButton.disabled = true;
+      try {
+        const sessions = await loadSessionsAndUsage();
+        setStatus(`Контрольные точки обновлены: ${sessions.length}.`, "good");
+      } catch (error) {
+        setStatus(`Контрольные точки не обновлены: ${error.message}`, "bad");
+      } finally {
+        refreshSessionsButton.disabled = false;
+      }
+    });
+
+    saveSessionButton.addEventListener("click", async () => {
+      const name = sessionName.value.trim();
+      if (!name) return setStatus("Введите название контрольной точки.", "bad");
+      saveSessionButton.disabled = true;
+      try {
+        const data = await api("/api/v1/architect/sessions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name,
+            ui_state: {
+              selected_node_id: nodeSelect.value || null,
+              selected_control_node_id: controlNodeSelect.value || null,
+              selected_report_id: activeReportId,
+              expanded_section: activeReportId ? "report_detail" : "dashboard"
+            }
+          })
+        });
+        await loadDashboard();
+        setStatus(`Контрольная точка «${data.session.name}» сохранена на сервере.`, "good");
+      } catch (error) {
+        setStatus(`Сессия не сохранена: ${error.message}`, "bad");
+      } finally {
+        saveSessionButton.disabled = false;
+      }
     });
 
     logoutButton.addEventListener("click", () => logout());
