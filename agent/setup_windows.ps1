@@ -24,6 +24,7 @@ if ($null -eq $Python) {
 
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 Copy-Item (Join-Path $SourceRoot "citadel_node_v1.py") (Join-Path $InstallRoot "citadel_node_v1.py") -Force
+Copy-Item (Join-Path $SourceRoot "citadel_node_v2.py") (Join-Path $InstallRoot "citadel_node_v2.py") -Force
 Copy-Item (Join-Path $SourceRoot "requirements.txt") (Join-Path $InstallRoot "requirements.txt") -Force
 
 $Venv = Join-Path $InstallRoot ".venv"
@@ -48,9 +49,9 @@ $ConfigPath = Join-Path $InstallRoot "config.json"
 
 $env:CITADEL_ENROLLMENT_TOKEN = $EnrollmentToken
 try {
-  & $VenvPython (Join-Path $InstallRoot "citadel_node_v1.py") doctor --config $ConfigPath
+  & $VenvPython (Join-Path $InstallRoot "citadel_node_v2.py") doctor --config $ConfigPath
   if ($LASTEXITCODE -ne 0) { throw "Agent diagnostics failed." }
-  & $VenvPython (Join-Path $InstallRoot "citadel_node_v1.py") enroll --config $ConfigPath
+  & $VenvPython (Join-Path $InstallRoot "citadel_node_v2.py") enroll --config $ConfigPath
   if ($LASTEXITCODE -ne 0) { throw "Enrollment failed." }
 } finally {
   Remove-Item Env:CITADEL_ENROLLMENT_TOKEN -ErrorAction SilentlyContinue
@@ -59,4 +60,4 @@ try {
 
 Write-Host "[CITADEL] Setup complete. No background task or service was installed."
 Write-Host "[CITADEL] Start with:"
-Write-Host ('"' + $VenvPython + '" "' + (Join-Path $InstallRoot "citadel_node_v1.py") + '" run --config "' + $ConfigPath + '"')
+Write-Host ('"' + $VenvPython + '" "' + (Join-Path $InstallRoot "citadel_node_v2.py") + '" run --config "' + $ConfigPath + '"')
