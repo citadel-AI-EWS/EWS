@@ -14,6 +14,7 @@ const JSON_HEADERS = {
 };
 const SIGNATURE_WINDOW_SECONDS = 300;
 const SECRET_KEY = /(pass(word)?|secret|token|api[_-]?key|authorization|cookie|private[_-]?key|credential)/i;
+const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 export class TelemetryError extends Error {
   constructor(status, code) {
@@ -231,11 +232,12 @@ export function sanitizeTelemetryValue(value, depth = 0) {
     return value.slice(0, 32).map((item) => sanitizeTelemetryValue(item, depth + 1));
   }
   if (value && typeof value === "object") {
-    const output = {};
+    const output = Object.create(null);
     let count = 0;
     for (const [key, item] of Object.entries(value)) {
       if (count >= 40) break;
       const safeKey = String(key).slice(0, 80);
+      if (UNSAFE_OBJECT_KEYS.has(safeKey)) continue;
       output[safeKey] = SECRET_KEY.test(safeKey)
         ? "[REDACTED]"
         : sanitizeTelemetryValue(item, depth + 1);
