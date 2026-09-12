@@ -33,7 +33,7 @@ export async function handleTelemetryRequest(request, env, url = new URL(request
     return null;
   } catch (error) {
     if (error instanceof TelemetryError) {
-      return json({ ok: false, error: error.code }, error.status);
+      return json({ ok: false, error: error.code }, error.status, error.headers);
     }
     console.error("Unhandled telemetry API error", error);
     return json({ ok: false, error: "internal_error" }, 500);
