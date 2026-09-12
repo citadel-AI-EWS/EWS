@@ -1,6 +1,8 @@
 name: Deploy Cloudflare TEST
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       confirm_test_deploy:
@@ -17,7 +19,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: inputs.confirm_test_deploy == 'DEPLOY_TEST'
+    if: github.event_name == 'push' || inputs.confirm_test_deploy == 'DEPLOY_TEST'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: cloudflare-test
