@@ -8,6 +8,8 @@ const MAX_ENROLLMENT_BODY_BYTES = 16 * 1024;
 const MAX_NODE_BODY_BYTES = 64 * 1024;
 const MAX_RESULT_BODY_BYTES = 768 * 1024;
 const MAX_REPORT_BYTES = 512 * 1024;
+const MAX_SESSION_BODY_BYTES = 24 * 1024;
+const MAX_SESSION_SNAPSHOT_BYTES = 16 * 1024;
 const SIGNATURE_WINDOW_SECONDS = 300;
 const ALLOWED_OUTCOMES = new Set(["success", "failed", "partial"]);
 const ALLOWED_REPORT_SENSITIVITIES = new Set([
@@ -21,6 +23,7 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "uninstall"]);
 const CONTROLLER_COMMAND_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0";
 let reportSchemaPromise;
+let sessionSchemaPromise;
 
 class ApiError extends Error {
   constructor(status, code) {
@@ -150,6 +153,35 @@ async function ensureReportStorage(env) {
     });
   }
   await reportSchemaPromise;
+}
+
+async function ensureSessionStorage(env) {
+  if (!sessionSchemaPromise) {
+    sessionSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS architect_sessions (
+          session_id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          schema_version INTEGER NOT NULL DEFAULT 1,
+          snapshot_json TEXT NOT NULL,
+          snapshot_sha256 TEXT NOT NULL,
+          snapshot_size_bytes INTEGER NOT NULL CHECK (snapshot_size_bytes >= 0),
+          status TEXT NOT NULL DEFAULT 'active'
+            CHECK (status IN ('active', 'archived')),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_architect_sessions_status_updated
+        ON architect_sessions(status, updated_at DESC)
+      `)
+    ]).catch((error) => {
+      sessionSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await sessionSchemaPromise;
 }
 
 function bytesToHex(bytes) {
@@ -889,6 +921,228 @@ async function architectGetReport(request, env, reportId) {
   });
 }
 
+function normalizeSessionUiState(value) {
+  if (value === undefined || value === null) {
+    return {};
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ApiError(400, "invalid_ui_state");
+  }
+
+  const normalized = {};
+  for (const [field, maxLength] of Object.entries({
+    selected_node_id: 128,
+    selected_control_node_id: 128,
+    selected_report_id: 128,
+    report_type_filter: 64,
+    expanded_section: 64
+  })) {
+    const item = optionalString(value[field], field, maxLength);
+    if (item) normalized[field] = item;
+  }
+  return normalized;
+}
+
+async function architectListSessions(request, env, url) {
+  await authenticateArchitect(request, env);
+  await ensureSessionStorage(env);
+
+  const rawLimit = url.searchParams.get("limit") || "30";
+  if (!/^\d{1,3}$/.test(rawLimit)) {
+    throw new ApiError(400, "invalid_limit");
+  }
+  const limit = Number(rawLimit);
+  if (limit < 1 || limit > 100) {
+    throw new ApiError(400, "invalid_limit");
+  }
+
+  const query = await env.DB.prepare(`
+    SELECT session_id, name, schema_version, snapshot_sha256,
+      snapshot_size_bytes, status, created_at, updated_at
+    FROM architect_sessions
+    ORDER BY updated_at DESC
+    LIMIT ?
+  `).bind(limit).all();
+
+  return json({ ok: true, sessions: query.results || [] });
+}
+
+async function architectCreateSession(request, env) {
+  await authenticateArchitect(request, env);
+  await Promise.all([ensureReportStorage(env), ensureSessionStorage(env)]);
+  const bodyText = await readBodyText(request, MAX_SESSION_BODY_BYTES);
+  const body = parseJsonObject(bodyText);
+  const name = requireString(body.name, "session_name", 120);
+  const uiState = normalizeSessionUiState(body.ui_state);
+
+  const counts = await env.DB.prepare(
+    "SELECT " +
+    "(SELECT COUNT(*) FROM nodes) AS nodes, " +
+    "(SELECT COUNT(*) FROM missions) AS missions, " +
+    "(SELECT COUNT(*) FROM results) AS results, " +
+    "(SELECT COUNT(*) FROM agent_reports) AS reports"
+  ).first();
+  const savedAt = new Date().toISOString();
+  const snapshot = {
+    schema_version: 1,
+    saved_at: savedAt,
+    ui_state: uiState,
+    counts: {
+      nodes: counts?.nodes || 0,
+      missions: counts?.missions || 0,
+      results: counts?.results || 0,
+      reports: counts?.reports || 0
+    }
+  };
+  const snapshotJson = JSON.stringify(snapshot);
+  const snapshotSizeBytes = new TextEncoder().encode(snapshotJson).byteLength;
+  if (snapshotSizeBytes > MAX_SESSION_SNAPSHOT_BYTES) {
+    throw new ApiError(413, "session_snapshot_too_large");
+  }
+
+  const sessionId = `session_${crypto.randomUUID()}`;
+  const snapshotSha256 = await sha256Hex(snapshotJson);
+  await env.DB.batch([
+    env.DB.prepare(`
+      INSERT INTO architect_sessions (
+        session_id, name, schema_version, snapshot_json, snapshot_sha256,
+        snapshot_size_bytes, status, created_at, updated_at
+      ) VALUES (?, ?, 1, ?, ?, ?, 'active', ?, ?)
+    `).bind(
+      sessionId,
+      name,
+      snapshotJson,
+      snapshotSha256,
+      snapshotSizeBytes,
+      savedAt,
+      savedAt
+    ),
+    env.DB.prepare(`
+      INSERT INTO audit_events (
+        actor_type, actor_id, action, target_type, target_id, details_json
+      ) VALUES ('architect', 'test-console', 'session.created', 'session', ?, ?)
+    `).bind(sessionId, JSON.stringify({ name, schema_version: 1 }))
+  ]);
+
+  return json({
+    ok: true,
+    session: {
+      session_id: sessionId,
+      name,
+      schema_version: 1,
+      snapshot_sha256: snapshotSha256,
+      snapshot_size_bytes: snapshotSizeBytes,
+      status: "active",
+      created_at: savedAt,
+      updated_at: savedAt
+    }
+  }, 201);
+}
+
+async function architectGetSession(request, env, sessionId) {
+  await authenticateArchitect(request, env);
+  await ensureSessionStorage(env);
+  const session = await env.DB.prepare(`
+    SELECT session_id, name, schema_version, snapshot_json, snapshot_sha256,
+      snapshot_size_bytes, status, created_at, updated_at
+    FROM architect_sessions
+    WHERE session_id = ?
+  `).bind(sessionId).first();
+  if (!session) {
+    throw new ApiError(404, "session_not_found");
+  }
+  return json({
+    ok: true,
+    session: {
+      ...session,
+      snapshot: safeJson(session.snapshot_json, null),
+      snapshot_json: undefined
+    }
+  });
+}
+
+async function architectUpdateSession(request, env, sessionId) {
+  await authenticateArchitect(request, env);
+  await ensureSessionStorage(env);
+  const bodyText = await readBodyText(request, 8 * 1024);
+  const body = parseJsonObject(bodyText);
+  const name = body.name === undefined
+    ? null
+    : requireString(body.name, "session_name", 120);
+  const status = body.status === undefined
+    ? null
+    : requireString(body.status, "session_status", 16);
+  if (status !== null && !["active", "archived"].includes(status)) {
+    throw new ApiError(400, "invalid_session_status");
+  }
+  if (name === null && status === null) {
+    throw new ApiError(400, "session_update_required");
+  }
+
+  const result = await env.DB.prepare(`
+    UPDATE architect_sessions
+    SET name = COALESCE(?, name),
+        status = COALESCE(?, status),
+        updated_at = CURRENT_TIMESTAMP
+    WHERE session_id = ?
+  `).bind(name, status, sessionId).run();
+  if ((result?.meta?.changes || 0) !== 1) {
+    throw new ApiError(404, "session_not_found");
+  }
+  await env.DB.prepare(`
+    INSERT INTO audit_events (
+      actor_type, actor_id, action, target_type, target_id, details_json
+    ) VALUES ('architect', 'test-console', 'session.updated', 'session', ?, ?)
+  `).bind(sessionId, JSON.stringify({ name, status })).run();
+  return architectGetSession(request, env, sessionId);
+}
+
+async function architectDeleteSession(request, env, sessionId) {
+  await authenticateArchitect(request, env);
+  await ensureSessionStorage(env);
+  const existing = await env.DB.prepare(
+    "SELECT session_id, name FROM architect_sessions WHERE session_id = ?"
+  ).bind(sessionId).first();
+  if (!existing) {
+    throw new ApiError(404, "session_not_found");
+  }
+  await env.DB.batch([
+    env.DB.prepare(
+      "DELETE FROM architect_sessions WHERE session_id = ?"
+    ).bind(sessionId),
+    env.DB.prepare(`
+      INSERT INTO audit_events (
+        actor_type, actor_id, action, target_type, target_id, details_json
+      ) VALUES ('architect', 'test-console', 'session.deleted', 'session', ?, ?)
+    `).bind(sessionId, JSON.stringify({ name: existing.name }))
+  ]);
+  return json({ ok: true, deleted_session_id: sessionId });
+}
+
+async function architectStorageUsage(request, env) {
+  await authenticateArchitect(request, env);
+  await Promise.all([ensureReportStorage(env), ensureSessionStorage(env)]);
+  const usage = await env.DB.prepare(
+    "SELECT " +
+    "(SELECT COUNT(*) FROM agent_reports) AS report_count, " +
+    "(SELECT COALESCE(SUM(report_size_bytes), 0) FROM agent_reports) AS report_bytes, " +
+    "(SELECT COUNT(*) FROM architect_sessions) AS session_count, " +
+    "(SELECT COALESCE(SUM(snapshot_size_bytes), 0) FROM architect_sessions) AS session_bytes"
+  ).first();
+  return json({
+    ok: true,
+    usage: {
+      report_count: usage?.report_count || 0,
+      report_bytes: usage?.report_bytes || 0,
+      session_count: usage?.session_count || 0,
+      session_bytes: usage?.session_bytes || 0,
+      safe_d1_target_bytes: 400 * 1024 * 1024,
+      d1_database_limit_bytes: 500 * 1024 * 1024,
+      max_report_bytes: MAX_REPORT_BYTES
+    }
+  });
+}
+
 async function listCommands(request, env, nodeId, url) {
   const node = await authenticateNode(request, env, nodeId, url, "");
 
@@ -1020,7 +1274,7 @@ async function authenticateArchitect(request, env) {
 
 async function architectOverview(request, env) {
   await authenticateArchitect(request, env);
-  await ensureReportStorage(env);
+  await Promise.all([ensureReportStorage(env), ensureSessionStorage(env)]);
 
   const [counts, nodesQuery, missionsQuery, commandsQuery, auditQuery] = await Promise.all([
     env.DB.prepare(
@@ -1028,7 +1282,8 @@ async function architectOverview(request, env) {
       "(SELECT COUNT(*) FROM nodes) AS nodes, " +
       "(SELECT COUNT(*) FROM nodes WHERE status = 'online') AS online_nodes, " +
       "(SELECT COUNT(*) FROM missions) AS missions, " +
-      "(SELECT COUNT(*) FROM agent_reports) AS reports"
+      "(SELECT COUNT(*) FROM agent_reports) AS reports, " +
+      "(SELECT COUNT(*) FROM architect_sessions) AS sessions"
     ).first(),
     env.DB.prepare(
       "SELECT node_id, hostname, os_name, os_version, architecture, " +
@@ -1069,7 +1324,8 @@ async function architectOverview(request, env) {
       nodes: counts?.nodes || 0,
       online_nodes: counts?.online_nodes || 0,
       missions: counts?.missions || 0,
-      reports: counts?.reports || 0
+      reports: counts?.reports || 0,
+      sessions: counts?.sessions || 0
     },
     nodes: nodesQuery.results || [],
     missions,
@@ -1267,22 +1523,27 @@ async function handleApi(request, env, url) {
 
     try {
       const row = await env.DB.prepare("SELECT 1 AS ok").first();
-      const [controllerSigning, reportStorage] = await Promise.all([
+      const [controllerSigning, reportStorage, sessionStorage] = await Promise.all([
         importControllerPrivateKey(env)
           .then(() => "ready")
           .catch(() => "unavailable"),
         ensureReportStorage(env)
+          .then(() => "ready")
+          .catch(() => "unavailable"),
+        ensureSessionStorage(env)
           .then(() => "ready")
           .catch(() => "unavailable")
       ]);
       return json({
         ok: row?.ok === 1 &&
           controllerSigning === "ready" &&
-          reportStorage === "ready",
+          reportStorage === "ready" &&
+          sessionStorage === "ready",
         service: "citadel-ai",
         database: "citadel-control",
         controller_signing: controllerSigning,
-        report_storage: reportStorage
+        report_storage: reportStorage,
+        session_storage: sessionStorage
       });
     } catch {
       return json({
@@ -1309,6 +1570,39 @@ async function handleApi(request, env, url) {
     return request.method === "GET"
       ? architectListReports(request, env, url)
       : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/storage") {
+    return request.method === "GET"
+      ? architectStorageUsage(request, env)
+      : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/sessions") {
+    if (request.method === "GET") {
+      return architectListSessions(request, env, url);
+    }
+    if (request.method === "POST") {
+      return architectCreateSession(request, env);
+    }
+    return methodNotAllowed(["GET", "POST"]);
+  }
+
+  const architectSessionMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/sessions\/([^/]+)$/
+  );
+  if (architectSessionMatch) {
+    const sessionId = decodeURIComponent(architectSessionMatch[1]);
+    if (request.method === "GET") {
+      return architectGetSession(request, env, sessionId);
+    }
+    if (request.method === "PATCH") {
+      return architectUpdateSession(request, env, sessionId);
+    }
+    if (request.method === "DELETE") {
+      return architectDeleteSession(request, env, sessionId);
+    }
+    return methodNotAllowed(["GET", "PATCH", "DELETE"]);
   }
 
   const architectReportMatch = url.pathname.match(

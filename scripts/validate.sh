@@ -30,6 +30,7 @@ node --check /tmp/ews-architect.js
 node --check /tmp/ews-node-test.js
 node --check src/index.js
 node tests/report-storage.mjs
+node tests/session-storage.mjs
 bash -n controller_deploy.sh scripts/build_site.sh scripts/package_controller.sh scripts/validate.sh
 cfn-lint controller_template.yaml project_stack.yaml
 artifact="$(mktemp --suffix=.zip)"

@@ -209,3 +209,38 @@ Next step:
 
 - merge and deploy the Architect report browser and expanded JavaScript CI
   checks; then implement report retention and versioned session snapshots.
+
+
+### 2026-09-12 — Checkpoint: report browser live and session storage prepared
+
+Completed:
+
+- PR #20 merged as commit
+  `d0d47fe91e0cde5a257b658f0d8fe96f99c23571`.
+- CI run 35 and Cloudflare TEST deploy run 18 completed successfully.
+- The live Architect page exposes authenticated full-report browsing and the
+  live health endpoint still reports controller signing and report storage
+  ready.
+- A versioned `architect_sessions` D1 schema, authenticated create/list/get/
+  update/delete routes, storage-usage route, and mobile UI were implemented
+  locally for the next reviewed increment.
+- Session snapshots accept only allowlisted UI identifiers and server-generated
+  counts. They exclude login secrets and full report contents.
+- The UI supports save, restore, archive/reactivate, export, and audited delete.
+- Worker/page syntax checks, DOM consistency checks, 15 controller tests,
+  report-storage tests, and session-storage tests pass locally.
+
+Current decision:
+
+- Keep session snapshots small (16 KiB maximum) and versioned.
+- Use 400 MiB as the operating target for the 500 MiB D1 Free database, while
+  clearly labeling the UI meter as tracked report/session payloads rather than
+  total physical database usage.
+- Do not broaden the Cloudflare deployment token; bootstrap the idempotent
+  session schema through the runtime D1 binding.
+
+Next step:
+
+- publish the session checkpoint increment through CI and TEST deployment;
+  then implement report retention controls and the Cloudflare-v1 Python agent
+  adapter as separate reviewed changes.
