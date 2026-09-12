@@ -46,13 +46,15 @@ class Statement {
     if (this.sql.includes("SELECT result_id, outcome, created_at FROM results")) {
       return state.result;
     }
-    if (this.sql.includes("FROM results AS r") && this.sql.includes("WHERE r.result_id = ?")) {
-      return state.result?.result_id === this.args[0] ? { ...state.result } : null;
+    if (this.sql.includes("FROM agent_reports AS ar") && this.sql.includes("WHERE ar.report_id = ?")) {
+      return state.result && [state.result.report_id, state.result.result_id].includes(this.args[0])
+        ? { ...state.result }
+        : null;
     }
     throw new Error(`Unhandled first(): ${this.sql}`);
   }
   async all() {
-    if (this.sql.includes("FROM results AS r") && this.sql.includes("ORDER BY r.created_at DESC")) {
+    if (this.sql.includes("FROM agent_reports AS ar") && this.sql.includes("ORDER BY ar.created_at DESC")) {
       return { results: state.result ? [{ ...state.result }] : [] };
     }
     throw new Error(`Unhandled all(): ${this.sql}`);
@@ -66,12 +68,7 @@ class Statement {
         outcome,
         summary,
         artifact_key,
-        metrics_json,
-        report_type,
-        report_json,
-        report_sha256,
-        report_size_bytes,
-        sensitivity
+        metrics_json
       ] = this.args;
       state.result = {
         result_id,
@@ -82,14 +79,33 @@ class Statement {
         summary,
         artifact_key,
         metrics_json,
+        created_at: new Date().toISOString()
+      };
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("INSERT INTO agent_reports")) {
+      const [
+        report_id,
         report_type,
         report_json,
         report_sha256,
         report_size_bytes,
         sensitivity,
-        created_at: new Date().toISOString()
-      };
+        result_id
+      ] = this.args;
+      assert.equal(result_id, state.result.result_id);
+      Object.assign(state.result, {
+        report_id,
+        report_type,
+        report_json,
+        report_sha256,
+        report_size_bytes,
+        sensitivity
+      });
       return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("CREATE TABLE") || this.sql.startsWith("CREATE INDEX")) {
+      return { meta: { changes: 0 } };
     }
     if (
       this.sql.startsWith("UPDATE assignments") ||
