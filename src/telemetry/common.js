@@ -4,7 +4,9 @@ export const TELEMETRY_LIMITS = Object.freeze({
   event_bytes: 2 * 1024,
   retention_days: 7,
   per_node_events: 5000,
-  page_size: 100
+  page_size: 100,
+  rate_window_seconds: 5 * 60,
+  requests_per_window: 60
 });
 
 const JSON_HEADERS = {
@@ -17,10 +19,11 @@ const SECRET_KEY = /(pass(word)?|secret|token|api[_-]?key|authorization|cookie|p
 const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 export class TelemetryError extends Error {
-  constructor(status, code) {
+  constructor(status, code, headers = {}) {
     super(code);
     this.status = status;
     this.code = code;
+    this.headers = headers;
   }
 }
 
