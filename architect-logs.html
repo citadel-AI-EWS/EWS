@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>CITADEL — журнал узлов TEST</title>
+  <style>
+    :root{font-family:system-ui,-apple-system,sans-serif;color:#f2f5ff;background:#080c17}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;padding:18px;background:#080c17}main{max-width:900px;margin:auto}
+    h1{font-size:28px;margin:8px 0}h2{font-size:19px}.brand,.muted,.small{color:#9aa8c5}.brand{font-size:12px;font-weight:900;letter-spacing:.13em}
+    .card{margin-top:16px;padding:17px;border:1px solid #2b3757;border-radius:16px;background:#11182a}.grid{display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px}
+    label{display:block;margin:8px 0 6px;font-weight:700}input,select,button{width:100%;padding:12px;border-radius:10px;font-size:15px}input,select{border:1px solid #3a496f;background:#090e1b;color:#fff}
+    button{border:0;background:#3478f6;color:#fff;font-weight:800;cursor:pointer}button.secondary{background:#273451}button:disabled{opacity:.55}.toolbar{display:flex;gap:9px;margin-top:12px}.toolbar button{width:auto;flex:1}
+    .status{margin-top:15px;padding:12px;border-radius:10px;background:#0b1222;white-space:pre-wrap}.good{border-left:4px solid #35d07f}.bad{border-left:4px solid #ff6874}
+    .event{margin-top:10px;padding:13px;border-radius:12px;background:#0b1222;border-left:4px solid #5b8fff;overflow-wrap:anywhere}.event.warn{border-left-color:#ffb44f}.event.error{border-left-color:#ff6874}.event.debug{border-left-color:#8d97aa}
+    .event strong{display:block}.details{margin-top:8px;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px;color:#cfd9ee;max-height:220px;overflow:auto}
+    .hidden{display:none!important}@media(max-width:650px){.grid{grid-template-columns:1fr}.toolbar{flex-direction:column}.toolbar button{width:100%}}
+  </style>
+</head>
+<body>
+<main>
+  <div class="brand">CITADEL / ARCHITECT / TELEMETRY / TEST</div>
+  <h1>Журнал узлов</h1>
+  <p class="muted">Только операционные события. Секретные поля редактируются на сервере; журнал не является каналом команд.</p>
+
+  <section id="loginCard" class="card">
+    <h2>Защищённый вход</h2>
+    <label for="token">Секрет архитектора</label>
+    <input id="token" type="password" autocomplete="off" spellcheck="false">
+    <button id="loginButton" type="button">Войти</button>
+  </section>
+
+  <section id="browser" class="hidden">
+    <section class="card">
+      <div id="stats" class="small">Статистика загружается…</div>
+      <div class="grid">
+        <div><label for="nodeFilter">Node ID</label><input id="nodeFilter" maxlength="128" placeholder="все узлы"></div>
+        <div><label for="levelFilter">Уровень</label><select id="levelFilter"><option value="">все</option><option>debug</option><option>info</option><option>warn</option><option>error</option></select></div>
+        <div><label for="typeFilter">Тип</label><select id="typeFilter"><option value="">все</option><option>agent_start</option><option>agent_stop</option><option>node_enrolled</option><option>cycle_error</option><option>resource_guard</option><option>assignment_rejected_local</option><option>result_submitted</option><option>result_queued</option><option>queued_results_flushed</option><option>command_signature_rejected</option><option>command_completed</option><option>command_failure_ack_failed</option><option>command_failed</option></select></div>
+      </div>
+      <div class="toolbar">
+        <button id="refreshButton" type="button">Обновить</button>
+        <button id="moreButton" class="secondary" type="button" disabled>Ещё</button>
+        <button id="logoutButton" class="secondary" type="button">Выйти</button>
+      </div>
+    </section>
+    <section class="card"><div id="events"></div></section>
+  </section>
+  <div id="status" class="status">Ожидаю входа.</div>
+</main>
+<script>
+  const loginCard = document.getElementById("loginCard");
+  const browser = document.getElementById("browser");
+  const tokenInput = document.getElementById("token");
+  const loginButton = document.getElementById("loginButton");
+  const refreshButton = document.getElementById("refreshButton");
+  const moreButton = document.getElementById("moreButton");
+  const logoutButton = document.getElementById("logoutButton");
+  const nodeFilter = document.getElementById("nodeFilter");
+  const levelFilter = document.getElementById("levelFilter");
+  const typeFilter = document.getElementById("typeFilter");
+  const eventsElement = document.getElementById("events");
+  const statsElement = document.getElementById("stats");
+  const statusElement = document.getElementById("status");
+  let architectToken = sessionStorage.getItem("citadel-architect-token") || "";
+  let nextCursor = null;
+
+  function setStatus(message, kind = "") {
+    statusElement.textContent = message;
+    statusElement.className = `status ${kind}`.trim();
+  }
+
+  function addText(parent, tag, text, className = "") {
+    const item = document.createElement(tag);
+    item.textContent = text;
+    if (className) item.className = className;
+    parent.appendChild(item);
+    return item;
+  }
+
+  async function api(path) {
+    const response = await fetch(path, {
+      headers: { authorization: `Bearer ${architectToken}` }
+    });
+    const data = await response.json().catch(() => ({ error: "invalid_server_response" }));
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    return data;
+  }
+
+  function queryPath(cursor = null) {
+    const params = new URLSearchParams({ limit: "50" });
+    if (nodeFilter.value.trim()) params.set("node_id", nodeFilter.value.trim());
+    if (levelFilter.value) params.set("level", levelFilter.value);
+    if (typeFilter.value) params.set("event_type", typeFilter.value);
+    if (cursor) params.set("cursor", cursor);
+    return `/api/v1/architect/logs?${params}`;
+  }
+
+  function renderEvent(event) {
+    const item = document.createElement("div");
+    item.className = `event ${event.level}`;
+    addText(item, "strong", `${event.event_type} · ${event.level}`);
+    addText(item, "div", event.message, "small");
+    addText(item, "div", `${event.node_id} · ${event.created_at}`, "small");
+    if (event.details && Object.keys(event.details).length) {
+      addText(item, "pre", JSON.stringify(event.details, null, 2), "details");
+    }
+    eventsElement.appendChild(item);
+  }
+
+  async function loadStats() {
+    const data = await api("/api/v1/architect/logs/stats");
+    const stats = data.stats || {};
+    statsElement.textContent = `Событий: ${stats.event_count || 0} · узлов: ${stats.node_count || 0} · хранение: ${stats.retention_days || 7} дней · максимум: ${stats.per_node_event_cap || 5000} событий на узел`;
+  }
+
+  async function loadLogs(append = false) {
+    setStatus(append ? "Загружаю следующую страницу…" : "Загружаю журнал…");
+    const data = await api(queryPath(append ? nextCursor : null));
+    if (!append) eventsElement.replaceChildren();
+    for (const event of data.logs || []) renderEvent(event);
+    if (!eventsElement.children.length) addText(eventsElement, "p", "Событий по выбранному фильтру нет.", "muted");
+    nextCursor = data.next_cursor || null;
+    moreButton.disabled = !nextCursor;
+    setStatus(`Показано событий: ${eventsElement.querySelectorAll(".event").length}.`, "good");
+  }
+
+  async function openBrowser() {
+    await Promise.all([loadStats(), loadLogs(false)]);
+    loginCard.classList.add("hidden");
+    browser.classList.remove("hidden");
+    sessionStorage.setItem("citadel-architect-token", architectToken);
+  }
+
+  function logout(message = "Сеанс завершён.") {
+    architectToken = "";
+    nextCursor = null;
+    sessionStorage.removeItem("citadel-architect-token");
+    browser.classList.add("hidden");
+    loginCard.classList.remove("hidden");
+    tokenInput.value = "";
+    eventsElement.replaceChildren();
+    setStatus(message);
+  }
+
+  loginButton.addEventListener("click", async () => {
+    const token = tokenInput.value.trim();
+    if (!token) return setStatus("Введите секрет архитектора.", "bad");
+    architectToken = token;
+    loginButton.disabled = true;
+    try {
+      await openBrowser();
+      tokenInput.value = "";
+    } catch (error) {
+      logout(`Вход не выполнен: ${error.message}`);
+      statusElement.classList.add("bad");
+    } finally {
+      loginButton.disabled = false;
+    }
+  });
+
+  refreshButton.addEventListener("click", async () => {
+    refreshButton.disabled = true;
+    try { await Promise.all([loadStats(), loadLogs(false)]); }
+    catch (error) { setStatus(`Журнал не обновлён: ${error.message}`, "bad"); }
+    finally { refreshButton.disabled = false; }
+  });
+  moreButton.addEventListener("click", async () => {
+    if (!nextCursor) return;
+    moreButton.disabled = true;
+    try { await loadLogs(true); }
+    catch (error) { setStatus(`Следующая страница не загружена: ${error.message}`, "bad"); }
+    finally { moreButton.disabled = !nextCursor; }
+  });
+  logoutButton.addEventListener("click", () => logout());
+
+  if (architectToken) {
+    openBrowser().catch(() => logout("Сохранённый сеанс недействителен. Войдите снова."));
+  }
+</script>
+</body>
+</html>
