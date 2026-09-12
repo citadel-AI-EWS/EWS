@@ -14,11 +14,12 @@
     label{display:block;margin:12px 0 7px;font-weight:750}input,select{width:100%;padding:13px;border:1px solid #3a496f;border-radius:11px;background:#090e1b;color:#fff;font-size:16px}
     button{width:100%;margin-top:13px;padding:14px;border:0;border-radius:11px;background:#3478f6;color:#fff;font-size:16px;font-weight:850}
     button.secondary{background:#273451}button.danger{background:#703542}button:disabled{opacity:.55}.hidden{display:none!important}
-    .toolbar{display:flex;gap:10px}.toolbar button{width:auto;flex:1}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:17px}
+    .toolbar{display:flex;gap:10px}.toolbar button{width:auto;flex:1}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:17px}
     .stat{padding:14px;border:1px solid #2b3757;border-radius:15px;background:#11182a}.stat b{display:block;font-size:25px}.stat span,.small{font-size:13px;color:#93a0ba}
     .item{margin-top:10px;padding:13px;border-radius:13px;background:#0b1222;border-left:4px solid #5b8fff;overflow-wrap:anywhere}.item.ok{border-left-color:#35d07f}.item.warn{border-left-color:#ffb44f}
     .item strong{display:block;margin-bottom:5px}.status{margin-top:15px;padding:13px;border-radius:11px;background:#0b1222;white-space:pre-wrap;overflow-wrap:anywhere}
     .good{border-left:4px solid #35d07f}.bad{border-left:4px solid #ff6874}.muted{color:#93a0ba}.section-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .section-head button,.item button{width:auto;margin:0;padding:10px 12px}.report-body{margin:12px 0 0;padding:13px;border-radius:11px;background:#080e1d;color:#dfe7fb;white-space:pre-wrap;overflow-wrap:anywhere;max-height:55vh;overflow:auto}
     .control-buttons{display:grid;grid-template-columns:1fr 1fr;gap:9px}.control-buttons button{margin-top:10px}.control-buttons .full{grid-column:1/-1}
     @media(max-width:520px){body{padding:17px}.stats{grid-template-columns:1fr}.card{padding:17px}h1{font-size:27px}}
   </style>
@@ -47,6 +48,7 @@
         <div class="stat"><b id="nodeCount">0</b><span>всего узлов</span></div>
         <div class="stat"><b id="onlineCount">0</b><span>узлов online</span></div>
         <div class="stat"><b id="missionCount">0</b><span>миссий</span></div>
+        <div class="stat"><b id="reportCount">0</b><span>полных отчётов</span></div>
       </div>
 
       <section class="card">
@@ -93,6 +95,24 @@
       </section>
 
       <section class="card">
+        <div class="section-head">
+          <h2>Полные отчёты агентов</h2>
+          <button id="refreshReportsButton" class="secondary" type="button">Обновить</button>
+        </div>
+        <p class="small">В списке показываются только метаданные. Содержимое загружается отдельно после выбора отчёта.</p>
+        <div id="reportsList"></div>
+      </section>
+
+      <section id="reportDetailCard" class="card hidden">
+        <div class="section-head">
+          <h2>Содержимое отчёта</h2>
+          <button id="closeReportButton" class="secondary" type="button">Закрыть</button>
+        </div>
+        <div id="reportDetailMeta" class="small"></div>
+        <pre id="reportDetailBody" class="report-body"></pre>
+      </section>
+
+      <section class="card">
         <h2>Последние события аудита</h2>
         <div id="auditList"></div>
       </section>
@@ -109,6 +129,11 @@
     const refreshButton = document.getElementById("refreshButton");
     const logoutButton = document.getElementById("logoutButton");
     const createMissionButton = document.getElementById("createMissionButton");
+    const refreshReportsButton = document.getElementById("refreshReportsButton");
+    const reportDetailCard = document.getElementById("reportDetailCard");
+    const reportDetailMeta = document.getElementById("reportDetailMeta");
+    const reportDetailBody = document.getElementById("reportDetailBody");
+    const closeReportButton = document.getElementById("closeReportButton");
     const nodeSelect = document.getElementById("nodeSelect");
     const controlNodeSelect = document.getElementById("controlNodeSelect");
     const pauseButton = document.getElementById("pauseButton");
@@ -214,6 +239,54 @@
       if (!missions.length) addText(list, "p", "Миссий пока нет.", "muted");
     }
 
+    function renderReports(reports) {
+      const list = document.getElementById("reportsList");
+      list.replaceChildren();
+      for (const report of reports) {
+        const item = document.createElement("div");
+        item.className = `item ${report.outcome === "success" ? "ok" : "warn"}`;
+        addText(item, "strong", `${report.report_type} — ${report.outcome}`);
+        addText(item, "div", `Узел: ${report.node_id}`, "small");
+        addText(item, "div", `Размер: ${report.report_size_bytes} байт · Доступ: ${report.sensitivity}`, "small");
+        addText(item, "div", `SHA-256: ${report.report_sha256}`, "small");
+        addText(item, "div", report.created_at, "small");
+        const openButton = addText(item, "button", "Открыть отчёт", "secondary");
+        openButton.type = "button";
+        openButton.addEventListener("click", () => openReport(report.report_id));
+        list.appendChild(item);
+      }
+      if (!reports.length) addText(list, "p", "Новых полных отчётов пока нет.", "muted");
+    }
+
+    async function loadReports() {
+      const data = await api("/api/v1/architect/reports?limit=50");
+      renderReports(data.reports || []);
+      return data.reports || [];
+    }
+
+    async function openReport(reportId) {
+      setStatus("Загружаю полный отчёт…");
+      try {
+        const data = await api(`/api/v1/architect/reports/${encodeURIComponent(reportId)}`);
+        const report = data.report;
+        reportDetailMeta.textContent = [
+          `Report ID: ${report.report_id}`,
+          `Mission ID: ${report.mission_id}`,
+          `Node ID: ${report.node_id}`,
+          `Тип: ${report.report_type}`,
+          `Доступ: ${report.sensitivity}`,
+          `Размер: ${report.report_size_bytes} байт`,
+          `SHA-256: ${report.report_sha256}`
+        ].join(" · ");
+        reportDetailBody.textContent = JSON.stringify(report.content, null, 2);
+        reportDetailCard.classList.remove("hidden");
+        reportDetailCard.scrollIntoView({ behavior: "smooth", block: "start" });
+        setStatus("Полный отчёт загружен.", "good");
+      } catch (error) {
+        setStatus(`Отчёт не загружен: ${error.message}`, "bad");
+      }
+    }
+
     function renderAudit(events) {
       const list = document.getElementById("auditList");
       list.replaceChildren();
@@ -230,15 +303,20 @@
 
     async function loadDashboard() {
       setStatus("Загружаю данные…");
-      const data = await api("/api/v1/architect/overview");
+      const [data, reports] = await Promise.all([
+        api("/api/v1/architect/overview"),
+        api("/api/v1/architect/reports?limit=50")
+      ]);
       document.getElementById("nodeCount").textContent = data.counts.nodes;
       document.getElementById("onlineCount").textContent = data.counts.online_nodes;
       document.getElementById("missionCount").textContent = data.counts.missions;
+      document.getElementById("reportCount").textContent = data.counts.reports;
       document.getElementById("nodesUpdated").textContent = new Date().toLocaleTimeString();
       renderNodes(data.nodes);
       renderMissions(data.missions);
       renderCommands(data.commands || []);
       renderAudit(data.audit_events);
+      renderReports(reports.reports || []);
       loginCard.classList.add("hidden");
       dashboard.classList.remove("hidden");
       setStatus("Панель подключена к Controller.", "good");
@@ -275,6 +353,23 @@
       try { await loadDashboard(); }
       catch (error) { setStatus(`Обновление не выполнено: ${error.message}`, "bad"); }
       finally { refreshButton.disabled = false; }
+    });
+
+    refreshReportsButton.addEventListener("click", async () => {
+      refreshReportsButton.disabled = true;
+      try {
+        const reports = await loadReports();
+        setStatus(`Список отчётов обновлён: ${reports.length}.`, "good");
+      } catch (error) {
+        setStatus(`Отчёты не обновлены: ${error.message}`, "bad");
+      } finally {
+        refreshReportsButton.disabled = false;
+      }
+    });
+    closeReportButton.addEventListener("click", () => {
+      reportDetailCard.classList.add("hidden");
+      reportDetailMeta.textContent = "";
+      reportDetailBody.textContent = "";
     });
 
     logoutButton.addEventListener("click", () => logout());
