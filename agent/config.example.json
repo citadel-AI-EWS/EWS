@@ -1,0 +1,11 @@
+{
+  "controller_url": "https://citadel-ai.init1.workers.dev",
+  "data_dir": "",
+  "poll_seconds": 30,
+  "heartbeat_seconds": 30,
+  "request_timeout_seconds": 30,
+  "max_cpu_percent": 90,
+  "max_memory_percent": 90,
+  "controller_public_x": "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0",
+  "enrollment_token": ""
+}
