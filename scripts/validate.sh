@@ -11,6 +11,7 @@ import re
 for source, target in (
     ("index.html", "/tmp/ews-site.js"),
     ("architect.html", "/tmp/ews-architect.js"),
+    ("architect-logs.html", "/tmp/ews-architect-logs.js"),
     ("node-test.html", "/tmp/ews-node-test.js"),
 ):
     html = Path(source).read_text(encoding="utf-8")
@@ -33,19 +34,30 @@ for forbidden in ("executionpolicy bypass", "register-scheduledtask", "schtasks"
 PY
 node --check /tmp/ews-site.js
 node --check /tmp/ews-architect.js
+node --check /tmp/ews-architect-logs.js
 node --check /tmp/ews-node-test.js
 node --check src/index.js
+node --check src/worker.js
+node --check src/telemetry/common.js
+node --check src/telemetry/schema.js
+node --check src/telemetry/normalize.js
+node --check src/telemetry/ingest.js
+node --check src/telemetry/cursor.js
+node --check src/telemetry/architect.js
+node --check src/telemetry/router.js
 node tests/report-storage.mjs
 node tests/session-storage.mjs
+node tests/telemetry-storage.mjs
 bash -n controller_deploy.sh scripts/build_site.sh scripts/package_controller.sh scripts/validate.sh
 cfn-lint controller_template.yaml project_stack.yaml
 artifact="$(mktemp --suffix=.zip)"
-trap 'rm -f "$artifact" /tmp/ews-site.js /tmp/ews-architect.js /tmp/ews-node-test.js' EXIT
+trap 'rm -f "$artifact" /tmp/ews-site.js /tmp/ews-architect.js /tmp/ews-architect-logs.js /tmp/ews-node-test.js' EXIT
 scripts/package_controller.sh "$artifact"
 unzip -t "$artifact"
 site_dir="$(mktemp -d)"
 scripts/build_site.sh "$site_dir"
 test -s "$site_dir/index.html"
 test -s "$site_dir/_headers"
+test -s "$site_dir/architect/logs/index.html"
 rm -rf "$site_dir"
 git diff --check
