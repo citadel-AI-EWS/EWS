@@ -3,7 +3,8 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 python -m unittest -v controller_tests.py
-python -m py_compile controller_app.py controller_tests.py
+python -m py_compile controller_app.py controller_tests.py agent/citadel_node_v1.py
+python agent/citadel_node_v1.py self-test
 python - <<'PY'
 from pathlib import Path
 import re
@@ -24,6 +25,11 @@ for source, target in (
     if missing:
         raise SystemExit(f"missing HTML ids in {source}: {missing}")
     Path(target).write_text(match.group(1), encoding="utf-8")
+
+setup = Path("agent/setup_windows.ps1").read_text(encoding="utf-8").lower()
+for forbidden in ("executionpolicy bypass", "register-scheduledtask", "schtasks", "runonce"):
+    if forbidden in setup:
+        raise SystemExit(f"unsafe Windows setup pattern detected: {forbidden}")
 PY
 node --check /tmp/ews-site.js
 node --check /tmp/ews-architect.js
