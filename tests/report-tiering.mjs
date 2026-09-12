@@ -207,9 +207,10 @@ class FakeR2 {
   async get(key) {
     const item = this.objects.get(key);
     if (!item) return null;
+    const corruptReads = this.corruptReads;
     return {
       async text() {
-        return item.value + (this.corruptReads ? "corrupt" : "");
+        return item.value + (corruptReads ? "corrupt" : "");
       }
     };
   }
