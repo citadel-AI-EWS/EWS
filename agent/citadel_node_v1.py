@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""CITADEL/EWS Cloudflare v1 node agent.
+"""Bounded CITADEL/EWS node for operator-owned or administered computers.
 
-Transparent, opt-in software for computers owned or administered by the
-operator. It deliberately has no remote shell, arbitrary code loader,
-credential collection, lateral movement, exploit engine, or self-propagation.
+The node speaks the existing Cloudflare /api/v1 Ed25519 protocol. It has no
+remote shell, arbitrary code loader, exploit engine, credential collector,
+self-propagation, stealth installation, or autonomous financial actions.
 Only locally registered mission handlers can execute.
 """
 from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import dataclasses
 import datetime as dt
 import hashlib
+import http.client
 import json
 import os
 import platform
@@ -20,9 +22,7 @@ import shutil
 import socket
 import tempfile
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
@@ -35,13 +35,13 @@ try:
     )
 except ImportError as exc:
     raise SystemExit(
-        "Missing agent dependencies. Run: python -m pip install -r agent/requirements.txt"
+        "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
 VERSION = "0.1.0"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
-MAX_HTTP_BODY_BYTES = 2 * 1024 * 1024
+MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 SUPPORTED_COMMANDS = {"pause", "resume", "uninstall"}
 
 
@@ -73,20 +73,14 @@ def atomic_write(path: Path, text: str, mode: int = 0o600) -> None:
             stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
-        try:
+        with contextlib.suppress(OSError):
             os.chmod(temp_name, mode)
-        except OSError:
-            pass
         os.replace(temp_name, path)
-        try:
+        with contextlib.suppress(OSError):
             os.chmod(path, mode)
-        except OSError:
-            pass
     finally:
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.unlink(temp_name)
-        except FileNotFoundError:
-            pass
 
 
 def load_json(path: Path, default: Any) -> Any:
@@ -99,8 +93,8 @@ def load_json(path: Path, default: Any) -> Any:
 def default_data_dir() -> Path:
     if os.name == "nt":
         return Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "CitadelEWS" / "state"
-    state = Path(os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state"))
-    return state / "citadel-ews"
+    state_home = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
+    return state_home / "citadel-ews"
 
 
 @dataclasses.dataclass
@@ -119,8 +113,11 @@ class AgentConfig:
     def from_file(cls, path: Path) -> "AgentConfig":
         raw = load_json(path, {}) or {}
         controller_url = str(raw.get("controller_url") or "").strip().rstrip("/")
-        if not controller_url.startswith("https://") and not controller_url.startswith("http://127.0.0.1"):
-            raise ValueError("controller_url must use HTTPS; localhost HTTP is test-only")
+        parsed = urllib.parse.urlsplit(controller_url)
+        secure = parsed.scheme == "https" and bool(parsed.hostname)
+        local_test = parsed.scheme == "http" and parsed.hostname == "127.0.0.1"
+        if not (secure or local_test):
+            raise ValueError("controller_url must use HTTPS; loopback HTTP is test-only")
         return cls(
             controller_url=controller_url,
             data_dir=Path(raw.get("data_dir") or default_data_dir()).expanduser().resolve(),
@@ -165,14 +162,13 @@ class Identity:
             self.private_key = Ed25519PrivateKey.generate()
             self.save()
 
-    def require_private_key(self) -> Ed25519PrivateKey:
+    def require_key(self) -> Ed25519PrivateKey:
         if self.private_key is None:
-            raise RuntimeError("node identity is unavailable")
+            raise RuntimeError("node identity unavailable")
         return self.private_key
 
     def save(self) -> None:
-        key = self.require_private_key()
-        pem = key.private_bytes(
+        pem = self.require_key().private_bytes(
             serialization.Encoding.PEM,
             serialization.PrivateFormat.PKCS8,
             serialization.NoEncryption(),
@@ -187,66 +183,86 @@ class Identity:
         self.save()
 
     def public_jwk(self) -> dict[str, str]:
-        raw = self.require_private_key().public_key().public_bytes(
+        raw = self.require_key().public_key().public_bytes(
             serialization.Encoding.Raw, serialization.PublicFormat.Raw
         )
         return {"kty": "OKP", "crv": "Ed25519", "x": b64url(raw)}
 
     def sign(self, value: bytes) -> str:
-        return b64url(self.require_private_key().sign(value))
+        return b64url(self.require_key().sign(value))
 
 
 class ApiClient:
     def __init__(self, config: AgentConfig, identity: Identity) -> None:
         self.config = config
         self.identity = identity
+        parsed = urllib.parse.urlsplit(config.controller_url)
+        self.scheme = parsed.scheme
+        self.host = parsed.hostname or ""
+        self.port = parsed.port
+        self.base_path = parsed.path.rstrip("/")
+        if self.scheme == "https":
+            self.connection_type = http.client.HTTPSConnection
+        elif self.scheme == "http" and self.host == "127.0.0.1":
+            self.connection_type = http.client.HTTPConnection
+        else:
+            raise ValueError("unsupported controller scheme")
 
-    def request(self, method: str, path: str, body: Any = None, signed: bool = True) -> dict[str, Any]:
+    def request(
+        self,
+        method: str,
+        path: str,
+        body: Any = None,
+        signed: bool = True,
+    ) -> dict[str, Any]:
         method = method.upper()
         if not path.startswith("/"):
             raise ValueError("API path must begin with /")
+        request_path = self.base_path + path
         body_text = "" if body is None else json_text(body)
-        headers = {"user-agent": USER_AGENT, "accept": "application/json"}
+        headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
         if body is not None:
-            headers["content-type"] = "application/json"
+            headers["Content-Type"] = "application/json"
         if signed:
             if not self.identity.node_id:
                 raise RuntimeError("node is not enrolled")
             timestamp = str(int(time.time()))
-            canonical = "\n".join((method, path, timestamp, sha256_text(body_text)))
+            canonical = "\n".join((method, request_path, timestamp, sha256_text(body_text)))
             headers.update({
                 "x-node-id": self.identity.node_id,
                 "x-node-timestamp": timestamp,
                 "x-node-signature": self.identity.sign(canonical.encode("utf-8")),
             })
-        request_url = self.config.controller_url + path
-        parsed = urllib.parse.urlsplit(request_url)
-        if parsed.scheme != "https" and not (
-            parsed.scheme == "http" and parsed.hostname == "127.0.0.1"
-        ):
-            raise RuntimeError("refusing non-HTTPS controller request")
-        request = urllib.request.Request(
-            request_url,
-            data=body_text.encode("utf-8") if body is not None else None,
-            headers=headers,
-            method=method,
+
+        connection = self.connection_type(
+            self.host,
+            self.port,
+            timeout=self.config.request_timeout_seconds,
         )
         try:
-            # nosec B310: request_url is revalidated immediately above and permits only HTTPS or loopback test HTTP.
-            with urllib.request.urlopen(request, timeout=self.config.request_timeout_seconds) as response:
-                raw = response.read(MAX_HTTP_BODY_BYTES + 1)
-                if len(raw) > MAX_HTTP_BODY_BYTES:
-                    raise RuntimeError("controller response too large")
-                return json.loads(raw.decode("utf-8")) if raw else {}
-        except urllib.error.HTTPError as error:
-            raw = error.read(MAX_HTTP_BODY_BYTES).decode("utf-8", errors="replace")
+            connection.request(
+                method,
+                request_path,
+                body=body_text.encode("utf-8") if body is not None else None,
+                headers=headers,
+            )
+            response = connection.getresponse()
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
+            if len(raw) > MAX_RESPONSE_BYTES:
+                raise RuntimeError("controller response too large")
+            decoded = raw.decode("utf-8", errors="replace")
             try:
-                message = json.loads(raw).get("error") or raw
-            except json.JSONDecodeError:
-                message = raw or error.reason
-            raise RuntimeError(f"controller HTTP {error.code}: {message}") from error
-        except urllib.error.URLError as error:
-            raise RuntimeError(f"controller unavailable: {error.reason}") from error
+                value = json.loads(decoded) if decoded else {}
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("controller returned invalid JSON") from exc
+            if not 200 <= response.status < 300:
+                error = value.get("error") if isinstance(value, dict) else decoded
+                raise RuntimeError(f"controller HTTP {response.status}: {error}")
+            if not isinstance(value, dict):
+                raise RuntimeError("controller response must be a JSON object")
+            return value
+        finally:
+            connection.close()
 
 
 class ResultQueue:
@@ -302,10 +318,8 @@ class Agent:
     def __init__(self, config: AgentConfig) -> None:
         self.config = config
         config.data_dir.mkdir(parents=True, exist_ok=True)
-        try:
+        with contextlib.suppress(OSError):
             os.chmod(config.data_dir, 0o700)
-        except OSError:
-            pass
         self.identity = Identity(config.data_dir / "identity.json")
         self.api = ApiClient(config, self.identity)
         self.log = JsonlLogger(config.data_dir / "agent.jsonl")
@@ -328,16 +342,21 @@ class Agent:
             return self.identity.node_id
         if len(self.config.enrollment_token) < 16:
             raise RuntimeError("one-time enrollment token is required")
-        response = self.api.request("POST", "/api/v1/enroll", {
-            "enrollment_token": self.config.enrollment_token,
-            "public_key": self.identity.public_jwk(),
-            "hostname": socket.gethostname(),
-            "os_name": platform.system() or "Unknown",
-            "os_version": platform.release(),
-            "architecture": platform.machine() or "unknown",
-            "agent_version": VERSION,
-            "capabilities": self.capabilities,
-        }, signed=False)
+        response = self.api.request(
+            "POST",
+            "/api/v1/enroll",
+            {
+                "enrollment_token": self.config.enrollment_token,
+                "public_key": self.identity.public_jwk(),
+                "hostname": socket.gethostname(),
+                "os_name": platform.system() or "Unknown",
+                "os_version": platform.release(),
+                "architecture": platform.machine() or "unknown",
+                "agent_version": VERSION,
+                "capabilities": self.capabilities,
+            },
+            signed=False,
+        )
         node_id = str(response.get("node", {}).get("node_id") or "")
         if not node_id.startswith("node_"):
             raise RuntimeError("controller returned invalid node_id")
@@ -347,12 +366,16 @@ class Agent:
 
     def heartbeat(self) -> None:
         node_id = self.require_node_id()
-        self.api.request("POST", f"/api/v1/nodes/{node_id}/heartbeat", {
-            "cpu_percent": float(psutil.cpu_percent(interval=0.05)),
-            "memory_percent": float(psutil.virtual_memory().percent),
-            "agent_version": VERSION,
-            "capabilities": self.capabilities,
-        })
+        self.api.request(
+            "POST",
+            f"/api/v1/nodes/{node_id}/heartbeat",
+            {
+                "cpu_percent": float(psutil.cpu_percent(interval=0.05)),
+                "memory_percent": float(psutil.virtual_memory().percent),
+                "agent_version": VERSION,
+                "capabilities": self.capabilities,
+            },
+        )
         self.last_heartbeat = time.monotonic()
 
     def resources_ok(self) -> tuple[bool, dict[str, float]]:
@@ -373,14 +396,22 @@ class Agent:
         mission_type = str(assignment.get("mission_type") or "")
         handler = HANDLERS.get(mission_type)
         if not assignment_id or handler is None:
-            self.log.write("assignment_rejected_local", assignment_id=assignment_id, mission_type=mission_type)
+            self.log.write(
+                "assignment_rejected_local",
+                assignment_id=assignment_id,
+                mission_type=mission_type,
+            )
             return
-        ok, metrics = self.resources_ok()
-        if not ok:
+        allowed, metrics = self.resources_ok()
+        if not allowed:
             self.log.write("resource_guard", assignment_id=assignment_id, **metrics)
             return
         quoted = urllib.parse.quote(assignment_id, safe="")
-        self.api.request("POST", f"/api/v1/nodes/{node_id}/assignments/{quoted}/accept", {})
+        self.api.request(
+            "POST",
+            f"/api/v1/nodes/{node_id}/assignments/{quoted}/accept",
+            {},
+        )
         started = time.monotonic()
         try:
             report = handler(assignment.get("payload") or {})
@@ -388,7 +419,10 @@ class Agent:
                 "assignment_id": assignment_id,
                 "outcome": "success",
                 "summary": f"{mission_type} completed by CITADEL node {VERSION}",
-                "metrics": {**metrics, "duration_ms": int((time.monotonic() - started) * 1000)},
+                "metrics": {
+                    **metrics,
+                    "duration_ms": int((time.monotonic() - started) * 1000),
+                },
                 "report_type": mission_type,
                 "sensitivity": "internal",
                 "report": report,
@@ -398,39 +432,54 @@ class Agent:
                 "assignment_id": assignment_id,
                 "outcome": "failed",
                 "summary": f"{mission_type} failed locally: {type(error).__name__}",
-                "metrics": {**metrics, "duration_ms": int((time.monotonic() - started) * 1000)},
+                "metrics": {
+                    **metrics,
+                    "duration_ms": int((time.monotonic() - started) * 1000),
+                },
                 "report_type": mission_type,
                 "sensitivity": "internal",
                 "report": {"error_type": type(error).__name__},
             }
         try:
             self.submit_result(result)
-            self.log.write("result_submitted", assignment_id=assignment_id, outcome=result["outcome"])
+            self.log.write(
+                "result_submitted",
+                assignment_id=assignment_id,
+                outcome=result["outcome"],
+            )
         except Exception as error:
             self.results.push(result)
-            self.log.write("result_queued", assignment_id=assignment_id, error=str(error)[:300])
+            self.log.write(
+                "result_queued",
+                assignment_id=assignment_id,
+                error=str(error)[:300],
+            )
 
     def verify_controller_command(self, command: dict[str, Any]) -> bool:
         command_id = str(command.get("command_id") or "")
         command_type = str(command.get("command_type") or "")
         created_at = str(command.get("created_at") or "")
         signature = str(command.get("signature") or "")
-        if command_type not in SUPPORTED_COMMANDS or not all(
-            (command_id, created_at, signature, self.identity.node_id)
-        ):
+        if command_type not in SUPPORTED_COMMANDS:
+            return False
+        if not all((command_id, created_at, signature, self.identity.node_id)):
             return False
         if (command.get("payload") or {}) != {}:
             return False
-        canonical = "\n".join((
-            "CITADEL-COMMAND-V1",
-            command_id,
-            self.identity.node_id or "",
-            command_type,
-            sha256_text("{}"),
-            created_at,
-        )).encode("utf-8")
+        canonical = "\n".join(
+            (
+                "CITADEL-COMMAND-V1",
+                command_id,
+                self.identity.node_id or "",
+                command_type,
+                sha256_text("{}"),
+                created_at,
+            )
+        ).encode("utf-8")
         try:
-            key = Ed25519PublicKey.from_public_bytes(unb64url(self.config.controller_public_x))
+            key = Ed25519PublicKey.from_public_bytes(
+                unb64url(self.config.controller_public_x)
+            )
             key.verify(unb64url(signature), canonical)
             return True
         except Exception:
@@ -439,7 +488,11 @@ class Agent:
     def ack_command(self, command_id: str, status: str) -> None:
         node_id = self.require_node_id()
         quoted = urllib.parse.quote(command_id, safe="")
-        self.api.request("POST", f"/api/v1/nodes/{node_id}/commands/{quoted}/ack", {"status": status})
+        self.api.request(
+            "POST",
+            f"/api/v1/nodes/{node_id}/commands/{quoted}/ack",
+            {"status": status},
+        )
 
     def handle_commands(self) -> None:
         node_id = self.require_node_id()
@@ -448,7 +501,11 @@ class Agent:
             command_id = str(command.get("command_id") or "")
             command_type = str(command.get("command_type") or "")
             if not self.verify_controller_command(command):
-                self.log.write("command_signature_rejected", command_id=command_id, command_type=command_type)
+                self.log.write(
+                    "command_signature_rejected",
+                    command_id=command_id,
+                    command_type=command_type,
+                )
                 continue
             try:
                 if command.get("status") == "pending":
@@ -456,15 +513,16 @@ class Agent:
                 if command_type == "pause":
                     atomic_write(self.paused_path, now_iso() + "\n")
                 elif command_type == "resume":
-                    try:
+                    with contextlib.suppress(FileNotFoundError):
                         self.paused_path.unlink()
-                    except FileNotFoundError:
-                        pass
                 elif command_type == "uninstall":
-                    # Controller can revoke/stop. Local file removal remains a local action.
                     atomic_write(self.stop_path, "controller stop " + now_iso() + "\n")
                 self.ack_command(command_id, "completed")
-                self.log.write("command_completed", command_id=command_id, command_type=command_type)
+                self.log.write(
+                    "command_completed",
+                    command_id=command_id,
+                    command_type=command_type,
+                )
             except Exception as error:
                 try:
                     self.ack_command(command_id, "failed")
@@ -474,7 +532,11 @@ class Agent:
                         command_id=command_id,
                         error=str(ack_error)[:300],
                     )
-                self.log.write("command_failed", command_id=command_id, error=str(error)[:300])
+                self.log.write(
+                    "command_failed",
+                    command_id=command_id,
+                    error=str(error)[:300],
+                )
 
     def cycle(self) -> None:
         self.enroll()
@@ -527,7 +589,8 @@ def doctor(config: AgentConfig) -> int:
         "mission_handlers": sorted(HANDLERS),
     }
     print(json.dumps(checks, ensure_ascii=False, indent=2))
-    return 0 if checks["data_dir_writable"] and checks["controller_public_key_bytes"] == 32 else 2
+    healthy = checks["data_dir_writable"] and checks["controller_public_key_bytes"] == 32
+    return 0 if healthy else 2
 
 
 def require_test(condition: bool, message: str) -> None:
@@ -540,56 +603,86 @@ def self_test() -> int:
         root = Path(temp)
         identity = Identity(root / "identity.json")
         identity.set_node_id("node_test")
-        message = "\n".join((
-            "POST",
-            "/api/v1/nodes/node_test/heartbeat",
-            "1700000000",
-            sha256_text(json_text({"hello": "world"})),
-        )).encode("utf-8")
-        identity.require_private_key().public_key().verify(
-            unb64url(identity.sign(message)), message
+        message = "\n".join(
+            (
+                "POST",
+                "/api/v1/nodes/node_test/heartbeat",
+                "1700000000",
+                sha256_text(json_text({"hello": "world"})),
+            )
+        ).encode("utf-8")
+        identity.require_key().public_key().verify(
+            unb64url(identity.sign(message)),
+            message,
         )
 
         controller_private = Ed25519PrivateKey.generate()
-        controller_x = b64url(controller_private.public_key().public_bytes(
-            serialization.Encoding.Raw, serialization.PublicFormat.Raw
-        ))
-        agent = Agent(AgentConfig("https://example.test", root, controller_public_x=controller_x))
+        controller_x = b64url(
+            controller_private.public_key().public_bytes(
+                serialization.Encoding.Raw,
+                serialization.PublicFormat.Raw,
+            )
+        )
+        config = AgentConfig(
+            "https://example.test",
+            root,
+            controller_public_x=controller_x,
+        )
+        agent = Agent(config)
         agent.identity = identity
-        command = {
+        command: dict[str, Any] = {
             "command_id": "command_test",
             "command_type": "pause",
             "payload": {},
             "status": "pending",
             "created_at": "2026-09-12T00:00:00.000Z",
         }
-        canonical = "\n".join((
-            "CITADEL-COMMAND-V1",
-            command["command_id"],
-            "node_test",
-            "pause",
-            sha256_text("{}"),
-            command["created_at"],
-        )).encode("utf-8")
+        canonical = "\n".join(
+            (
+                "CITADEL-COMMAND-V1",
+                command["command_id"],
+                "node_test",
+                "pause",
+                sha256_text("{}"),
+                command["created_at"],
+            )
+        ).encode("utf-8")
         command["signature"] = b64url(controller_private.sign(canonical))
-        require_test(agent.verify_controller_command(command), "valid controller signature rejected")
+        require_test(
+            agent.verify_controller_command(command),
+            "valid controller signature rejected",
+        )
         command["command_type"] = "shell"
-        require_test(not agent.verify_controller_command(command), "unapproved command accepted")
-        require_test(set(HANDLERS) == {"system_inventory"}, "unexpected handler registered")
+        require_test(
+            not agent.verify_controller_command(command),
+            "unapproved command accepted",
+        )
+        require_test(
+            set(HANDLERS) == {"system_inventory"},
+            "unexpected handler registered",
+        )
 
         pending = ResultQueue(root / "queue.json")
         pending.push({"assignment_id": "a1"})
         collected: list[dict[str, Any]] = []
         require_test(pending.flush(collected.append) == 1, "offline queue did not flush")
-        require_test(collected == [{"assignment_id": "a1"}], "offline queue content changed")
+        require_test(
+            collected == [{"assignment_id": "a1"}],
+            "offline queue content changed",
+        )
         require_test(system_inventory({})["memory_total_bytes"] > 0, "inventory failed")
     print("CITADEL v1 agent SELF TEST: PASS")
     return 0
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=f"CITADEL/EWS Cloudflare v1 node agent {VERSION}")
-    parser.add_argument("command", choices=["doctor", "enroll", "once", "run", "self-test"])
+    parser = argparse.ArgumentParser(
+        description=f"CITADEL/EWS Cloudflare v1 node agent {VERSION}"
+    )
+    parser.add_argument(
+        "command",
+        choices=["doctor", "enroll", "once", "run", "self-test"],
+    )
     parser.add_argument("--config", default="agent/config.json")
     return parser.parse_args(argv)
 
