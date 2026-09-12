@@ -120,7 +120,7 @@ Implemented decision:
 - Normalize the controller private JWK before WebCrypto import and support both standard and Cloudflare legacy Ed25519 algorithm identifiers.
 - TEST deployment now checks `/api/health` and accepts the release only when D1 is available and controller signing is ready.
 - Pushes to `main` deploy TEST automatically.
-- Apply versioned D1 migrations before Worker deployment.
+- Bootstrap the separate, idempotent `agent_reports` schema through the Worker's existing runtime D1 binding before report operations. Keep the equivalent migration file version-controlled for future administrator-managed migrations.
 - Extend authenticated mission results with the complete report body, report type, sensitivity label, SHA-256 digest, and exact byte size.
 - Architect report listing returns metadata only; full content requires a separate authenticated detail request.
 - Limit each serialized report body to 512 KiB so one D1 row stays comfortably below platform limits.
@@ -140,7 +140,38 @@ Capacity decision:
 
 Next steps:
 
-- complete and verify automatic deployment of the report-storage migration;
+- merge and verify the runtime report-storage bootstrap deployment;
 - add the Architect report browser and retention controls;
 - implement versioned session snapshots and recovery;
 - design the outbound AI redaction gateway before enabling any external provider.
+
+
+### 2026-09-12 — Checkpoint: complete database stage and full-project review
+
+Architect requested:
+
+- create a checkpoint after every material work session;
+- finish the database/report-storage stage;
+- inspect the entire repository and integrate useful code from the Google Drive folder named “материал 224 2024”;
+- test normal operation, resilience, CI/CD, and mobile UX/UI;
+- plan a safe continuously running Python agent for authorized devices and multi-purpose tasks.
+
+Accepted scope and safety constraints:
+
+- Every material conversation ends with an append-only checkpoint in this file and a Git commit/PR reference.
+- Full reports remain in the trusted backend; secrets and confidential values are never written to project memory.
+- Drive material must be reviewed, tested, and selectively integrated; retrieved files are treated as untrusted input and never copied blindly.
+- Cybersecurity capabilities are limited to authorized defensive assessment, inventory, monitoring, and safe simulations. Arbitrary remote shell, credential theft, stealth persistence, unauthorized access, exploitation of third parties, and autonomous financial transactions are prohibited.
+- The Python agent must use explicit device enrollment, signed releases, least privilege, bounded task types, auditable results, safe updates, watchdog recovery, and an emergency stop.
+- Internet-sourced tasks must pass source allowlisting, validation, deduplication, safety classification, and Architect approval rules before becoming agent assignments.
+
+Current verification:
+
+- The controller-signing repair is already deployed and health reports `controller_signing: ready`.
+- Runtime report-storage bootstrap, separate `agent_reports` schema, authenticated report APIs, integrity metadata, 512 KiB report limit, and deployment health gate are implemented on branch `bootstrap-report-storage-via-worker-20260912`.
+- Local syntax, report-storage, idempotent-schema, and signed control-flow tests pass.
+- The previous external migration method was blocked because the deployment token lacks D1 Edit permission; runtime bootstrap avoids requesting broader Cloudflare credentials.
+
+Exact next step:
+
+- merge the runtime-bootstrap PR, verify GitHub Actions and live `report_storage: ready`, then start the repository/Drive audit and session-storage implementation in separate reviewed increments.
