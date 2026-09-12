@@ -20,6 +20,7 @@ const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "uninstall"]);
 const CONTROLLER_COMMAND_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0";
+let reportSchemaPromise;
 
 class ApiError extends Error {
   constructor(status, code) {
@@ -106,6 +107,49 @@ async function readBodyText(request, maxBytes) {
     throw new ApiError(413, "request_too_large");
   }
   return text;
+}
+
+async function ensureReportStorage(env) {
+  if (!reportSchemaPromise) {
+    reportSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS agent_reports (
+          report_id TEXT PRIMARY KEY,
+          result_id TEXT NOT NULL UNIQUE,
+          assignment_id TEXT NOT NULL,
+          mission_id TEXT NOT NULL,
+          node_id TEXT NOT NULL,
+          report_type TEXT NOT NULL,
+          report_json TEXT NOT NULL,
+          report_sha256 TEXT NOT NULL,
+          report_size_bytes INTEGER NOT NULL CHECK (report_size_bytes >= 0),
+          sensitivity TEXT NOT NULL DEFAULT 'internal'
+            CHECK (sensitivity IN ('public', 'internal', 'confidential', 'restricted')),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (result_id) REFERENCES results(result_id) ON DELETE CASCADE,
+          FOREIGN KEY (assignment_id) REFERENCES assignments(assignment_id) ON DELETE CASCADE,
+          FOREIGN KEY (mission_id) REFERENCES missions(mission_id) ON DELETE CASCADE,
+          FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_agent_reports_node_created
+        ON agent_reports(node_id, created_at DESC)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_agent_reports_mission_created
+        ON agent_reports(mission_id, created_at DESC)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_agent_reports_type_created
+        ON agent_reports(report_type, created_at DESC)
+      `)
+    ]).catch((error) => {
+      reportSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await reportSchemaPromise;
 }
 
 function bytesToHex(bytes) {
@@ -634,6 +678,7 @@ async function submitResult(request, env, nodeId, url) {
     throw new ApiError(413, "report_too_large");
   }
   const reportSha256 = await sha256Hex(reportJson);
+  await ensureReportStorage(env);
 
   const existing = await env.DB.prepare(`
     SELECT result_id, outcome, created_at
@@ -645,6 +690,7 @@ async function submitResult(request, env, nodeId, url) {
   }
 
   const resultId = `result_${crypto.randomUUID()}`;
+  const reportId = `report_${crypto.randomUUID()}`;
   const assignmentStatus = outcome === "failed" ? "failed" : "completed";
   const detailsJson = JSON.stringify({ result_id: resultId, outcome });
 
@@ -654,11 +700,9 @@ async function submitResult(request, env, nodeId, url) {
       env.DB.prepare(`
         INSERT INTO results (
           result_id, assignment_id, node_id, outcome,
-          summary, artifact_key, metrics_json,
-          report_type, report_json, report_sha256,
-          report_size_bytes, sensitivity
+          summary, artifact_key, metrics_json
         )
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        SELECT ?, ?, ?, ?, ?, ?, ?
         FROM assignments
         WHERE assignment_id = ?
           AND node_id = ?
@@ -671,13 +715,28 @@ async function submitResult(request, env, nodeId, url) {
         summary,
         artifactKey,
         metricsJson,
+        assignmentId,
+        nodeId
+      ),
+      env.DB.prepare(`
+        INSERT INTO agent_reports (
+          report_id, result_id, assignment_id, mission_id, node_id,
+          report_type, report_json, report_sha256,
+          report_size_bytes, sensitivity
+        )
+        SELECT ?, r.result_id, r.assignment_id, a.mission_id, r.node_id,
+               ?, ?, ?, ?, ?
+        FROM results AS r
+        JOIN assignments AS a ON a.assignment_id = r.assignment_id
+        WHERE r.result_id = ?
+      `).bind(
+        reportId,
         reportType,
         reportJson,
         reportSha256,
         reportSizeBytes,
         sensitivity,
-        assignmentId,
-        nodeId
+        resultId
       ),
       env.DB.prepare(`
         UPDATE assignments
@@ -722,12 +781,18 @@ async function submitResult(request, env, nodeId, url) {
 
   return json({
     ok: true,
-    result: { result_id: resultId, assignment_id: assignmentId, outcome }
+    result: {
+      result_id: resultId,
+      report_id: reportId,
+      assignment_id: assignmentId,
+      outcome
+    }
   }, 201);
 }
 
 async function architectListReports(request, env, url) {
   await authenticateArchitect(request, env);
+  await ensureReportStorage(env);
 
   const rawLimit = url.searchParams.get("limit") || "50";
   if (!/^\d{1,3}$/.test(rawLimit)) {
@@ -744,6 +809,7 @@ async function architectListReports(request, env, url) {
 
   const query = await env.DB.prepare(`
     SELECT
+      ar.report_id,
       r.result_id,
       r.assignment_id,
       a.mission_id,
@@ -751,17 +817,18 @@ async function architectListReports(request, env, url) {
       r.outcome,
       r.summary,
       r.artifact_key,
-      r.report_type,
-      r.report_sha256,
-      r.report_size_bytes,
-      r.sensitivity,
-      r.created_at
-    FROM results AS r
+      ar.report_type,
+      ar.report_sha256,
+      ar.report_size_bytes,
+      ar.sensitivity,
+      ar.created_at
+    FROM agent_reports AS ar
+    JOIN results AS r ON r.result_id = ar.result_id
     JOIN assignments AS a ON a.assignment_id = r.assignment_id
     WHERE (? IS NULL OR r.node_id = ?)
       AND (? IS NULL OR a.mission_id = ?)
-      AND (? IS NULL OR r.report_type = ?)
-    ORDER BY r.created_at DESC
+      AND (? IS NULL OR ar.report_type = ?)
+    ORDER BY ar.created_at DESC
     LIMIT ?
   `).bind(
     nodeId,
@@ -779,11 +846,13 @@ async function architectListReports(request, env, url) {
   });
 }
 
-async function architectGetReport(request, env, resultId) {
+async function architectGetReport(request, env, reportId) {
   await authenticateArchitect(request, env);
+  await ensureReportStorage(env);
 
   const report = await env.DB.prepare(`
     SELECT
+      ar.report_id,
       r.result_id,
       r.assignment_id,
       a.mission_id,
@@ -792,16 +861,17 @@ async function architectGetReport(request, env, resultId) {
       r.summary,
       r.artifact_key,
       r.metrics_json,
-      r.report_type,
-      r.report_json,
-      r.report_sha256,
-      r.report_size_bytes,
-      r.sensitivity,
-      r.created_at
-    FROM results AS r
+      ar.report_type,
+      ar.report_json,
+      ar.report_sha256,
+      ar.report_size_bytes,
+      ar.sensitivity,
+      ar.created_at
+    FROM agent_reports AS ar
+    JOIN results AS r ON r.result_id = ar.result_id
     JOIN assignments AS a ON a.assignment_id = r.assignment_id
-    WHERE r.result_id = ?
-  `).bind(resultId).first();
+    WHERE ar.report_id = ? OR r.result_id = ?
+  `).bind(reportId, reportId).first();
 
   if (!report) {
     throw new ApiError(404, "report_not_found");
@@ -950,6 +1020,7 @@ async function authenticateArchitect(request, env) {
 
 async function architectOverview(request, env) {
   await authenticateArchitect(request, env);
+  await ensureReportStorage(env);
 
   const [counts, nodesQuery, missionsQuery, commandsQuery, auditQuery] = await Promise.all([
     env.DB.prepare(
@@ -957,7 +1028,7 @@ async function architectOverview(request, env) {
       "(SELECT COUNT(*) FROM nodes) AS nodes, " +
       "(SELECT COUNT(*) FROM nodes WHERE status = 'online') AS online_nodes, " +
       "(SELECT COUNT(*) FROM missions) AS missions, " +
-      "(SELECT COUNT(*) FROM results) AS reports"
+      "(SELECT COUNT(*) FROM agent_reports) AS reports"
     ).first(),
     env.DB.prepare(
       "SELECT node_id, hostname, os_name, os_version, architecture, " +
@@ -1196,14 +1267,22 @@ async function handleApi(request, env, url) {
 
     try {
       const row = await env.DB.prepare("SELECT 1 AS ok").first();
-      const controllerSigning = await importControllerPrivateKey(env)
-        .then(() => "ready")
-        .catch(() => "unavailable");
+      const [controllerSigning, reportStorage] = await Promise.all([
+        importControllerPrivateKey(env)
+          .then(() => "ready")
+          .catch(() => "unavailable"),
+        ensureReportStorage(env)
+          .then(() => "ready")
+          .catch(() => "unavailable")
+      ]);
       return json({
-        ok: row?.ok === 1 && controllerSigning === "ready",
+        ok: row?.ok === 1 &&
+          controllerSigning === "ready" &&
+          reportStorage === "ready",
         service: "citadel-ai",
         database: "citadel-control",
-        controller_signing: controllerSigning
+        controller_signing: controllerSigning,
+        report_storage: reportStorage
       });
     } catch {
       return json({
