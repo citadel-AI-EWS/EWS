@@ -81,7 +81,7 @@ are `public`, `internal`, `confidential`, and `restricted`.
 Authenticated architect routes:
 
 - `GET /api/v1/architect/reports?limit=50`
-- `GET /api/v1/architect/reports/{result_id}`
+- `GET /api/v1/architect/reports/{report_id-or-result_id}`
 
 The list route returns metadata only. Full report content is returned only by
 the detail route. Both require the architect bearer token.
