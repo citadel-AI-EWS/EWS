@@ -6,8 +6,16 @@ const JSON_HEADERS = {
 
 const MAX_ENROLLMENT_BODY_BYTES = 16 * 1024;
 const MAX_NODE_BODY_BYTES = 64 * 1024;
+const MAX_RESULT_BODY_BYTES = 768 * 1024;
+const MAX_REPORT_BYTES = 512 * 1024;
 const SIGNATURE_WINDOW_SECONDS = 300;
 const ALLOWED_OUTCOMES = new Set(["success", "failed", "partial"]);
+const ALLOWED_REPORT_SENSITIVITIES = new Set([
+  "public",
+  "internal",
+  "confidential",
+  "restricted"
+]);
 const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "uninstall"]);
@@ -590,7 +598,7 @@ async function acceptAssignment(request, env, nodeId, assignmentId, url) {
 }
 
 async function submitResult(request, env, nodeId, url) {
-  const bodyText = await readBodyText(request, MAX_NODE_BODY_BYTES);
+  const bodyText = await readBodyText(request, MAX_RESULT_BODY_BYTES);
   await authenticateNode(request, env, nodeId, url, bodyText);
   const body = parseJsonObject(bodyText);
 
@@ -603,6 +611,29 @@ async function submitResult(request, env, nodeId, url) {
   const summary = optionalString(body.summary, "summary", 4000);
   const artifactKey = optionalString(body.artifact_key, "artifact_key", 512);
   const metricsJson = normalizeMetrics(body.metrics);
+  const reportType = body.report_type === undefined
+    ? "mission_result"
+    : requireString(body.report_type, "report_type", 64);
+  const sensitivity = body.sensitivity === undefined
+    ? "internal"
+    : requireString(body.sensitivity, "sensitivity", 32);
+  if (!ALLOWED_REPORT_SENSITIVITIES.has(sensitivity)) {
+    throw new ApiError(400, "invalid_sensitivity");
+  }
+
+  const reportValue = body.report === undefined
+    ? {
+        summary,
+        artifact_key: artifactKey,
+        metrics: safeJson(metricsJson, {})
+      }
+    : body.report;
+  const reportJson = JSON.stringify(reportValue);
+  const reportSizeBytes = new TextEncoder().encode(reportJson).byteLength;
+  if (reportSizeBytes > MAX_REPORT_BYTES) {
+    throw new ApiError(413, "report_too_large");
+  }
+  const reportSha256 = await sha256Hex(reportJson);
 
   const existing = await env.DB.prepare(`
     SELECT result_id, outcome, created_at
@@ -623,9 +654,11 @@ async function submitResult(request, env, nodeId, url) {
       env.DB.prepare(`
         INSERT INTO results (
           result_id, assignment_id, node_id, outcome,
-          summary, artifact_key, metrics_json
+          summary, artifact_key, metrics_json,
+          report_type, report_json, report_sha256,
+          report_size_bytes, sensitivity
         )
-        SELECT ?, ?, ?, ?, ?, ?, ?
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         FROM assignments
         WHERE assignment_id = ?
           AND node_id = ?
@@ -638,6 +671,11 @@ async function submitResult(request, env, nodeId, url) {
         summary,
         artifactKey,
         metricsJson,
+        reportType,
+        reportJson,
+        reportSha256,
+        reportSizeBytes,
+        sensitivity,
         assignmentId,
         nodeId
       ),
@@ -686,6 +724,99 @@ async function submitResult(request, env, nodeId, url) {
     ok: true,
     result: { result_id: resultId, assignment_id: assignmentId, outcome }
   }, 201);
+}
+
+async function architectListReports(request, env, url) {
+  await authenticateArchitect(request, env);
+
+  const rawLimit = url.searchParams.get("limit") || "50";
+  if (!/^\d{1,3}$/.test(rawLimit)) {
+    throw new ApiError(400, "invalid_limit");
+  }
+  const limit = Number(rawLimit);
+  if (limit < 1 || limit > 100) {
+    throw new ApiError(400, "invalid_limit");
+  }
+
+  const nodeId = optionalString(url.searchParams.get("node_id"), "node_id", 128);
+  const missionId = optionalString(url.searchParams.get("mission_id"), "mission_id", 128);
+  const reportType = optionalString(url.searchParams.get("report_type"), "report_type", 64);
+
+  const query = await env.DB.prepare(`
+    SELECT
+      r.result_id,
+      r.assignment_id,
+      a.mission_id,
+      r.node_id,
+      r.outcome,
+      r.summary,
+      r.artifact_key,
+      r.report_type,
+      r.report_sha256,
+      r.report_size_bytes,
+      r.sensitivity,
+      r.created_at
+    FROM results AS r
+    JOIN assignments AS a ON a.assignment_id = r.assignment_id
+    WHERE (? IS NULL OR r.node_id = ?)
+      AND (? IS NULL OR a.mission_id = ?)
+      AND (? IS NULL OR r.report_type = ?)
+    ORDER BY r.created_at DESC
+    LIMIT ?
+  `).bind(
+    nodeId,
+    nodeId,
+    missionId,
+    missionId,
+    reportType,
+    reportType,
+    limit
+  ).all();
+
+  return json({
+    ok: true,
+    reports: query.results || []
+  });
+}
+
+async function architectGetReport(request, env, resultId) {
+  await authenticateArchitect(request, env);
+
+  const report = await env.DB.prepare(`
+    SELECT
+      r.result_id,
+      r.assignment_id,
+      a.mission_id,
+      r.node_id,
+      r.outcome,
+      r.summary,
+      r.artifact_key,
+      r.metrics_json,
+      r.report_type,
+      r.report_json,
+      r.report_sha256,
+      r.report_size_bytes,
+      r.sensitivity,
+      r.created_at
+    FROM results AS r
+    JOIN assignments AS a ON a.assignment_id = r.assignment_id
+    WHERE r.result_id = ?
+  `).bind(resultId).first();
+
+  if (!report) {
+    throw new ApiError(404, "report_not_found");
+  }
+
+  return json({
+    ok: true,
+    report: {
+      ...report,
+      metrics: safeJson(report.metrics_json, {}),
+      content: safeJson(report.report_json, null),
+      metrics_json: undefined,
+      report_json: undefined
+    }
+  });
 }
 
 async function listCommands(request, env, nodeId, url) {
@@ -825,7 +956,8 @@ async function architectOverview(request, env) {
       "SELECT " +
       "(SELECT COUNT(*) FROM nodes) AS nodes, " +
       "(SELECT COUNT(*) FROM nodes WHERE status = 'online') AS online_nodes, " +
-      "(SELECT COUNT(*) FROM missions) AS missions"
+      "(SELECT COUNT(*) FROM missions) AS missions, " +
+      "(SELECT COUNT(*) FROM results) AS reports"
     ).first(),
     env.DB.prepare(
       "SELECT node_id, hostname, os_name, os_version, architecture, " +
@@ -865,7 +997,8 @@ async function architectOverview(request, env) {
     counts: {
       nodes: counts?.nodes || 0,
       online_nodes: counts?.online_nodes || 0,
-      missions: counts?.missions || 0
+      missions: counts?.missions || 0,
+      reports: counts?.reports || 0
     },
     nodes: nodesQuery.results || [],
     missions,
@@ -1091,6 +1224,25 @@ async function handleApi(request, env, url) {
     return request.method === "POST"
       ? architectCreateMission(request, env)
       : methodNotAllowed(["POST"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/reports") {
+    return request.method === "GET"
+      ? architectListReports(request, env, url)
+      : methodNotAllowed(["GET"]);
+  }
+
+  const architectReportMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/reports\/([^/]+)$/
+  );
+  if (architectReportMatch) {
+    return request.method === "GET"
+      ? architectGetReport(
+          request,
+          env,
+          decodeURIComponent(architectReportMatch[1])
+        )
+      : methodNotAllowed(["GET"]);
   }
 
   const architectMatch = url.pathname.match(
