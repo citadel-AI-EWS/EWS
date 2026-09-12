@@ -38,6 +38,7 @@ node --check /tmp/ews-architect-logs.js
 node --check /tmp/ews-node-test.js
 node --check src/index.js
 node --check src/worker.js
+node --check src/report_tiering.js
 node --check src/telemetry/common.js
 node --check src/telemetry/schema.js
 node --check src/telemetry/normalize.js
@@ -46,6 +47,7 @@ node --check src/telemetry/cursor.js
 node --check src/telemetry/architect.js
 node --check src/telemetry/router.js
 node tests/report-storage.mjs
+node tests/report-tiering.mjs
 node tests/session-storage.mjs
 node tests/telemetry-storage.mjs
 bash -n controller_deploy.sh scripts/build_site.sh scripts/package_controller.sh scripts/validate.sh
