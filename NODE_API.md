@@ -101,6 +101,8 @@ Server limits:
 - allow-listed event types and levels only;
 - obvious secret-bearing fields and common credential patterns are redacted;
 - duplicate `event_id` values are ignored;
+- at most 60 authenticated telemetry requests per node in a five-minute window;
+- rate-limited requests return HTTP 429 with `Retry-After: 300`;
 - default D1 retention is 7 days;
 - hard cap is 5,000 events per node.
 
