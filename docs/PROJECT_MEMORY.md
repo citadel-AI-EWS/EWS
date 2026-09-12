@@ -175,3 +175,37 @@ Current verification:
 Exact next step:
 
 - merge the runtime-bootstrap PR, verify GitHub Actions and live `report_storage: ready`, then start the repository/Drive audit and session-storage implementation in separate reviewed increments.
+
+
+### 2026-09-12 — Checkpoint: database live and repository/Drive audit
+
+Completed:
+
+- PR #19 was merged as commit
+  `c936e754af01137d798ae1d89d4874a0f275b190`.
+- GitHub Actions CI and Cloudflare TEST deploy run 17 completed successfully.
+- Live `/api/health` returned `ok: true`, `controller_signing: ready`, and
+  `report_storage: ready`.
+- All repository source/text files were reviewed and the Drive folder
+  `Материалы 2024` was inspected.
+- The Drive package `CITADEL_UNIFIED_v20.1.0_2026-09-11` passed Python syntax
+  compilation and its built-in self-test when used as a complete package.
+- A full review and capacity calculation were recorded in
+  `docs/FULL_PROJECT_REVIEW_2026-09-12.md`.
+
+Decision:
+
+- The database/report-storage stage is complete.
+- The Drive Python package will not replace the Cloudflare Controller because
+  its local Hub/SQLite/HMAC protocol is incompatible with the deployed
+  Worker/D1/Ed25519 protocol.
+- Safe mission handlers, offline queue, resource limits, diagnostics, and
+  transparent installer behavior will be ported through a Cloudflare v1
+  adapter in reviewed increments.
+- Add authenticated report browsing to the Architect console first so stored
+  reports are usable from the current mobile workflow.
+
+Next step:
+
+- merge and deploy the Architect report browser and expanded JavaScript CI
+  checks; then implement report retention and versioned session snapshots.
