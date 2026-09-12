@@ -26,7 +26,9 @@ Git history and deployed-version identifiers remain the authoritative technical 
 - Allowed safe test mission type: `system_inventory`
 - Signed node-control commands: `pause`, `resume`, `uninstall`
 - Arbitrary remote command execution is prohibited.
-- Controller signing is being repaired for Cloudflare WebCrypto compatibility. Deployment must verify signing readiness before reporting success.
+- Controller signing is compatible with Cloudflare WebCrypto. TEST health must report `controller_signing: ready` before deployment is accepted.
+- TEST deploys run automatically after updates reach `main` and fail closed if signing readiness is unavailable.
+- Complete authenticated agent reports are stored in D1 with type, sensitivity, byte size, and SHA-256 integrity metadata.
 
 ## Product requirements
 
@@ -103,3 +105,42 @@ Next steps:
 - design the session snapshot data model and recovery UI;
 - specify the AI report redaction policy and provider-adapter interface;
 - create the USB deployment utility as a separate repository/specification after the target operating system and device-management method are chosen.
+
+
+### 2026-09-12 — Controller signing repair and durable report storage
+
+Architect requested:
+
+- finish the unresolved `controller_signing_not_configured` failure;
+- persist complete agent reports on the backend;
+- determine free-plan storage capacity and finish the D1 database procedure.
+
+Implemented decision:
+
+- Normalize the controller private JWK before WebCrypto import and support both standard and Cloudflare legacy Ed25519 algorithm identifiers.
+- TEST deployment now checks `/api/health` and accepts the release only when D1 is available and controller signing is ready.
+- Pushes to `main` deploy TEST automatically.
+- Apply versioned D1 migrations before Worker deployment.
+- Extend authenticated mission results with the complete report body, report type, sensitivity label, SHA-256 digest, and exact byte size.
+- Architect report listing returns metadata only; full content requires a separate authenticated detail request.
+- Limit each serialized report body to 512 KiB so one D1 row stays comfortably below platform limits.
+
+Verification:
+
+- Cloudflare TEST deployment completed successfully.
+- Public health returned `ok: true`, database `citadel-control`, and `controller_signing: ready`.
+- Signed pause/resume/uninstall control-flow tests passed.
+- D1 migration syntax and authenticated report submit/list/detail tests passed.
+
+Capacity decision:
+
+- D1 remains the active report database for this stage.
+- Keep at least 20% free headroom for indexes and operational growth.
+- If average reports grow beyond roughly 100 KiB or long-term volume approaches the D1 database cap, move full report bodies to R2 while retaining metadata and audit records in D1.
+
+Next steps:
+
+- complete and verify automatic deployment of the report-storage migration;
+- add the Architect report browser and retention controls;
+- implement versioned session snapshots and recovery;
+- design the outbound AI redaction gateway before enabling any external provider.
