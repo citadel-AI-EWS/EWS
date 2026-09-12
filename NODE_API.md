@@ -6,7 +6,7 @@ execute commands on nodes and it has no arbitrary-shell route.
 
 ## Public routes
 
-- `GET /api/health` — D1 and controller-signing readiness check.
+- `GET /api/health` — D1, controller-signing, report/session and telemetry readiness check.
 - `GET /api/v1` — supported mission and command types.
 - `POST /api/v1/enroll` — enroll one node using an active enrollment batch token.
 
@@ -21,8 +21,8 @@ The node supplies an Ed25519 public key as JWK:
   "os_name": "Linux",
   "os_version": "example",
   "architecture": "x86_64",
-  "agent_version": "0.1.0",
-  "capabilities": ["system_inventory", "file_hashing"]
+  "agent_version": "0.2.0",
+  "capabilities": ["system_inventory"]
 }
 ```
 
@@ -32,6 +32,7 @@ The node supplies an Ed25519 public key as JWK:
 - `GET /api/v1/nodes/{node_id}/assignments`
 - `POST /api/v1/nodes/{node_id}/assignments/{assignment_id}/accept`
 - `POST /api/v1/nodes/{node_id}/results`
+- `POST /api/v1/nodes/{node_id}/logs`
 - `GET /api/v1/nodes/{node_id}/commands`
 - `POST /api/v1/nodes/{node_id}/commands/{command_id}/ack`
 
@@ -86,12 +87,44 @@ Authenticated architect routes:
 The list route returns metadata only. Full report content is returned only by
 the detail route. Both require the architect bearer token.
 
+## Operational telemetry
+
+`POST /api/v1/nodes/{node_id}/logs` accepts only the node's bounded operational
+JSONL events after the same Ed25519 authentication used by the rest of the node
+API. The telemetry channel is observability-only and is not a command channel.
+
+Server limits:
+
+- request body: at most 64 KiB;
+- at most 50 events per batch;
+- serialized event: about 2 KiB maximum;
+- allow-listed event types and levels only;
+- obvious secret-bearing fields and common credential patterns are redacted;
+- duplicate `event_id` values are ignored;
+- default D1 retention is 7 days;
+- hard cap is 5,000 events per node.
+
+Architect-only routes:
+
+- `GET /api/v1/architect/logs?limit=50&node_id=...&level=...&event_type=...`
+- `GET /api/v1/architect/logs/stats`
+
+The list route uses an opaque `next_cursor` for pagination. The browser is
+published at `/architect/logs/` and reuses the same session-scoped Architect
+bearer token as the main Architect console.
+
+The v0.2 Python node reads only its own local `agent.jsonl`, assigns deterministic
+event IDs from the node ID, byte offset and original line, and advances a local
+cursor only after a successful upload. A retry therefore does not duplicate
+stored events.
+
 ## Safety boundary
 
-Mission types are constrained by D1 to inventory, log/config/dependency audits,
-advisory analysis, and file hashing. Commands are constrained to `pause`,
-`resume`, `update`, and `uninstall`. A node must independently validate a
-command's controller signature and must never treat `payload` as shell code.
+The active Python node contains only locally registered bounded mission handlers.
+It has no remote shell, arbitrary code loader, credential collector, exploit
+engine, lateral movement, stealth installation, self-propagation, or autonomous
+financial transaction capability.
 
 Architect routes require a separately configured bearer token. The browser
-console exposes only allow-listed safe missions and signed node controls.
+console exposes only allow-listed safe missions, signed node controls and
+read-only operational telemetry.
