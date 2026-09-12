@@ -1,6 +1,7 @@
 {
   "name": "ews-architect-console",
   "private": true,
+  "type": "module",
   "version": "0.3.0",
   "description": "EWS Architect console and TEST Controller deployment tooling",
   "scripts": {
