@@ -7,11 +7,17 @@ import {
   readBodyText
 } from "./common.js";
 import { normalizeTelemetryEvent } from "./normalize.js";
-import { ensureTelemetryStorage } from "./schema.js";
+import {
+  enforceTelemetryRateLimit,
+  ensureTelemetryStorage
+} from "./schema.js";
 
 export async function ingestNodeLogs(request, env, nodeId, url) {
   const bodyText = await readBodyText(request, TELEMETRY_LIMITS.request_bytes);
   await authenticateNode(request, env, nodeId, url, bodyText);
+  await ensureTelemetryStorage(env);
+  await enforceTelemetryRateLimit(env, nodeId);
+
   const body = parseJsonObject(bodyText);
   if (!Array.isArray(body.events) || body.events.length < 1) {
     throw new TelemetryError(400, "events_required");
@@ -20,7 +26,6 @@ export async function ingestNodeLogs(request, env, nodeId, url) {
     throw new TelemetryError(413, "too_many_events");
   }
   const events = body.events.map(normalizeTelemetryEvent);
-  await ensureTelemetryStorage(env);
 
   const insertStatements = events.map((event) => env.DB.prepare(`
     INSERT OR IGNORE INTO node_logs (
@@ -66,6 +71,10 @@ export async function ingestNodeLogs(request, env, nodeId, url) {
     accepted,
     duplicates: events.length - accepted,
     retention_days: TELEMETRY_LIMITS.retention_days,
-    per_node_event_cap: TELEMETRY_LIMITS.per_node_events
+    per_node_event_cap: TELEMETRY_LIMITS.per_node_events,
+    rate_limit: {
+      requests: TELEMETRY_LIMITS.requests_per_window,
+      window_seconds: TELEMETRY_LIMITS.rate_window_seconds
+    }
   }, accepted ? 201 : 200);
 }
