@@ -21,3 +21,10 @@ CREATE INDEX IF NOT EXISTS idx_node_logs_received
 
 CREATE INDEX IF NOT EXISTS idx_node_logs_level_created
   ON node_logs(level, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS node_log_rate_limits (
+  node_id TEXT PRIMARY KEY,
+  window_started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  request_count INTEGER NOT NULL DEFAULT 0 CHECK (request_count >= 0),
+  FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+);
