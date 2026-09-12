@@ -14,6 +14,8 @@ if not match:
 Path("/tmp/ews-site.js").write_text(match.group(1), encoding="utf-8")
 PY
 node --check /tmp/ews-site.js
+node --check src/index.js
+node tests/report-storage.mjs
 bash -n controller_deploy.sh scripts/build_site.sh scripts/package_controller.sh scripts/validate.sh
 cfn-lint controller_template.yaml project_stack.yaml
 artifact="$(mktemp --suffix=.zip)"
