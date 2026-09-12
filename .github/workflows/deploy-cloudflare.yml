@@ -51,11 +51,11 @@ jobs:
           CONTROLLER_COMMAND_PRIVATE_JWK: ${{ secrets.CONTROLLER_COMMAND_PRIVATE_JWK }}
       - name: Verify TEST controls
         run: |
-          for attempt in 1 2 3 4 5; do
-            response="$(curl --fail --silent --show-error https://citadel-ai.init1.workers.dev/api/health)"
+          for attempt in $(seq 1 20); do
+            response="$(curl --fail --silent --show-error "https://citadel-ai.init1.workers.dev/api/health?deployment=${GITHUB_SHA}-${attempt}")"
             if node -e 'const value = JSON.parse(process.argv[1]); process.exit(value.ok && value.controller_signing === "ready" && value.report_storage === "ready" && value.session_storage === "ready" ? 0 : 1)' "$response"; then
               exit 0
             fi
-            sleep 2
+            sleep 3
           done
           exit 1
