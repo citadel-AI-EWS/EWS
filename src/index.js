@@ -136,13 +136,24 @@ function controllerCommandCanonical(commandId, nodeId, commandType, payloadHash,
   ].join("\n");
 }
 
-async function signControllerCommand(env, commandId, nodeId, commandType, payloadJson, createdAt) {
-  const encodedKey = typeof env.CONTROLLER_COMMAND_PRIVATE_JWK === "string"
+function controllerPrivateJwk(env) {
+  let encodedKey = typeof env.CONTROLLER_COMMAND_PRIVATE_JWK === "string"
     ? env.CONTROLLER_COMMAND_PRIVATE_JWK.trim()
     : "";
+
+  if (encodedKey.startsWith("```")) {
+    encodedKey = encodedKey
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/, "")
+      .trim();
+  }
+
   let privateJwk;
   try {
     privateJwk = JSON.parse(encodedKey);
+    if (typeof privateJwk === "string") {
+      privateJwk = JSON.parse(privateJwk.trim());
+    }
   } catch {
     throw new ApiError(503, "controller_signing_not_configured");
   }
@@ -157,14 +168,42 @@ async function signControllerCommand(env, commandId, nodeId, commandType, payloa
     throw new ApiError(503, "controller_signing_not_configured");
   }
 
+  return {
+    kty: "OKP",
+    crv: "Ed25519",
+    x: privateJwk.x,
+    d: privateJwk.d
+  };
+}
+
+async function importControllerPrivateKey(env) {
+  const privateJwk = controllerPrivateJwk(env);
+  const algorithms = [
+    { name: "Ed25519" },
+    { name: "NODE-ED25519", namedCurve: "NODE-ED25519" }
+  ];
+
+  for (const algorithm of algorithms) {
+    try {
+      const key = await crypto.subtle.importKey(
+        "jwk",
+        privateJwk,
+        algorithm,
+        false,
+        ["sign"]
+      );
+      return { key, algorithm };
+    } catch {
+      // Try Cloudflare's legacy Ed25519 name after the web-standard name.
+    }
+  }
+
+  throw new ApiError(503, "controller_signing_not_configured");
+}
+
+async function signControllerCommand(env, commandId, nodeId, commandType, payloadJson, createdAt) {
   try {
-    const privateKey = await crypto.subtle.importKey(
-      "jwk",
-      privateJwk,
-      { name: "Ed25519" },
-      false,
-      ["sign"]
-    );
+    const { key, algorithm } = await importControllerPrivateKey(env);
     const payloadHash = await sha256Hex(payloadJson);
     const canonical = controllerCommandCanonical(
       commandId,
@@ -174,8 +213,8 @@ async function signControllerCommand(env, commandId, nodeId, commandType, payloa
       createdAt
     );
     const signature = await crypto.subtle.sign(
-      "Ed25519",
-      privateKey,
+      algorithm,
+      key,
       new TextEncoder().encode(canonical)
     );
     return bytesToBase64Url(signature);
@@ -1024,10 +1063,14 @@ async function handleApi(request, env, url) {
 
     try {
       const row = await env.DB.prepare("SELECT 1 AS ok").first();
+      const controllerSigning = await importControllerPrivateKey(env)
+        .then(() => "ready")
+        .catch(() => "unavailable");
       return json({
-        ok: row?.ok === 1,
+        ok: row?.ok === 1 && controllerSigning === "ready",
         service: "citadel-ai",
-        database: "citadel-control"
+        database: "citadel-control",
+        controller_signing: controllerSigning
       });
     } catch {
       return json({
