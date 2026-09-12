@@ -165,9 +165,14 @@ class Identity:
             self.private_key = Ed25519PrivateKey.generate()
             self.save()
 
+    def require_private_key(self) -> Ed25519PrivateKey:
+        if self.private_key is None:
+            raise RuntimeError("node identity is unavailable")
+        return self.private_key
+
     def save(self) -> None:
-        assert self.private_key is not None
-        pem = self.private_key.private_bytes(
+        key = self.require_private_key()
+        pem = key.private_bytes(
             serialization.Encoding.PEM,
             serialization.PrivateFormat.PKCS8,
             serialization.NoEncryption(),
@@ -182,15 +187,13 @@ class Identity:
         self.save()
 
     def public_jwk(self) -> dict[str, str]:
-        assert self.private_key is not None
-        raw = self.private_key.public_key().public_bytes(
+        raw = self.require_private_key().public_key().public_bytes(
             serialization.Encoding.Raw, serialization.PublicFormat.Raw
         )
         return {"kty": "OKP", "crv": "Ed25519", "x": b64url(raw)}
 
     def sign(self, value: bytes) -> str:
-        assert self.private_key is not None
-        return b64url(self.private_key.sign(value))
+        return b64url(self.require_private_key().sign(value))
 
 
 class ApiClient:
@@ -216,13 +219,20 @@ class ApiClient:
                 "x-node-timestamp": timestamp,
                 "x-node-signature": self.identity.sign(canonical.encode("utf-8")),
             })
+        request_url = self.config.controller_url + path
+        parsed = urllib.parse.urlsplit(request_url)
+        if parsed.scheme != "https" and not (
+            parsed.scheme == "http" and parsed.hostname == "127.0.0.1"
+        ):
+            raise RuntimeError("refusing non-HTTPS controller request")
         request = urllib.request.Request(
-            self.config.controller_url + path,
+            request_url,
             data=body_text.encode("utf-8") if body is not None else None,
             headers=headers,
             method=method,
         )
         try:
+            # nosec B310: request_url is revalidated immediately above and permits only HTTPS or loopback test HTTP.
             with urllib.request.urlopen(request, timeout=self.config.request_timeout_seconds) as response:
                 raw = response.read(MAX_HTTP_BODY_BYTES + 1)
                 if len(raw) > MAX_HTTP_BODY_BYTES:
@@ -308,6 +318,11 @@ class Agent:
     def capabilities(self) -> list[str]:
         return sorted(HANDLERS)
 
+    def require_node_id(self) -> str:
+        if not self.identity.node_id:
+            raise RuntimeError("node is not enrolled")
+        return self.identity.node_id
+
     def enroll(self) -> str:
         if self.identity.node_id:
             return self.identity.node_id
@@ -331,8 +346,8 @@ class Agent:
         return node_id
 
     def heartbeat(self) -> None:
-        assert self.identity.node_id
-        self.api.request("POST", f"/api/v1/nodes/{self.identity.node_id}/heartbeat", {
+        node_id = self.require_node_id()
+        self.api.request("POST", f"/api/v1/nodes/{node_id}/heartbeat", {
             "cpu_percent": float(psutil.cpu_percent(interval=0.05)),
             "memory_percent": float(psutil.virtual_memory().percent),
             "agent_version": VERSION,
@@ -349,11 +364,11 @@ class Agent:
         )
 
     def submit_result(self, result: dict[str, Any]) -> None:
-        assert self.identity.node_id
-        self.api.request("POST", f"/api/v1/nodes/{self.identity.node_id}/results", result)
+        node_id = self.require_node_id()
+        self.api.request("POST", f"/api/v1/nodes/{node_id}/results", result)
 
     def execute_assignment(self, assignment: dict[str, Any]) -> None:
-        assert self.identity.node_id
+        node_id = self.require_node_id()
         assignment_id = str(assignment.get("assignment_id") or "")
         mission_type = str(assignment.get("mission_type") or "")
         handler = HANDLERS.get(mission_type)
@@ -365,11 +380,7 @@ class Agent:
             self.log.write("resource_guard", assignment_id=assignment_id, **metrics)
             return
         quoted = urllib.parse.quote(assignment_id, safe="")
-        self.api.request(
-            "POST",
-            f"/api/v1/nodes/{self.identity.node_id}/assignments/{quoted}/accept",
-            {},
-        )
+        self.api.request("POST", f"/api/v1/nodes/{node_id}/assignments/{quoted}/accept", {})
         started = time.monotonic()
         try:
             report = handler(assignment.get("payload") or {})
@@ -408,8 +419,7 @@ class Agent:
             (command_id, created_at, signature, self.identity.node_id)
         ):
             return False
-        payload = command.get("payload") or {}
-        if payload != {}:
+        if (command.get("payload") or {}) != {}:
             return False
         canonical = "\n".join((
             "CITADEL-COMMAND-V1",
@@ -427,17 +437,13 @@ class Agent:
             return False
 
     def ack_command(self, command_id: str, status: str) -> None:
-        assert self.identity.node_id
+        node_id = self.require_node_id()
         quoted = urllib.parse.quote(command_id, safe="")
-        self.api.request(
-            "POST",
-            f"/api/v1/nodes/{self.identity.node_id}/commands/{quoted}/ack",
-            {"status": status},
-        )
+        self.api.request("POST", f"/api/v1/nodes/{node_id}/commands/{quoted}/ack", {"status": status})
 
     def handle_commands(self) -> None:
-        assert self.identity.node_id
-        response = self.api.request("GET", f"/api/v1/nodes/{self.identity.node_id}/commands")
+        node_id = self.require_node_id()
+        response = self.api.request("GET", f"/api/v1/nodes/{node_id}/commands")
         for command in response.get("commands") or []:
             command_id = str(command.get("command_id") or "")
             command_type = str(command.get("command_type") or "")
@@ -455,15 +461,19 @@ class Agent:
                     except FileNotFoundError:
                         pass
                 elif command_type == "uninstall":
-                    # Remote control can revoke/stop the node. File removal stays a local action.
+                    # Controller can revoke/stop. Local file removal remains a local action.
                     atomic_write(self.stop_path, "controller stop " + now_iso() + "\n")
                 self.ack_command(command_id, "completed")
                 self.log.write("command_completed", command_id=command_id, command_type=command_type)
             except Exception as error:
                 try:
                     self.ack_command(command_id, "failed")
-                except Exception:
-                    pass
+                except Exception as ack_error:
+                    self.log.write(
+                        "command_failure_ack_failed",
+                        command_id=command_id,
+                        error=str(ack_error)[:300],
+                    )
                 self.log.write("command_failed", command_id=command_id, error=str(error)[:300])
 
     def cycle(self) -> None:
@@ -478,8 +488,8 @@ class Agent:
             self.log.write("queued_results_flushed", count=sent)
         if self.paused_path.exists():
             return
-        assert self.identity.node_id
-        response = self.api.request("GET", f"/api/v1/nodes/{self.identity.node_id}/assignments")
+        node_id = self.require_node_id()
+        response = self.api.request("GET", f"/api/v1/nodes/{node_id}/assignments")
         for assignment in response.get("assignments") or []:
             self.execute_assignment(assignment)
 
@@ -520,6 +530,11 @@ def doctor(config: AgentConfig) -> int:
     return 0 if checks["data_dir_writable"] and checks["controller_public_key_bytes"] == 32 else 2
 
 
+def require_test(condition: bool, message: str) -> None:
+    if not condition:
+        raise RuntimeError("self-test failed: " + message)
+
+
 def self_test() -> int:
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)
@@ -531,7 +546,7 @@ def self_test() -> int:
             "1700000000",
             sha256_text(json_text({"hello": "world"})),
         )).encode("utf-8")
-        identity.private_key.public_key().verify(  # type: ignore[union-attr]
+        identity.require_private_key().public_key().verify(
             unb64url(identity.sign(message)), message
         )
 
@@ -557,17 +572,17 @@ def self_test() -> int:
             command["created_at"],
         )).encode("utf-8")
         command["signature"] = b64url(controller_private.sign(canonical))
-        assert agent.verify_controller_command(command)
+        require_test(agent.verify_controller_command(command), "valid controller signature rejected")
         command["command_type"] = "shell"
-        assert not agent.verify_controller_command(command)
-        assert set(HANDLERS) == {"system_inventory"}
+        require_test(not agent.verify_controller_command(command), "unapproved command accepted")
+        require_test(set(HANDLERS) == {"system_inventory"}, "unexpected handler registered")
 
         pending = ResultQueue(root / "queue.json")
         pending.push({"assignment_id": "a1"})
         collected: list[dict[str, Any]] = []
-        assert pending.flush(collected.append) == 1
-        assert collected == [{"assignment_id": "a1"}]
-        assert system_inventory({})["memory_total_bytes"] > 0
+        require_test(pending.flush(collected.append) == 1, "offline queue did not flush")
+        require_test(collected == [{"assignment_id": "a1"}], "offline queue content changed")
+        require_test(system_inventory({})["memory_total_bytes"] > 0, "inventory failed")
     print("CITADEL v1 agent SELF TEST: PASS")
     return 0
 
