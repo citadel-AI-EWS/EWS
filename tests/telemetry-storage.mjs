@@ -19,8 +19,7 @@ const state = {
     public_key: JSON.stringify({ kty: "OKP", crv: "Ed25519", x: nodePublicJwk.x }),
     status: "online"
   },
-  logs: [],
-  audits: []
+  logs: []
 };
 
 function compact(sql) {
@@ -107,7 +106,10 @@ class Statement {
       return { meta: { changes: 1 } };
     }
     if (this.sql.startsWith("DELETE FROM node_logs") && this.sql.includes("datetime(received_at)")) {
-      return { meta: { changes: 0 } };
+      const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const before = state.logs.length;
+      state.logs = state.logs.filter((item) => Date.parse(item.received_at) >= cutoff);
+      return { meta: { changes: before - state.logs.length } };
     }
     if (this.sql.startsWith("DELETE FROM node_logs") && this.sql.includes("event_id NOT IN")) {
       const [nodeId] = this.args;
@@ -122,10 +124,6 @@ class Statement {
       const before = state.logs.length;
       state.logs = state.logs.filter((item) => item.node_id !== nodeId || keep.has(item.event_id));
       return { meta: { changes: before - state.logs.length } };
-    }
-    if (this.sql.startsWith("INSERT INTO audit_events")) {
-      state.audits.push({ args: [...this.args] });
-      return { meta: { changes: 1 } };
     }
     throw new Error(`Unhandled run(): ${this.sql}`);
   }
@@ -209,6 +207,30 @@ assert.equal(data.accepted, 0);
 assert.equal(data.duplicates, 2);
 assert.equal(state.logs.length, 2);
 
+const unsafeDetails = JSON.parse(
+  '{"__proto__":{"polluted":"yes"},"constructor":{"prototype":{"polluted":"yes"}},"api_key":"must-not-be-stored","safe":"ok"}'
+);
+response = await signedPost({
+  events: [{
+    event_id: "log_evt_unsafe_keys",
+    level: "error",
+    event_type: "cycle_error",
+    message: "cycle_error",
+    created_at: "2026-09-12T20:00:01Z",
+    details: unsafeDetails
+  }]
+});
+assert.equal(response.status, 201);
+const unsafeStored = JSON.parse(
+  state.logs.find((item) => item.event_id === "log_evt_unsafe_keys").details_json
+);
+assert.equal(Object.hasOwn(unsafeStored, "__proto__"), false);
+assert.equal(Object.hasOwn(unsafeStored, "constructor"), false);
+assert.equal(unsafeStored.api_key, "[REDACTED]");
+assert.equal(unsafeStored.safe, "ok");
+assert.equal({}.polluted, undefined);
+state.logs = state.logs.filter((item) => item.event_id !== "log_evt_unsafe_keys");
+
 response = await signedPost(batch, { badSignature: true });
 assert.equal(response.status, 401);
 assert.equal((await response.json()).error, "invalid_signature");
@@ -241,6 +263,24 @@ response = await signedPost(oversized);
 assert.equal(response.status, 413);
 assert.equal((await response.json()).error, "request_too_large");
 
+response = await worker.fetch(new Request(
+  "https://example.test/api/v1/architect/logs?limit=1",
+  { headers: { authorization: "Bearer wrong-token" } }
+), env);
+assert.equal(response.status, 401);
+assert.equal((await response.json()).error, "invalid_architect_token");
+
+state.logs.push({
+  event_id: "expired_event",
+  node_id: state.node.node_id,
+  level: "info",
+  event_type: "agent_start",
+  message: "expired",
+  details_json: "{}",
+  created_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+  received_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString()
+});
+
 const architectHeaders = { authorization: `Bearer ${architectToken}` };
 response = await worker.fetch(new Request(
   "https://example.test/api/v1/architect/logs?limit=1",
@@ -248,6 +288,7 @@ response = await worker.fetch(new Request(
 ), env);
 assert.equal(response.status, 200);
 data = await response.json();
+assert.equal(state.logs.some((item) => item.event_id === "expired_event"), false);
 assert.equal(data.logs.length, 1);
 assert.equal(data.logs[0].event_id, "log_evt_002");
 assert.ok(data.next_cursor);
@@ -273,4 +314,4 @@ assert.equal(data.stats.node_count, 1);
 assert.equal(data.stats.retention_days, 7);
 assert.equal(data.stats.per_node_event_cap, 5000);
 
-console.log("Signed bounded telemetry ingestion, redaction and pagination: OK");
+console.log("Signed bounded telemetry ingestion, redaction, retention and pagination: OK");
