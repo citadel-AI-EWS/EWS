@@ -244,3 +244,40 @@ Next step:
 - publish the session checkpoint increment through CI and TEST deployment;
   then implement report retention controls and the Cloudflare-v1 Python agent
   adapter as separate reviewed changes.
+
+
+### 2026-09-12 — Checkpoint: session storage live
+
+Completed:
+
+- PR #21 merged as commit
+  `ff6ad73028c7a0e9b497976c8174ebc57915b198`.
+- Main CI run 39 completed successfully.
+- Cloudflare TEST deploy run 19 succeeded on its second verification attempt.
+  The first attempt deployed correctly but its 10-second health window ended
+  before the new Worker version had propagated to every request path.
+- Live `/api/health` returns `controller_signing: ready`,
+  `report_storage: ready`, and `session_storage: ready`.
+- The live Architect page contains “Контрольные точки”, “Сохранить сессию”,
+  and the tracked-storage meter.
+
+Database-stage result:
+
+- D1 now persistently stores operational entities, authenticated full reports,
+  and versioned Architect session checkpoints.
+- Reports and sessions have integrity metadata; sensitive authorization is not
+  restored from snapshots.
+- The database stage requested for TEST is complete. Automated retention and
+  D1-to-R2 overflow are capacity improvements, not blockers for current TEST
+  operation.
+
+Resilience follow-up:
+
+- extend the deployment health window to 60 seconds and add a per-attempt cache
+  buster so normal Cloudflare propagation does not create a false-negative CD
+  result.
+
+Next step:
+
+- finish and verify the CD propagation fix; then port the reviewed Python agent
+  behind the Cloudflare v1 Ed25519 protocol without arbitrary command execution.

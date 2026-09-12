@@ -62,8 +62,8 @@ new Cloudflare v1 client adapter and tested incrementally.
 ## Current product gaps
 
 1. Report retention/deletion and R2 overflow storage are not implemented.
-2. Server-side session checkpoints are implemented but still require CI and
-   TEST deployment verification.
+2. Server-side session checkpoints are implemented and verified in TEST;
+   automated retention and R2 overflow remain future work.
 4. The Drive Python agent is not yet integrated with the Cloudflare v1 signed
    protocol.
 5. Internet task ingestion, source provenance, deduplication, safety
