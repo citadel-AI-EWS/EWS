@@ -8,11 +8,11 @@ import {
 } from "./common.js";
 import { decodeCursor, encodeCursor } from "./cursor.js";
 import { ALLOWED_EVENT_TYPES, validLogLevel } from "./normalize.js";
-import { ensureTelemetryStorage } from "./schema.js";
+import { pruneExpiredTelemetry } from "./schema.js";
 
 export async function architectListLogs(request, env, url) {
   await authenticateArchitect(request, env);
-  await ensureTelemetryStorage(env);
+  await pruneExpiredTelemetry(env);
 
   const rawLimit = url.searchParams.get("limit") || "50";
   if (!/^\d{1,3}$/.test(rawLimit)) {
@@ -73,7 +73,7 @@ export async function architectListLogs(request, env, url) {
 
 export async function architectLogStats(request, env) {
   await authenticateArchitect(request, env);
-  await ensureTelemetryStorage(env);
+  await pruneExpiredTelemetry(env);
   const totals = await env.DB.prepare(`
     SELECT COUNT(*) AS event_count,
       COUNT(DISTINCT node_id) AS node_count,
