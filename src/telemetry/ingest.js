@@ -41,6 +41,8 @@ export async function ingestNodeLogs(request, env, nodeId, url) {
     0
   );
 
+  // Telemetry batches are intentionally not mirrored into audit_events: doing so
+  // would make the supposedly bounded observability path grow D1 indefinitely.
   await env.DB.batch([
     env.DB.prepare(`
       DELETE FROM node_logs
@@ -55,16 +57,7 @@ export async function ingestNodeLogs(request, env, nodeId, url) {
           ORDER BY created_at DESC, event_id DESC
           LIMIT 5000
         )
-    `).bind(nodeId, nodeId),
-    env.DB.prepare(`
-      INSERT INTO audit_events (
-        actor_type, actor_id, action, target_type, target_id, details_json
-      ) VALUES ('node', ?, 'telemetry.ingested', 'node', ?, ?)
-    `).bind(
-      nodeId,
-      nodeId,
-      JSON.stringify({ received: events.length, accepted })
-    )
+    `).bind(nodeId, nodeId)
   ]);
 
   return json({
