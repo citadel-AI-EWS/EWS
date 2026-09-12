@@ -35,3 +35,11 @@ export async function ensureTelemetryStorage(env) {
   }
   await telemetrySchemaPromise;
 }
+
+export async function pruneExpiredTelemetry(env) {
+  await ensureTelemetryStorage(env);
+  await env.DB.prepare(`
+    DELETE FROM node_logs
+    WHERE datetime(received_at) < datetime('now', '-7 days')
+  `).run();
+}
