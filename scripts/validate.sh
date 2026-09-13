@@ -40,6 +40,7 @@ node --check /tmp/ews-node-test.js
 node --check src/index.js
 node --check src/worker.js
 node --check src/report_tiering.js
+node --check src/google_drive_store.js
 node --check src/telemetry/common.js
 node --check src/telemetry/schema.js
 node --check src/telemetry/normalize.js
@@ -48,6 +49,7 @@ node --check src/telemetry/cursor.js
 node --check src/telemetry/architect.js
 node --check src/telemetry/router.js
 node tests/report-storage.mjs
+node tests/google-drive-store.mjs
 node tests/report-tiering.mjs
 node tests/session-storage.mjs
 node tests/telemetry-storage.mjs

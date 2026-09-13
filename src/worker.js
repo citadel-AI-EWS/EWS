@@ -42,6 +42,8 @@ export default {
       const tiering = await reportTieringHealth(env);
       body.telemetry_storage = telemetryStorage;
       body.report_tiering_schema = tiering.schema;
+      body.report_storage_provider = tiering.provider;
+      body.report_google_drive = tiering.google_drive;
       body.report_r2 = tiering.r2;
       body.ok = Boolean(body.ok) &&
         telemetryStorage === "ready" &&

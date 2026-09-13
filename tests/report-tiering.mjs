@@ -66,6 +66,9 @@ class Statement {
     return this;
   }
   async first() {
+    if (this.sql.includes("SELECT storage_provider FROM report_objects LIMIT 1")) {
+      return null;
+    }
     if (this.sql === "PRAGMA page_count") return { page_count: 10 };
     if (this.sql === "PRAGMA page_size") return { page_size: 4096 };
     if (this.sql.includes("FROM report_objects") && this.sql.includes("WHERE report_id = ?")) {
@@ -99,7 +102,7 @@ class Statement {
     if (this.sql.includes("COUNT(*) AS report_count") && this.sql.includes("LEFT JOIN report_objects")) {
       let logical = 0;
       let inline = 0;
-      let r2 = 0;
+      let external = 0;
       let tiered = 0;
       let deleted = 0;
       for (const report of state.reports.values()) {
@@ -108,7 +111,7 @@ class Statement {
         if (!object) inline += report.report_size_bytes;
         else {
           tiered += 1;
-          if (object.state !== "purged") r2 += object.body_size_bytes;
+          if (object.state !== "purged") external += object.body_size_bytes;
           if (object.state === "deleted") deleted += 1;
         }
       }
@@ -116,7 +119,7 @@ class Statement {
         report_count: state.reports.size,
         report_logical_bytes: logical,
         report_inline_d1_bytes: inline,
-        report_r2_bytes: r2,
+        report_external_bytes: external,
         tiered_report_count: tiered,
         pending_delete_count: deleted
       };
@@ -137,7 +140,7 @@ class Statement {
           return {
             ...report,
             ...result,
-            storage_backend: !object ? "d1" : object.state === "purged" ? "purged" : "r2",
+            storage_backend: !object ? "d1" : object.state === "purged" ? "purged" : object.storage_provider,
             storage_state: object?.state || "active"
           };
         })
@@ -185,10 +188,11 @@ class Statement {
       return { meta: { changes: 1 } };
     }
     if (this.sql.startsWith("INSERT INTO report_objects")) {
-      const [report_id, object_key, body_sha256, body_size_bytes] = this.args;
+      const [report_id, storage_provider, object_key, body_sha256, body_size_bytes] = this.args;
       if (state.objects.has(report_id)) throw new Error("duplicate report object");
       state.objects.set(report_id, {
         report_id,
+        storage_provider,
         object_key,
         body_sha256,
         body_size_bytes,
@@ -405,4 +409,4 @@ assert.ok(state.audits.some((event) => event.action === "lifecycle.purged"));
 purge = await purgeExpiredReportObjects(env);
 assert.equal(purge.purged, 0, "completed purge must not repeat on later cron runs");
 
-console.log("Fail-safe D1/R2 report tiering, rollback, delete and restore: OK");
+console.log("Fail-safe D1/external report tiering, rollback, delete and restore: OK");

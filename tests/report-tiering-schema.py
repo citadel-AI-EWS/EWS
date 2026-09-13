@@ -8,13 +8,16 @@ connection.execute("CREATE TABLE agent_reports (report_id TEXT PRIMARY KEY)")
 connection.executescript(
     Path("migrations/0004_report_tiering.sql").read_text(encoding="utf-8")
 )
+connection.executescript(
+    Path("migrations/0005_google_drive_report_storage.sql").read_text(encoding="utf-8")
+)
 
 connection.execute("INSERT INTO agent_reports(report_id) VALUES ('report_schema_test')")
 connection.execute(
     """
     INSERT INTO report_objects(
-      report_id, object_key, body_sha256, body_size_bytes, state
-    ) VALUES ('report_schema_test', 'reports/test.json', 'abc', 3, 'active')
+      report_id, storage_provider, object_key, body_sha256, body_size_bytes, state
+    ) VALUES ('report_schema_test', 'gdrive', 'drive-file-test', 'abc', 3, 'active')
     """
 )
 connection.execute(

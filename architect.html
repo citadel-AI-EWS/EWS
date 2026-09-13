@@ -71,10 +71,10 @@
           <h2>Хранилище отчётов</h2>
           <button id="refreshTieringButton" class="secondary" type="button">Обновить</button>
         </div>
-        <p class="small">D1 хранит индексы и метаданные; полные тела отчётов переносятся в приватный R2 только после проверки размера и SHA-256.</p>
-        <div id="tieringUsage" class="status">Метрики D1/R2 загружаются…</div>
-        <button id="migrateReportsButton" type="button" disabled>Перенести до 10 отчётов в R2</button>
-        <p class="small">Перенос ограничен одной небольшой партией и прекращается при первой ошибке. Исходник в D1 заменяется только после успешной проверки R2.</p>
+        <p class="small">D1 хранит индексы и метаданные; тела отчётов шифруются AES-256-GCM и переносятся в закрытый Google Drive только после проверки размера и SHA-256.</p>
+        <div id="tieringUsage" class="status">Метрики D1/Google Drive загружаются…</div>
+        <button id="migrateReportsButton" type="button" disabled>Перенести до 10 отчётов в Google Drive</button>
+        <p class="small">Перенос ограничен одной небольшой партией и прекращается при первой ошибке. Исходник в D1 заменяется только после успешного чтения и проверки зашифрованной копии.</p>
         <h2 style="margin-top:20px">Журнал хранения</h2>
         <div id="storageAuditList"></div>
       </section>
@@ -308,18 +308,18 @@
         guard: "защитный порог"
       };
       tieringUsage.textContent = [
-        `R2: ${data.r2_configured ? "подключён" : "не подключён"}`,
+        `Google Drive: ${data.google_drive_configured ? "подключён" : "ожидает безопасной авторизации"}`,
         `D1: ${formatBytes(d1.bytes)} · ${Number(d1.percent_of_database_limit || 0).toFixed(2)}% от 500 МиБ`,
         `Состояние: ${warningLabels[d1.warning] || d1.warning || "неизвестно"}`,
-        `Отчёты: ${reports.count || 0}; в R2: ${reports.tiered_count || 0}; в D1: ${formatBytes(reports.inline_d1_bytes)}`,
-        `R2-данные: ${formatBytes(reports.r2_bytes)}; ожидают окончательного удаления: ${reports.pending_delete_count || 0}`
+        `Отчёты: ${reports.count || 0}; в Google Drive: ${reports.tiered_count || 0}; в D1: ${formatBytes(reports.inline_d1_bytes)}`,
+        `Внешние данные: ${formatBytes(reports.external_bytes)}; ожидают окончательного удаления: ${reports.pending_delete_count || 0}`
       ].join("\n");
       tieringUsage.className = `status ${d1.warning === "guard" ? "bad" : ["warning", "watch"].includes(d1.warning) ? "warn" : "good"}`;
-      migrateReportsButton.disabled = !data.r2_configured || Number(reports.inline_d1_bytes || 0) === 0;
+      migrateReportsButton.disabled = !data.google_drive_configured || Number(reports.inline_d1_bytes || 0) === 0;
 
       storageAuditList.replaceChildren();
       const labels = {
-        "tier.migrated": "Перенос в R2 завершён",
+        "tier.migrated": "Перенос во внешнее хранилище завершён",
         "tier.deferred": "Перенос отложен",
         "lifecycle.delete_requested": "Запрошено мягкое удаление",
         "lifecycle.restored": "Отчёт восстановлен",
@@ -474,7 +474,7 @@
         addText(item, "strong", `${report.report_type} — ${report.outcome}`);
         addText(item, "div", `Узел: ${report.node_id}`, "small");
         addText(item, "div", `Размер: ${report.report_size_bytes} байт · Доступ: ${report.sensitivity}`, "small");
-        const storageLabels = { d1: "D1", r2: "R2", purged: "удалён" };
+        const storageLabels = { d1: "D1", gdrive: "Google Drive", r2: "R2", purged: "удалён" };
         const stateLabels = { active: "активен", deleted: "можно восстановить", purged: "удалён окончательно" };
         addText(item, "div", `Хранилище: ${storageLabels[report.storage_backend] || report.storage_backend || "D1"} · ${stateLabels[report.storage_state] || report.storage_state || "активен"}`, "small");
         addText(item, "div", `SHA-256: ${report.report_sha256}`, "small");
@@ -649,7 +649,7 @@
       refreshTieringButton.disabled = true;
       try {
         await loadTieringStorage();
-        setStatus("Метрики D1/R2 обновлены.", "good");
+        setStatus("Метрики D1/Google Drive обновлены.", "good");
       } catch (error) {
         setStatus(`Метрики хранилища не обновлены: ${error.message}`, "bad");
       } finally {
@@ -658,7 +658,7 @@
     });
 
     migrateReportsButton.addEventListener("click", async () => {
-      if (!confirm("Перенести до 10 отчётов из D1 в приватный R2 с проверкой SHA-256?")) return;
+      if (!confirm("Перенести до 10 отчётов из D1 в закрытый Google Drive с шифрованием и проверкой SHA-256?")) return;
       migrateReportsButton.disabled = true;
       setStatus("Выполняю контролируемый перенос отчётов…");
       try {

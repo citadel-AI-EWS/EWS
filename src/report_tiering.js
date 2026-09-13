@@ -7,9 +7,13 @@ import {
   safeJson,
   sha256Hex
 } from "./telemetry/common.js";
+import {
+  createGoogleDriveStore,
+  googleDriveStorageReady
+} from "./google_drive_store.js";
 
 export const REPORT_TIERING = Object.freeze({
-  sentinel: '{"$ews_storage":"r2"}',
+  sentinel: '{"$ews_storage":"external"}',
   migrate_batch_max: 50,
   restore_grace_days: 7,
   purge_recovery_minutes: 15,
@@ -29,6 +33,31 @@ function r2Ready(env) {
   );
 }
 
+function storeForProvider(env, provider = null) {
+  const requested = provider || String(env?.REPORT_STORAGE_PROVIDER || "gdrive").trim();
+  if (requested === "gdrive" && googleDriveStorageReady(env)) {
+    return createGoogleDriveStore(env);
+  }
+  if (requested === "r2" && r2Ready(env)) {
+    return {
+      provider: "r2",
+      async put(key, value, metadata) {
+        await env.REPORTS.put(key, value, metadata);
+        return key;
+      },
+      get(key) { return env.REPORTS.get(key); },
+      delete(key) { return env.REPORTS.delete(key); }
+    };
+  }
+  if (!provider && googleDriveStorageReady(env)) return createGoogleDriveStore(env);
+  if (!provider && r2Ready(env)) return storeForProvider(env, "r2");
+  return null;
+}
+
+function configuredProvider(env) {
+  return storeForProvider(env)?.provider || null;
+}
+
 export async function ensureReportTieringStorage(env) {
   if (!env?.DB || (typeof env.DB !== "object" && typeof env.DB !== "function")) {
     throw new TelemetryError(503, "database_not_configured");
@@ -39,6 +68,8 @@ export async function ensureReportTieringStorage(env) {
       env.DB.prepare(`
         CREATE TABLE IF NOT EXISTS report_objects (
           report_id TEXT PRIMARY KEY,
+          storage_provider TEXT NOT NULL
+            CHECK (storage_provider IN ('gdrive', 'r2')),
           object_key TEXT NOT NULL UNIQUE,
           body_sha256 TEXT NOT NULL,
           body_size_bytes INTEGER NOT NULL CHECK (body_size_bytes >= 0),
@@ -87,7 +118,13 @@ export async function ensureReportTieringStorage(env) {
           SELECT RAISE(ABORT, 'report_storage_audit_is_append_only');
         END
       `)
-    ]).catch((error) => {
+    ]).then(async () => {
+      // CREATE TABLE IF NOT EXISTS cannot upgrade a previously deployed draft
+      // schema. Fail health checks until migration 0005 has added the column.
+      await env.DB.prepare(
+        "SELECT storage_provider FROM report_objects LIMIT 1"
+      ).first();
+    }).catch((error) => {
       schemaPromises.delete(env.DB);
       throw error;
     });
@@ -131,15 +168,15 @@ async function loadReportRow(env, reportId) {
 
 async function loadReportObject(env, reportId) {
   return env.DB.prepare(`
-    SELECT report_id, object_key, body_sha256, body_size_bytes,
+    SELECT report_id, storage_provider, object_key, body_sha256, body_size_bytes,
       state, migrated_at, delete_requested_at, restored_at, purged_at
     FROM report_objects
     WHERE report_id = ?
   `).bind(reportId).first();
 }
 
-async function verifyR2Object(env, objectKey, expectedSha, expectedSize) {
-  const object = await env.REPORTS.get(objectKey);
+async function verifyStoredObject(store, objectKey, expectedSha, expectedSize) {
+  const object = await store.get(objectKey);
   if (!object) throw new TelemetryError(503, "report_object_missing");
   const body = await object.text();
   const actualSize = new TextEncoder().encode(body).byteLength;
@@ -157,7 +194,7 @@ export async function tierReportById(env, reportId) {
   const existing = await loadReportObject(env, reportId);
   if (existing) {
     return {
-      backend: existing.state === "purged" ? "purged" : "r2",
+      backend: existing.state === "purged" ? "purged" : existing.storage_provider,
       state: existing.state,
       object_key: existing.object_key,
       already_tiered: true
@@ -169,11 +206,13 @@ export async function tierReportById(env, reportId) {
   if (report.report_json === REPORT_TIERING.sentinel) {
     throw new TelemetryError(503, "report_storage_metadata_missing");
   }
-  if (!r2Ready(env)) {
+  const store = storeForProvider(env);
+  if (!store) {
     await auditStorage(env, reportId, "tier.deferred", null, {
-      reason: "r2_not_configured"
+      reason: "external_storage_not_configured",
+      requested_provider: String(env?.REPORT_STORAGE_PROVIDER || "gdrive")
     });
-    return { backend: "d1", state: "deferred", reason: "r2_not_configured" };
+    return { backend: "d1", state: "deferred", reason: "external_storage_not_configured" };
   }
 
   const reportJson = String(report.report_json || "null");
@@ -183,8 +222,8 @@ export async function tierReportById(env, reportId) {
     throw new TelemetryError(503, "d1_report_integrity_error");
   }
 
-  const objectKey = reportObjectKey(reportId, report.created_at, report.report_sha256);
-  await env.REPORTS.put(objectKey, reportJson, {
+  const logicalKey = reportObjectKey(reportId, report.created_at, report.report_sha256);
+  const objectKey = await store.put(logicalKey, reportJson, {
     httpMetadata: { contentType: "application/json; charset=utf-8" },
     customMetadata: {
       report_id: reportId,
@@ -195,7 +234,7 @@ export async function tierReportById(env, reportId) {
   });
 
   try {
-    await verifyR2Object(env, objectKey, report.report_sha256, report.report_size_bytes);
+    await verifyStoredObject(store, objectKey, report.report_sha256, report.report_size_bytes);
 
     const migrationId = `storage_${crypto.randomUUID()}`;
     const [bodyUpdate, objectInsert, auditInsert] = await env.DB.batch([
@@ -206,15 +245,16 @@ export async function tierReportById(env, reportId) {
       `).bind(REPORT_TIERING.sentinel, reportId, reportJson),
       env.DB.prepare(`
         INSERT INTO report_objects (
-          report_id, object_key, body_sha256, body_size_bytes, state
+          report_id, storage_provider, object_key, body_sha256, body_size_bytes, state
         )
-        SELECT ?, ?, ?, ?, 'active'
+        SELECT ?, ?, ?, ?, ?, 'active'
         WHERE EXISTS (
           SELECT 1 FROM agent_reports
           WHERE report_id = ? AND report_json = ?
         )
       `).bind(
         reportId,
+        store.provider,
         objectKey,
         report.report_sha256,
         report.report_size_bytes,
@@ -235,6 +275,8 @@ export async function tierReportById(env, reportId) {
         reportId,
         objectKey,
         JSON.stringify({
+          storage_provider: store.provider,
+          logical_key: logicalKey,
           sha256: report.report_sha256,
           size_bytes: report.report_size_bytes
         }),
@@ -253,23 +295,24 @@ export async function tierReportById(env, reportId) {
     const winner = await loadReportObject(env, reportId).catch(() => null);
     if (
       winner?.object_key === objectKey &&
+      winner?.storage_provider === store.provider &&
       winner?.body_sha256 === report.report_sha256 &&
       Number(winner?.body_size_bytes) === Number(report.report_size_bytes)
     ) {
-      await verifyR2Object(env, objectKey, report.report_sha256, report.report_size_bytes);
+      await verifyStoredObject(store, objectKey, report.report_sha256, report.report_size_bytes);
       return {
-        backend: winner.state === "purged" ? "purged" : "r2",
+        backend: winner.state === "purged" ? "purged" : store.provider,
         state: winner.state,
         object_key: objectKey,
         already_tiered: true
       };
     }
-    try { await env.REPORTS.delete(objectKey); } catch {}
+    try { await store.delete(objectKey); } catch {}
     throw error;
   }
 
   return {
-    backend: "r2",
+    backend: store.provider,
     state: "active",
     object_key: objectKey,
     already_tiered: false
@@ -321,11 +364,12 @@ async function readTieredReportBody(env, report, object) {
   }
   if (object.state === "purged") throw new TelemetryError(410, "report_purged");
   if (object.state === "deleted") throw new TelemetryError(410, "report_deleted");
-  if (!r2Ready(env)) throw new TelemetryError(503, "r2_not_configured");
+  const store = storeForProvider(env, object.storage_provider);
+  if (!store) throw new TelemetryError(503, "external_storage_not_configured");
   return {
-    backend: "r2",
-    body: await verifyR2Object(
-      env,
+    backend: object.storage_provider,
+    body: await verifyStoredObject(
+      store,
       object.object_key,
       object.body_sha256,
       object.body_size_bytes
@@ -427,7 +471,7 @@ async function architectListTieredReports(request, env, url) {
       CASE
         WHEN ro.report_id IS NULL THEN 'd1'
         WHEN ro.state = 'purged' THEN 'purged'
-        ELSE 'r2'
+        ELSE ro.storage_provider
       END AS storage_backend,
       COALESCE(ro.state, 'active') AS storage_state
     FROM agent_reports AS ar
@@ -455,8 +499,8 @@ async function ensureTieredForLifecycle(env, reportId) {
   let object = await loadReportObject(env, reportId);
   if (object) return object;
   const tiered = await tierReportById(env, reportId);
-  if (tiered.backend !== "r2") {
-    throw new TelemetryError(503, "r2_required_for_recoverable_delete");
+  if (tiered.backend === "d1") {
+    throw new TelemetryError(503, "external_storage_required_for_recoverable_delete");
   }
   object = await loadReportObject(env, reportId);
   if (!object) throw new TelemetryError(503, "report_storage_metadata_missing");
@@ -527,8 +571,9 @@ async function architectRestoreReport(request, env, reportId) {
   if (object.state === "active") {
     return json({ ok: true, report_id: reportId, state: "active", duplicate: true });
   }
-  if (!r2Ready(env)) throw new TelemetryError(503, "r2_not_configured");
-  await verifyR2Object(env, object.object_key, object.body_sha256, object.body_size_bytes);
+  const store = storeForProvider(env, object.storage_provider);
+  if (!store) throw new TelemetryError(503, "external_storage_not_configured");
+  await verifyStoredObject(store, object.object_key, object.body_sha256, object.body_size_bytes);
   const changedAt = new Date().toISOString();
   const eventId = `storage_${crypto.randomUUID()}`;
   const [update, audit] = await env.DB.batch([
@@ -558,7 +603,7 @@ async function architectRestoreReport(request, env, reportId) {
 async function architectMigrateReports(request, env) {
   await authenticateArchitect(request, env);
   await ensureReportTieringStorage(env);
-  if (!r2Ready(env)) throw new TelemetryError(503, "r2_not_configured");
+  if (!storeForProvider(env)) throw new TelemetryError(503, "external_storage_not_configured");
   const body = parseJsonObject(await readBodyText(request, 4096));
   const limit = body.limit === undefined ? 20 : body.limit;
   if (!Number.isInteger(limit) || limit < 1 || limit > REPORT_TIERING.migrate_batch_max) {
@@ -630,7 +675,7 @@ async function architectStorageTiering(request, env) {
         COALESCE(SUM(CASE WHEN ro.report_id IS NULL THEN ar.report_size_bytes ELSE 0 END), 0)
           AS report_inline_d1_bytes,
         COALESCE(SUM(CASE WHEN ro.state != 'purged' THEN ro.body_size_bytes ELSE 0 END), 0)
-          AS report_r2_bytes,
+          AS report_external_bytes,
         COALESCE(SUM(CASE WHEN ro.report_id IS NOT NULL THEN 1 ELSE 0 END), 0)
           AS tiered_report_count,
         COALESCE(SUM(CASE WHEN ro.state = 'deleted' THEN 1 ELSE 0 END), 0)
@@ -669,6 +714,9 @@ async function architectStorageTiering(request, env) {
 
   return json({
     ok: true,
+    storage_provider: String(env?.REPORT_STORAGE_PROVIDER || "gdrive"),
+    external_storage_configured: Boolean(configuredProvider(env)),
+    google_drive_configured: googleDriveStorageReady(env),
     r2_configured: r2Ready(env),
     d1: {
       bytes: d1Bytes,
@@ -683,7 +731,7 @@ async function architectStorageTiering(request, env) {
       count: Number(reports?.report_count || 0),
       logical_bytes: Number(reports?.report_logical_bytes || 0),
       inline_d1_bytes: Number(reports?.report_inline_d1_bytes || 0),
-      r2_bytes: Number(reports?.report_r2_bytes || 0),
+      external_bytes: Number(reports?.report_external_bytes || 0),
       tiered_count: Number(reports?.tiered_report_count || 0),
       pending_delete_count: Number(reports?.pending_delete_count || 0)
     },
@@ -705,9 +753,8 @@ async function architectStorageTiering(request, env) {
 
 export async function purgeExpiredReportObjects(env, limit = 50) {
   await ensureReportTieringStorage(env);
-  if (!r2Ready(env)) return { purged: 0, skipped: "r2_not_configured" };
   const query = await env.DB.prepare(`
-    SELECT report_id, object_key, state, purged_at
+    SELECT report_id, storage_provider, object_key, state, purged_at
     FROM report_objects
     WHERE (
         state = 'deleted'
@@ -727,6 +774,8 @@ export async function purgeExpiredReportObjects(env, limit = 50) {
   ).all();
   let purged = 0;
   for (const row of query.results || []) {
+    const store = storeForProvider(env, row.storage_provider);
+    if (!store) continue;
     let purgedAt = row.purged_at;
     if (row.state === "deleted") {
       purgedAt = new Date().toISOString();
@@ -754,7 +803,7 @@ export async function purgeExpiredReportObjects(env, limit = 50) {
     }
 
     try {
-      await env.REPORTS.delete(row.object_key);
+      await store.delete(row.object_key);
       const operationHash = await sha256Hex(`${row.report_id}\n${purgedAt}`);
       const [finalize, audit] = await env.DB.batch([
         env.DB.prepare(`
@@ -865,5 +914,10 @@ export async function reportTieringHealth(env) {
   const schema = await ensureReportTieringStorage(env)
     .then(() => "ready")
     .catch(() => "unavailable");
-  return { schema, r2: r2Ready(env) ? "ready" : "not_configured" };
+  return {
+    schema,
+    provider: String(env?.REPORT_STORAGE_PROVIDER || "gdrive"),
+    google_drive: googleDriveStorageReady(env) ? "ready" : "not_configured",
+    r2: r2Ready(env) ? "ready" : "not_configured"
+  };
 }
