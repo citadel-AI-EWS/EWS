@@ -35,3 +35,51 @@ jobs:
       - run: scripts/validate.sh
       - run: npm run build && npm run check:cloudflare
       - run: bandit -q controller_app.py agent/citadel_node_v1.py agent/citadel_node_v2.py
+
+  deploy-r2-test:
+    needs: validate
+    if: github.event_name == 'pull_request' && github.head_ref == 'work/storage-tiering-r2-v1' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: cloudflare-test
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - run: npm ci
+      - run: scripts/build_site.sh
+      - name: Ensure TEST R2 bucket and D1 schema
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if ! npx wrangler r2 bucket info citadel-reports-test --json > /tmp/citadel-r2.json; then
+            npx wrangler r2 bucket create citadel-reports-test
+          fi
+          npx wrangler r2 bucket info citadel-reports-test --json
+          npx wrangler d1 migrations apply citadel-control --remote
+      - name: Deploy TEST site
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
+          secrets: |
+            ARCHITECT_TOKEN_HASH
+            CONTROLLER_COMMAND_PRIVATE_JWK
+        env:
+          ARCHITECT_TOKEN_HASH: ${{ secrets.ARCHITECT_TOKEN_HASH }}
+          CONTROLLER_COMMAND_PRIVATE_JWK: ${{ secrets.CONTROLLER_COMMAND_PRIVATE_JWK }}
+      - name: Verify TEST R2 controls
+        run: |
+          for attempt in $(seq 1 20); do
+            response="$(curl --fail --silent --show-error "https://citadel-ai.init1.workers.dev/api/health?deployment=${GITHUB_SHA}-${attempt}")"
+            if node -e 'const value = JSON.parse(process.argv[1]); process.exit(value.ok && value.controller_signing === "ready" && value.report_storage === "ready" && value.session_storage === "ready" && value.telemetry_storage === "ready" && value.report_tiering_schema === "ready" && value.report_r2 === "ready" ? 0 : 1)' "$response"; then
+              exit 0
+            fi
+            sleep 3
+          done
+          exit 1
