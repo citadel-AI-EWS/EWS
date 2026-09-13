@@ -4,6 +4,7 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 python -m unittest -v controller_tests.py
 python -m py_compile controller_app.py controller_tests.py agent/citadel_node_v1.py agent/citadel_node_v2.py
+python tests/report-tiering-schema.py
 python agent/citadel_node_v2.py self-test
 python - <<'PY'
 from pathlib import Path
@@ -38,6 +39,8 @@ node --check /tmp/ews-architect-logs.js
 node --check /tmp/ews-node-test.js
 node --check src/index.js
 node --check src/worker.js
+node --check src/report_tiering.js
+node --check src/google_drive_store.js
 node --check src/telemetry/common.js
 node --check src/telemetry/schema.js
 node --check src/telemetry/normalize.js
@@ -46,6 +49,8 @@ node --check src/telemetry/cursor.js
 node --check src/telemetry/architect.js
 node --check src/telemetry/router.js
 node tests/report-storage.mjs
+node tests/google-drive-store.mjs
+node tests/report-tiering.mjs
 node tests/session-storage.mjs
 node tests/telemetry-storage.mjs
 bash -n controller_deploy.sh scripts/build_site.sh scripts/package_controller.sh scripts/validate.sh

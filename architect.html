@@ -21,7 +21,8 @@
     .good{border-left:4px solid #35d07f}.bad{border-left:4px solid #ff6874}.muted{color:#93a0ba}.section-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
     .section-head button,.item button{width:auto;margin:0;padding:10px 12px}.report-body{margin:12px 0 0;padding:13px;border-radius:11px;background:#080e1d;color:#dfe7fb;white-space:pre-wrap;overflow-wrap:anywhere;max-height:55vh;overflow:auto}
     .control-buttons{display:grid;grid-template-columns:1fr 1fr;gap:9px}.control-buttons button{margin-top:10px}.control-buttons .full{grid-column:1/-1}
-    @media(max-width:520px){body{padding:17px}.stats{grid-template-columns:1fr}.card{padding:17px}h1{font-size:27px}}
+    .metric-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:9px;margin-top:12px}.metric{padding:12px;border-radius:11px;background:#0b1222}.metric b{display:block;margin-bottom:4px}.metric span{color:#aeb9d2;overflow-wrap:anywhere}
+    @media(max-width:520px){body{padding:17px}.stats,.metric-grid{grid-template-columns:1fr}.card{padding:17px}h1{font-size:27px}}
   </style>
 </head>
 <body>
@@ -63,6 +64,19 @@
         <button id="saveSessionButton" type="button">Сохранить сессию</button>
         <div id="storageUsage" class="status">Использование хранилища загружается…</div>
         <div id="sessionsList"></div>
+      </section>
+
+      <section class="card">
+        <div class="section-head">
+          <h2>Хранилище отчётов</h2>
+          <button id="refreshTieringButton" class="secondary" type="button">Обновить</button>
+        </div>
+        <p class="small">D1 хранит индексы и метаданные; тела отчётов шифруются AES-256-GCM и переносятся в закрытый Google Drive только после проверки размера и SHA-256.</p>
+        <div id="tieringUsage" class="status">Метрики D1/Google Drive загружаются…</div>
+        <button id="migrateReportsButton" type="button" disabled>Перенести до 10 отчётов в Google Drive</button>
+        <p class="small">Перенос ограничен одной небольшой партией и прекращается при первой ошибке. Исходник в D1 заменяется только после успешного чтения и проверки зашифрованной копии.</p>
+        <h2 style="margin-top:20px">Журнал хранения</h2>
+        <div id="storageAuditList"></div>
       </section>
 
       <section class="card">
@@ -152,6 +166,10 @@
     const saveSessionButton = document.getElementById("saveSessionButton");
     const sessionName = document.getElementById("sessionName");
     const storageUsage = document.getElementById("storageUsage");
+    const tieringUsage = document.getElementById("tieringUsage");
+    const storageAuditList = document.getElementById("storageAuditList");
+    const refreshTieringButton = document.getElementById("refreshTieringButton");
+    const migrateReportsButton = document.getElementById("migrateReportsButton");
     const nodeSelect = document.getElementById("nodeSelect");
     const controlNodeSelect = document.getElementById("controlNodeSelect");
     const pauseButton = document.getElementById("pauseButton");
@@ -280,6 +298,54 @@
       storageUsage.className = `status ${percent >= 90 ? "bad" : percent >= 75 ? "warn" : "good"}`;
     }
 
+    function renderTieringUsage(data) {
+      const d1 = data.d1 || {};
+      const reports = data.reports || {};
+      const warningLabels = {
+        ok: "норма",
+        watch: "наблюдение",
+        warning: "предупреждение",
+        guard: "защитный порог"
+      };
+      tieringUsage.textContent = [
+        `Google Drive: ${data.google_drive_configured ? "подключён" : "ожидает безопасной авторизации"}`,
+        `D1: ${formatBytes(d1.bytes)} · ${Number(d1.percent_of_database_limit || 0).toFixed(2)}% от 500 МиБ`,
+        `Состояние: ${warningLabels[d1.warning] || d1.warning || "неизвестно"}`,
+        `Отчёты: ${reports.count || 0}; в Google Drive: ${reports.tiered_count || 0}; в D1: ${formatBytes(reports.inline_d1_bytes)}`,
+        `Внешние данные: ${formatBytes(reports.external_bytes)}; ожидают окончательного удаления: ${reports.pending_delete_count || 0}`
+      ].join("\n");
+      tieringUsage.className = `status ${d1.warning === "guard" ? "bad" : ["warning", "watch"].includes(d1.warning) ? "warn" : "good"}`;
+      migrateReportsButton.disabled = !data.google_drive_configured || Number(reports.inline_d1_bytes || 0) === 0;
+
+      storageAuditList.replaceChildren();
+      const labels = {
+        "tier.migrated": "Перенос во внешнее хранилище завершён",
+        "tier.deferred": "Перенос отложен",
+        "lifecycle.delete_requested": "Запрошено мягкое удаление",
+        "lifecycle.restored": "Отчёт восстановлен",
+        "lifecycle.purge_started": "Начато окончательное удаление",
+        "lifecycle.purge_failed": "Удаление не удалось — будет повторено",
+        "lifecycle.purged": "Окончательное удаление завершено"
+      };
+      for (const event of data.audit_events || []) {
+        const item = document.createElement("div");
+        item.className = `item ${event.action === "lifecycle.purge_failed" ? "warn" : ""}`.trim();
+        addText(item, "strong", labels[event.action] || event.action);
+        addText(item, "div", `Report ID: ${event.report_id}`, "small");
+        addText(item, "div", event.created_at, "small");
+        storageAuditList.appendChild(item);
+      }
+      if (!(data.audit_events || []).length) {
+        addText(storageAuditList, "p", "Событий хранения пока нет.", "muted");
+      }
+    }
+
+    async function loadTieringStorage() {
+      const data = await api("/api/v1/architect/storage/tiering");
+      renderTieringUsage(data);
+      return data;
+    }
+
     function renderSessions(sessions) {
       const list = document.getElementById("sessionsList");
       list.replaceChildren();
@@ -404,15 +470,30 @@
       list.replaceChildren();
       for (const report of reports) {
         const item = document.createElement("div");
-        item.className = `item ${report.outcome === "success" ? "ok" : "warn"}`;
+        item.className = `item ${report.storage_state === "deleted" || report.storage_state === "purged" ? "warn" : report.outcome === "success" ? "ok" : "warn"}`;
         addText(item, "strong", `${report.report_type} — ${report.outcome}`);
         addText(item, "div", `Узел: ${report.node_id}`, "small");
         addText(item, "div", `Размер: ${report.report_size_bytes} байт · Доступ: ${report.sensitivity}`, "small");
+        const storageLabels = { d1: "D1", gdrive: "Google Drive", r2: "R2", purged: "удалён" };
+        const stateLabels = { active: "активен", deleted: "можно восстановить", purged: "удалён окончательно" };
+        addText(item, "div", `Хранилище: ${storageLabels[report.storage_backend] || report.storage_backend || "D1"} · ${stateLabels[report.storage_state] || report.storage_state || "активен"}`, "small");
         addText(item, "div", `SHA-256: ${report.report_sha256}`, "small");
         addText(item, "div", report.created_at, "small");
-        const openButton = addText(item, "button", "Открыть отчёт", "secondary");
-        openButton.type = "button";
-        openButton.addEventListener("click", () => openReport(report.report_id));
+        const actions = document.createElement("div");
+        actions.className = "toolbar";
+        if ((report.storage_state || "active") === "active") {
+          const openButton = addText(actions, "button", "Открыть", "secondary");
+          openButton.type = "button";
+          openButton.addEventListener("click", () => openReport(report.report_id));
+          const deleteButton = addText(actions, "button", "Удалить", "danger");
+          deleteButton.type = "button";
+          deleteButton.addEventListener("click", () => deleteReport(report));
+        } else if (report.storage_state === "deleted") {
+          const restoreButton = addText(actions, "button", "Восстановить", "secondary");
+          restoreButton.type = "button";
+          restoreButton.addEventListener("click", () => restoreReport(report));
+        }
+        if (actions.childElementCount) item.appendChild(actions);
         list.appendChild(item);
       }
       if (!reports.length) addText(list, "p", "Новых полных отчётов пока нет.", "muted");
@@ -436,6 +517,7 @@
           `Node ID: ${report.node_id}`,
           `Тип: ${report.report_type}`,
           `Доступ: ${report.sensitivity}`,
+          `Хранилище: ${(report.storage_backend || "d1").toUpperCase()}`,
           `Размер: ${report.report_size_bytes} байт`,
           `SHA-256: ${report.report_sha256}`
         ].join(" · ");
@@ -445,6 +527,34 @@
         setStatus("Полный отчёт загружен.", "good");
       } catch (error) {
         setStatus(`Отчёт не загружен: ${error.message}`, "bad");
+      }
+    }
+
+    async function deleteReport(report) {
+      if (!confirm(`Поместить отчёт ${report.report_id} в корзину на 7 дней?`)) return;
+      setStatus("Выполняю мягкое удаление отчёта…");
+      try {
+        await api(`/api/v1/architect/reports/${encodeURIComponent(report.report_id)}`, {
+          method: "DELETE"
+        });
+        await Promise.all([loadReports(), loadTieringStorage()]);
+        if (activeReportId === report.report_id) closeReportButton.click();
+        setStatus("Отчёт помещён в корзину на 7 дней. Действие записано в неизменяемый журнал.", "good");
+      } catch (error) {
+        setStatus(`Отчёт не удалён: ${error.message}`, "bad");
+      }
+    }
+
+    async function restoreReport(report) {
+      setStatus("Проверяю SHA-256 и восстанавливаю отчёт…");
+      try {
+        await api(`/api/v1/architect/reports/${encodeURIComponent(report.report_id)}/restore`, {
+          method: "POST"
+        });
+        await Promise.all([loadReports(), loadTieringStorage()]);
+        setStatus("Отчёт восстановлен после проверки целостности.", "good");
+      } catch (error) {
+        setStatus(`Отчёт не восстановлен: ${error.message}`, "bad");
       }
     }
 
@@ -464,11 +574,12 @@
 
     async function loadDashboard() {
       setStatus("Загружаю данные…");
-      const [data, reports, sessions, storage] = await Promise.all([
+      const [data, reports, sessions, storage, tiering] = await Promise.all([
         api("/api/v1/architect/overview"),
         api("/api/v1/architect/reports?limit=50"),
         api("/api/v1/architect/sessions?limit=30"),
-        api("/api/v1/architect/storage")
+        api("/api/v1/architect/storage"),
+        api("/api/v1/architect/storage/tiering")
       ]);
       document.getElementById("nodeCount").textContent = data.counts.nodes;
       document.getElementById("onlineCount").textContent = data.counts.online_nodes;
@@ -483,6 +594,7 @@
       renderReports(reports.reports || []);
       renderSessions(sessions.sessions || []);
       renderStorageUsage(storage.usage || {});
+      renderTieringUsage(tiering);
       loginCard.classList.add("hidden");
       dashboard.classList.remove("hidden");
       setStatus("Панель подключена к Controller.", "good");
@@ -530,6 +642,36 @@
         setStatus(`Отчёты не обновлены: ${error.message}`, "bad");
       } finally {
         refreshReportsButton.disabled = false;
+      }
+    });
+
+    refreshTieringButton.addEventListener("click", async () => {
+      refreshTieringButton.disabled = true;
+      try {
+        await loadTieringStorage();
+        setStatus("Метрики D1/Google Drive обновлены.", "good");
+      } catch (error) {
+        setStatus(`Метрики хранилища не обновлены: ${error.message}`, "bad");
+      } finally {
+        refreshTieringButton.disabled = false;
+      }
+    });
+
+    migrateReportsButton.addEventListener("click", async () => {
+      if (!confirm("Перенести до 10 отчётов из D1 в закрытый Google Drive с шифрованием и проверкой SHA-256?")) return;
+      migrateReportsButton.disabled = true;
+      setStatus("Выполняю контролируемый перенос отчётов…");
+      try {
+        const data = await api("/api/v1/architect/storage/migrate", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ limit: 10 })
+        });
+        await Promise.all([loadReports(), loadTieringStorage()]);
+        setStatus(`Перенос завершён: ${data.migrated} из ${data.attempted}.`, data.ok ? "good" : "bad");
+      } catch (error) {
+        setStatus(`Перенос остановлен без потери исходных данных: ${error.message}`, "bad");
+        await loadTieringStorage().catch(() => {});
       }
     });
     closeReportButton.addEventListener("click", () => {

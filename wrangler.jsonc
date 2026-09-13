@@ -16,5 +16,16 @@
       "database_name": "citadel-control",
       "database_id": "8e7855f0-905d-4ca4-96e7-4df015ada1c7"
     }
-  ]
+  ],
+  "vars": {
+    "REPORT_STORAGE_PROVIDER": "gdrive",
+    "GOOGLE_DRIVE_STORAGE_FOLDER_ID": "1wBlDlqWQzfhxTLodOXd1S3Id9oiAXAqM",
+    "GOOGLE_DRIVE_REPORTS_FOLDER_ID": "135_YkqQRJpkM1gmk_oh2uV8ldROqVmbn",
+    "GOOGLE_DRIVE_MANIFESTS_FOLDER_ID": "1rlPJXlp97BV464-cPQHvr-j1tMxRZOG4",
+    "GOOGLE_DRIVE_QUARANTINE_FOLDER_ID": "17teUO5Deo33VlWxiytdxlQCMwCvlc_MJ",
+    "GOOGLE_DRIVE_REPORT_KEY_VERSION": "v1"
+  },
+  "triggers": {
+    "crons": ["17 3 * * *"]
+  }
 }
