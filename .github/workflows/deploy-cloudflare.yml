@@ -41,7 +41,6 @@ jobs:
       - name: Ensure TEST R2 bucket and D1 schema
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           if ! npx wrangler r2 bucket info citadel-reports-test --json > /tmp/citadel-r2.json; then
             npx wrangler r2 bucket create citadel-reports-test
@@ -52,7 +51,6 @@ jobs:
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy
           secrets: |
             ARCHITECT_TOKEN_HASH
