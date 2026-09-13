@@ -1,5 +1,6 @@
 __pycache__/
 *.py[cod]
+.venv/
 .build-controller/
 packaged.yaml
 controller_lambda.zip

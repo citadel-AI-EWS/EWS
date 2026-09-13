@@ -12,6 +12,7 @@ export const REPORT_TIERING = Object.freeze({
   sentinel: '{"$ews_storage":"r2"}',
   migrate_batch_max: 50,
   restore_grace_days: 7,
+  purge_recovery_minutes: 15,
   d1_database_limit_bytes: 500 * 1024 * 1024,
   d1_operating_target_bytes: 400 * 1024 * 1024,
   warning_percentages: [60, 75, 80]
@@ -65,13 +66,26 @@ export async function ensureReportTieringStorage(env) {
           action TEXT NOT NULL,
           object_key TEXT,
           details_json TEXT NOT NULL DEFAULT '{}',
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (report_id) REFERENCES agent_reports(report_id) ON DELETE CASCADE
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
       `),
       env.DB.prepare(`
         CREATE INDEX IF NOT EXISTS idx_report_storage_audit_report_created
         ON report_storage_audit(report_id, created_at DESC)
+      `),
+      env.DB.prepare(`
+        CREATE TRIGGER IF NOT EXISTS report_storage_audit_no_update
+        BEFORE UPDATE ON report_storage_audit
+        BEGIN
+          SELECT RAISE(ABORT, 'report_storage_audit_is_append_only');
+        END
+      `),
+      env.DB.prepare(`
+        CREATE TRIGGER IF NOT EXISTS report_storage_audit_no_delete
+        BEFORE DELETE ON report_storage_audit
+        BEGIN
+          SELECT RAISE(ABORT, 'report_storage_audit_is_append_only');
+        END
       `)
     ]).catch((error) => {
       schemaPromises.delete(env.DB);
@@ -82,13 +96,13 @@ export async function ensureReportTieringStorage(env) {
   await promise;
 }
 
-async function auditStorage(env, reportId, action, objectKey, details = {}) {
+async function auditStorage(env, reportId, action, objectKey, details = {}, eventId = null) {
   await env.DB.prepare(`
-    INSERT INTO report_storage_audit (
+    INSERT OR IGNORE INTO report_storage_audit (
       storage_event_id, report_id, action, object_key, details_json
     ) VALUES (?, ?, ?, ?, ?)
   `).bind(
-    `storage_${crypto.randomUUID()}`,
+    eventId || `storage_${crypto.randomUUID()}`,
     reportId,
     action,
     objectKey || null,
@@ -96,12 +110,13 @@ async function auditStorage(env, reportId, action, objectKey, details = {}) {
   ).run();
 }
 
-export function reportObjectKey(reportId, createdAt = "") {
+export function reportObjectKey(reportId, createdAt = "", sha256 = "") {
   const match = String(createdAt).match(/^(\d{4})-(\d{2})/);
   const year = match?.[1] || "unknown-year";
   const month = match?.[2] || "unknown-month";
   const safeId = String(reportId).replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 180);
-  return `reports/${year}/${month}/${safeId}.json`;
+  const safeHash = String(sha256).replace(/[^a-fA-F0-9]/g, "").slice(0, 16) || "unhashed";
+  return `reports/${year}/${month}/${safeId}-${safeHash}.json`;
 }
 
 async function loadReportRow(env, reportId) {
@@ -137,16 +152,6 @@ async function verifyR2Object(env, objectKey, expectedSha, expectedSize) {
   return body;
 }
 
-async function restoreInlineBodyAfterFailedMetadata(env, reportId, reportJson) {
-  try {
-    await env.DB.prepare(`
-      UPDATE agent_reports
-      SET report_json = ?
-      WHERE report_id = ? AND report_json = ?
-    `).bind(reportJson, reportId, REPORT_TIERING.sentinel).run();
-  } catch {}
-}
-
 export async function tierReportById(env, reportId) {
   await ensureReportTieringStorage(env);
   const existing = await loadReportObject(env, reportId);
@@ -178,7 +183,7 @@ export async function tierReportById(env, reportId) {
     throw new TelemetryError(503, "d1_report_integrity_error");
   }
 
-  const objectKey = reportObjectKey(reportId, report.created_at);
+  const objectKey = reportObjectKey(reportId, report.created_at, report.report_sha256);
   await env.REPORTS.put(objectKey, reportJson, {
     httpMetadata: { contentType: "application/json; charset=utf-8" },
     customMetadata: {
@@ -192,41 +197,73 @@ export async function tierReportById(env, reportId) {
   try {
     await verifyR2Object(env, objectKey, report.report_sha256, report.report_size_bytes);
 
-    const bodyUpdate = await env.DB.prepare(`
-      UPDATE agent_reports
-      SET report_json = ?
-      WHERE report_id = ? AND report_json = ?
-    `).bind(REPORT_TIERING.sentinel, reportId, reportJson).run();
-    if ((bodyUpdate?.meta?.changes || 0) !== 1) {
+    const migrationId = `storage_${crypto.randomUUID()}`;
+    const [bodyUpdate, objectInsert, auditInsert] = await env.DB.batch([
+      env.DB.prepare(`
+        UPDATE agent_reports
+        SET report_json = ?
+        WHERE report_id = ? AND report_json = ?
+      `).bind(REPORT_TIERING.sentinel, reportId, reportJson),
+      env.DB.prepare(`
+        INSERT INTO report_objects (
+          report_id, object_key, body_sha256, body_size_bytes, state
+        )
+        SELECT ?, ?, ?, ?, 'active'
+        WHERE EXISTS (
+          SELECT 1 FROM agent_reports
+          WHERE report_id = ? AND report_json = ?
+        )
+      `).bind(
+        reportId,
+        objectKey,
+        report.report_sha256,
+        report.report_size_bytes,
+        reportId,
+        REPORT_TIERING.sentinel
+      ),
+      env.DB.prepare(`
+        INSERT INTO report_storage_audit (
+          storage_event_id, report_id, action, object_key, details_json
+        )
+        SELECT ?, ?, 'tier.migrated', ?, ?
+        WHERE EXISTS (
+          SELECT 1 FROM report_objects
+          WHERE report_id = ? AND object_key = ?
+        )
+      `).bind(
+        migrationId,
+        reportId,
+        objectKey,
+        JSON.stringify({
+          sha256: report.report_sha256,
+          size_bytes: report.report_size_bytes
+        }),
+        reportId,
+        objectKey
+      )
+    ]);
+    if (
+      (bodyUpdate?.meta?.changes || 0) !== 1 ||
+      (objectInsert?.meta?.changes || 0) !== 1 ||
+      (auditInsert?.meta?.changes || 0) !== 1
+    ) {
       throw new TelemetryError(409, "report_body_changed_during_tiering");
     }
-
-    try {
-      await env.DB.batch([
-        env.DB.prepare(`
-          INSERT INTO report_objects (
-            report_id, object_key, body_sha256, body_size_bytes, state
-          ) VALUES (?, ?, ?, ?, 'active')
-        `).bind(reportId, objectKey, report.report_sha256, report.report_size_bytes),
-        env.DB.prepare(`
-          INSERT INTO report_storage_audit (
-            storage_event_id, report_id, action, object_key, details_json
-          ) VALUES (?, ?, 'tier.migrated', ?, ?)
-        `).bind(
-          `storage_${crypto.randomUUID()}`,
-          reportId,
-          objectKey,
-          JSON.stringify({
-            sha256: report.report_sha256,
-            size_bytes: report.report_size_bytes
-          })
-        )
-      ]);
-    } catch (error) {
-      await restoreInlineBodyAfterFailedMetadata(env, reportId, reportJson);
-      throw error;
-    }
   } catch (error) {
+    const winner = await loadReportObject(env, reportId).catch(() => null);
+    if (
+      winner?.object_key === objectKey &&
+      winner?.body_sha256 === report.report_sha256 &&
+      Number(winner?.body_size_bytes) === Number(report.report_size_bytes)
+    ) {
+      await verifyR2Object(env, objectKey, report.report_sha256, report.report_size_bytes);
+      return {
+        backend: winner.state === "purged" ? "purged" : "r2",
+        state: winner.state,
+        object_key: objectKey,
+        already_tiered: true
+      };
+    }
     try { await env.REPORTS.delete(objectKey); } catch {}
     throw error;
   }
@@ -351,6 +388,69 @@ async function architectGetTieredReport(request, env, reportId) {
   });
 }
 
+function optionalQueryString(url, name, maxLength) {
+  const raw = url.searchParams.get(name);
+  if (raw === null) return null;
+  const value = raw.trim();
+  if (!value || value.length > maxLength) {
+    throw new TelemetryError(400, `invalid_${name}`);
+  }
+  return value;
+}
+
+async function architectListTieredReports(request, env, url) {
+  await authenticateArchitect(request, env);
+  await ensureReportTieringStorage(env);
+  const rawLimit = url.searchParams.get("limit") || "50";
+  if (!/^\d{1,3}$/.test(rawLimit)) throw new TelemetryError(400, "invalid_limit");
+  const limit = Number(rawLimit);
+  if (limit < 1 || limit > 100) throw new TelemetryError(400, "invalid_limit");
+  const nodeId = optionalQueryString(url, "node_id", 128);
+  const missionId = optionalQueryString(url, "mission_id", 128);
+  const reportType = optionalQueryString(url, "report_type", 64);
+
+  const query = await env.DB.prepare(`
+    SELECT
+      ar.report_id,
+      r.result_id,
+      r.assignment_id,
+      a.mission_id,
+      r.node_id,
+      r.outcome,
+      r.summary,
+      r.artifact_key,
+      ar.report_type,
+      ar.report_sha256,
+      ar.report_size_bytes,
+      ar.sensitivity,
+      ar.created_at,
+      CASE
+        WHEN ro.report_id IS NULL THEN 'd1'
+        WHEN ro.state = 'purged' THEN 'purged'
+        ELSE 'r2'
+      END AS storage_backend,
+      COALESCE(ro.state, 'active') AS storage_state
+    FROM agent_reports AS ar
+    JOIN results AS r ON r.result_id = ar.result_id
+    JOIN assignments AS a ON a.assignment_id = r.assignment_id
+    LEFT JOIN report_objects AS ro ON ro.report_id = ar.report_id
+    WHERE (? IS NULL OR r.node_id = ?)
+      AND (? IS NULL OR a.mission_id = ?)
+      AND (? IS NULL OR ar.report_type = ?)
+    ORDER BY ar.created_at DESC
+    LIMIT ?
+  `).bind(
+    nodeId,
+    nodeId,
+    missionId,
+    missionId,
+    reportType,
+    reportType,
+    limit
+  ).all();
+  return json({ ok: true, reports: query.results || [] });
+}
+
 async function ensureTieredForLifecycle(env, reportId) {
   let object = await loadReportObject(env, reportId);
   if (object) return object;
@@ -381,17 +481,35 @@ async function architectDeleteReport(request, env, reportId) {
     });
   }
 
-  const update = await env.DB.prepare(`
-    UPDATE report_objects
-    SET state = 'deleted', delete_requested_at = CURRENT_TIMESTAMP
-    WHERE report_id = ? AND state = 'active'
-  `).bind(reportId).run();
-  if ((update?.meta?.changes || 0) !== 1) {
+  const changedAt = new Date().toISOString();
+  const eventId = `storage_${crypto.randomUUID()}`;
+  const [update, audit] = await env.DB.batch([
+    env.DB.prepare(`
+      UPDATE report_objects
+      SET state = 'deleted', delete_requested_at = ?, purged_at = NULL
+      WHERE report_id = ? AND state = 'active'
+    `).bind(changedAt, reportId),
+    env.DB.prepare(`
+      INSERT INTO report_storage_audit (
+        storage_event_id, report_id, action, object_key, details_json
+      )
+      SELECT ?, ?, 'lifecycle.delete_requested', ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM report_objects
+        WHERE report_id = ? AND state = 'deleted' AND delete_requested_at = ?
+      )
+    `).bind(
+      eventId,
+      reportId,
+      object.object_key,
+      JSON.stringify({ restore_grace_days: REPORT_TIERING.restore_grace_days }),
+      reportId,
+      changedAt
+    )
+  ]);
+  if ((update?.meta?.changes || 0) !== 1 || (audit?.meta?.changes || 0) !== 1) {
     throw new TelemetryError(409, "report_lifecycle_conflict");
   }
-  await auditStorage(env, reportId, "lifecycle.delete_requested", object.object_key, {
-    restore_grace_days: REPORT_TIERING.restore_grace_days
-  });
   return json({
     ok: true,
     report_id: reportId,
@@ -411,16 +529,29 @@ async function architectRestoreReport(request, env, reportId) {
   }
   if (!r2Ready(env)) throw new TelemetryError(503, "r2_not_configured");
   await verifyR2Object(env, object.object_key, object.body_sha256, object.body_size_bytes);
-  const update = await env.DB.prepare(`
-    UPDATE report_objects
-    SET state = 'active', delete_requested_at = NULL,
-        restored_at = CURRENT_TIMESTAMP
-    WHERE report_id = ? AND state = 'deleted'
-  `).bind(reportId).run();
-  if ((update?.meta?.changes || 0) !== 1) {
+  const changedAt = new Date().toISOString();
+  const eventId = `storage_${crypto.randomUUID()}`;
+  const [update, audit] = await env.DB.batch([
+    env.DB.prepare(`
+      UPDATE report_objects
+      SET state = 'active', delete_requested_at = NULL,
+          restored_at = ?, purged_at = NULL
+      WHERE report_id = ? AND state = 'deleted'
+    `).bind(changedAt, reportId),
+    env.DB.prepare(`
+      INSERT INTO report_storage_audit (
+        storage_event_id, report_id, action, object_key, details_json
+      )
+      SELECT ?, ?, 'lifecycle.restored', ?, '{}'
+      WHERE EXISTS (
+        SELECT 1 FROM report_objects
+        WHERE report_id = ? AND state = 'active' AND restored_at = ?
+      )
+    `).bind(eventId, reportId, object.object_key, reportId, changedAt)
+  ]);
+  if ((update?.meta?.changes || 0) !== 1 || (audit?.meta?.changes || 0) !== 1) {
     throw new TelemetryError(409, "report_lifecycle_conflict");
   }
-  await auditStorage(env, reportId, "lifecycle.restored", object.object_key);
   return json({ ok: true, report_id: reportId, state: "active" });
 }
 
@@ -491,7 +622,7 @@ async function pragmaDatabaseBytes(env) {
 async function architectStorageTiering(request, env) {
   await authenticateArchitect(request, env);
   await ensureReportTieringStorage(env);
-  const [reports, sessions, telemetry, databaseBytes] = await Promise.all([
+  const [reports, sessions, telemetry, audits, databaseBytes] = await Promise.all([
     env.DB.prepare(`
       SELECT
         COUNT(*) AS report_count,
@@ -517,6 +648,12 @@ async function architectStorageTiering(request, env) {
         COALESCE(SUM(LENGTH(message) + LENGTH(details_json)), 0) AS telemetry_known_bytes
       FROM node_logs
     `).first().catch(() => ({ telemetry_event_count: 0, telemetry_known_bytes: 0 })),
+    env.DB.prepare(`
+      SELECT storage_event_id, report_id, action, object_key, details_json, created_at
+      FROM report_storage_audit
+      ORDER BY created_at DESC
+      LIMIT 20
+    `).all().catch(() => ({ results: [] })),
     pragmaDatabaseBytes(env)
   ]);
 
@@ -557,7 +694,12 @@ async function architectStorageTiering(request, env) {
     telemetry: {
       event_count: Number(telemetry?.telemetry_event_count || 0),
       known_bytes: Number(telemetry?.telemetry_known_bytes || 0)
-    }
+    },
+    audit_events: (audits?.results || []).map((event) => ({
+      ...event,
+      details: safeJson(event.details_json, {}),
+      details_json: undefined
+    }))
   });
 }
 
@@ -565,24 +707,108 @@ export async function purgeExpiredReportObjects(env, limit = 50) {
   await ensureReportTieringStorage(env);
   if (!r2Ready(env)) return { purged: 0, skipped: "r2_not_configured" };
   const query = await env.DB.prepare(`
-    SELECT report_id, object_key
+    SELECT report_id, object_key, state, purged_at
     FROM report_objects
-    WHERE state = 'deleted'
-      AND datetime(delete_requested_at) <= datetime('now', ?)
+    WHERE (
+        state = 'deleted'
+        AND datetime(delete_requested_at) <= datetime('now', ?)
+      ) OR (
+        state = 'purged'
+        AND delete_requested_at IS NOT NULL
+        AND purged_at IS NOT NULL
+        AND datetime(purged_at) <= datetime('now', ?)
+      )
     ORDER BY delete_requested_at ASC
     LIMIT ?
-  `).bind(`-${REPORT_TIERING.restore_grace_days} days`, limit).all();
+  `).bind(
+    `-${REPORT_TIERING.restore_grace_days} days`,
+    `-${REPORT_TIERING.purge_recovery_minutes} minutes`,
+    limit
+  ).all();
   let purged = 0;
   for (const row of query.results || []) {
-    await env.REPORTS.delete(row.object_key);
-    const update = await env.DB.prepare(`
-      UPDATE report_objects
-      SET state = 'purged', purged_at = CURRENT_TIMESTAMP
-      WHERE report_id = ? AND state = 'deleted'
-    `).bind(row.report_id).run();
-    if ((update?.meta?.changes || 0) === 1) {
-      await auditStorage(env, row.report_id, "lifecycle.purged", row.object_key);
-      purged += 1;
+    let purgedAt = row.purged_at;
+    if (row.state === "deleted") {
+      purgedAt = new Date().toISOString();
+      const startId = `storage_${crypto.randomUUID()}`;
+      const [claim, audit] = await env.DB.batch([
+        env.DB.prepare(`
+          UPDATE report_objects
+          SET state = 'purged', purged_at = ?
+          WHERE report_id = ? AND state = 'deleted'
+        `).bind(purgedAt, row.report_id),
+        env.DB.prepare(`
+          INSERT INTO report_storage_audit (
+            storage_event_id, report_id, action, object_key, details_json
+          )
+          SELECT ?, ?, 'lifecycle.purge_started', ?, '{}'
+          WHERE EXISTS (
+            SELECT 1 FROM report_objects
+            WHERE report_id = ? AND state = 'purged' AND purged_at = ?
+          )
+        `).bind(startId, row.report_id, row.object_key, row.report_id, purgedAt)
+      ]);
+      if ((claim?.meta?.changes || 0) !== 1 || (audit?.meta?.changes || 0) !== 1) {
+        continue;
+      }
+    }
+
+    try {
+      await env.REPORTS.delete(row.object_key);
+      const operationHash = await sha256Hex(`${row.report_id}\n${purgedAt}`);
+      const [finalize, audit] = await env.DB.batch([
+        env.DB.prepare(`
+          UPDATE report_objects
+          SET delete_requested_at = NULL
+          WHERE report_id = ? AND state = 'purged' AND purged_at = ?
+        `).bind(row.report_id, purgedAt),
+        env.DB.prepare(`
+          INSERT OR IGNORE INTO report_storage_audit (
+            storage_event_id, report_id, action, object_key, details_json
+          )
+          SELECT ?, ?, 'lifecycle.purged', ?, '{}'
+          WHERE EXISTS (
+            SELECT 1 FROM report_objects
+            WHERE report_id = ? AND state = 'purged'
+              AND purged_at = ? AND delete_requested_at IS NULL
+          )
+        `).bind(
+          `storage_purge_completed_${operationHash}`,
+          row.report_id,
+          row.object_key,
+          row.report_id,
+          purgedAt
+        )
+      ]);
+      if ((finalize?.meta?.changes || 0) === 1 && (audit?.meta?.changes || 0) === 1) {
+        purged += 1;
+      }
+    } catch (error) {
+      const revertedAt = new Date().toISOString();
+      const [revert] = await env.DB.batch([
+        env.DB.prepare(`
+          UPDATE report_objects
+          SET state = 'deleted', purged_at = NULL
+          WHERE report_id = ? AND state = 'purged' AND purged_at = ?
+        `).bind(row.report_id, purgedAt),
+        env.DB.prepare(`
+          INSERT INTO report_storage_audit (
+            storage_event_id, report_id, action, object_key, details_json
+          )
+          SELECT ?, ?, 'lifecycle.purge_failed', ?, ?
+          WHERE EXISTS (
+            SELECT 1 FROM report_objects
+            WHERE report_id = ? AND state = 'deleted' AND purged_at IS NULL
+          )
+        `).bind(
+          `storage_${crypto.randomUUID()}`,
+          row.report_id,
+          row.object_key,
+          JSON.stringify({ retry_at: revertedAt }),
+          row.report_id
+        )
+      ]);
+      if ((revert?.meta?.changes || 0) !== 1) throw error;
     }
   }
   return { purged };
@@ -591,6 +817,7 @@ export async function purgeExpiredReportObjects(env, limit = 50) {
 export function isReportTieringArchitectPath(method, pathname) {
   if (method === "GET" && pathname === "/api/v1/architect/storage/tiering") return true;
   if (method === "POST" && pathname === "/api/v1/architect/storage/migrate") return true;
+  if (method === "GET" && pathname === "/api/v1/architect/reports") return true;
   if (method === "GET" && /^\/api\/v1\/architect\/reports\/[^/]+$/.test(pathname)) return true;
   if (method === "DELETE" && /^\/api\/v1\/architect\/reports\/[^/]+$/.test(pathname)) return true;
   if (method === "POST" && /^\/api\/v1\/architect\/reports\/[^/]+\/restore$/.test(pathname)) return true;
@@ -604,6 +831,9 @@ export async function handleReportTieringArchitectRequest(request, env, url) {
     }
     if (request.method === "POST" && url.pathname === "/api/v1/architect/storage/migrate") {
       return await architectMigrateReports(request, env);
+    }
+    if (request.method === "GET" && url.pathname === "/api/v1/architect/reports") {
+      return await architectListTieredReports(request, env, url);
     }
 
     let match = url.pathname.match(/^\/api\/v1\/architect\/reports\/([^/]+)$/);

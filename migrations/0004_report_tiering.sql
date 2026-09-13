@@ -29,9 +29,22 @@ CREATE TABLE IF NOT EXISTS report_storage_audit (
   action TEXT NOT NULL,
   object_key TEXT,
   details_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (report_id) REFERENCES agent_reports(report_id) ON DELETE CASCADE
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_report_storage_audit_report_created
   ON report_storage_audit(report_id, created_at DESC);
+
+-- Storage audit is append-only. It intentionally has no cascading foreign key,
+-- so evidence remains available even if report metadata is removed later.
+CREATE TRIGGER IF NOT EXISTS report_storage_audit_no_update
+BEFORE UPDATE ON report_storage_audit
+BEGIN
+  SELECT RAISE(ABORT, 'report_storage_audit_is_append_only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS report_storage_audit_no_delete
+BEFORE DELETE ON report_storage_audit
+BEGIN
+  SELECT RAISE(ABORT, 'report_storage_audit_is_append_only');
+END;

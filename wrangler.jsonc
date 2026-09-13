@@ -16,5 +16,14 @@
       "database_name": "citadel-control",
       "database_id": "8e7855f0-905d-4ca4-96e7-4df015ada1c7"
     }
-  ]
+  ],
+  "r2_buckets": [
+    {
+      "binding": "REPORTS",
+      "bucket_name": "citadel-reports-test"
+    }
+  ],
+  "triggers": {
+    "crons": ["17 3 * * *"]
+  }
 }

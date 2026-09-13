@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   REPORT_TIERING,
   handleReportTieringArchitectRequest,
+  purgeExpiredReportObjects,
   tierReportById
 } from "../src/report_tiering.js";
 
@@ -125,6 +126,23 @@ class Statement {
     throw new Error(`Unhandled first(): ${this.sql}`);
   }
   async all() {
+    if (this.sql.includes("FROM report_storage_audit") && this.sql.includes("ORDER BY created_at DESC")) {
+      return { results: state.audits.slice(-20).reverse() };
+    }
+    if (this.sql.includes("JOIN results AS r") && this.sql.includes("LEFT JOIN report_objects AS ro")) {
+      return {
+        results: [...state.reports.values()].map((report) => {
+          const result = state.results.get(report.result_id);
+          const object = state.objects.get(report.report_id);
+          return {
+            ...report,
+            ...result,
+            storage_backend: !object ? "d1" : object.state === "purged" ? "purged" : "r2",
+            storage_state: object?.state || "active"
+          };
+        })
+      };
+    }
     if (this.sql.includes("LEFT JOIN report_objects AS ro") && this.sql.includes("ro.report_id IS NULL")) {
       const limit = this.args.at(-1);
       return {
@@ -134,17 +152,36 @@ class Statement {
           .map((report) => ({ report_id: report.report_id }))
       };
     }
-    if (this.sql.includes("FROM report_objects") && this.sql.includes("state = 'deleted'")) {
-      return { results: [] };
+    if (this.sql.includes("FROM report_objects") && this.sql.includes("state = 'deleted'") && this.sql.includes("state = 'purged'")) {
+      const recoveryCutoff = Date.now() - REPORT_TIERING.purge_recovery_minutes * 60 * 1000;
+      return {
+        results: [...state.objects.values()].filter((object) =>
+          object.delete_requested_at && (
+            object.state === "deleted" ||
+            (object.state === "purged" && Date.parse(object.purged_at || "") <= recoveryCutoff)
+          )
+        )
+      };
     }
     throw new Error(`Unhandled all(): ${this.sql}`);
   }
   async run() {
-    if (this.sql.startsWith("CREATE TABLE") || this.sql.startsWith("CREATE INDEX")) {
+    if (this.sql.startsWith("CREATE TABLE") || this.sql.startsWith("CREATE INDEX") || this.sql.startsWith("CREATE TRIGGER")) {
       return { meta: { changes: 0 } };
     }
-    if (this.sql.startsWith("INSERT INTO report_storage_audit")) {
-      state.audits.push({ args: [...this.args], sql: this.sql });
+    if (this.sql.startsWith("INSERT INTO report_storage_audit") || this.sql.startsWith("INSERT OR IGNORE INTO report_storage_audit")) {
+      const eventId = this.args[0];
+      if (this.sql.startsWith("INSERT OR IGNORE") && state.audits.some((event) => event.storage_event_id === eventId)) {
+        return { meta: { changes: 0 } };
+      }
+      state.audits.push({
+        storage_event_id: eventId,
+        report_id: this.args[1],
+        action: this.sql.match(/'([^']+)'/)?.[1] || this.args[2],
+        object_key: this.sql.includes("SELECT") ? this.args[2] : this.args[3],
+        details_json: this.sql.includes("SELECT") ? (this.args[3] || "{}") : (this.args[4] || "{}"),
+        created_at: new Date().toISOString()
+      });
       return { meta: { changes: 1 } };
     }
     if (this.sql.startsWith("INSERT INTO report_objects")) {
@@ -171,25 +208,43 @@ class Statement {
       return { meta: { changes: 1 } };
     }
     if (this.sql.startsWith("UPDATE report_objects SET state = 'deleted'")) {
-      const object = state.objects.get(this.args[0]);
+      const reverting = this.sql.includes("purged_at = NULL") && this.args.length === 2 && !this.sql.includes("delete_requested_at = ?");
+      const reportId = reverting ? this.args[0] : this.args[1];
+      const object = state.objects.get(reportId);
+      if (reverting) {
+        if (!object || object.state !== "purged" || object.purged_at !== this.args[1]) return { meta: { changes: 0 } };
+        object.state = "deleted";
+        object.purged_at = null;
+        return { meta: { changes: 1 } };
+      }
       if (!object || object.state !== "active") return { meta: { changes: 0 } };
       object.state = "deleted";
-      object.delete_requested_at = new Date().toISOString();
+      object.delete_requested_at = this.args[0];
+      object.purged_at = null;
       return { meta: { changes: 1 } };
     }
     if (this.sql.startsWith("UPDATE report_objects SET state = 'active'")) {
-      const object = state.objects.get(this.args[0]);
+      const object = state.objects.get(this.args[1]);
       if (!object || object.state !== "deleted") return { meta: { changes: 0 } };
       object.state = "active";
       object.delete_requested_at = null;
-      object.restored_at = new Date().toISOString();
+      object.restored_at = this.args[0];
+      object.purged_at = null;
       return { meta: { changes: 1 } };
     }
     if (this.sql.startsWith("UPDATE report_objects SET state = 'purged'")) {
-      const object = state.objects.get(this.args[0]);
+      const object = state.objects.get(this.args[1]);
       if (!object || object.state !== "deleted") return { meta: { changes: 0 } };
       object.state = "purged";
-      object.purged_at = new Date().toISOString();
+      object.purged_at = this.args[0];
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("UPDATE report_objects SET delete_requested_at = NULL")) {
+      const object = state.objects.get(this.args[0]);
+      if (!object || object.state !== "purged" || object.purged_at !== this.args[1]) {
+        return { meta: { changes: 0 } };
+      }
+      object.delete_requested_at = null;
       return { meta: { changes: 1 } };
     }
     throw new Error(`Unhandled run(): ${this.sql}`);
@@ -200,6 +255,7 @@ class FakeR2 {
   constructor() {
     this.objects = new Map();
     this.corruptReads = false;
+    this.failDeletes = false;
   }
   async put(key, value, metadata) {
     this.objects.set(key, { value: String(value), metadata });
@@ -215,6 +271,7 @@ class FakeR2 {
     };
   }
   async delete(key) {
+    if (this.failDeletes) throw new Error("simulated R2 delete failure");
     this.objects.delete(key);
   }
 }
@@ -307,5 +364,45 @@ assert.equal(data.r2_configured, true);
 assert.equal(data.reports.tiered_count, 1);
 assert.equal(data.d1.source, "pragma");
 assert.equal(data.d1.warning, "ok");
+assert.ok(Array.isArray(data.audit_events));
+
+response = await handleReportTieringArchitectRequest(
+  new Request("https://example.test/api/v1/architect/reports?limit=50", { headers }),
+  env,
+  new URL("https://example.test/api/v1/architect/reports?limit=50")
+);
+assert.equal(response.status, 200);
+data = await response.json();
+assert.equal(data.reports.find((report) => report.report_id === "report_ok").storage_backend, "r2");
+
+response = await handleReportTieringArchitectRequest(
+  new Request("https://example.test/api/v1/architect/reports/report_ok", { method: "DELETE", headers }),
+  env,
+  new URL("https://example.test/api/v1/architect/reports/report_ok")
+);
+assert.equal(response.status, 202);
+state.objects.get("report_ok").delete_requested_at = "2026-08-01T00:00:00Z";
+state.objects.get("report_ok").state = "purged";
+state.objects.get("report_ok").purged_at = new Date().toISOString();
+let purge = await purgeExpiredReportObjects(env);
+assert.equal(purge.purged, 0, "a concurrent fresh purge claim must not be recovered");
+assert.ok(r2.objects.has(storage.object_key));
+state.objects.get("report_ok").state = "deleted";
+state.objects.get("report_ok").purged_at = null;
+r2.failDeletes = true;
+purge = await purgeExpiredReportObjects(env);
+assert.equal(purge.purged, 0);
+assert.equal(state.objects.get("report_ok").state, "deleted");
+assert.ok(r2.objects.has(storage.object_key));
+
+r2.failDeletes = false;
+purge = await purgeExpiredReportObjects(env);
+assert.equal(purge.purged, 1);
+assert.equal(state.objects.get("report_ok").state, "purged");
+assert.equal(state.objects.get("report_ok").delete_requested_at, null);
+assert.equal(r2.objects.has(storage.object_key), false);
+assert.ok(state.audits.some((event) => event.action === "lifecycle.purged"));
+purge = await purgeExpiredReportObjects(env);
+assert.equal(purge.purged, 0, "completed purge must not repeat on later cron runs");
 
 console.log("Fail-safe D1/R2 report tiering, rollback, delete and restore: OK");
