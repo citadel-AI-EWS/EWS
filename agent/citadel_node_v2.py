@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CITADEL/EWS node v0.2: bounded v1 node plus signed operational telemetry.
+"""CITADEL/EWS node v0.3: bounded node, telemetry and signed self-update.
 
 Telemetry only uploads the node's own JSONL operational events to the existing
 Controller. It does not add remote execution, credential collection, discovery,
@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 import citadel_node_v1 as v1
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 v1.VERSION = VERSION
 v1.USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 
@@ -43,6 +43,8 @@ ALLOWED_EVENTS = {
     "queued_results_flushed",
     "command_signature_rejected",
     "command_completed",
+    "agent_updated",
+    "agent_update_rolled_back",
     "command_failure_ack_failed",
     "command_failed",
 }
@@ -157,8 +159,8 @@ class TelemetryCursor:
 
 
 class Agent(v1.Agent):
-    def __init__(self, config: v1.AgentConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: v1.AgentConfig, config_path: Path | None = None) -> None:
+        super().__init__(config, config_path)
         self.telemetry = TelemetryCursor(
             config.data_dir / "agent.jsonl",
             config.data_dir / "telemetry-cursor.json",
@@ -219,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     config = v1.AgentConfig.from_file(Path(args.config))
     if args.command == "doctor":
         return v1.doctor(config)
-    agent = Agent(config)
+    agent = Agent(config, Path(args.config))
     if args.command == "enroll":
         print(agent.enroll())
         return 0

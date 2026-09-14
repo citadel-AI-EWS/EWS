@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>EWS v15 · Controller TEST v0.3</title>
+<title>CITADEL EWS 0.4 · Control Center</title>
 <style>
 :root{--bg:#07101c;--bg2:#0a1525;--panel:#101c2e;--panel2:#14243a;--line:#2a3b55;--text:#edf4ff;--muted:#98abc4;--blue:#6fa8ff;--green:#63d18c;--amber:#f0c55e;--red:#ff7180;--purple:#a27dff;--shadow:0 20px 60px #0004}
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:radial-gradient(circle at 10% 0,#10284d 0,transparent 25%),linear-gradient(180deg,var(--bg),var(--bg2));color:var(--text);font:14px/1.45 Inter,Segoe UI,Arial,sans-serif}button,input,select,textarea{font:inherit}button{cursor:pointer}.hidden{display:none!important}.muted{color:var(--muted)}.tiny{font-size:12px}.ok{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--red)}
@@ -18,8 +18,8 @@ table{width:100%;border-collapse:collapse}th,td{padding:9px 8px;border-bottom:1p
 </head>
 <body>
 <header class="top">
- <div class="brand"><div class="mark">E</div><div><b>EWS</b><small>v15 · CONTROLLER v0.3</small></div></div>
- <div class="top-actions"><span class="clock" id="clock"></span><button class="btn small" id="langBtn" onclick="toggleLang()">RU</button><button class="btn small alt hidden" id="logoutBtn" onclick="logout()" data-ru="Выйти" data-en="Sign out">Выйти</button></div>
+ <div class="brand"><div class="mark">E</div><div><b>EWS</b><small>CITADEL 0.4</small></div></div>
+ <div class="top-actions"><a class="btn small good" href="/hub/" style="text-decoration:none">LIVE HUB</a><span class="clock" id="clock"></span><button class="btn small" id="langBtn" onclick="toggleLang()">RU</button><button class="btn small alt hidden" id="logoutBtn" onclick="logout()" data-ru="Выйти" data-en="Sign out">Выйти</button></div>
 </header>
 
 <section id="loginScreen" class="login-wrap">

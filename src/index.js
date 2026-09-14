@@ -20,7 +20,22 @@ const ALLOWED_REPORT_SENSITIVITIES = new Set([
 ]);
 const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
-const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "uninstall"]);
+const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "uninstall"]);
+const LATEST_NODE_RELEASE = Object.freeze({
+  version: "0.3.0",
+  files: [
+    {
+      path: "citadel_node_v1.py",
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
+      sha256: "0d04b81ea777ef3ddcd98015f3cc350090955bf8cb0d67960ad407264855abfa"
+    },
+    {
+      path: "citadel_node_v2.py",
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
+      sha256: "765dfbe5963c6da5822ee8fb233e25c2de647ba77867d43cc8c771231f610f6a"
+    }
+  ]
+});
 const CONTROLLER_COMMAND_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0";
 let reportSchemaPromise;
 let sessionSchemaPromise;
@@ -1366,6 +1381,32 @@ async function architectOverview(request, env) {
   });
 }
 
+async function publicHubNodes(env) {
+  await ensureAutoEnrollmentStorage(env);
+  const query = await env.DB.prepare(
+    "SELECT nn.node_number, n.agent_version, n.status, n.enrolled_at, n.last_seen_at " +
+    "FROM node_numbers AS nn JOIN nodes AS n ON n.node_id = nn.node_id " +
+    "WHERE n.status != 'revoked' ORDER BY nn.node_number ASC LIMIT 500"
+  ).all();
+  return json({
+    ok: true,
+    refreshed_at: new Date().toISOString(),
+    nodes: (query.results || []).map((node) => ({
+      node_number: node.node_number,
+      display_name: `CITADEL Node ${node.node_number}`,
+      agent_version: node.agent_version,
+      status: node.status,
+      enrolled_at: node.enrolled_at,
+      last_seen_at: node.last_seen_at
+    }))
+  });
+}
+
+async function architectRelease(request, env) {
+  await authenticateArchitect(request, env);
+  return json({ ok: true, release: LATEST_NODE_RELEASE });
+}
+
 async function architectCreateCommand(request, env, nodeId) {
   await authenticateArchitect(request, env);
   const bodyText = await readBodyText(request, 8 * 1024);
@@ -1400,7 +1441,8 @@ async function architectCreateCommand(request, env, nodeId) {
   }
 
   const commandId = "command_" + crypto.randomUUID();
-  const payloadJson = "{}";
+  const payload = commandType === "update" ? LATEST_NODE_RELEASE : {};
+  const payloadJson = JSON.stringify(payload);
   const createdAt = new Date().toISOString();
   const signature = await signControllerCommand(
     env,
@@ -1589,6 +1631,18 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/v1/architect/overview") {
     return request.method === "GET"
       ? architectOverview(request, env)
+      : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/release") {
+    return request.method === "GET"
+      ? architectRelease(request, env)
+      : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/hub/nodes") {
+    return request.method === "GET"
+      ? publicHubNodes(env)
       : methodNotAllowed(["GET"]);
   }
 
