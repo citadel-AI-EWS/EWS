@@ -2,7 +2,15 @@
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT="${1:-$ROOT/public}"
-rm -rf "$OUTPUT"
+case "$OUTPUT" in
+  /|"$HOME"|"$ROOT")
+    printf 'Refusing unsafe output directory: %s\n' "$OUTPUT" >&2
+    exit 2
+    ;;
+esac
+if [[ -d "$OUTPUT" ]]; then
+  find "$OUTPUT" -mindepth 1 -delete
+fi
 mkdir -p "$OUTPUT/node-test" "$OUTPUT/architect/logs"
 cp "$ROOT/index.html" "$OUTPUT/index.html"
 cp "$ROOT/node-test.html" "$OUTPUT/node-test/index.html"

@@ -1,2 +1,2 @@
-cryptography>=42,<48
+cryptography>=50.0.1,<51
 psutil>=5.9,<8
