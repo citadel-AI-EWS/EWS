@@ -8,14 +8,12 @@ execute commands on nodes and it has no arbitrary-shell route.
 
 - `GET /api/health` — D1, controller-signing, report/session and telemetry readiness check.
 - `GET /api/v1` — supported mission and command types.
-- `POST /api/v1/enroll` — enroll one node using an active enrollment batch token.
+- `POST /api/v1/enroll` — automatically register a new node and assign its permanent sequential number.
 
-The enrollment token is sent once over HTTPS. D1 stores only its SHA-256 hash.
-The node supplies an Ed25519 public key as JWK:
+No manual code, login, confirmation, or enrollment token is required. The node generates its own Ed25519 identity locally and supplies only the public key. Repeating enrollment with the same key returns the same node ID and number:
 
 ```json
 {
-  "enrollment_token": "one-time-high-entropy-token",
   "public_key": { "kty": "OKP", "crv": "Ed25519", "x": "base64url-key" },
   "hostname": "owned-node-01",
   "os_name": "Linux",
@@ -52,7 +50,7 @@ SHA256_HEX_OF_EXACT_BODY
 ```
 
 For a request without a body, hash the empty string. The exact timestamp header
-value is included in the signed message.
+value is included in the signed message. The private key never leaves the computer.
 
 ## Durable reports
 
