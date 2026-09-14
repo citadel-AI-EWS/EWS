@@ -20,6 +20,8 @@ import os
 import platform
 import shutil
 import socket
+import subprocess
+import sys
 import tempfile
 import time
 import urllib.parse
@@ -38,11 +40,13 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.1.0"
+VERSION = "0.3.0"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-SUPPORTED_COMMANDS = {"pause", "resume", "uninstall"}
+SUPPORTED_COMMANDS = {"pause", "resume", "update", "uninstall"}
+UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
+UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
 
 
 def now_iso() -> str:
@@ -311,8 +315,9 @@ HANDLERS: dict[str, MissionHandler] = {"system_inventory": system_inventory}
 
 
 class Agent:
-    def __init__(self, config: AgentConfig) -> None:
+    def __init__(self, config: AgentConfig, config_path: Path | None = None) -> None:
         self.config = config
+        self.config_path = (config_path or Path("config.json")).resolve()
         config.data_dir.mkdir(parents=True, exist_ok=True)
         with contextlib.suppress(OSError):
             os.chmod(config.data_dir, 0o700)
@@ -459,15 +464,21 @@ class Agent:
             return False
         if not all((command_id, created_at, signature, self.identity.node_id)):
             return False
-        if (command.get("payload") or {}) != {}:
+        payload = command.get("payload") or {}
+        if not isinstance(payload, dict):
             return False
+        if command_type != "update" and payload != {}:
+            return False
+        if command_type == "update" and not self.validate_update_payload(payload):
+            return False
+        payload_json = json_text(payload)
         canonical = "\n".join(
             (
                 "CITADEL-COMMAND-V1",
                 command_id,
                 self.identity.node_id or "",
                 command_type,
-                sha256_text("{}"),
+                sha256_text(payload_json),
                 created_at,
             )
         ).encode("utf-8")
@@ -479,6 +490,102 @@ class Agent:
             return True
         except Exception:
             return False
+
+    @staticmethod
+    def validate_update_payload(payload: dict[str, Any]) -> bool:
+        version = payload.get("version")
+        files = payload.get("files")
+        if not isinstance(version, str) or not version or len(version) > 32:
+            return False
+        if not isinstance(files, list) or not 1 <= len(files) <= len(UPDATE_FILE_NAMES):
+            return False
+        seen: set[str] = set()
+        for item in files:
+            if not isinstance(item, dict):
+                return False
+            name = item.get("path")
+            url = item.get("url")
+            digest = item.get("sha256")
+            if name not in UPDATE_FILE_NAMES or name in seen:
+                return False
+            parsed = urllib.parse.urlsplit(url) if isinstance(url, str) else None
+            if (
+                parsed is None
+                or parsed.scheme != "https"
+                or parsed.hostname != "raw.githubusercontent.com"
+                or not parsed.path.startswith("/citadel-AI-EWS/EWS/")
+                or not parsed.path.endswith("/agent/" + name)
+                or not isinstance(digest, str)
+                or len(digest) != 64
+                or any(char not in "0123456789abcdef" for char in digest)
+            ):
+                return False
+            seen.add(name)
+        return True
+
+    def download_update_file(self, url: str) -> bytes:
+        parsed = urllib.parse.urlsplit(url)
+        connection = http.client.HTTPSConnection(
+            parsed.hostname,
+            parsed.port or 443,
+            timeout=self.config.request_timeout_seconds,
+        )
+        target = urllib.parse.urlunsplit(("", "", parsed.path, parsed.query, ""))
+        try:
+            connection.request("GET", target, headers={"User-Agent": USER_AGENT})
+            response = connection.getresponse()
+            if response.status != 200:
+                raise RuntimeError(f"update download failed: HTTP {response.status}")
+            data = response.read(UPDATE_MAX_FILE_BYTES + 1)
+            if len(data) > UPDATE_MAX_FILE_BYTES:
+                raise RuntimeError("update file exceeds size limit")
+            return data
+        finally:
+            connection.close()
+
+    def apply_update(self, payload: dict[str, Any]) -> None:
+        if not self.validate_update_payload(payload):
+            raise RuntimeError("invalid update payload")
+        install_root = Path(__file__).resolve().parent
+        staging = Path(tempfile.mkdtemp(prefix="citadel-update-", dir=self.config.data_dir))
+        backup = self.config.data_dir / "update-backup"
+        replaced: list[str] = []
+        try:
+            for item in payload["files"]:
+                data = self.download_update_file(item["url"])
+                if hashlib.sha256(data).hexdigest() != item["sha256"]:
+                    raise RuntimeError(f"update hash mismatch: {item['path']}")
+                (staging / item["path"]).write_bytes(data)
+            entrypoint = staging / "citadel_node_v2.py"
+            if entrypoint.exists():
+                result = subprocess.run(
+                    [sys.executable, str(entrypoint), "self-test"],
+                    cwd=staging,
+                    timeout=120,
+                    capture_output=True,
+                    text=True,
+                    shell=False,
+                )
+                if result.returncode != 0:
+                    raise RuntimeError("updated agent self-test failed")
+            backup.mkdir(parents=True, exist_ok=True)
+            for item in payload["files"]:
+                name = item["path"]
+                current = install_root / name
+                if current.exists():
+                    shutil.copy2(current, backup / name)
+                os.replace(staging / name, current)
+                replaced.append(name)
+            self.log.write("agent_updated", version=payload["version"], files=replaced)
+        except Exception:
+            for name in replaced:
+                saved = backup / name
+                if saved.exists():
+                    shutil.copy2(saved, install_root / name)
+            self.log.write("agent_update_rolled_back", files=replaced)
+            raise
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
 
     def ack_command(self, command_id: str, status: str) -> None:
         node_id = self.require_node_id()
@@ -503,6 +610,7 @@ class Agent:
                 )
                 continue
             try:
+                restart_after = False
                 if command.get("status") == "pending":
                     self.ack_command(command_id, "accepted")
                 if command_type == "pause":
@@ -510,6 +618,9 @@ class Agent:
                 elif command_type == "resume":
                     with contextlib.suppress(FileNotFoundError):
                         self.paused_path.unlink()
+                elif command_type == "update":
+                    self.apply_update(command.get("payload") or {})
+                    restart_after = True
                 elif command_type == "uninstall":
                     atomic_write(self.stop_path, "controller stop " + now_iso() + "\n")
                 self.ack_command(command_id, "completed")
@@ -518,6 +629,15 @@ class Agent:
                     command_id=command_id,
                     command_type=command_type,
                 )
+                if restart_after:
+                    entrypoint = Path(__file__).resolve().parent / "citadel_node_v2.py"
+                    subprocess.Popen(
+                        [sys.executable, str(entrypoint), "run", "--config", str(self.config_path)],
+                        cwd=entrypoint.parent,
+                        shell=False,
+                        creationflags=(0x08000000 if os.name == "nt" else 0),
+                    )
+                    raise SystemExit(0)
             except Exception as error:
                 try:
                     self.ack_command(command_id, "failed")
@@ -707,7 +827,7 @@ def main(argv: list[str] | None = None) -> int:
     config = AgentConfig.from_file(Path(args.config))
     if args.command == "doctor":
         return doctor(config)
-    agent = Agent(config)
+    agent = Agent(config, Path(args.config))
     if args.command == "enroll":
         print(agent.enroll())
         return 0
