@@ -51,7 +51,14 @@ node tests/telemetry-storage.mjs
 bash -n controller_deploy.sh scripts/build_site.sh scripts/package_controller.sh scripts/validate.sh
 cfn-lint controller_template.yaml project_stack.yaml
 artifact="$(mktemp --suffix=.zip)"
-trap 'rm -f "$artifact" /tmp/ews-site.js /tmp/ews-architect.js /tmp/ews-architect-logs.js /tmp/ews-node-test.js' EXIT
+cleanup_validation_files() {
+  for path in "$artifact" /tmp/ews-site.js /tmp/ews-architect.js /tmp/ews-architect-logs.js /tmp/ews-node-test.js; do
+    if [[ -e "$path" ]]; then
+      unlink "$path"
+    fi
+  done
+}
+trap cleanup_validation_files EXIT
 scripts/package_controller.sh "$artifact"
 unzip -t "$artifact"
 site_dir="$(mktemp -d)"
@@ -59,5 +66,6 @@ scripts/build_site.sh "$site_dir"
 test -s "$site_dir/index.html"
 test -s "$site_dir/_headers"
 test -s "$site_dir/architect/logs/index.html"
-rm -rf "$site_dir"
+find "$site_dir" -mindepth 1 -delete
+rmdir "$site_dir"
 git diff --check
