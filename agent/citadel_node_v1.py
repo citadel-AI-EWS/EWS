@@ -552,26 +552,44 @@ class Agent:
 
     def run(self, once: bool = False) -> int:
         self.log.write("agent_start", version=VERSION, once=once)
+        keep_awake = False
+        if os.name == "nt" and not once:
+            import ctypes
+
+            es_continuous = 0x80000000
+            es_system_required = 0x00000001
+            keep_awake = bool(
+                ctypes.windll.kernel32.SetThreadExecutionState(
+                    es_continuous | es_system_required
+                )
+            )
+            self.log.write("windows_sleep_inhibit", enabled=keep_awake)
         backoff = 2
-        while True:
-            try:
-                self.cycle()
-                backoff = 2
-                if once:
+        try:
+            while True:
+                try:
+                    self.cycle()
+                    backoff = 2
+                    if once:
+                        return 0
+                    time.sleep(self.config.poll_seconds)
+                except SystemExit:
+                    self.log.write("agent_stop", reason="STOP")
                     return 0
-                time.sleep(self.config.poll_seconds)
-            except SystemExit:
-                self.log.write("agent_stop", reason="STOP")
-                return 0
-            except KeyboardInterrupt:
-                self.log.write("agent_stop", reason="keyboard_interrupt")
-                return 0
-            except Exception as error:
-                self.log.write("cycle_error", error=str(error)[:500])
-                if once:
-                    raise
-                time.sleep(backoff)
-                backoff = min(60, backoff * 2)
+                except KeyboardInterrupt:
+                    self.log.write("agent_stop", reason="keyboard_interrupt")
+                    return 0
+                except Exception as error:
+                    self.log.write("cycle_error", error=str(error)[:500])
+                    if once:
+                        raise
+                    time.sleep(backoff)
+                    backoff = min(60, backoff * 2)
+        finally:
+            if os.name == "nt" and keep_awake:
+                import ctypes
+
+                ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
 
 
 def doctor(config: AgentConfig) -> int:
