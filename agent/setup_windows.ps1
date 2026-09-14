@@ -26,6 +26,7 @@ $Venv = Join-Path $InstallRoot ".venv"
 & $Python.Source -m venv $Venv
 if ($LASTEXITCODE -ne 0) { throw "Unable to create Python virtual environment." }
 $VenvPython = Join-Path $Venv "Scripts\python.exe"
+$VenvPythonw = Join-Path $Venv "Scripts\pythonw.exe"
 & $VenvPython -m pip install --disable-pip-version-check --requirement (Join-Path $InstallRoot "requirements.txt")
 if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
 
@@ -46,6 +47,26 @@ if ($LASTEXITCODE -ne 0) { throw "Agent diagnostics failed." }
 & $VenvPython (Join-Path $InstallRoot "citadel_node_v2.py") enroll --config $ConfigPath
 if ($LASTEXITCODE -ne 0) { throw "Automatic enrollment failed." }
 
+$AgentScript = Join-Path $InstallRoot "citadel_node_v2.py"
+$StartupDir = [Environment]::GetFolderPath("Startup")
+$ShortcutPath = Join-Path $StartupDir "CITADEL EWS Agent.lnk"
+$Shell = New-Object -ComObject WScript.Shell
+$Shortcut = $Shell.CreateShortcut($ShortcutPath)
+$Shortcut.TargetPath = $VenvPythonw
+$Shortcut.Arguments = ('"' + $AgentScript + '" run --config "' + $ConfigPath + '"')
+$Shortcut.WorkingDirectory = $InstallRoot
+$Shortcut.WindowStyle = 7
+$Shortcut.Description = "CITADEL EWS background agent"
+$Shortcut.Save()
+
+Start-Process -FilePath $VenvPythonw -ArgumentList @(
+  $AgentScript,
+  "run",
+  "--config",
+  $ConfigPath
+) -WorkingDirectory $InstallRoot -WindowStyle Hidden
+
 Write-Host "[CITADEL] Setup complete. This computer registered automatically."
-Write-Host "[CITADEL] Start with:"
-Write-Host ('"' + $VenvPython + '" "' + (Join-Path $InstallRoot "citadel_node_v2.py") + '" run --config "' + $ConfigPath + '"')
+Write-Host "[CITADEL] Agent is running without a console window."
+Write-Host "[CITADEL] Automatic Windows sleep is blocked while the agent is running."
+Write-Host "[CITADEL] Agent will start automatically after Windows sign-in."
