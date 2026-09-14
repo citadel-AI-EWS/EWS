@@ -2,7 +2,7 @@
   "name": "ews-architect-console",
   "private": true,
   "type": "module",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "EWS Architect console and TEST Controller deployment tooling",
   "scripts": {
     "build": "bash scripts/build_site.sh",
