@@ -11,11 +11,12 @@ esac
 if [[ -d "$OUTPUT" ]]; then
   find "$OUTPUT" -mindepth 1 -delete
 fi
-mkdir -p "$OUTPUT/node-test" "$OUTPUT/architect/logs"
+mkdir -p "$OUTPUT/node-test" "$OUTPUT/architect/logs" "$OUTPUT/hub"
 cp "$ROOT/index.html" "$OUTPUT/index.html"
 cp "$ROOT/node-test.html" "$OUTPUT/node-test/index.html"
 cp "$ROOT/architect.html" "$OUTPUT/architect/index.html"
 cp "$ROOT/architect-logs.html" "$OUTPUT/architect/logs/index.html"
+cp "$ROOT/hub.html" "$OUTPUT/hub/index.html"
 cat > "$OUTPUT/_headers" <<'HEADERS'
 /*
   Cache-Control: no-store
