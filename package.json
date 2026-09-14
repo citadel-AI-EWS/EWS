@@ -9,6 +9,6 @@
     "check:cloudflare": "wrangler deploy --dry-run"
   },
   "devDependencies": {
-    "wrangler": "4.129.0"
+    "wrangler": "4.131.2"
   }
 }
