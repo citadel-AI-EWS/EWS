@@ -20,7 +20,8 @@ import os
 import platform
 import shutil
 import socket
-import subprocess
+# Subprocesses below use a fixed interpreter, allowlisted local scripts and no shell.
+import subprocess  # nosec B404
 import sys
 import tempfile
 import time
@@ -558,7 +559,8 @@ class Agent:
                 (staging / item["path"]).write_bytes(data)
             entrypoint = staging / "citadel_node_v2.py"
             if entrypoint.exists():
-                result = subprocess.run(
+                # The argv is fixed and the shell remains disabled.
+                result = subprocess.run(  # nosec B603
                     [sys.executable, str(entrypoint), "self-test"],
                     cwd=staging,
                     timeout=120,
@@ -631,7 +633,8 @@ class Agent:
                 )
                 if restart_after:
                     entrypoint = Path(__file__).resolve().parent / "citadel_node_v2.py"
-                    subprocess.Popen(
+                    # The argv is fixed and the shell remains disabled.
+                    subprocess.Popen(  # nosec B603
                         [sys.executable, str(entrypoint), "run", "--config", str(self.config_path)],
                         cwd=entrypoint.parent,
                         shell=False,
