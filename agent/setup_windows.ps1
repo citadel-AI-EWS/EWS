@@ -6,15 +6,50 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+$PythonWingetId = "Python.Python.3.14"
 
 if (-not $ControllerUrl.StartsWith("https://")) {
   throw "ControllerUrl must use HTTPS."
 }
 $SourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Python = Get-Command python -ErrorAction SilentlyContinue
-if ($null -eq $Python) { $Python = Get-Command py -ErrorAction SilentlyContinue }
-if ($null -eq $Python) {
-  throw "Python 3.11+ is required. Install Python from python.org or Windows Package Manager and run setup again."
+
+function Find-Python314 {
+  $Launcher = Get-Command py -ErrorAction SilentlyContinue
+  if ($null -ne $Launcher) {
+    $Resolved = & $Launcher.Source -3.14 -c "import sys; print(sys.executable)" 2>$null
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($Resolved)) {
+      return $Resolved.Trim()
+    }
+  }
+  $Candidates = @(
+    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python314\python.exe"),
+    (Join-Path $env:ProgramFiles "Python314\python.exe")
+  )
+  foreach ($Candidate in $Candidates) {
+    if (Test-Path $Candidate) { return $Candidate }
+  }
+  return $null
+}
+
+$Winget = Get-Command winget -ErrorAction SilentlyContinue
+$PythonPath = Find-Python314
+if ($null -eq $Winget -and $null -eq $PythonPath) {
+  throw "Windows Package Manager (winget) is required to install Python automatically."
+}
+if ($null -ne $Winget) {
+  if ($null -eq $PythonPath) {
+    & $Winget.Source install --exact --id $PythonWingetId --source winget --scope user --silent --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) { throw "Automatic Python installation failed." }
+  } else {
+    & $Winget.Source upgrade --exact --id $PythonWingetId --source winget --scope user --silent --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "[CITADEL] Python is already installed; continuing with the available 3.14 release."
+    }
+  }
+  $PythonPath = Find-Python314
+}
+if ($null -eq $PythonPath) {
+  throw "Python 3.14 installation completed but python.exe could not be located."
 }
 
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
@@ -23,11 +58,13 @@ Copy-Item (Join-Path $SourceRoot "citadel_node_v2.py") (Join-Path $InstallRoot "
 Copy-Item (Join-Path $SourceRoot "requirements.txt") (Join-Path $InstallRoot "requirements.txt") -Force
 
 $Venv = Join-Path $InstallRoot ".venv"
-& $Python.Source -m venv $Venv
+& $PythonPath -m venv $Venv
 if ($LASTEXITCODE -ne 0) { throw "Unable to create Python virtual environment." }
 $VenvPython = Join-Path $Venv "Scripts\python.exe"
 $VenvPythonw = Join-Path $Venv "Scripts\pythonw.exe"
-& $VenvPython -m pip install --disable-pip-version-check --requirement (Join-Path $InstallRoot "requirements.txt")
+& $VenvPython -m pip install --disable-pip-version-check --upgrade pip
+if ($LASTEXITCODE -ne 0) { throw "pip update failed." }
+& $VenvPython -m pip install --disable-pip-version-check --upgrade --requirement (Join-Path $InstallRoot "requirements.txt")
 if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
 
 $ConfigPath = Join-Path $InstallRoot "config.json"
@@ -44,6 +81,8 @@ $ConfigPath = Join-Path $InstallRoot "config.json"
 
 & $VenvPython (Join-Path $InstallRoot "citadel_node_v2.py") doctor --config $ConfigPath
 if ($LASTEXITCODE -ne 0) { throw "Agent diagnostics failed." }
+& $VenvPython (Join-Path $InstallRoot "citadel_node_v2.py") self-test
+if ($LASTEXITCODE -ne 0) { throw "Agent self-test failed." }
 & $VenvPython (Join-Path $InstallRoot "citadel_node_v2.py") enroll --config $ConfigPath
 if ($LASTEXITCODE -ne 0) { throw "Automatic enrollment failed." }
 
