@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>CITADEL — панель архитектора TEST</title>
+  <title>CITADEL — панель архитектора</title>
   <style>
     :root{font-family:system-ui,-apple-system,sans-serif;color:#f2f5ff;background:#080c17}
     *{box-sizing:border-box}body{margin:0;min-height:100vh;padding:20px;background:radial-gradient(circle at top,#172441,#080c17 55%)}
@@ -26,7 +26,7 @@
 </head>
 <body>
   <main>
-    <div class="brand">CITADEL / ARCHITECT / TEST</div>
+    <div class="brand">CITADEL / ARCHITECT</div>
     <h1>Панель архитектора</h1>
     <p>Контролируемое управление узлами и разрешёнными миссиями. Произвольные команды отключены.</p>
 
@@ -72,9 +72,10 @@
         <div class="control-buttons">
           <button id="pauseButton" class="secondary" type="button">Поставить на паузу</button>
           <button id="resumeButton" class="secondary" type="button">Возобновить</button>
+          <button id="updateButton" class="secondary full" type="button">Обновить агент дистанционно</button>
           <button id="disconnectButton" class="danger full" type="button">Отключить узел</button>
         </div>
-        <p class="small">Команда подписывается Controller. В TEST узел применит её после проверки управления.</p>
+        <p class="small">Каждая команда подписывается Controller. Обновление проверяется по подписи и SHA‑256; при ошибке агент откатывает файлы.</p>
       </section>
 
       <section class="card">
@@ -156,6 +157,7 @@
     const controlNodeSelect = document.getElementById("controlNodeSelect");
     const pauseButton = document.getElementById("pauseButton");
     const resumeButton = document.getElementById("resumeButton");
+    const updateButton = document.getElementById("updateButton");
     const disconnectButton = document.getElementById("disconnectButton");
     const missionTitle = document.getElementById("missionTitle");
     const expiresHours = document.getElementById("expiresHours");
@@ -223,6 +225,7 @@
       );
       pauseButton.disabled = !node || pending || ["paused", "revoked"].includes(node.status);
       resumeButton.disabled = !node || pending || node.status !== "paused";
+      updateButton.disabled = !node || pending || node.status === "revoked";
       disconnectButton.disabled = !node || pending || node.status === "revoked";
     }
 
@@ -230,7 +233,7 @@
       currentCommands = commands;
       const list = document.getElementById("commandsList");
       list.replaceChildren();
-      const labels = { pause: "Пауза", resume: "Возобновление", uninstall: "Отключение" };
+      const labels = { pause: "Пауза", resume: "Возобновление", update: "Обновление", uninstall: "Отключение" };
       for (const command of commands) {
         const item = document.createElement("div");
         item.className = `item ${command.status === "completed" ? "ok" : "warn"}`;
@@ -584,8 +587,8 @@
     async function sendControl(commandType) {
       const nodeId = controlNodeSelect.value;
       if (!nodeId) return setStatus("Выберите узел.", "bad");
-      const labels = { pause: "паузу", resume: "возобновление", uninstall: "отключение" };
-      for (const button of [pauseButton, resumeButton, disconnectButton]) button.disabled = true;
+      const labels = { pause: "паузу", resume: "возобновление", update: "обновление", uninstall: "отключение" };
+      for (const button of [pauseButton, resumeButton, updateButton, disconnectButton]) button.disabled = true;
       setStatus(`Отправляю команду на ${labels[commandType]}…`);
       try {
         const data = await api(`/api/v1/architect/nodes/${encodeURIComponent(nodeId)}/commands`, {
@@ -603,6 +606,7 @@
 
     pauseButton.addEventListener("click", () => sendControl("pause"));
     resumeButton.addEventListener("click", () => sendControl("resume"));
+    updateButton.addEventListener("click", () => sendControl("update"));
     disconnectButton.addEventListener("click", () => {
       const node = currentNodes.find((item) => item.node_id === controlNodeSelect.value);
       if (!node) return;
