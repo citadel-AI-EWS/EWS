@@ -107,7 +107,6 @@ class AgentConfig:
     max_cpu_percent: float = 90.0
     max_memory_percent: float = 90.0
     controller_public_x: str = DEFAULT_CONTROLLER_PUBLIC_X
-    enrollment_token: str = ""
 
     @classmethod
     def from_file(cls, path: Path) -> "AgentConfig":
@@ -127,9 +126,6 @@ class AgentConfig:
             max_cpu_percent=max(10.0, min(100.0, float(raw.get("max_cpu_percent", 90)))),
             max_memory_percent=max(10.0, min(100.0, float(raw.get("max_memory_percent", 90)))),
             controller_public_x=str(raw.get("controller_public_x") or DEFAULT_CONTROLLER_PUBLIC_X),
-            enrollment_token=str(
-                os.environ.get("CITADEL_ENROLLMENT_TOKEN") or raw.get("enrollment_token") or ""
-            ).strip(),
         )
 
 
@@ -340,13 +336,10 @@ class Agent:
     def enroll(self) -> str:
         if self.identity.node_id:
             return self.identity.node_id
-        if len(self.config.enrollment_token) < 16:
-            raise RuntimeError("one-time enrollment token is required")
         response = self.api.request(
             "POST",
             "/api/v1/enroll",
             {
-                "enrollment_token": self.config.enrollment_token,
                 "public_key": self.identity.public_jwk(),
                 "hostname": socket.gethostname(),
                 "os_name": platform.system() or "Unknown",
@@ -357,11 +350,13 @@ class Agent:
             },
             signed=False,
         )
-        node_id = str(response.get("node", {}).get("node_id") or "")
+        node = response.get("node", {})
+        node_id = str(node.get("node_id") or "")
+        node_number = int(node.get("node_number") or 0)
         if not node_id.startswith("node_"):
             raise RuntimeError("controller returned invalid node_id")
         self.identity.set_node_id(node_id)
-        self.log.write("node_enrolled", node_id=node_id)
+        self.log.write("node_enrolled", node_id=node_id, node_number=node_number)
         return node_id
 
     def heartbeat(self) -> None:

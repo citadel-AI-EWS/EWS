@@ -6,6 +6,5 @@
   "request_timeout_seconds": 30,
   "max_cpu_percent": 90,
   "max_memory_percent": 90,
-  "controller_public_x": "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0",
-  "enrollment_token": ""
+  "controller_public_x": "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 }

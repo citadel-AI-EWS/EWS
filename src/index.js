@@ -456,14 +456,39 @@ async function authenticateNode(request, env, nodeId, url, bodyText) {
   return node;
 }
 
+async function ensureAutoEnrollmentStorage(env) {
+  await env.DB.batch([
+    env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS node_numbers (
+        node_number INTEGER PRIMARY KEY AUTOINCREMENT,
+        node_id TEXT NOT NULL UNIQUE,
+        public_key TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+      )
+    `),
+    env.DB.prepare(`
+      CREATE INDEX IF NOT EXISTS idx_node_numbers_public_key
+      ON node_numbers(public_key)
+    `)
+  ]);
+}
+
+function enrollmentResponse(nodeId, nodeNumber, status = "online", responseStatus = 201) {
+  return json({
+    ok: true,
+    node: { node_id: nodeId, node_number: nodeNumber, status },
+    authentication: {
+      scheme: "CITADEL-Ed25519",
+      required_headers: ["x-node-id", "x-node-timestamp", "x-node-signature"],
+      signature_window_seconds: SIGNATURE_WINDOW_SECONDS
+    }
+  }, responseStatus);
+}
+
 async function enrollNode(request, env) {
   const bodyText = await readBodyText(request, MAX_ENROLLMENT_BODY_BYTES);
   const body = parseJsonObject(bodyText);
-
-  const enrollmentToken = requireString(body.enrollment_token, "enrollment_token", 512);
-  if (enrollmentToken.length < 16) {
-    throw new ApiError(400, "invalid_enrollment_token");
-  }
 
   const publicKey = normalizePublicKey(body.public_key);
   const hostname = requireString(body.hostname, "hostname", 255);
@@ -472,27 +497,36 @@ async function enrollNode(request, env) {
   const architecture = optionalString(body.architecture, "architecture", 80);
   const agentVersion = requireString(body.agent_version, "agent_version", 80);
   const capabilitiesJson = normalizeCapabilities(body.capabilities);
-  const tokenHash = await sha256Hex(enrollmentToken);
-  const nodeId = `node_${crypto.randomUUID()}`;
-  const detailsJson = JSON.stringify({ hostname, os_name: osName, agent_version: agentVersion });
+  const detailsJson = JSON.stringify({
+    hostname,
+    os_name: osName,
+    agent_version: agentVersion,
+    enrollment: "automatic"
+  });
 
-  let results;
+  await ensureAutoEnrollmentStorage(env);
+
+  const existing = await env.DB.prepare(`
+    SELECT n.node_id, n.status, nn.node_number
+    FROM node_numbers AS nn
+    JOIN nodes AS n ON n.node_id = nn.node_id
+    WHERE nn.public_key = ?
+  `).bind(publicKey).first();
+  if (existing) {
+    if (existing.status === "revoked") {
+      throw new ApiError(403, "node_revoked");
+    }
+    return enrollmentResponse(existing.node_id, existing.node_number, existing.status, 200);
+  }
+
+  const nodeId = `node_${crypto.randomUUID()}`;
   try {
-    results = await env.DB.batch([
+    await env.DB.batch([
       env.DB.prepare(`
         INSERT INTO nodes (
           node_id, public_key, hostname, os_name, os_version,
           architecture, agent_version, status, capabilities_json
-        )
-        SELECT ?, ?, ?, ?, ?, ?, ?, 'online', ?
-        WHERE EXISTS (
-          SELECT 1
-          FROM enrollment_batches
-          WHERE token_hash = ?
-            AND revoked_at IS NULL
-            AND (expires_at IS NULL OR datetime(expires_at) > CURRENT_TIMESTAMP)
-            AND used_nodes < max_nodes
-        )
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'online', ?)
       `).bind(
         nodeId,
         publicKey,
@@ -501,42 +535,40 @@ async function enrollNode(request, env) {
         osVersion,
         architecture,
         agentVersion,
-        capabilitiesJson,
-        tokenHash
+        capabilitiesJson
       ),
       env.DB.prepare(`
-        UPDATE enrollment_batches
-        SET used_nodes = used_nodes + 1
-        WHERE token_hash = ? AND changes() = 1
-      `).bind(tokenHash),
+        INSERT INTO node_numbers (node_id, public_key)
+        VALUES (?, ?)
+      `).bind(nodeId, publicKey),
       env.DB.prepare(`
         INSERT INTO audit_events (
           actor_type, actor_id, action, target_type, target_id, details_json
-        )
-        SELECT 'node', ?, 'node.enrolled', 'node', ?, ?
-        WHERE changes() = 1
+        ) VALUES ('node', ?, 'node.auto_enrolled', 'node', ?, ?)
       `).bind(nodeId, nodeId, detailsJson)
     ]);
   } catch (error) {
-    if (String(error).includes("nodes.public_key")) {
-      throw new ApiError(409, "public_key_already_enrolled");
+    if (String(error).includes("public_key") || String(error).includes("UNIQUE")) {
+      const raced = await env.DB.prepare(`
+        SELECT n.node_id, n.status, nn.node_number
+        FROM node_numbers AS nn
+        JOIN nodes AS n ON n.node_id = nn.node_id
+        WHERE nn.public_key = ?
+      `).bind(publicKey).first();
+      if (raced) {
+        return enrollmentResponse(raced.node_id, raced.node_number, raced.status, 200);
+      }
     }
     throw error;
   }
 
-  if ((results[0]?.meta?.changes || 0) !== 1) {
-    throw new ApiError(403, "enrollment_rejected");
+  const assigned = await env.DB.prepare(
+    "SELECT node_number FROM node_numbers WHERE node_id = ?"
+  ).bind(nodeId).first();
+  if (!assigned?.node_number) {
+    throw new ApiError(500, "node_number_assignment_failed");
   }
-
-  return json({
-    ok: true,
-    node: { node_id: nodeId, status: "online" },
-    authentication: {
-      scheme: "CITADEL-Ed25519",
-      required_headers: ["x-node-id", "x-node-timestamp", "x-node-signature"],
-      signature_window_seconds: SIGNATURE_WINDOW_SECONDS
-    }
-  }, 201);
+  return enrollmentResponse(nodeId, assigned.node_number);
 }
 
 async function heartbeat(request, env, nodeId, url) {

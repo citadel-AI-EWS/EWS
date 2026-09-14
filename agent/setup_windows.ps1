@@ -1,7 +1,6 @@
 [CmdletBinding()]
 param(
   [string]$ControllerUrl = "https://citadel-ai.init1.workers.dev",
-  [string]$EnrollmentToken = $env:CITADEL_ENROLLMENT_TOKEN,
   [string]$InstallRoot = "$env:LOCALAPPDATA\CitadelEWS\agent"
 )
 
@@ -11,10 +10,6 @@ Set-StrictMode -Version Latest
 if (-not $ControllerUrl.StartsWith("https://")) {
   throw "ControllerUrl must use HTTPS."
 }
-if ([string]::IsNullOrWhiteSpace($EnrollmentToken) -or $EnrollmentToken.Length -lt 16) {
-  throw "A one-time enrollment token is required."
-}
-
 $SourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Python = Get-Command python -ErrorAction SilentlyContinue
 if ($null -eq $Python) { $Python = Get-Command py -ErrorAction SilentlyContinue }
@@ -44,20 +39,13 @@ $ConfigPath = Join-Path $InstallRoot "config.json"
   max_cpu_percent = 90
   max_memory_percent = 90
   controller_public_x = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
-  enrollment_token = ""
 } | ConvertTo-Json | Set-Content -Path $ConfigPath -Encoding UTF8
 
-$env:CITADEL_ENROLLMENT_TOKEN = $EnrollmentToken
-try {
-  & $VenvPython (Join-Path $InstallRoot "citadel_node_v2.py") doctor --config $ConfigPath
-  if ($LASTEXITCODE -ne 0) { throw "Agent diagnostics failed." }
-  & $VenvPython (Join-Path $InstallRoot "citadel_node_v2.py") enroll --config $ConfigPath
-  if ($LASTEXITCODE -ne 0) { throw "Enrollment failed." }
-} finally {
-  Remove-Item Env:CITADEL_ENROLLMENT_TOKEN -ErrorAction SilentlyContinue
-  $EnrollmentToken = ""
-}
+& $VenvPython (Join-Path $InstallRoot "citadel_node_v2.py") doctor --config $ConfigPath
+if ($LASTEXITCODE -ne 0) { throw "Agent diagnostics failed." }
+& $VenvPython (Join-Path $InstallRoot "citadel_node_v2.py") enroll --config $ConfigPath
+if ($LASTEXITCODE -ne 0) { throw "Automatic enrollment failed." }
 
-Write-Host "[CITADEL] Setup complete. No background task or service was installed."
+Write-Host "[CITADEL] Setup complete. This computer registered automatically."
 Write-Host "[CITADEL] Start with:"
 Write-Host ('"' + $VenvPython + '" "' + (Join-Path $InstallRoot "citadel_node_v2.py") + '" run --config "' + $ConfigPath + '"')
