@@ -7,11 +7,47 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $PythonWingetId = "Python.Python.3.14"
+$ExpectedV1Sha256 = "b7731e1149d5a3354fe5d45745df01ad6129b40a13e27d94d693fcdff38ee30e"
+$ExpectedV2Sha256 = "765dfbe5963c6da5822ee8fb233e25c2de647ba77867d43cc8c771231f610f6a"
 
-if (-not $ControllerUrl.StartsWith("https://")) {
-  throw "ControllerUrl must use HTTPS."
+$ControllerUri = [System.Uri]$ControllerUrl
+$IsHttps = $ControllerUri.Scheme -eq "https"
+$IsLoopbackTest = $ControllerUri.Scheme -eq "http" -and @("127.0.0.1", "localhost", "::1") -contains $ControllerUri.DnsSafeHost
+if (-not ($IsHttps -or $IsLoopbackTest)) {
+  throw "ControllerUrl must use HTTPS; loopback HTTP is test-only."
 }
+
 $SourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$StateRoot = Join-Path $env:LOCALAPPDATA "CitadelEWS\state"
+
+function Get-Sha256([string]$Path) {
+  return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Copy-VerifiedAgentFile([string]$Name, [string]$ExpectedHash) {
+  $Source = Join-Path $SourceRoot $Name
+  $Destination = Join-Path $InstallRoot $Name
+  if (-not (Test-Path -LiteralPath $Source)) {
+    throw "Required package file is missing: $Name"
+  }
+  $SourceHash = Get-Sha256 $Source
+  if ($SourceHash -ne $ExpectedHash) {
+    throw "Package integrity check failed for $Name. Refusing to install an unknown agent file."
+  }
+  if (Test-Path -LiteralPath $Destination) {
+    $InstalledHash = Get-Sha256 $Destination
+    if ($InstalledHash -eq $ExpectedHash) {
+      Write-Host "[CITADEL] $Name already matches the current release; keeping it."
+      return $false
+    }
+  }
+  Copy-Item -LiteralPath $Source -Destination $Destination -Force
+  if ((Get-Sha256 $Destination) -ne $ExpectedHash) {
+    throw "Installed file verification failed: $Name"
+  }
+  Write-Host "[CITADEL] Installed verified $Name."
+  return $true
+}
 
 function Find-Python314 {
   $Launcher = Get-Command py -ErrorAction SilentlyContinue
@@ -26,67 +62,147 @@ function Find-Python314 {
     (Join-Path $env:ProgramFiles "Python314\python.exe")
   )
   foreach ($Candidate in $Candidates) {
-    if (Test-Path $Candidate) { return $Candidate }
+    if (Test-Path -LiteralPath $Candidate) { return $Candidate }
   }
   return $null
 }
 
-$Winget = Get-Command winget -ErrorAction SilentlyContinue
-$PythonPath = Find-Python314
-if ($null -eq $Winget -and $null -eq $PythonPath) {
-  throw "Windows Package Manager (winget) is required to install Python automatically."
-}
-if ($null -ne $Winget) {
-  if ($null -eq $PythonPath) {
-    & $Winget.Source install --exact --id $PythonWingetId --source winget --scope user --silent --accept-package-agreements --accept-source-agreements
-    if ($LASTEXITCODE -ne 0) { throw "Automatic Python installation failed." }
-  } else {
-    & $Winget.Source upgrade --exact --id $PythonWingetId --source winget --scope user --silent --accept-package-agreements --accept-source-agreements
-    if ($LASTEXITCODE -ne 0) {
-      Write-Host "[CITADEL] Python is already installed; continuing with the available 3.14 release."
-    }
+function Get-RunningCitadelAgents([string]$AgentScriptPath, [string]$ConfigPathValue) {
+  $AgentNeedle = [System.IO.Path]::GetFileName($AgentScriptPath)
+  $ConfigNeedle = [System.IO.Path]::GetFileName($ConfigPathValue)
+  try {
+    return @(
+      Get-CimInstance Win32_Process -ErrorAction Stop |
+        Where-Object {
+          $_.CommandLine -and
+          $_.CommandLine.Contains($AgentNeedle) -and
+          $_.CommandLine.Contains($ConfigNeedle)
+        }
+    )
+  } catch {
+    Write-Host "[CITADEL] Could not inspect running processes; startup will still be verified."
+    return @()
   }
+}
+
+$PythonPath = Find-Python314
+if ($null -eq $PythonPath) {
+  $Winget = Get-Command winget -ErrorAction SilentlyContinue
+  if ($null -eq $Winget) {
+    throw "Python 3.14 is not installed and Windows Package Manager (winget) is unavailable."
+  }
+  Write-Host "[CITADEL] Installing Python 3.14 once..."
+  & $Winget.Source install --exact --id $PythonWingetId --source winget --scope user --silent --accept-package-agreements --accept-source-agreements
+  if ($LASTEXITCODE -ne 0) { throw "Automatic Python installation failed." }
   $PythonPath = Find-Python314
 }
 if ($null -eq $PythonPath) {
-  throw "Python 3.14 installation completed but python.exe could not be located."
+  throw "Python 3.14 is unavailable after installation."
 }
 
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
-Copy-Item (Join-Path $SourceRoot "citadel_node_v1.py") (Join-Path $InstallRoot "citadel_node_v1.py") -Force
-Copy-Item (Join-Path $SourceRoot "citadel_node_v2.py") (Join-Path $InstallRoot "citadel_node_v2.py") -Force
-Copy-Item (Join-Path $SourceRoot "requirements.txt") (Join-Path $InstallRoot "requirements.txt") -Force
+New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
+
+$V1Changed = Copy-VerifiedAgentFile "citadel_node_v1.py" $ExpectedV1Sha256
+$V2Changed = Copy-VerifiedAgentFile "citadel_node_v2.py" $ExpectedV2Sha256
+
+$RequirementsSource = Join-Path $SourceRoot "requirements.txt"
+$RequirementsPath = Join-Path $InstallRoot "requirements.txt"
+if (-not (Test-Path -LiteralPath $RequirementsSource)) {
+  throw "Required package file is missing: requirements.txt"
+}
+$RequirementsHash = Get-Sha256 $RequirementsSource
+$RequirementsChanged = $true
+if (Test-Path -LiteralPath $RequirementsPath) {
+  $RequirementsChanged = (Get-Sha256 $RequirementsPath) -ne $RequirementsHash
+}
+if ($RequirementsChanged) {
+  Copy-Item -LiteralPath $RequirementsSource -Destination $RequirementsPath -Force
+} else {
+  Write-Host "[CITADEL] requirements.txt is unchanged; keeping the installed copy."
+}
 
 $Venv = Join-Path $InstallRoot ".venv"
-& $PythonPath -m venv $Venv
-if ($LASTEXITCODE -ne 0) { throw "Unable to create Python virtual environment." }
 $VenvPython = Join-Path $Venv "Scripts\python.exe"
 $VenvPythonw = Join-Path $Venv "Scripts\pythonw.exe"
-& $VenvPython -m pip install --disable-pip-version-check --upgrade pip
-if ($LASTEXITCODE -ne 0) { throw "pip update failed." }
-& $VenvPython -m pip install --disable-pip-version-check --upgrade --requirement (Join-Path $InstallRoot "requirements.txt")
-if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
+$CreateVenv = -not (Test-Path -LiteralPath $VenvPython)
+if (-not $CreateVenv) {
+  & $VenvPython -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" *> $null
+  if ($LASTEXITCODE -ne 0) { $CreateVenv = $true }
+}
+if ($CreateVenv) {
+  if (Test-Path -LiteralPath $Venv) { Remove-Item -LiteralPath $Venv -Recurse -Force }
+  Write-Host "[CITADEL] Creating the local Python environment..."
+  & $PythonPath -m venv $Venv
+  if ($LASTEXITCODE -ne 0) { throw "Unable to create Python virtual environment." }
+} else {
+  Write-Host "[CITADEL] Existing Python environment found; reusing it."
+}
+
+$RequirementsMarker = Join-Path $InstallRoot ".requirements.sha256"
+$MarkerMatches = $false
+if (Test-Path -LiteralPath $RequirementsMarker) {
+  $MarkerMatches = ((Get-Content -LiteralPath $RequirementsMarker -Raw).Trim().ToLowerInvariant() -eq $RequirementsHash)
+}
+& $VenvPython -c "import cryptography, psutil" *> $null
+$DependenciesWork = $LASTEXITCODE -eq 0
+if (-not ($MarkerMatches -and $DependenciesWork)) {
+  Write-Host "[CITADEL] Installing/updating agent dependencies..."
+  & $VenvPython -m pip install --disable-pip-version-check --upgrade pip
+  if ($LASTEXITCODE -ne 0) { throw "pip update failed." }
+  & $VenvPython -m pip install --disable-pip-version-check --upgrade --requirement $RequirementsPath
+  if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
+  [System.IO.File]::WriteAllText($RequirementsMarker, $RequirementsHash + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
+} else {
+  Write-Host "[CITADEL] Dependencies are already ready; skipping download."
+}
 
 $ConfigPath = Join-Path $InstallRoot "config.json"
-@{
+$ConfigJson = @{
   controller_url = $ControllerUrl.TrimEnd('/')
-  data_dir = (Join-Path $env:LOCALAPPDATA "CitadelEWS\state")
+  data_dir = $StateRoot
   poll_seconds = 30
   heartbeat_seconds = 30
   request_timeout_seconds = 30
   max_cpu_percent = 90
   max_memory_percent = 90
   controller_public_x = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
-} | ConvertTo-Json | Set-Content -Path $ConfigPath -Encoding UTF8
-
-& $VenvPython (Join-Path $InstallRoot "citadel_node_v2.py") doctor --config $ConfigPath
-if ($LASTEXITCODE -ne 0) { throw "Agent diagnostics failed." }
-& $VenvPython (Join-Path $InstallRoot "citadel_node_v2.py") self-test
-if ($LASTEXITCODE -ne 0) { throw "Agent self-test failed." }
-& $VenvPython (Join-Path $InstallRoot "citadel_node_v2.py") enroll --config $ConfigPath
-if ($LASTEXITCODE -ne 0) { throw "Automatic enrollment failed." }
+} | ConvertTo-Json
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$ConfigText = $ConfigJson + [Environment]::NewLine
+$ExistingConfigText = if (Test-Path -LiteralPath $ConfigPath) { [System.IO.File]::ReadAllText($ConfigPath) } else { "" }
+$ConfigChanged = $ExistingConfigText -ne $ConfigText
+if ($ConfigChanged) {
+  [System.IO.File]::WriteAllText($ConfigPath, $ConfigText, $Utf8NoBom)
+  Write-Host "[CITADEL] Configuration written as UTF-8 without BOM."
+} else {
+  Write-Host "[CITADEL] Configuration is unchanged."
+}
 
 $AgentScript = Join-Path $InstallRoot "citadel_node_v2.py"
+$StopPath = Join-Path $StateRoot "STOP"
+if (Test-Path -LiteralPath $StopPath) {
+  Remove-Item -LiteralPath $StopPath -Force
+  Write-Host "[CITADEL] Previous local STOP marker cleared by explicit reinstall."
+}
+
+& $VenvPython $AgentScript doctor --config $ConfigPath
+if ($LASTEXITCODE -ne 0) { throw "Agent diagnostics failed." }
+& $VenvPython $AgentScript self-test
+if ($LASTEXITCODE -ne 0) { throw "Agent self-test failed." }
+
+$EnrollOutput = & $VenvPython $AgentScript enroll --config $ConfigPath
+if ($LASTEXITCODE -ne 0) { throw "Automatic enrollment failed." }
+$NodeId = (($EnrollOutput | Select-Object -Last 1) -as [string]).Trim()
+if (-not $NodeId.StartsWith("node_")) {
+  throw "Controller did not return a valid node id."
+}
+Write-Host "[CITADEL] Controller enrollment confirmed: $NodeId"
+
+& $VenvPython $AgentScript once --config $ConfigPath
+if ($LASTEXITCODE -ne 0) { throw "Live Controller cycle failed after enrollment." }
+Write-Host "[CITADEL] Live heartbeat/controller cycle confirmed."
+
 $StartupDir = [Environment]::GetFolderPath("Startup")
 $ShortcutPath = Join-Path $StartupDir "CITADEL EWS Agent.lnk"
 $Shell = New-Object -ComObject WScript.Shell
@@ -98,14 +214,44 @@ $Shortcut.WindowStyle = 7
 $Shortcut.Description = "CITADEL EWS background agent"
 $Shortcut.Save()
 
-Start-Process -FilePath $VenvPythonw -ArgumentList @(
-  $AgentScript,
-  "run",
-  "--config",
-  $ConfigPath
-) -WorkingDirectory $InstallRoot -WindowStyle Hidden
+$RunningAgents = Get-RunningCitadelAgents $AgentScript $ConfigPath
+$RestartRequired = $V1Changed -or $V2Changed -or $ConfigChanged
+if ($RunningAgents.Count -gt 0 -and $RestartRequired) {
+  Write-Host "[CITADEL] Agent files/configuration changed; restarting the existing CITADEL process."
+  foreach ($Process in $RunningAgents) {
+    Stop-Process -Id $Process.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+  Start-Sleep -Milliseconds 500
+  $RunningAgents = @()
+}
 
-Write-Host "[CITADEL] Setup complete. This computer registered automatically."
-Write-Host "[CITADEL] Agent is running without a console window."
-Write-Host "[CITADEL] Automatic Windows sleep is blocked while the agent is running."
-Write-Host "[CITADEL] Agent will start automatically after Windows sign-in."
+if ($RunningAgents.Count -eq 0) {
+  Start-Process -FilePath $VenvPythonw -ArgumentList @(
+    $AgentScript,
+    "run",
+    "--config",
+    $ConfigPath
+  ) -WorkingDirectory $InstallRoot -WindowStyle Hidden
+  Start-Sleep -Seconds 1
+  Write-Host "[CITADEL] Started one background agent process."
+} else {
+  Write-Host "[CITADEL] Agent is already running; a second copy was not started."
+}
+
+$InstallState = @{
+  node_id = $NodeId
+  controller_url = $ControllerUrl.TrimEnd('/')
+  install_root = $InstallRoot
+  agent_version = "0.3.0"
+  v1_sha256 = $ExpectedV1Sha256
+  v2_sha256 = $ExpectedV2Sha256
+  updated_at = [DateTime]::UtcNow.ToString("o")
+} | ConvertTo-Json
+[System.IO.File]::WriteAllText((Join-Path $InstallRoot "install-state.json"), $InstallState + [Environment]::NewLine, $Utf8NoBom)
+
+Write-Host ""
+Write-Host "[CITADEL] Setup/repair complete."
+Write-Host "[CITADEL] Node: $NodeId"
+Write-Host "[CITADEL] Controller: $($ControllerUrl.TrimEnd('/'))"
+Write-Host "[CITADEL] Re-running this installer reuses the same identity, environment and installation."
+Write-Host "[CITADEL] The agent polls signed Hub commands, including verified remote updates, automatically."
