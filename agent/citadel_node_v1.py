@@ -14,6 +14,7 @@ import contextlib
 import dataclasses
 import datetime as dt
 import hashlib
+import ipaddress
 import http.client
 import json
 import os
@@ -41,7 +42,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -90,7 +91,7 @@ def atomic_write(path: Path, text: str, mode: int = 0o600) -> None:
 
 def load_json(path: Path, default: Any) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return default
 
@@ -119,7 +120,7 @@ class AgentConfig:
         controller_url = str(raw.get("controller_url") or "").strip().rstrip("/")
         parsed = urllib.parse.urlsplit(controller_url)
         secure = parsed.scheme == "https" and bool(parsed.hostname)
-        local_test = parsed.scheme == "http" and parsed.hostname == "127.0.0.1"
+        local_test = parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
         if not (secure or local_test):
             raise ValueError("controller_url must use HTTPS; loopback HTTP is test-only")
         return cls(
@@ -204,7 +205,7 @@ class ApiClient:
         self.base_path = parsed.path.rstrip("/")
         if self.scheme == "https":
             self.connection_type = http.client.HTTPSConnection
-        elif self.scheme == "http" and self.host == "127.0.0.1":
+        elif self.scheme == "http" and self.host in {"127.0.0.1", "localhost", "::1"}:
             self.connection_type = http.client.HTTPConnection
         else:
             raise ValueError("unsupported controller scheme")
@@ -295,6 +296,72 @@ class ResultQueue:
 MissionHandler = Callable[[dict[str, Any]], dict[str, Any]]
 
 
+
+TAILSCALE_INTERFACE_TOKEN = "tailscale"
+VIRTUAL_INTERFACE_TOKENS = (
+    "loopback",
+    "docker",
+    "vethernet",
+    "hyper-v",
+    "vmware",
+    "virtualbox",
+    "wsl",
+)
+
+
+def local_network_addresses() -> dict[str, Any]:
+    """Discover current host LAN/Tailscale IPv4 addresses without hard-coding DHCP data."""
+    lan: list[str] = []
+    tailscale: list[str] = []
+    interfaces: list[dict[str, str]] = []
+    try:
+        stats = psutil.net_if_stats()
+        addresses = psutil.net_if_addrs()
+    except Exception:
+        return {
+            "lan_ipv4": None,
+            "tailscale_ipv4": None,
+            "private_ipv4": [],
+            "interfaces": [],
+        }
+
+    for interface_name, items in addresses.items():
+        state = stats.get(interface_name)
+        if state is not None and not state.isup:
+            continue
+        lowered = interface_name.lower()
+        is_virtual = any(token in lowered for token in VIRTUAL_INTERFACE_TOKENS)
+        for item in items:
+            if item.family != socket.AF_INET:
+                continue
+            try:
+                address = ipaddress.ip_address(item.address)
+            except ValueError:
+                continue
+            if (
+                address.is_loopback
+                or address.is_link_local
+                or address.is_multicast
+                or address.is_unspecified
+            ):
+                continue
+            value = str(address)
+            interfaces.append({"name": interface_name[:120], "ipv4": value})
+            if TAILSCALE_INTERFACE_TOKEN in lowered:
+                tailscale.append(value)
+            elif address.is_private and not is_virtual:
+                lan.append(value)
+
+    lan = list(dict.fromkeys(lan))
+    tailscale = list(dict.fromkeys(tailscale))
+    return {
+        "lan_ipv4": lan[0] if lan else None,
+        "tailscale_ipv4": tailscale[0] if tailscale else None,
+        "private_ipv4": lan,
+        "interfaces": interfaces[:32],
+    }
+
+
 def system_inventory(_: dict[str, Any]) -> dict[str, Any]:
     disk = shutil.disk_usage(Path.home())
     memory = psutil.virtual_memory()
@@ -309,6 +376,7 @@ def system_inventory(_: dict[str, Any]) -> dict[str, Any]:
         "memory_total_bytes": int(memory.total),
         "disk_home_total_bytes": int(disk.total),
         "disk_home_free_bytes": int(disk.free),
+        "network": local_network_addresses(),
     }
 
 
@@ -329,6 +397,7 @@ class Agent:
         self.stop_path = config.data_dir / "STOP"
         self.paused_path = config.data_dir / "PAUSED"
         self.last_heartbeat = 0.0
+        self.enrollment_confirmed = False
 
     @property
     def capabilities(self) -> list[str]:
@@ -340,8 +409,9 @@ class Agent:
         return self.identity.node_id
 
     def enroll(self) -> str:
-        if self.identity.node_id:
+        if self.enrollment_confirmed and self.identity.node_id:
             return self.identity.node_id
+        previous_node_id = self.identity.node_id
         response = self.api.request(
             "POST",
             "/api/v1/enroll",
@@ -359,14 +429,22 @@ class Agent:
         node = response.get("node", {})
         node_id = str(node.get("node_id") or "")
         node_number = int(node.get("node_number") or 0)
-        if not node_id.startswith("node_"):
-            raise RuntimeError("controller returned invalid node_id")
-        self.identity.set_node_id(node_id)
-        self.log.write("node_enrolled", node_id=node_id, node_number=node_number)
+        if not node_id.startswith("node_") or node_number <= 0:
+            raise RuntimeError("controller returned invalid node identity")
+        if previous_node_id != node_id:
+            self.identity.set_node_id(node_id)
+        self.enrollment_confirmed = True
+        self.log.write(
+            "node_enrolled",
+            node_id=node_id,
+            node_number=node_number,
+            reconciled=bool(previous_node_id and previous_node_id != node_id),
+        )
         return node_id
 
     def heartbeat(self) -> None:
         node_id = self.require_node_id()
+        network = local_network_addresses()
         self.api.request(
             "POST",
             f"/api/v1/nodes/{node_id}/heartbeat",
@@ -375,6 +453,10 @@ class Agent:
                 "memory_percent": float(psutil.virtual_memory().percent),
                 "agent_version": VERSION,
                 "capabilities": self.capabilities,
+                "network": {
+                    "lan_ipv4": network.get("lan_ipv4"),
+                    "tailscale_ipv4": network.get("tailscale_ipv4"),
+                },
             },
         )
         self.last_heartbeat = time.monotonic()
@@ -798,6 +880,15 @@ def self_test() -> int:
             "unexpected handler registered",
         )
 
+        bom_json = root / "bom.json"
+        bom_json.write_bytes(b"\xef\xbb\xbf{\"ok\":true}\n")
+        require_test(load_json(bom_json, {}).get("ok") is True, "UTF-8 BOM JSON rejected")
+        network = local_network_addresses()
+        require_test(
+            set(network) == {"lan_ipv4", "tailscale_ipv4", "private_ipv4", "interfaces"},
+            "network discovery returned an unexpected shape",
+        )
+
         pending = ResultQueue(root / "queue.json")
         pending.push({"assignment_id": "a1"})
         collected: list[dict[str, Any]] = []
@@ -807,6 +898,24 @@ def self_test() -> int:
             "offline queue content changed",
         )
         require_test(system_inventory({})["memory_total_bytes"] > 0, "inventory failed")
+        reconcile_root = root / "reconcile"
+        reconcile_root.mkdir()
+        reconcile_config = AgentConfig(
+            "https://example.test",
+            reconcile_root,
+            controller_public_x=controller_x,
+        )
+        reconcile_agent = Agent(reconcile_config)
+        reconcile_agent.identity.set_node_id("node_stale")
+        reconcile_agent.api.request = lambda *args, **kwargs: {
+            "node": {"node_id": "node_reconciled", "node_number": 7}
+        }
+        require_test(
+            reconcile_agent.enroll() == "node_reconciled"
+            and reconcile_agent.identity.node_id == "node_reconciled",
+            "stale node id was not reconciled with Controller",
+        )
+
     print("CITADEL v1 agent SELF TEST: PASS")
     return 0
 
