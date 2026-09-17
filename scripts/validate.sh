@@ -13,6 +13,7 @@ for source, target in (
     ("architect.html", "/tmp/ews-architect.js"),
     ("architect-logs.html", "/tmp/ews-architect-logs.js"),
     ("node-test.html", "/tmp/ews-node-test.js"),
+    ("hub.html", "/tmp/ews-hub.js"),
 ):
     html = Path(source).read_text(encoding="utf-8")
     match = re.search(r"<script>(.*)</script>", html, re.S)
@@ -36,8 +37,10 @@ node --check /tmp/ews-site.js
 node --check /tmp/ews-architect.js
 node --check /tmp/ews-architect-logs.js
 node --check /tmp/ews-node-test.js
+node --check /tmp/ews-hub.js
 node --check src/index.js
 node --check src/worker.js
+node --check src/presence.js
 node --check src/telemetry/common.js
 node --check src/telemetry/schema.js
 node --check src/telemetry/normalize.js
@@ -48,11 +51,12 @@ node --check src/telemetry/router.js
 node tests/report-storage.mjs
 node tests/session-storage.mjs
 node tests/telemetry-storage.mjs
+node tests/presence-storage.mjs
 bash -n controller_deploy.sh scripts/build_site.sh scripts/package_controller.sh scripts/validate.sh
 cfn-lint controller_template.yaml project_stack.yaml
 artifact="$(mktemp --suffix=.zip)"
 cleanup_validation_files() {
-  for path in "$artifact" /tmp/ews-site.js /tmp/ews-architect.js /tmp/ews-architect-logs.js /tmp/ews-node-test.js; do
+  for path in "$artifact" /tmp/ews-site.js /tmp/ews-architect.js /tmp/ews-architect-logs.js /tmp/ews-node-test.js /tmp/ews-hub.js; do
     if [[ -e "$path" ]]; then
       unlink "$path"
     fi
@@ -64,6 +68,7 @@ unzip -t "$artifact"
 site_dir="$(mktemp -d)"
 scripts/build_site.sh "$site_dir"
 test -s "$site_dir/index.html"
+test -s "$site_dir/hub/index.html"
 test -s "$site_dir/_headers"
 test -s "$site_dir/architect/logs/index.html"
 find "$site_dir" -mindepth 1 -delete
