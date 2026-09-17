@@ -26,10 +26,8 @@
     <p>Эта страница регистрирует текущий телефон как тестовый узел и проверяет подписанную связь с Controller.</p>
 
     <section id="enrollCard" class="card">
-      <label for="token">Одноразовый токен регистрации</label>
-      <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="ews_enroll_…">
       <button id="enrollButton" type="button">Зарегистрировать этот телефон</button>
-      <p class="small">Токен не сохраняется. Приватный ключ остаётся внутри защищённого хранилища браузера.</p>
+      <p class="small">Регистрация выполняется автоматически по новому ключу Ed25519. Приватный ключ остаётся внутри защищённого хранилища браузера.</p>
     </section>
 
     <section id="nodeCard" class="card hidden">
@@ -83,7 +81,6 @@
     const controlCard = document.getElementById("controlCard");
     const nodeIdElement = document.getElementById("nodeId");
     const missionText = document.getElementById("missionText");
-    const tokenInput = document.getElementById("token");
     const enrollButton = document.getElementById("enrollButton");
     const heartbeatButton = document.getElementById("heartbeatButton");
     const assignmentButton = document.getElementById("assignmentButton");
@@ -277,12 +274,6 @@
     }
 
     enrollButton.addEventListener("click", async () => {
-      const enrollmentToken = tokenInput.value.trim();
-      if (!enrollmentToken) {
-        setStatus("Сначала вставьте одноразовый токен.", "bad");
-        return;
-      }
-
       enrollButton.disabled = true;
       setStatus("Создаю ключ Ed25519 и регистрирую узел…");
       try {
@@ -305,7 +296,6 @@
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            enrollment_token: enrollmentToken,
             public_key: publicKey,
             hostname: "android-browser-test",
             os_name: "Android",
@@ -318,7 +308,6 @@
 
         const identity = { nodeId: data.node.node_id, privateKey };
         await storagePut(identity);
-        tokenInput.value = "";
         showNode(identity);
         setStatus("Регистрация выполнена. Проверяю подписанную связь…", "ok");
         await sendHeartbeat(identity);

@@ -11,6 +11,8 @@ const MAX_REPORT_BYTES = 512 * 1024;
 const MAX_SESSION_BODY_BYTES = 24 * 1024;
 const MAX_SESSION_SNAPSHOT_BYTES = 16 * 1024;
 const SIGNATURE_WINDOW_SECONDS = 300;
+const AUTO_ENROLLMENT_DEFAULT_HOURLY_LIMIT = 120;
+const AUTO_ENROLLMENT_DEFAULT_NODE_CAP = 10000;
 const ALLOWED_OUTCOMES = new Set(["success", "failed", "partial"]);
 const ALLOWED_REPORT_SENSITIVITIES = new Set([
   "public",
@@ -22,17 +24,17 @@ const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "rollback", "uninstall"]);
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.2",
+  version: "0.3.3",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "69d7838bea16f2d0b1578a47f32af9bfe7b94c51b0a2eaf49803d7d0e8e30a5f"
+      sha256: "02b4afa121574217ec050a38502d58d9a27c6e6b473e7a67f64e16d225e0513d"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "8f7667ff675e1e5b5b964a77deb191eb25b84259cdd78367bd9df2bb9f4f2d24"
+      sha256: "a78bffa05def286a356761a1ef3157c4f89cf9b0704b1784a97541a3708d3ed8"
     }
   ]
 });
@@ -471,6 +473,14 @@ async function authenticateNode(request, env, nodeId, url, bodyText) {
   return node;
 }
 
+function autoEnrollmentLimit(value, fallback, maximum) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return fallback;
+  }
+  return Math.min(parsed, maximum);
+}
+
 async function ensureAutoEnrollmentStorage(env) {
   await env.DB.batch([
     env.DB.prepare(`
@@ -485,8 +495,56 @@ async function ensureAutoEnrollmentStorage(env) {
     env.DB.prepare(`
       CREATE INDEX IF NOT EXISTS idx_node_numbers_public_key
       ON node_numbers(public_key)
+    `),
+    env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS auto_enrollment_windows (
+        window_key TEXT PRIMARY KEY,
+        created_count INTEGER NOT NULL DEFAULT 0 CHECK (created_count >= 0),
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
     `)
   ]);
+}
+
+async function consumeAutoEnrollmentSlot(env) {
+  const hourlyLimit = autoEnrollmentLimit(
+    env.AUTO_ENROLL_MAX_NEW_PER_HOUR,
+    AUTO_ENROLLMENT_DEFAULT_HOURLY_LIMIT,
+    100000
+  );
+  const nodeCap = autoEnrollmentLimit(
+    env.AUTO_ENROLL_MAX_NODES,
+    AUTO_ENROLLMENT_DEFAULT_NODE_CAP,
+    1000000
+  );
+  const total = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM nodes"
+  ).first();
+  if (Number(total?.count || 0) >= nodeCap) {
+    throw new ApiError(503, "auto_enrollment_capacity_reached");
+  }
+
+  const now = new Date();
+  const windowKey = now.toISOString().slice(0, 13);
+  const pruneBefore = new Date(now.getTime() - 48 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 13);
+  await env.DB.prepare(
+    "DELETE FROM auto_enrollment_windows WHERE window_key < ?"
+  ).bind(pruneBefore).run();
+
+  const slot = await env.DB.prepare(`
+    INSERT INTO auto_enrollment_windows (window_key, created_count, updated_at)
+    VALUES (?, 1, CURRENT_TIMESTAMP)
+    ON CONFLICT(window_key) DO UPDATE SET
+      created_count = auto_enrollment_windows.created_count + 1,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE auto_enrollment_windows.created_count < ?
+    RETURNING created_count
+  `).bind(windowKey, hourlyLimit).first();
+  if (!slot) {
+    throw new ApiError(429, "auto_enrollment_rate_limited");
+  }
 }
 
 function enrollmentResponse(nodeId, nodeNumber, status = "online", responseStatus = 201) {
@@ -521,7 +579,7 @@ async function enrollNode(request, env) {
 
   await ensureAutoEnrollmentStorage(env);
 
-  const existing = await env.DB.prepare(`
+  let existing = await env.DB.prepare(`
     SELECT n.node_id, n.status, nn.node_number
     FROM node_numbers AS nn
     JOIN nodes AS n ON n.node_id = nn.node_id
@@ -534,6 +592,33 @@ async function enrollNode(request, env) {
     return enrollmentResponse(existing.node_id, existing.node_number, existing.status, 200);
   }
 
+  const legacyNode = await env.DB.prepare(`
+    SELECT node_id, status
+    FROM nodes
+    WHERE public_key = ?
+  `).bind(publicKey).first();
+  if (legacyNode) {
+    if (legacyNode.status === "revoked") {
+      throw new ApiError(403, "node_revoked");
+    }
+    await env.DB.prepare(`
+      INSERT OR IGNORE INTO node_numbers (node_id, public_key)
+      VALUES (?, ?)
+    `).bind(legacyNode.node_id, publicKey).run();
+    existing = await env.DB.prepare(`
+      SELECT n.node_id, n.status, nn.node_number
+      FROM node_numbers AS nn
+      JOIN nodes AS n ON n.node_id = nn.node_id
+      WHERE nn.public_key = ?
+    `).bind(publicKey).first();
+    if (!existing?.node_number) {
+      throw new ApiError(500, "node_number_assignment_failed");
+    }
+    return enrollmentResponse(existing.node_id, existing.node_number, existing.status, 200);
+  }
+
+  await consumeAutoEnrollmentSlot(env);
+
   const nodeId = `node_${crypto.randomUUID()}`;
   try {
     await env.DB.batch([
@@ -542,16 +627,7 @@ async function enrollNode(request, env) {
           node_id, public_key, hostname, os_name, os_version,
           architecture, agent_version, status, capabilities_json
         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'online', ?)
-      `).bind(
-        nodeId,
-        publicKey,
-        hostname,
-        osName,
-        osVersion,
-        architecture,
-        agentVersion,
-        capabilitiesJson
-      ),
+      `).bind(nodeId, publicKey, hostname, osName, osVersion, architecture, agentVersion, capabilitiesJson),
       env.DB.prepare(`
         INSERT INTO node_numbers (node_id, public_key)
         VALUES (?, ?)
@@ -571,6 +647,9 @@ async function enrollNode(request, env) {
         WHERE nn.public_key = ?
       `).bind(publicKey).first();
       if (raced) {
+        if (raced.status === "revoked") {
+          throw new ApiError(403, "node_revoked");
+        }
         return enrollmentResponse(raced.node_id, raced.node_number, raced.status, 200);
       }
     }
@@ -1321,7 +1400,7 @@ async function authenticateArchitect(request, env) {
 
 async function architectOverview(request, env) {
   await authenticateArchitect(request, env);
-  await Promise.all([ensureReportStorage(env), ensureSessionStorage(env)]);
+  await Promise.all([ensureReportStorage(env), ensureSessionStorage(env), ensureAutoEnrollmentStorage(env)]);
 
   const [counts, nodesQuery, missionsQuery, commandsQuery, auditQuery] = await Promise.all([
     env.DB.prepare(
@@ -1333,10 +1412,11 @@ async function architectOverview(request, env) {
       "(SELECT COUNT(*) FROM architect_sessions) AS sessions"
     ).first(),
     env.DB.prepare(
-      "SELECT node_id, hostname, os_name, os_version, architecture, " +
-      "agent_version, status, cpu_percent, memory_percent, " +
-      "enrolled_at, last_seen_at FROM nodes " +
-      "ORDER BY last_seen_at DESC LIMIT 100"
+      "SELECT n.node_id, nn.node_number, n.hostname, n.os_name, n.os_version, n.architecture, " +
+      "n.agent_version, n.status, n.cpu_percent, n.memory_percent, " +
+      "n.enrolled_at, n.last_seen_at FROM nodes AS n " +
+      "LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id " +
+      "ORDER BY n.last_seen_at DESC LIMIT 100"
     ).all(),
     env.DB.prepare(
       "SELECT m.mission_id, m.title, m.mission_type, m.status, " +

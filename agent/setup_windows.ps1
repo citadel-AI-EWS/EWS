@@ -7,8 +7,8 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $PythonWingetId = "Python.Python.3.14"
-$ExpectedV1Sha256 = "69d7838bea16f2d0b1578a47f32af9bfe7b94c51b0a2eaf49803d7d0e8e30a5f"
-$ExpectedV2Sha256 = "8f7667ff675e1e5b5b964a77deb191eb25b84259cdd78367bd9df2bb9f4f2d24"
+$ExpectedV1Sha256 = "02b4afa121574217ec050a38502d58d9a27c6e6b473e7a67f64e16d225e0513d"
+$ExpectedV2Sha256 = "a78bffa05def286a356761a1ef3157c4f89cf9b0704b1784a97541a3708d3ed8"
 
 $ControllerUri = [System.Uri]$ControllerUrl
 $IsHttps = $ControllerUri.Scheme -eq "https"
@@ -80,8 +80,7 @@ function Get-RunningCitadelAgents([string]$AgentScriptPath, [string]$ConfigPathV
         }
     )
   } catch {
-    Write-Host "[CITADEL] Could not inspect running processes; startup will still be verified."
-    return @()
+    throw "[CITADEL] Could not inspect running CITADEL processes safely; refusing to start another copy."
   }
 }
 
@@ -226,12 +225,8 @@ if ($RunningAgents.Count -gt 0 -and $RestartRequired) {
 }
 
 if ($RunningAgents.Count -eq 0) {
-  Start-Process -FilePath $VenvPythonw -ArgumentList @(
-    $AgentScript,
-    "run",
-    "--config",
-    $ConfigPath
-  ) -WorkingDirectory $InstallRoot -WindowStyle Hidden
+  $RunArguments = '"' + $AgentScript + '" run --config "' + $ConfigPath + '"'
+  Start-Process -FilePath $VenvPythonw -ArgumentList $RunArguments -WorkingDirectory $InstallRoot -WindowStyle Hidden
   Start-Sleep -Seconds 1
   Write-Host "[CITADEL] Started one background agent process."
 } else {
@@ -242,7 +237,7 @@ $InstallState = @{
   node_id = $NodeId
   controller_url = $ControllerUrl.TrimEnd('/')
   install_root = $InstallRoot
-  agent_version = "0.3.2"
+  agent_version = "0.3.3"
   v1_sha256 = $ExpectedV1Sha256
   v2_sha256 = $ExpectedV2Sha256
   updated_at = [DateTime]::UtcNow.ToString("o")

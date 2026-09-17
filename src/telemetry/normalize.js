@@ -12,6 +12,7 @@ export const ALLOWED_EVENT_TYPES = new Set([
   "agent_start",
   "agent_stop",
   "node_enrolled",
+  "windows_sleep_inhibit",
   "cycle_error",
   "resource_guard",
   "assignment_rejected_local",
@@ -20,6 +21,11 @@ export const ALLOWED_EVENT_TYPES = new Set([
   "queued_results_flushed",
   "command_signature_rejected",
   "command_completed",
+  "agent_updated",
+  "agent_update_rolled_back",
+  "agent_update_healthcheck_passed",
+  "agent_update_manual_rollback",
+  "agent_restart_requested",
   "command_failure_ack_failed",
   "command_failed"
 ]);
