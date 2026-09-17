@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 import citadel_node_v1 as v1
 
-VERSION = "0.3.2"
+VERSION = "0.3.3"
 v1.VERSION = VERSION
 v1.USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 
@@ -35,6 +35,7 @@ ALLOWED_EVENTS = {
     "agent_start",
     "agent_stop",
     "node_enrolled",
+    "windows_sleep_inhibit",
     "cycle_error",
     "resource_guard",
     "assignment_rejected_local",
@@ -189,18 +190,21 @@ def self_test() -> int:
             "\n".join([
                 json.dumps({"ts": "2026-09-12T20:00:00+00:00", "event": "agent_start", "version": VERSION}),
                 json.dumps({"ts": "2026-09-12T20:00:01+00:00", "event": "resource_guard", "cpu_percent": 95.0}),
+                json.dumps({"ts": "2026-09-12T20:00:02+00:00", "event": "windows_sleep_inhibit", "enabled": True}),
             ]) + "\n",
             encoding="utf-8",
         )
         cursor = TelemetryCursor(log_path, root / "cursor.json")
         payloads: list[dict[str, Any]] = []
         sent = cursor.flush("node_test", payloads.append)
-        if sent != 2 or len(payloads) != 1:
+        if sent != 3 or len(payloads) != 1:
             raise RuntimeError("telemetry self-test failed: batch not uploaded")
         if cursor.flush("node_test", payloads.append) != 0:
             raise RuntimeError("telemetry self-test failed: cursor did not advance")
         if payloads[0]["events"][1]["level"] != "warn":
             raise RuntimeError("telemetry self-test failed: severity mapping")
+        if payloads[0]["events"][2]["event_type"] != "windows_sleep_inhibit":
+            raise RuntimeError("telemetry self-test failed: sleep inhibit event dropped")
     print("CITADEL v2 telemetry SELF TEST: PASS")
     return 0
 
