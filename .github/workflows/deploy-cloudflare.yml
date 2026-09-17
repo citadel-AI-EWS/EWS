@@ -1,12 +1,14 @@
 name: Deploy Cloudflare TEST
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
       confirm_test_deploy:
-        description: Type DEPLOY_TEST; this site is not approved for customer production.
+        description: Type DEPLOY_TEST to deploy the current main commit.
         required: true
         type: string
 
@@ -19,27 +21,35 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.event_name == 'push' || inputs.confirm_test_deploy == 'DEPLOY_TEST'
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.confirm_test_deploy == 'DEPLOY_TEST' ||
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: cloudflare-test
+    env:
+      DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Checkout exact CI-approved commit
+        uses: actions/checkout@v7
         with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: requirements-dev.txt
+          ref: ${{ env.DEPLOY_SHA }}
+
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
-      - run: sudo apt-get update && sudo apt-get install -y zip
-      - run: npm ci
-      - run: npm audit --audit-level=high
-      - run: python -m pip install --requirement requirements-dev.txt
-      - run: scripts/validate.sh
-      - run: scripts/build_site.sh
-      - name: Deploy TEST site
+          cache: npm
+
+      - name: Install pinned Node dependencies
+        run: npm ci
+
+      - name: Build immutable static site
+        run: scripts/build_site.sh
+
+      - name: Deploy TEST site and Worker
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -50,29 +60,19 @@ jobs:
         env:
           ARCHITECT_TOKEN_HASH: ${{ secrets.ARCHITECT_TOKEN_HASH }}
           CONTROLLER_COMMAND_PRIVATE_JWK: ${{ secrets.CONTROLLER_COMMAND_PRIVATE_JWK }}
-      - name: Verify TEST controls
+
+      - name: Verify deployed TEST against real endpoints
+        env:
+          CITADEL_BASE_URL: https://citadel-ai.init1.workers.dev
+          SMOKE_ATTEMPTS: "20"
+          SMOKE_DELAY_MS: "3000"
+        run: node scripts/smoke_test.mjs "$CITADEL_BASE_URL"
+
+      - name: Deployment summary
+        if: success()
         run: |
-          for attempt in $(seq 1 20); do
-            health="$(curl --fail --silent --show-error "https://citadel-ai.init1.workers.dev/api/health?deployment=${GITHUB_SHA}-${attempt}")" || true
-            hub="$(curl --fail --silent --show-error "https://citadel-ai.init1.workers.dev/api/v1/hub/nodes?deployment=${GITHUB_SHA}-${attempt}")" || true
-            root="$(curl --fail --silent --show-error "https://citadel-ai.init1.workers.dev/?deployment=${GITHUB_SHA}-${attempt}")" || true
-            if node -e '
-              const health = JSON.parse(process.argv[1]);
-              const hub = JSON.parse(process.argv[2]);
-              const root = process.argv[3];
-              const ready = health.ok &&
-                health.controller_signing === "ready" &&
-                health.report_storage === "ready" &&
-                health.session_storage === "ready" &&
-                health.telemetry_storage === "ready" &&
-                health.presence_storage === "ready" &&
-                hub.ok === true && Array.isArray(hub.nodes) &&
-                root.includes("נתונים אמיתיים בלבד") &&
-                !root.includes("ews-demo-has-project");
-              process.exit(ready ? 0 : 1);
-            ' "$health" "$hub" "$root"; then
-              exit 0
-            fi
-            sleep 3
-          done
-          exit 1
+          echo "### CITADEL Cloudflare TEST" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Commit: \`$DEPLOY_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- CI gate: passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Cloudflare deploy: passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Live smoke test: passed" >> "$GITHUB_STEP_SUMMARY"
