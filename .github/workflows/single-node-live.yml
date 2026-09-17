@@ -1,0 +1,30 @@
+name: Single live node test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/single_node_live_test.mjs"
+      - ".github/workflows/single-node-live.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  single-node:
+    name: Verify one real connected computer
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Syntax check
+        run: node --check scripts/single_node_live_test.mjs
+      - name: Test live Node 1
+        env:
+          CITADEL_BASE_URL: https://citadel-ai.init1.workers.dev
+          MAX_HEARTBEAT_AGE_SECONDS: "180"
+        run: node scripts/single_node_live_test.mjs
