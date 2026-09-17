@@ -4,173 +4,191 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>CITADEL — Live Hub</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'self'">
+  <title>CITADEL — Operations Hub</title>
   <style>
-    :root{font-family:Inter,system-ui,sans-serif;color:#eef4ff;background:#071018}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 20% 0,#173446,#071018 48%);padding:24px}main{max-width:1120px;margin:auto}.top{display:flex;justify-content:space-between;gap:20px;align-items:end}.brand{color:#72e4b4;font-weight:900;letter-spacing:.16em;font-size:13px}h1{font-size:clamp(34px,6vw,68px);line-height:.96;margin:14px 0}p{color:#9cb0bf}.status{display:flex;align-items:center;gap:9px}.dot{width:10px;height:10px;border-radius:50%;background:#55e6a5;box-shadow:0 0 18px #55e6a5}.summary,.auth{margin:24px 0 18px;padding:18px;border:1px solid #244453;border-radius:18px;background:#0c1b26}.summary b{font-size:28px}.auth{display:flex;gap:10px;align-items:end;flex-wrap:wrap}.auth label{flex:1;min-width:230px;color:#9cb0bf;font-size:13px}.auth input{width:100%;margin-top:7px;background:#07131c;color:#eef4ff;border:1px solid #315160;border-radius:12px;padding:12px}.btn{border:1px solid #315160;border-radius:12px;background:#122a38;color:#eef4ff;padding:11px 14px;cursor:pointer}.btn:hover{border-color:#72e4b4}.btn.good{background:#123d2e;border-color:#2a7f5b}.btn:disabled{opacity:.45;cursor:not-allowed}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}.node{padding:18px;border:1px solid #254654;border-radius:18px;background:#0d1c27;box-shadow:0 14px 34px #0005}.node.online{border-color:#267855}.node h2{margin:0 0 12px}.pill{display:inline-block;padding:5px 9px;border-radius:99px;background:#173544;color:#b9d9e7;font-size:12px}.online .pill{background:#124532;color:#8df3bd}.meta{margin-top:14px;color:#91a8b7;font-size:13px;line-height:1.7;white-space:pre-line}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.empty{padding:30px;border:1px dashed #355262;border-radius:18px;color:#9cb0bf;text-align:center}.notice{margin-top:16px;padding:14px;border-radius:14px;background:#0b1720;border:1px solid #254654;color:#9cb0bf;font-size:13px}.ok{color:#8df3bd}.warn{color:#ffd990}a{color:#8be8bc}footer{margin:32px 0;color:#6f8795;font-size:13px}@media(max-width:650px){.top{display:block}.status{margin-top:16px}}
+    :root{
+      font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      color:#e9f7f4;background:#050b0f;
+      --bg:#050b0f;--panel:#09141b;--panel2:#0c1b24;--line:#18333f;--line2:#245163;
+      --text:#e9f7f4;--muted:#82a0ac;--green:#5af2b0;--cyan:#55d7ff;--amber:#ffd27a;--red:#ff7f86;
+      --shadow:0 24px 70px #0008;
+    }
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;min-height:100vh;background:
+      radial-gradient(circle at 15% 0,#123342 0,transparent 34%),
+      radial-gradient(circle at 85% 10%,#0c2b25 0,transparent 26%),
+      linear-gradient(180deg,#061016 0,#050b0f 58%,#03070a 100%);color:var(--text);overflow-x:hidden}
+    body::before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.12;background-image:
+      linear-gradient(#6dd8ff0b 1px,transparent 1px),linear-gradient(90deg,#6dd8ff0b 1px,transparent 1px);background-size:34px 34px;mask-image:linear-gradient(to bottom,#000 0,#0008 60%,transparent 100%)}
+    body::after{content:"";position:fixed;inset:-40%;pointer-events:none;background:conic-gradient(from 180deg at 50% 50%,transparent 0 78%,#5af2b010 82%,transparent 86%);animation:sweep 18s linear infinite}
+    @keyframes sweep{to{transform:rotate(360deg)}}@keyframes pulse{50%{opacity:.45;transform:scale(.88)}}@keyframes scan{0%{transform:translateY(-120%)}100%{transform:translateY(120vh)}}@keyframes rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+    @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;scroll-behavior:auto!important;transition:none!important}}
+    button,input,select{font:inherit}.shell{width:min(1480px,calc(100% - 32px));margin:auto;padding:22px 0 54px;position:relative;z-index:1}
+    .scanline{position:fixed;left:0;right:0;top:0;height:90px;background:linear-gradient(to bottom,transparent,#55d7ff08,transparent);pointer-events:none;animation:scan 9s linear infinite;z-index:0}
+    .topbar{display:grid;grid-template-columns:1fr auto;gap:20px;align-items:center;padding:14px 16px;border:1px solid var(--line);border-radius:16px;background:#071118d9;backdrop-filter:blur(14px);box-shadow:0 10px 32px #0005;position:sticky;top:10px;z-index:20}
+    .brandrow{display:flex;align-items:center;gap:12px;min-width:0}.sigil{width:38px;height:38px;border:1px solid #2b6372;border-radius:50%;display:grid;place-items:center;position:relative;box-shadow:inset 0 0 24px #55d7ff12}.sigil::before,.sigil::after{content:"";position:absolute;border:1px solid #55d7ff55;border-radius:50%}.sigil::before{width:22px;height:22px}.sigil::after{width:6px;height:6px;background:var(--green);border:0;box-shadow:0 0 18px var(--green);animation:pulse 1.7s ease-in-out infinite}.brand{font-size:12px;font-weight:900;letter-spacing:.23em;color:var(--green);white-space:nowrap}.subbrand{font-size:12px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .toptools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}.chip,.lang button{border:1px solid var(--line);background:#0a171f;color:var(--muted);border-radius:999px;padding:7px 10px;font-size:12px}.chip strong{color:var(--text);font-weight:700}.liveDot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 12px var(--green);margin-inline-end:7px}.lang{display:flex;gap:4px}.lang button{cursor:pointer;padding:6px 9px}.lang button.active{border-color:#2e7180;color:var(--cyan);background:#0c2028}
+    .hero{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(310px,.65fr);gap:18px;margin:20px 0}.heroCard,.auth,.panel,.node,.metric,.sshPanel{border:1px solid var(--line);background:linear-gradient(180deg,#0a161edb,#071117e8);border-radius:22px;box-shadow:var(--shadow)}
+    .heroCard{padding:28px;position:relative;overflow:hidden;min-height:245px}.heroCard::after{content:"";position:absolute;width:340px;height:340px;border:1px solid #55d7ff17;border-radius:50%;right:-120px;top:-110px;box-shadow:0 0 0 50px #55d7ff08,0 0 0 100px #55d7ff05}.eyebrow{font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--cyan);font-weight:800}.hero h1{font-size:clamp(42px,6vw,84px);line-height:.9;letter-spacing:-.055em;margin:18px 0 16px;max-width:900px}.hero p{max-width:760px;color:var(--muted);line-height:1.65;margin:0}.heroStatus{display:flex;gap:10px;flex-wrap:wrap;margin-top:24px}.statusPill{padding:8px 11px;border:1px solid var(--line2);border-radius:10px;background:#0a1b22;color:#b7d1d9;font-size:12px}.statusPill.ok{color:#96f3c5;border-color:#1e6149}.statusPill.warn{color:#ffd999;border-color:#5e4c21}.statusPill.bad{color:#ff9da2;border-color:#6b2d33}
+    .auth{padding:18px;display:flex;flex-direction:column;gap:12px}.authTitle{display:flex;justify-content:space-between;align-items:center;gap:12px}.authTitle strong{font-size:14px}.authTitle span{font-size:11px;color:var(--muted)}.field label{display:block;color:var(--muted);font-size:12px;margin-bottom:7px}.field input{width:100%;border:1px solid var(--line2);border-radius:12px;background:#041016;color:var(--text);padding:12px 13px;outline:none}.field input:focus{border-color:#3d8fa1;box-shadow:0 0 0 3px #55d7ff10}.btnrow{display:flex;gap:8px;flex-wrap:wrap}.btn{border:1px solid var(--line2);border-radius:11px;background:#0d222c;color:var(--text);padding:10px 12px;cursor:pointer;transition:.18s ease}.btn:hover{transform:translateY(-1px);border-color:#3e8294;background:#102a35}.btn.good{background:#0c3025;border-color:#236346;color:#9bf1c7}.btn.cyan{background:#0b2932;border-color:#225f6e;color:#9feaff}.btn.warn{background:#32280e;border-color:#65501b;color:#ffe0a0}.btn.danger{background:#321419;border-color:#6f2d35;color:#ffb0b4}.btn:disabled{opacity:.38;cursor:not-allowed;transform:none}.micro{font-size:11px;color:#6f8d98;line-height:1.5}
+    .metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:0 0 18px}.metric{padding:16px;min-height:102px;animation:rise .28s ease both}.metricLabel{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#6f909d}.metricValue{font-size:32px;font-weight:850;letter-spacing:-.035em;margin-top:10px}.metricSub{font-size:11px;color:var(--muted);margin-top:5px}
+    .toolbar{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:12px;align-items:center;margin:0 0 18px}.search{position:relative}.search input{width:100%;padding:12px 14px 12px 40px;background:#07141b;border:1px solid var(--line);border-radius:14px;color:var(--text);outline:none}.search::before{content:"⌕";position:absolute;left:14px;top:9px;color:var(--cyan);font-size:20px}.actionsTop{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+    .layout{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(320px,.65fr);gap:18px}.panel{padding:18px;min-width:0}.panelHead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.panelHead h2{margin:0;font-size:16px}.panelHead span{font-size:11px;color:var(--muted)}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}.node{padding:16px;position:relative;overflow:hidden;animation:rise .32s ease both}.node::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:#35515e}.node.online::before{background:var(--green);box-shadow:0 0 20px #5af2b055}.node.stale::before{background:var(--amber)}.node.revoked::before{background:var(--red)}.nodeTop{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}.nodeName{font-size:17px;font-weight:800;overflow-wrap:anywhere}.nodeId{font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:#60808c;margin-top:4px;overflow-wrap:anywhere}.badge{font-size:10px;border:1px solid var(--line2);border-radius:999px;padding:5px 7px;color:#a9c3cc;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap}.badge.online{border-color:#24684e;color:#8cf0bf}.badge.stale{border-color:#6b5520;color:#ffd487}.badge.revoked{border-color:#6b2e35;color:#ff9ba0}.nodeMetrics{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}.nodeMetric{border:1px solid #17313d;border-radius:12px;padding:10px;background:#071219}.nodeMetric span{display:block;color:#6e8d99;font-size:10px;text-transform:uppercase;letter-spacing:.08em}.nodeMetric b{display:block;margin-top:5px;font-size:16px}.bar{height:4px;background:#102730;border-radius:999px;overflow:hidden;margin-top:7px}.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--green),var(--cyan));border-radius:inherit;transition:width .35s ease}.nodeMeta{display:grid;grid-template-columns:98px 1fr;gap:5px 10px;font-size:12px;line-height:1.45}.nodeMeta dt{color:#678795}.nodeMeta dd{margin:0;color:#b7ccd4;overflow-wrap:anywhere}.nodeActions{display:flex;gap:7px;flex-wrap:wrap;margin-top:14px}.nodeActions .btn{padding:8px 10px;font-size:11px}
+    .empty{grid-column:1/-1;border:1px dashed #24434f;border-radius:16px;padding:32px;text-align:center;color:var(--muted);background:#071119}.sideStack{display:flex;flex-direction:column;gap:18px}.timeline{display:flex;flex-direction:column;gap:8px;max-height:380px;overflow:auto;padding-right:4px}.event{border:1px solid #17313d;border-radius:12px;padding:10px;background:#071219}.eventTop{display:flex;justify-content:space-between;gap:8px;font-size:11px}.eventTop strong{color:#cfe0e5}.eventTop time{color:#627f8a}.eventText{font-size:11px;color:#7f9ca7;margin-top:5px;overflow-wrap:anywhere}.event.ok{border-color:#1d4d3b}.event.warn{border-color:#5a481e}
+    .sshPanel{padding:18px}.sshState{display:flex;align-items:center;gap:9px;margin:8px 0 14px}.light{width:9px;height:9px;border-radius:50%;background:#55656b}.light.ready{background:var(--green);box-shadow:0 0 14px var(--green)}.sshGrid{display:grid;grid-template-columns:1fr 1fr;gap:9px}.sshGrid .field:first-child{grid-column:1/-1}.cmd{margin-top:10px;padding:11px;border:1px solid #17333e;border-radius:12px;background:#030b0f;color:#9feaff;font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere;min-height:54px}.notice{padding:12px;border-radius:12px;border:1px solid #2c4622;background:#15200e;color:#d7e8b8;font-size:11px;line-height:1.55;margin-top:10px}.notice.warn{border-color:#5e4b20;background:#211b0b;color:#ffe0a0}
+    .footer{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:20px;color:#5f7b86;font-size:11px}.footer a{color:#83dfff;text-decoration:none}.toast{position:fixed;right:22px;bottom:22px;z-index:50;min-width:260px;max-width:420px;border:1px solid var(--line2);background:#07141bea;border-radius:14px;padding:12px 14px;box-shadow:var(--shadow);transform:translateY(20px);opacity:0;pointer-events:none;transition:.2s ease}.toast.show{transform:none;opacity:1}.toast.ok{border-color:#27634c}.toast.bad{border-color:#6b3038}.toast strong{display:block;font-size:12px}.toast span{display:block;font-size:11px;color:var(--muted);margin-top:4px}
+    @media(max-width:1100px){.metrics{grid-template-columns:repeat(3,1fr)}.layout,.hero{grid-template-columns:1fr}.topbar{position:relative;top:0}}@media(max-width:720px){.shell{width:min(100% - 18px,1480px);padding-top:9px}.topbar{grid-template-columns:1fr}.toptools{justify-content:flex-start}.heroCard{padding:20px}.metrics{grid-template-columns:1fr 1fr}.toolbar{grid-template-columns:1fr}.actionsTop{justify-content:flex-start}.grid{grid-template-columns:1fr}.sshGrid{grid-template-columns:1fr}.sshGrid .field:first-child{grid-column:auto}.nodeMeta{grid-template-columns:86px 1fr}.footer{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
 <body>
-  <main>
-    <div class="top"><div><div class="brand">CITADEL / LIVE HUB</div><h1>Подключённые<br>компьютеры</h1></div><div class="status"><span class="dot"></span><span id="refreshState">Связь с Controller</span></div></div>
-    <p>Здесь показываются только данные, полученные от реально зарегистрированных узлов. IP и управление доступны только в защищённом режиме.</p>
+  <div class="scanline"></div>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brandrow">
+        <div class="sigil" aria-hidden="true"></div>
+        <div><div class="brand">CITADEL / OPERATIONS HUB</div><div class="subbrand" id="refreshState">Controller link initializing…</div></div>
+      </div>
+      <div class="toptools">
+        <span class="chip"><span class="liveDot"></span><strong id="clock">--:--:--</strong></span>
+        <span class="chip" id="networkChip">NETWORK <strong>CHECKING</strong></span>
+        <span class="chip" id="modeChip">MODE <strong>PUBLIC</strong></span>
+        <div class="lang" aria-label="Language"><button type="button" data-lang="ru" class="active">RU</button><button type="button" data-lang="he">HE</button><button type="button" data-lang="en">EN</button></div>
+      </div>
+    </header>
 
-    <div class="auth">
-      <label>Architect token
-        <input id="architectToken" type="password" autocomplete="current-password" placeholder="Введите токен для IP и управления">
-      </label>
-      <button id="loginButton" class="btn good" type="button">Защищённый режим</button>
-      <button id="logoutButton" class="btn" type="button" hidden>Выйти</button>
+    <section class="hero">
+      <div class="heroCard">
+        <div class="eyebrow" data-i18n="eyebrow">REAL-TIME NODE CONTROL</div>
+        <h1 data-i18n="title">Живой центр управления.</h1>
+        <p data-i18n="subtitle">Только реальные зарегистрированные компьютеры. Никаких демонстрационных счётчиков: состояние, IP, команды и обновления берутся из Controller.</p>
+        <div class="heroStatus">
+          <span class="statusPill" id="controllerStatus">CONTROLLER — CHECKING</span>
+          <span class="statusPill" id="presenceStatus">PRESENCE — LOCKED</span>
+          <span class="statusPill" id="releaseStatus">RELEASE — LOCKED</span>
+        </div>
+      </div>
+      <aside class="auth">
+        <div class="authTitle"><strong data-i18n="secureAccess">Architect secure access</strong><span>Bearer / SHA-256 verified</span></div>
+        <div class="field"><label for="architectToken" data-i18n="tokenLabel">Architect token</label><input id="architectToken" type="password" autocomplete="current-password" placeholder="••••••••••••"></div>
+        <div class="btnrow"><button id="loginButton" class="btn good" type="button" data-i18n="secureMode">Защищённый режим</button><button id="logoutButton" class="btn" type="button" hidden data-i18n="logout">Выйти</button></div>
+        <div class="micro" data-i18n="authHint">IP, команды, audit и обновление агента доступны только после авторизации.</div>
+      </aside>
+    </section>
+
+    <section class="metrics" aria-label="Live metrics">
+      <article class="metric"><div class="metricLabel" data-i18n="online">Online</div><div class="metricValue" id="onlineCount">0</div><div class="metricSub" data-i18n="onlineSub">active nodes now</div></article>
+      <article class="metric"><div class="metricLabel" data-i18n="registered">Registered</div><div class="metricValue" id="totalCount">0</div><div class="metricSub" data-i18n="registeredSub">real enrolled nodes</div></article>
+      <article class="metric"><div class="metricLabel" data-i18n="commands">Commands</div><div class="metricValue" id="commandCount">—</div><div class="metricSub" data-i18n="commandsSub">recent controller queue</div></article>
+      <article class="metric"><div class="metricLabel" data-i18n="release">Release</div><div class="metricValue" id="releaseVersion">—</div><div class="metricSub" data-i18n="releaseSub">signed agent release</div></article>
+      <article class="metric"><div class="metricLabel" data-i18n="mode">Mode</div><div class="metricValue" id="modeLabel">PUBLIC</div><div class="metricSub" data-i18n="modeSub">privileged data locked</div></article>
+    </section>
+
+    <section class="toolbar">
+      <div class="search"><input id="nodeSearch" type="search" autocomplete="off" placeholder="Search hostname, node ID, IP, OS…" aria-label="Search nodes"></div>
+      <div class="actionsTop">
+        <button id="refreshButton" class="btn cyan" type="button" data-i18n="refresh">Обновить сейчас</button>
+        <button id="exportButton" class="btn" type="button" disabled data-i18n="export">Экспорт snapshot</button>
+        <button id="updateAllButton" class="btn good" type="button" disabled data-i18n="updateAll">Обновить все</button>
+        <button id="pauseAllButton" class="btn warn" type="button" disabled data-i18n="pauseAll">Пауза всем</button>
+      </div>
+    </section>
+
+    <div class="layout">
+      <section class="panel">
+        <div class="panelHead"><h2 data-i18n="nodesTitle">Nodes / компьютеры</h2><span id="nodeSummary">0 visible</span></div>
+        <div id="nodes" class="grid" aria-live="polite"></div>
+      </section>
+
+      <aside class="sideStack">
+        <section class="sshPanel">
+          <div class="panelHead"><h2>SSH / ZERO TRUST</h2><span id="sshMode">NOT CONFIGURED</span></div>
+          <div class="sshState"><span id="sshLight" class="light"></span><strong id="sshStateText" data-i18n="sshNotReady">Secure tunnel not configured</strong></div>
+          <div class="sshGrid">
+            <div class="field"><label for="sshHost" data-i18n="sshHost">Cloudflare Access hostname</label><input id="sshHost" type="text" inputmode="url" placeholder="ssh.example.com"></div>
+            <div class="field"><label for="sshUser" data-i18n="sshUser">SSH user</label><input id="sshUser" type="text" autocomplete="username" placeholder="operator"></div>
+          </div>
+          <div id="sshCommand" class="cmd">cloudflared Access hostname is required.</div>
+          <div class="btnrow" style="margin-top:9px"><button id="copySshButton" class="btn" type="button" disabled data-i18n="copyCommand">Копировать команду</button><button id="openSshButton" class="btn cyan" type="button" disabled data-i18n="browserSsh">Browser SSH</button></div>
+          <div id="sshNotice" class="notice warn" data-i18n="sshNotice">SSH не открывает порт 22 в интернет. Нужны Cloudflare Tunnel + Access и работающий SSH server на node.</div>
+        </section>
+
+        <section class="panel">
+          <div class="panelHead"><h2 data-i18n="commandFeed">Command feed</h2><span id="pendingCount">0 pending</span></div>
+          <div id="commandTimeline" class="timeline"><div class="empty" data-i18n="secureRequired">Secure mode required.</div></div>
+        </section>
+
+        <section class="panel">
+          <div class="panelHead"><h2 data-i18n="auditFeed">Audit feed</h2><span>server events</span></div>
+          <div id="auditTimeline" class="timeline"><div class="empty" data-i18n="secureRequired">Secure mode required.</div></div>
+        </section>
+      </aside>
     </div>
 
-    <div class="summary"><b id="onlineCount">0</b> online · <span id="totalCount">0</span> зарегистрировано · <span id="modeLabel">публичный просмотр</span></div>
-    <section id="nodes" class="grid" aria-live="polite"></section>
-    <div id="sshNotice" class="notice">SSH: пока не настроен. CITADEL не будет автоматически открывать порт 22 в интернет. Для реального SSH нужен защищённый туннель (Cloudflare Access/Tunnel) и отдельная авторизация.</div>
-    <footer>Обновление каждые 10 секунд · <a href="/architect/">Панель архитектора</a></footer>
+    <footer class="footer"><span id="footerState">Auto-refresh every 10 seconds · real controller data only</span><span><a href="/architect/" data-i18n="architectPanel">Architect panel</a> · <a href="/architect/logs/" data-i18n="logs">Logs</a></span></footer>
   </main>
+  <div id="toast" class="toast"><strong id="toastTitle"></strong><span id="toastText"></span></div>
+
   <script>
-    const nodes = document.getElementById("nodes");
-    const tokenInput = document.getElementById("architectToken");
-    const loginButton = document.getElementById("loginButton");
-    const logoutButton = document.getElementById("logoutButton");
-    let architectToken = sessionStorage.getItem("citadelArchitectToken") || "";
-    let releaseVersion = "";
+    const $ = (id) => document.getElementById(id);
+    const nodesEl = $("nodes"), tokenInput = $("architectToken"), loginButton = $("loginButton"), logoutButton = $("logoutButton");
+    const searchInput = $("nodeSearch"), updateAllButton = $("updateAllButton"), pauseAllButton = $("pauseAllButton"), exportButton = $("exportButton");
+    let architectToken = "", releaseVersion = "", lastOverview = null, lastPresence = [], lastPublic = [], refreshBusy = false, lang = localStorage.getItem("citadelHubLang") || "ru";
 
-    const escapeText = (value) => String(value ?? "—");
-    const setState = (text) => { document.getElementById("refreshState").textContent = text; };
+    const I18N = {
+      ru:{eyebrow:"REAL-TIME NODE CONTROL",title:"Живой центр управления.",subtitle:"Только реальные зарегистрированные компьютеры. Никаких демонстрационных счётчиков: состояние, IP, команды и обновления берутся из Controller.",secureAccess:"Architect secure access",tokenLabel:"Architect token",secureMode:"Защищённый режим",logout:"Выйти",authHint:"IP, команды, audit и обновление агента доступны только после авторизации.",online:"Online",onlineSub:"active nodes now",registered:"Registered",registeredSub:"real enrolled nodes",commands:"Commands",commandsSub:"recent controller queue",release:"Release",releaseSub:"signed agent release",mode:"Mode",modeSub:"privileged data locked",refresh:"Обновить сейчас",export:"Экспорт snapshot",updateAll:"Обновить все",pauseAll:"Пауза всем",nodesTitle:"Nodes / компьютеры",sshNotReady:"Secure tunnel not configured",sshHost:"Cloudflare Access hostname",sshUser:"SSH user",copyCommand:"Копировать команду",browserSsh:"Browser SSH",sshNotice:"SSH не открывает порт 22 в интернет. Нужны Cloudflare Tunnel + Access и работающий SSH server на node.",commandFeed:"Command feed",auditFeed:"Audit feed",secureRequired:"Secure mode required.",architectPanel:"Architect panel",logs:"Logs"},
+      he:{eyebrow:"REAL-TIME NODE CONTROL",title:"מרכז שליטה חי.",subtitle:"רק מחשבים רשומים אמיתיים. ללא מונים מדומים: מצב, IP, פקודות ועדכונים מגיעים ישירות מה-Controller.",secureAccess:"גישה מאובטחת ל-Architect",tokenLabel:"Architect token",secureMode:"מצב מאובטח",logout:"יציאה",authHint:"IP, פקודות, audit ועדכון agent זמינים רק לאחר אימות.",online:"מחוברים",onlineSub:"nodes פעילים עכשיו",registered:"רשומים",registeredSub:"nodes שנרשמו באמת",commands:"פקודות",commandsSub:"תור פקודות אחרונות",release:"גרסה",releaseSub:"גרסת agent חתומה",mode:"מצב",modeSub:"מידע מורשה נעול",refresh:"רענן עכשיו",export:"ייצוא snapshot",updateAll:"עדכן את כולם",pauseAll:"עצור את כולם",nodesTitle:"Nodes / מחשבים",sshNotReady:"מנהרת SSH מאובטחת עדיין לא מוגדרת",sshHost:"Cloudflare Access hostname",sshUser:"משתמש SSH",copyCommand:"העתק פקודה",browserSsh:"SSH בדפדפן",sshNotice:"SSH לא פותח את פורט 22 לאינטרנט. נדרשים Cloudflare Tunnel + Access ושרת SSH פעיל ב-node.",commandFeed:"תור פקודות",auditFeed:"Audit",secureRequired:"נדרש מצב מאובטח.",architectPanel:"Architect panel",logs:"Logs"},
+      en:{eyebrow:"REAL-TIME NODE CONTROL",title:"Live operations center.",subtitle:"Only real registered computers. No demo counters: status, IP, commands and updates come directly from the Controller.",secureAccess:"Architect secure access",tokenLabel:"Architect token",secureMode:"Secure mode",logout:"Sign out",authHint:"IP, commands, audit and agent updates are available only after authentication.",online:"Online",onlineSub:"active nodes now",registered:"Registered",registeredSub:"real enrolled nodes",commands:"Commands",commandsSub:"recent controller queue",release:"Release",releaseSub:"signed agent release",mode:"Mode",modeSub:"privileged data locked",refresh:"Refresh now",export:"Export snapshot",updateAll:"Update all",pauseAll:"Pause all",nodesTitle:"Nodes / computers",sshNotReady:"Secure tunnel not configured",sshHost:"Cloudflare Access hostname",sshUser:"SSH user",copyCommand:"Copy command",browserSsh:"Browser SSH",sshNotice:"SSH does not expose port 22 to the Internet. Cloudflare Tunnel + Access and a running SSH server on the node are required.",commandFeed:"Command feed",auditFeed:"Audit feed",secureRequired:"Secure mode required.",architectPanel:"Architect panel",logs:"Logs"}
+    };
+    function applyLanguage(next){lang=I18N[next]?next:"ru";localStorage.setItem("citadelHubLang",lang);document.documentElement.lang=lang;document.documentElement.dir=lang==="he"?"rtl":"ltr";document.querySelectorAll("[data-lang]").forEach(b=>b.classList.toggle("active",b.dataset.lang===lang));document.querySelectorAll("[data-i18n]").forEach(el=>{const k=el.dataset.i18n;if(I18N[lang][k])el.textContent=I18N[lang][k]});searchInput.placeholder=lang==="he"?"חיפוש לפי hostname, node ID, IP, מערכת…":lang==="en"?"Search hostname, node ID, IP, OS…":"Поиск hostname, node ID, IP, OS…";renderCurrent()}
+    document.querySelectorAll("[data-lang]").forEach(b=>b.addEventListener("click",()=>applyLanguage(b.dataset.lang)));
 
-    async function api(path, options = {}) {
-      const headers = new Headers(options.headers || {});
-      if (architectToken) headers.set("authorization", `Bearer ${architectToken}`);
-      const response = await fetch(path, {...options, headers, cache:"no-store"});
-      let data = {};
-      try { data = await response.json(); } catch { data = {}; }
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-      return data;
-    }
+    const esc=(v)=>String(v??"—");
+    function toast(title,text,type="ok"){const el=$("toast");$("toastTitle").textContent=title;$("toastText").textContent=text||"";el.className=`toast show ${type}`;clearTimeout(toast.timer);toast.timer=setTimeout(()=>el.className="toast",2800)}
+    function setState(text){$("refreshState").textContent=text}
+    function relativeTime(value){if(!value)return"—";const t=Date.parse(value.endsWith?.("Z")||/[+-]\d\d:\d\d$/.test(value)?value:value.replace(" ","T")+"Z");if(!Number.isFinite(t))return esc(value);const sec=Math.max(0,Math.floor((Date.now()-t)/1000));if(sec<10)return lang==="he"?"עכשיו":lang==="en"?"now":"сейчас";if(sec<60)return `${sec}s`;const m=Math.floor(sec/60);if(m<60)return `${m}m`;const h=Math.floor(m/60);if(h<24)return `${h}h`;return `${Math.floor(h/24)}d`}
+    function parseTimestamp(value){const raw=String(value||"").trim();if(!raw)return NaN;const normalized=raw.replace(" ","T");const hasZone=/(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized);return Date.parse(hasZone?normalized:`${normalized}Z`)}
+    function freshness(node){if(node.status==="revoked")return"revoked";const t=parseTimestamp(node.last_seen_at);if(Number.isFinite(t)&&Date.now()-t>120000)return"stale";return node.status==="online"?"online":"stale"}
+    function pct(v){const n=Number(v);return Number.isFinite(n)?Math.max(0,Math.min(100,n)):0}
+    function safeHost(value){const host=String(value||"").trim().toLowerCase();return /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(host)&&host.includes(".")?host:""}
+    function safeUser(value){const u=String(value||"").trim();return /^[a-zA-Z0-9._-]{1,64}$/.test(u)?u:""}
 
-    function publicCard(node) {
-      const el = document.createElement("article");
-      el.className = `node ${node.status === "online" ? "online" : ""}`;
-      const title = document.createElement("h2"); title.textContent = node.display_name;
-      const pill = document.createElement("span"); pill.className = "pill"; pill.textContent = node.status;
-      const meta = document.createElement("div"); meta.className = "meta";
-      meta.textContent = `Агент: ${escapeText(node.agent_version)}\nПоследняя связь: ${escapeText(node.last_seen_at)}`;
-      el.append(title, pill, meta); return el;
-    }
+    async function api(path,options={}){const headers=new Headers(options.headers||{});if(architectToken)headers.set("authorization",`Bearer ${architectToken}`);const response=await fetch(path,{...options,headers,cache:"no-store"});let data={};try{data=await response.json()}catch{}if(!response.ok)throw new Error(data.error||`HTTP ${response.status}`);return data}
 
-    function secureCard(node, presence, commands) {
-      const el = document.createElement("article");
-      el.className = `node ${node.status === "online" ? "online" : ""}`;
-      const title = document.createElement("h2"); title.textContent = node.hostname || node.node_id;
-      const pill = document.createElement("span"); pill.className = "pill"; pill.textContent = node.status;
-      const meta = document.createElement("div"); meta.className = "meta";
-      const ip = presence?.public_ip || "ожидаем следующий heartbeat";
-      meta.textContent = [
-        `IP: ${ip}`,
-        `OS: ${escapeText(node.os_name)} ${escapeText(node.os_version)}`,
-        `Архитектура: ${escapeText(node.architecture)}`,
-        `CPU: ${node.cpu_percent ?? "—"}% · RAM: ${node.memory_percent ?? "—"}%`,
-        `Агент: ${escapeText(node.agent_version)}${releaseVersion ? ` · актуальная ${releaseVersion}` : ""}`,
-        `Последняя связь: ${escapeText(node.last_seen_at)}`
-      ].join("\n");
-      const actions = document.createElement("div"); actions.className = "actions";
-      const update = document.createElement("button"); update.className = "btn good"; update.type = "button";
-      const pending = commands.some(command => command.node_id === node.node_id && ["pending","accepted"].includes(command.status));
-      update.textContent = pending ? "Команда выполняется…" : "Обновить агент";
-      update.disabled = pending || node.status === "revoked";
-      update.addEventListener("click", () => sendUpdate(node.node_id, update));
-      actions.append(update);
-      if (presence?.public_ip) {
-        const copy = document.createElement("button"); copy.className = "btn"; copy.type = "button"; copy.textContent = "Копировать IP";
-        copy.addEventListener("click", async () => {
-          await navigator.clipboard.writeText(presence.public_ip);
-          copy.textContent = "IP скопирован";
-          setTimeout(() => { copy.textContent = "Копировать IP"; }, 1200);
-        });
-        actions.append(copy);
-      }
-      el.append(title, pill, meta, actions); return el;
-    }
+    function publicCard(node){const el=document.createElement("article");const state=freshness(node);el.className=`node ${state}`;el.dataset.search=`${node.display_name||""} ${node.agent_version||""} ${node.status||""}`.toLowerCase();el.innerHTML=`<div class="nodeTop"><div><div class="nodeName"></div><div class="nodeId"></div></div><span class="badge ${state}"></span></div><dl class="nodeMeta"><dt>AGENT</dt><dd></dd><dt>LAST SEEN</dt><dd></dd></dl>`;el.querySelector(".nodeName").textContent=node.display_name||`Node ${node.node_number}`;el.querySelector(".nodeId").textContent=`#${esc(node.node_number)}`;el.querySelector(".badge").textContent=state;const dds=el.querySelectorAll("dd");dds[0].textContent=esc(node.agent_version);dds[1].textContent=`${relativeTime(node.last_seen_at)} · ${esc(node.last_seen_at)}`;return el}
 
-    async function sendUpdate(nodeId, button) {
-      if (!confirm(`Отправить подписанную команду обновления на ${nodeId}?`)) return;
-      button.disabled = true;
-      button.textContent = "Отправляю…";
-      try {
-        await api(`/api/v1/architect/nodes/${encodeURIComponent(nodeId)}/commands`, {
-          method:"POST",
-          headers:{"content-type":"application/json"},
-          body:JSON.stringify({command_type:"update"})
-        });
-        button.textContent = "Команда отправлена";
-        setState("Обновление поставлено в очередь");
-        await refreshSecure();
-      } catch (error) {
-        button.disabled = false;
-        button.textContent = "Обновить агент";
-        setState(`Ошибка обновления: ${error.message}`);
-      }
-    }
+    function secureCard(node,presence,commands){const el=document.createElement("article"),state=freshness(node),ip=presence?.public_ip||"—";el.className=`node ${state}`;el.dataset.search=`${node.hostname||""} ${node.node_id||""} ${ip} ${node.os_name||""} ${node.os_version||""} ${node.agent_version||""}`.toLowerCase();const pending=commands.some(c=>c.node_id===node.node_id&&["pending","accepted"].includes(c.status));const current=releaseVersion&&node.agent_version===releaseVersion;el.innerHTML=`<div class="nodeTop"><div><div class="nodeName"></div><div class="nodeId"></div></div><span class="badge ${state}"></span></div><div class="nodeMetrics"><div class="nodeMetric"><span>CPU</span><b class="cpu"></b><div class="bar"><i class="cpuBar"></i></div></div><div class="nodeMetric"><span>RAM</span><b class="ram"></b><div class="bar"><i class="ramBar"></i></div></div></div><dl class="nodeMeta"><dt>IP</dt><dd class="ip"></dd><dt>OS</dt><dd class="os"></dd><dt>ARCH</dt><dd class="arch"></dd><dt>AGENT</dt><dd class="agent"></dd><dt>LAST SEEN</dt><dd class="seen"></dd></dl><div class="nodeActions"></div>`;
+      el.querySelector(".nodeName").textContent=node.hostname||node.node_id;el.querySelector(".nodeId").textContent=node.node_id;el.querySelector(".badge").textContent=state;el.querySelector(".cpu").textContent=node.cpu_percent==null?"—":`${Number(node.cpu_percent).toFixed(1)}%`;el.querySelector(".ram").textContent=node.memory_percent==null?"—":`${Number(node.memory_percent).toFixed(1)}%`;el.querySelector(".cpuBar").style.width=`${pct(node.cpu_percent)}%`;el.querySelector(".ramBar").style.width=`${pct(node.memory_percent)}%`;el.querySelector(".ip").textContent=ip;el.querySelector(".os").textContent=`${esc(node.os_name)} ${esc(node.os_version)}`;el.querySelector(".arch").textContent=esc(node.architecture);el.querySelector(".agent").textContent=`${esc(node.agent_version)}${releaseVersion?current?" · CURRENT":` · target ${releaseVersion}`:""}`;el.querySelector(".seen").textContent=`${relativeTime(node.last_seen_at)} · ${esc(node.last_seen_at)}`;
+      const actions=el.querySelector(".nodeActions");const add=(label,cls,fn,disabled=false)=>{const b=document.createElement("button");b.type="button";b.className=`btn ${cls||""}`;b.textContent=label;b.disabled=disabled;b.addEventListener("click",fn);actions.append(b);return b};
+      add(lang==="he"?"אבחון":lang==="en"?"Diagnostics":"Диагностика","cyan",()=>sendDiagnostic(node.node_id));
+      add(current?(lang==="he"?"מעודכן":lang==="en"?"Up to date":"Актуально"):(lang==="he"?"עדכון":lang==="en"?"Update":"Обновить"),"good",()=>sendCommand(node.node_id,"update"),pending||current||node.status==="revoked");
+      if(node.status==="paused")add(lang==="he"?"המשך":lang==="en"?"Resume":"Продолжить","",()=>sendCommand(node.node_id,"resume"),pending);else add(lang==="he"?"השהה":lang==="en"?"Pause":"Пауза","warn",()=>sendCommand(node.node_id,"pause"),pending||node.status==="revoked");
+      if(presence?.public_ip)add(lang==="he"?"העתק IP":lang==="en"?"Copy IP":"Копировать IP","",()=>navigator.clipboard.writeText(presence.public_ip).then(()=>toast("IP",presence.public_ip)));
+      add("SSH","",()=>focusSsh(node),!safeHost($("sshHost").value));
+      return el}
 
-    function render(items) {
-      nodes.replaceChildren(...items);
-      if (!items.length) {
-        const empty=document.createElement("div"); empty.className="empty"; empty.textContent="Узлы пока не подключены."; nodes.append(empty);
-      }
-    }
+    function render(items){const q=searchInput.value.trim().toLowerCase();const visible=q?items.filter(el=>el.dataset.search.includes(q)):items;nodesEl.replaceChildren(...visible);if(!visible.length){const empty=document.createElement("div");empty.className="empty";empty.textContent=q?(lang==="he"?"לא נמצאו nodes.":lang==="en"?"No nodes match the filter.":"По фильтру ничего не найдено."):(lang==="he"?"אין nodes רשומים כרגע.":lang==="en"?"No registered nodes yet.":"Зарегистрированных узлов пока нет.");nodesEl.append(empty)}$("nodeSummary").textContent=`${visible.length} visible`}
+    function renderCurrent(){if(architectToken&&lastOverview){const p=new Map(lastPresence.map(x=>[x.node_id,x]));render((lastOverview.nodes||[]).map(n=>secureCard(n,p.get(n.node_id),lastOverview.commands||[])));renderFeeds(lastOverview)}else render((lastPublic||[]).map(publicCard))}
 
-    async function refreshPublic() {
-      const data = await api("/api/v1/hub/nodes");
-      render(data.nodes.map(publicCard));
-      document.getElementById("totalCount").textContent = data.nodes.length;
-      document.getElementById("onlineCount").textContent = data.nodes.filter(n=>n.status==="online").length;
-      document.getElementById("modeLabel").textContent = "публичный просмотр";
-      setState(`Обновлено ${new Date().toLocaleTimeString()}`);
-    }
+    function renderFeeds(overview){const commands=overview?.commands||[],audit=overview?.audit_events||[];$("commandCount").textContent=commands.length;$("pendingCount").textContent=`${commands.filter(c=>["pending","accepted"].includes(c.status)).length} pending`;const cmdEls=commands.slice(0,18).map(c=>{const el=document.createElement("div");el.className=`event ${c.status==="completed"?"ok":["pending","accepted"].includes(c.status)?"warn":""}`;const top=document.createElement("div");top.className="eventTop";const s=document.createElement("strong");s.textContent=`${c.command_type} · ${c.status}`;const time=document.createElement("time");time.textContent=relativeTime(c.completed_at||c.created_at);top.append(s,time);const txt=document.createElement("div");txt.className="eventText";txt.textContent=`${c.node_id} · ${c.command_id}`;el.append(top,txt);return el});$("commandTimeline").replaceChildren(...cmdEls);if(!cmdEls.length)$("commandTimeline").innerHTML='<div class="empty">No command history.</div>';
+      const auditEls=audit.slice(0,18).map(a=>{const el=document.createElement("div");el.className="event";const top=document.createElement("div");top.className="eventTop";const s=document.createElement("strong");s.textContent=a.action||"event";const time=document.createElement("time");time.textContent=relativeTime(a.created_at);top.append(s,time);const txt=document.createElement("div");txt.className="eventText";txt.textContent=`${esc(a.actor_type)}:${esc(a.actor_id)} → ${esc(a.target_type)} ${esc(a.target_id)}`;el.append(top,txt);return el});$("auditTimeline").replaceChildren(...auditEls);if(!auditEls.length)$("auditTimeline").innerHTML='<div class="empty">No audit events.</div>'}
 
-    async function refreshSecure() {
-      const [overview, presenceData, release] = await Promise.all([
-        api("/api/v1/architect/overview"),
-        api("/api/v1/architect/presence"),
-        api("/api/v1/architect/release")
-      ]);
-      releaseVersion = release.release?.version || "";
-      const presence = new Map((presenceData.presence || []).map(item => [item.node_id, item]));
-      render((overview.nodes || []).map(node => secureCard(node, presence.get(node.node_id), overview.commands || [])));
-      document.getElementById("totalCount").textContent = overview.counts?.nodes || 0;
-      document.getElementById("onlineCount").textContent = overview.counts?.online_nodes || 0;
-      document.getElementById("modeLabel").textContent = "защищённый режим";
-      loginButton.hidden = true; logoutButton.hidden = false; tokenInput.disabled = true;
-      setState(`Защищённо обновлено ${new Date().toLocaleTimeString()}`);
-    }
+    async function refreshPublic(){const data=await api("/api/v1/hub/nodes");lastPublic=data.nodes||[];lastOverview=null;renderCurrent();$("totalCount").textContent=lastPublic.length;$("onlineCount").textContent=lastPublic.filter(n=>n.status==="online").length;$("commandCount").textContent="—";$("releaseVersion").textContent="—";$("modeLabel").textContent="PUBLIC";$("modeChip").innerHTML='MODE <strong>PUBLIC</strong>';$("controllerStatus").textContent="CONTROLLER — LIVE";$("controllerStatus").className="statusPill ok";$("presenceStatus").textContent="PRESENCE — LOCKED";$("releaseStatus").textContent="RELEASE — LOCKED";setState(`Live public data · ${new Date().toLocaleTimeString()}`)}
+    async function refreshSecure(){const [overview,presenceData,release]=await Promise.all([api("/api/v1/architect/overview"),api("/api/v1/architect/presence"),api("/api/v1/architect/release")]);lastOverview=overview;lastPresence=presenceData.presence||[];releaseVersion=release.release?.version||"";renderCurrent();$("totalCount").textContent=overview.counts?.nodes||0;$("onlineCount").textContent=overview.counts?.online_nodes||0;$("releaseVersion").textContent=releaseVersion||"—";$("modeLabel").textContent="SECURE";$("modeChip").innerHTML='MODE <strong>SECURE</strong>';$("controllerStatus").textContent="CONTROLLER — AUTHENTICATED";$("controllerStatus").className="statusPill ok";$("presenceStatus").textContent="PRESENCE — READY";$("presenceStatus").className="statusPill ok";$("releaseStatus").textContent=releaseVersion?`RELEASE — ${releaseVersion}`:"RELEASE — UNKNOWN";$("releaseStatus").className=releaseVersion?"statusPill ok":"statusPill warn";loginButton.hidden=true;logoutButton.hidden=false;tokenInput.disabled=true;updateAllButton.disabled=false;pauseAllButton.disabled=false;exportButton.disabled=false;setState(`Secure controller data · ${new Date().toLocaleTimeString()}`)}
+    async function refresh(){if(refreshBusy)return;refreshBusy=true;$("networkChip").innerHTML='NETWORK <strong>SYNC</strong>';try{if(architectToken)await refreshSecure();else await refreshPublic();$("networkChip").innerHTML='NETWORK <strong>ONLINE</strong>'}catch(error){$("networkChip").innerHTML='NETWORK <strong>ERROR</strong>';$("controllerStatus").textContent=`CONTROLLER — ${error.message}`;$("controllerStatus").className="statusPill bad";if(architectToken&&["architect_authentication_required","invalid_architect_token"].includes(error.message)){architectToken="";tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;toast("Authentication failed",error.message,"bad");await refreshPublic()}else setState(`Controller error: ${error.message}`)}finally{refreshBusy=false}}
 
-    async function refresh() {
-      try {
-        if (architectToken) await refreshSecure(); else await refreshPublic();
-      } catch (error) {
-        if (architectToken && ["architect_authentication_required","invalid_architect_token"].includes(error.message)) {
-          architectToken = ""; sessionStorage.removeItem("citadelArchitectToken"); tokenInput.disabled = false; loginButton.hidden = false; logoutButton.hidden = true;
-          setState("Architect token неверен");
-          await refreshPublic();
-          return;
-        }
-        setState(`Нет связи: ${error.message}`);
-      }
-    }
+    async function sendCommand(nodeId,type){const labels={update:"update",pause:"pause",resume:"resume",uninstall:"disconnect"};if(!confirm(`${labels[type]||type}: ${nodeId}?`))return;try{await api(`/api/v1/architect/nodes/${encodeURIComponent(nodeId)}/commands`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({command_type:type})});toast("Command queued",`${type} → ${nodeId}`);await refresh()}catch(e){toast("Command failed",e.message,"bad")}}
+    async function sendDiagnostic(nodeId){try{await api("/api/v1/architect/missions",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({node_id:nodeId,title:`Hub diagnostics ${new Date().toISOString()}`,mission_type:"system_inventory",priority:100,expires_in_hours:1})});toast("Diagnostics queued",nodeId);await refresh()}catch(e){toast("Diagnostics failed",e.message,"bad")}}
+    async function bulkCommand(type){const nodes=(lastOverview?.nodes||[]).filter(n=>n.status!=="revoked"&&(type!=="pause"||n.status!=="paused"));if(!nodes.length)return toast("Nothing to do","No eligible nodes");if(!confirm(`${type.toUpperCase()} ${nodes.length} nodes?`))return;let ok=0,failed=0;for(const n of nodes){try{await api(`/api/v1/architect/nodes/${encodeURIComponent(n.node_id)}/commands`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({command_type:type})});ok++}catch{failed++}}toast("Bulk command",`${ok} queued · ${failed} skipped/failed`,failed?"bad":"ok");await refresh()}
 
-    loginButton.addEventListener("click", async () => {
-      const value = tokenInput.value.trim();
-      if (!value) { setState("Введите Architect token"); return; }
-      architectToken = value; sessionStorage.setItem("citadelArchitectToken", value);
-      await refresh();
-      tokenInput.value = "";
-    });
-    logoutButton.addEventListener("click", async () => {
-      architectToken = ""; sessionStorage.removeItem("citadelArchitectToken"); tokenInput.disabled = false; loginButton.hidden = false; logoutButton.hidden = true;
-      await refreshPublic();
-    });
+    loginButton.addEventListener("click",async()=>{const value=tokenInput.value.trim();if(!value)return toast("Token required","Enter Architect token","bad");architectToken=value;tokenInput.value="";await refresh()});logoutButton.addEventListener("click",async()=>{architectToken="";releaseVersion="";lastOverview=null;lastPresence=[];tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;$("commandTimeline").innerHTML='<div class="empty">Secure mode required.</div>';$("auditTimeline").innerHTML='<div class="empty">Secure mode required.</div>';await refreshPublic()});$("refreshButton").addEventListener("click",refresh);searchInput.addEventListener("input",renderCurrent);updateAllButton.addEventListener("click",()=>bulkCommand("update"));pauseAllButton.addEventListener("click",()=>bulkCommand("pause"));
+    exportButton.addEventListener("click",()=>{if(!lastOverview)return;const snapshot={exported_at:new Date().toISOString(),counts:lastOverview.counts,nodes:lastOverview.nodes,presence:lastPresence,commands:lastOverview.commands,audit_events:lastOverview.audit_events,release_version:releaseVersion};const blob=new Blob([JSON.stringify(snapshot,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`citadel-hub-${new Date().toISOString().replace(/[:.]/g,"-")}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);toast("Snapshot exported","Real controller data only")});
 
-    refresh(); setInterval(refresh, 10000);
+    const sshHost=$("sshHost"),sshUser=$("sshUser");sshHost.value=sessionStorage.getItem("citadelSshHost")||"";sshUser.value=sessionStorage.getItem("citadelSshUser")||"";
+    function updateSsh(){const host=safeHost(sshHost.value),user=safeUser(sshUser.value);sessionStorage.setItem("citadelSshHost",host);sessionStorage.setItem("citadelSshUser",user);const ready=Boolean(host&&user);$("sshLight").classList.toggle("ready",ready);$("sshMode").textContent=ready?"CONFIGURED LOCALLY":"NOT CONFIGURED";$("sshStateText").textContent=ready?(lang==="he"?"יעד SSH הוגדר מקומית; זמינות המנהרה עדיין לא אומתה":lang==="en"?"SSH target configured locally; tunnel reachability is not yet verified":"SSH цель настроена локально; доступность Tunnel ещё не подтверждена"):I18N[lang].sshNotReady;const cmd=ready?`ssh -o ProxyCommand="cloudflared access ssh --hostname %h" ${user}@${host}`:"cloudflared Access hostname is required.";$("sshCommand").textContent=cmd;$("copySshButton").disabled=!ready;$("openSshButton").disabled=!ready;renderCurrent()}
+    sshHost.addEventListener("input",updateSsh);sshUser.addEventListener("input",updateSsh);$("copySshButton").addEventListener("click",()=>navigator.clipboard.writeText($("sshCommand").textContent).then(()=>toast("SSH","Command copied")));$("openSshButton").addEventListener("click",()=>{const host=safeHost(sshHost.value);if(host)window.open(`https://${host}`,"_blank","noopener,noreferrer")});function focusSsh(node){sshUser.focus();document.querySelector(".sshPanel").scrollIntoView({behavior:"smooth",block:"center"});toast("SSH",`${node.hostname||node.node_id}: configure Access hostname + user`)}
+
+    setInterval(()=>{$("clock").textContent=new Date().toLocaleTimeString([], {hour12:false});renderCurrent()},1000);applyLanguage(lang);updateSsh();refresh();setInterval(refresh,10000);
   </script>
 </body>
 </html>

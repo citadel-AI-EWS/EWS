@@ -32,6 +32,37 @@ for source, target in (
         raise SystemExit(f"missing HTML ids in {source}: {missing}")
     Path(target).write_text(match.group(1), encoding="utf-8")
 
+hub = Path("hub.html").read_text(encoding="utf-8")
+for required in (
+    "/api/v1/hub/nodes",
+    "/api/v1/architect/overview",
+    "/api/v1/architect/presence",
+    "/api/v1/architect/release",
+    "/api/v1/architect/missions",
+    "cloudflared access ssh --hostname %h",
+    "CONFIGURED LOCALLY",
+    "prefers-reduced-motion",
+    "system_inventory",
+):
+    if required not in hub:
+        raise SystemExit(f"required real Hub capability missing: {required}")
+
+for forbidden in (
+    "Math.random(",
+    "eval(",
+    "new Function(",
+    "document.write(",
+    'command_type:"shell"',
+    'command_type: "shell"',
+    'sessionStorage.setItem("citadelArchitectToken"',
+    'localStorage.setItem("citadelArchitectToken"',
+):
+    if forbidden in hub:
+        raise SystemExit(f"unsafe or simulated Hub pattern detected: {forbidden}")
+
+if "SSH target configured locally; tunnel reachability is not yet verified" not in hub:
+    raise SystemExit("Hub must not claim SSH reachability before Tunnel verification")
+
 setup = Path("agent/setup_windows.ps1").read_text(encoding="utf-8").lower()
 installer = Path("agent/Install Windows Node.cmd").read_text(encoding="utf-8").lower()
 for forbidden in (
