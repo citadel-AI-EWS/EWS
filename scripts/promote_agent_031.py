@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+import sys
 from pathlib import Path
 
-from scripts import build_fixed_agent_package as legacy
-
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from scripts import build_fixed_agent_package as legacy
 
 
 def sha256(path: Path) -> str:
