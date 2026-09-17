@@ -53,8 +53,24 @@ jobs:
       - name: Verify TEST controls
         run: |
           for attempt in $(seq 1 20); do
-            response="$(curl --fail --silent --show-error "https://citadel-ai.init1.workers.dev/api/health?deployment=${GITHUB_SHA}-${attempt}")"
-            if node -e 'const value = JSON.parse(process.argv[1]); process.exit(value.ok && value.controller_signing === "ready" && value.report_storage === "ready" && value.session_storage === "ready" && value.telemetry_storage === "ready" ? 0 : 1)' "$response"; then
+            health="$(curl --fail --silent --show-error "https://citadel-ai.init1.workers.dev/api/health?deployment=${GITHUB_SHA}-${attempt}")" || true
+            hub="$(curl --fail --silent --show-error "https://citadel-ai.init1.workers.dev/api/v1/hub/nodes?deployment=${GITHUB_SHA}-${attempt}")" || true
+            root="$(curl --fail --silent --show-error "https://citadel-ai.init1.workers.dev/?deployment=${GITHUB_SHA}-${attempt}")" || true
+            if node -e '
+              const health = JSON.parse(process.argv[1]);
+              const hub = JSON.parse(process.argv[2]);
+              const root = process.argv[3];
+              const ready = health.ok &&
+                health.controller_signing === "ready" &&
+                health.report_storage === "ready" &&
+                health.session_storage === "ready" &&
+                health.telemetry_storage === "ready" &&
+                health.presence_storage === "ready" &&
+                hub.ok === true && Array.isArray(hub.nodes) &&
+                root.includes("נתונים אמיתיים בלבד") &&
+                !root.includes("ews-demo-has-project");
+              process.exit(ready ? 0 : 1);
+            ' "$health" "$hub" "$root"; then
               exit 0
             fi
             sleep 3
