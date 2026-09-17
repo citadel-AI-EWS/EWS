@@ -22,17 +22,17 @@ const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "uninstall"]);
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.0",
+  version: "0.3.1",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "b7731e1149d5a3354fe5d45745df01ad6129b40a13e27d94d693fcdff38ee30e"
+      sha256: "6cca40539de2c5facbb840a4d518b58515a8217a2f3c4d1c0f6781475e2b4cdb"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "765dfbe5963c6da5822ee8fb233e25c2de647ba77867d43cc8c771231f610f6a"
+      sha256: "187862e91d7378c74282e111b6e55b5e78abd81ea6e235f8ef6116dd11ec81e3"
     }
   ]
 });

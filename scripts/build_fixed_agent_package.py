@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Build a self-contained Windows CITADEL agent repair package.
 
-The builder stages a reviewed reliability patch over the checked-in agent release,
-validates the staged Python agent, and emits one ZIP containing every install file.
+The builder packages the checked-in reviewed agent release without mutating source,
+validates release pins, and emits one ZIP containing every install file.
 It deliberately does not add SSH or arbitrary remote execution.
 """
 from __future__ import annotations
@@ -324,11 +324,22 @@ def build() -> Path:
     ):
         shutil.copy2(ROOT / "agent" / name, STAGE / name)
 
-    patch_v1(STAGE / "citadel_node_v1.py")
-    patch_v2(STAGE / "citadel_node_v2.py")
-    v1_hash = sha256(STAGE / "citadel_node_v1.py")
-    v2_hash = sha256(STAGE / "citadel_node_v2.py")
-    patch_setup(STAGE / "setup_windows.ps1", v1_hash, v2_hash)
+    v1_path = STAGE / "citadel_node_v1.py"
+    v2_path = STAGE / "citadel_node_v2.py"
+    setup_path = STAGE / "setup_windows.ps1"
+    v1_hash = sha256(v1_path)
+    v2_hash = sha256(v2_path)
+    if 'VERSION = "0.3.1"' not in v1_path.read_text(encoding="utf-8"):
+        raise RuntimeError("repository v1 source is not release 0.3.1")
+    if 'VERSION = "0.3.1"' not in v2_path.read_text(encoding="utf-8"):
+        raise RuntimeError("repository v2 source is not release 0.3.1")
+    setup_text = setup_path.read_text(encoding="utf-8")
+    if f'$ExpectedV1Sha256 = "{v1_hash}"' not in setup_text:
+        raise RuntimeError("setup_windows.ps1 v1 hash pin does not match repository source")
+    if f'$ExpectedV2Sha256 = "{v2_hash}"' not in setup_text:
+        raise RuntimeError("setup_windows.ps1 v2 hash pin does not match repository source")
+    if 'agent_version = "0.3.1"' not in setup_text:
+        raise RuntimeError("setup_windows.ps1 release version is not 0.3.1")
     write_extras()
 
     manifest_names = sorted(

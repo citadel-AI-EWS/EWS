@@ -7,8 +7,8 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $PythonWingetId = "Python.Python.3.14"
-$ExpectedV1Sha256 = "b7731e1149d5a3354fe5d45745df01ad6129b40a13e27d94d693fcdff38ee30e"
-$ExpectedV2Sha256 = "765dfbe5963c6da5822ee8fb233e25c2de647ba77867d43cc8c771231f610f6a"
+$ExpectedV1Sha256 = "6cca40539de2c5facbb840a4d518b58515a8217a2f3c4d1c0f6781475e2b4cdb"
+$ExpectedV2Sha256 = "187862e91d7378c74282e111b6e55b5e78abd81ea6e235f8ef6116dd11ec81e3"
 
 $ControllerUri = [System.Uri]$ControllerUrl
 $IsHttps = $ControllerUri.Scheme -eq "https"
@@ -242,7 +242,7 @@ $InstallState = @{
   node_id = $NodeId
   controller_url = $ControllerUrl.TrimEnd('/')
   install_root = $InstallRoot
-  agent_version = "0.3.0"
+  agent_version = "0.3.1"
   v1_sha256 = $ExpectedV1Sha256
   v2_sha256 = $ExpectedV2Sha256
   updated_at = [DateTime]::UtcNow.ToString("o")
