@@ -281,3 +281,12 @@ Next step:
 
 - finish and verify the CD propagation fix; then port the reviewed Python agent
   behind the Cloudflare v1 Ed25519 protocol without arbitrary command execution.
+
+
+## 2026-09-17 — Remote update guard 0.3.2
+
+- Hub and Architect console can issue signed allowlisted `update`, `restart`, and `rollback` commands.
+- Remote update still accepts only official `raw.githubusercontent.com/citadel-AI-EWS/EWS/.../agent/` files with pinned SHA-256 hashes.
+- After replacing files, the agent launches the newly installed v2 in a fresh `startup-check` process using the real local config. Failure triggers automatic file rollback before daemon handoff.
+- Manual rollback validates the complete local backup with self-test before restoring it.
+- No arbitrary shell/command execution was introduced.

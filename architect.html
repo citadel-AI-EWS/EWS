@@ -73,9 +73,11 @@
           <button id="pauseButton" class="secondary" type="button">Поставить на паузу</button>
           <button id="resumeButton" class="secondary" type="button">Возобновить</button>
           <button id="updateButton" class="secondary full" type="button">Обновить агент дистанционно</button>
+          <button id="restartButton" class="secondary" type="button">Перезапустить агент</button>
+          <button id="rollbackButton" class="danger" type="button">Откатить последнее обновление</button>
           <button id="disconnectButton" class="danger full" type="button">Отключить узел</button>
         </div>
-        <p class="small">Каждая команда подписывается Controller. Обновление проверяется по подписи и SHA‑256; при ошибке агент откатывает файлы.</p>
+        <p class="small">Каждая команда подписывается Controller. Обновление проверяется по подписи, SHA‑256, self-test и fresh-process startup-check; при ошибке файлы автоматически откатываются. Доступен и ручной откат последней сохранённой версии.</p>
       </section>
 
       <section class="card">
@@ -158,6 +160,8 @@
     const pauseButton = document.getElementById("pauseButton");
     const resumeButton = document.getElementById("resumeButton");
     const updateButton = document.getElementById("updateButton");
+    const restartButton = document.getElementById("restartButton");
+    const rollbackButton = document.getElementById("rollbackButton");
     const disconnectButton = document.getElementById("disconnectButton");
     const missionTitle = document.getElementById("missionTitle");
     const expiresHours = document.getElementById("expiresHours");
@@ -226,6 +230,8 @@
       pauseButton.disabled = !node || pending || ["paused", "revoked"].includes(node.status);
       resumeButton.disabled = !node || pending || node.status !== "paused";
       updateButton.disabled = !node || pending || node.status === "revoked";
+      restartButton.disabled = !node || pending || node.status === "revoked";
+      rollbackButton.disabled = !node || pending || node.status === "revoked";
       disconnectButton.disabled = !node || pending || node.status === "revoked";
     }
 
@@ -233,7 +239,7 @@
       currentCommands = commands;
       const list = document.getElementById("commandsList");
       list.replaceChildren();
-      const labels = { pause: "Пауза", resume: "Возобновление", update: "Обновление", uninstall: "Отключение" };
+      const labels = { pause: "Пауза", resume: "Возобновление", update: "Обновление", restart: "Перезапуск", rollback: "Откат", uninstall: "Отключение" };
       for (const command of commands) {
         const item = document.createElement("div");
         item.className = `item ${command.status === "completed" ? "ok" : "warn"}`;
@@ -587,8 +593,8 @@
     async function sendControl(commandType) {
       const nodeId = controlNodeSelect.value;
       if (!nodeId) return setStatus("Выберите узел.", "bad");
-      const labels = { pause: "паузу", resume: "возобновление", update: "обновление", uninstall: "отключение" };
-      for (const button of [pauseButton, resumeButton, updateButton, disconnectButton]) button.disabled = true;
+      const labels = { pause: "паузу", resume: "возобновление", update: "обновление", restart: "перезапуск", rollback: "откат", uninstall: "отключение" };
+      for (const button of [pauseButton, resumeButton, updateButton, restartButton, rollbackButton, disconnectButton]) button.disabled = true;
       setStatus(`Отправляю команду на ${labels[commandType]}…`);
       try {
         const data = await api(`/api/v1/architect/nodes/${encodeURIComponent(nodeId)}/commands`, {
@@ -607,6 +613,11 @@
     pauseButton.addEventListener("click", () => sendControl("pause"));
     resumeButton.addEventListener("click", () => sendControl("resume"));
     updateButton.addEventListener("click", () => sendControl("update"));
+    restartButton.addEventListener("click", () => sendControl("restart"));
+    rollbackButton.addEventListener("click", () => {
+      const node = currentNodes.find((item) => item.node_id === controlNodeSelect.value);
+      if (node && confirm(`Откатить агент ${node.hostname} к последней сохранённой версии?`)) sendControl("rollback");
+    });
     disconnectButton.addEventListener("click", () => {
       const node = currentNodes.find((item) => item.node_id === controlNodeSelect.value);
       if (!node) return;

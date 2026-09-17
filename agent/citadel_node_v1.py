@@ -42,11 +42,11 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-SUPPORTED_COMMANDS = {"pause", "resume", "update", "uninstall"}
+SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "rollback", "uninstall"}
 UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
 
@@ -660,6 +660,29 @@ class Agent:
                     shutil.copy2(current, backup / name)
                 os.replace(staging / name, current)
                 replaced.append(name)
+            if "citadel_node_v2.py" in replaced:
+                installed_entrypoint = install_root / "citadel_node_v2.py"
+                result = subprocess.run(  # nosec B603
+                    [
+                        sys.executable,
+                        str(installed_entrypoint),
+                        "startup-check",
+                        "--config",
+                        str(self.config_path),
+                    ],
+                    cwd=install_root,
+                    timeout=120,
+                    capture_output=True,
+                    text=True,
+                    shell=False,
+                )
+                if result.returncode != 0:
+                    raise RuntimeError("updated agent startup health-check failed")
+                self.log.write(
+                    "agent_update_healthcheck_passed",
+                    version=payload["version"],
+                    files=replaced,
+                )
             self.log.write("agent_updated", version=payload["version"], files=replaced)
         except Exception:
             for name in replaced:
@@ -668,6 +691,36 @@ class Agent:
                     shutil.copy2(saved, install_root / name)
             self.log.write("agent_update_rolled_back", files=replaced)
             raise
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+
+    def rollback_last_update(self) -> None:
+        install_root = Path(__file__).resolve().parent
+        backup = self.config.data_dir / "update-backup"
+        missing = [name for name in UPDATE_FILE_NAMES if not (backup / name).is_file()]
+        if missing:
+            raise RuntimeError("complete update backup unavailable")
+        staging = Path(tempfile.mkdtemp(prefix="citadel-rollback-", dir=self.config.data_dir))
+        try:
+            for name in sorted(UPDATE_FILE_NAMES):
+                shutil.copy2(backup / name, staging / name)
+            entrypoint = staging / "citadel_node_v2.py"
+            result = subprocess.run(  # nosec B603
+                [sys.executable, str(entrypoint), "self-test"],
+                cwd=staging,
+                timeout=120,
+                capture_output=True,
+                text=True,
+                shell=False,
+            )
+            if result.returncode != 0:
+                raise RuntimeError("rollback backup self-test failed")
+            for name in sorted(UPDATE_FILE_NAMES):
+                shutil.copy2(staging / name, install_root / name)
+            self.log.write(
+                "agent_update_manual_rollback",
+                files=sorted(UPDATE_FILE_NAMES),
+            )
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
@@ -704,6 +757,12 @@ class Agent:
                         self.paused_path.unlink()
                 elif command_type == "update":
                     self.apply_update(command.get("payload") or {})
+                    restart_after = True
+                elif command_type == "restart":
+                    self.log.write("agent_restart_requested")
+                    restart_after = True
+                elif command_type == "rollback":
+                    self.rollback_last_update()
                     restart_after = True
                 elif command_type == "uninstall":
                     atomic_write(self.stop_path, "controller stop " + now_iso() + "\n")
