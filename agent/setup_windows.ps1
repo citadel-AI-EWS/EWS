@@ -7,7 +7,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $PythonWingetId = "Python.Python.3.14"
-$ExpectedV1Sha256 = "169f81a54ea2142f0fbf95b6396c3287e1a9d3d895d5961a17b5b0b7e21267ef"
+$ExpectedV1Sha256 = "6cca40539de2c5facbb840a4d518b58515a8217a2f3c4d1c0f6781475e2b4cdb"
 $ExpectedV2Sha256 = "187862e91d7378c74282e111b6e55b5e78abd81ea6e235f8ef6116dd11ec81e3"
 
 $ControllerUri = [System.Uri]$ControllerUrl

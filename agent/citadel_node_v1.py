@@ -297,7 +297,7 @@ MissionHandler = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 
-TAILSCALE_INTERFACE_TOKEN = "tailscale"
+TAILSCALE_INTERFACE_MARKER = "tailscale"
 VIRTUAL_INTERFACE_TOKENS = (
     "loopback",
     "docker",
@@ -347,7 +347,7 @@ def local_network_addresses() -> dict[str, Any]:
                 continue
             value = str(address)
             interfaces.append({"name": interface_name[:120], "ipv4": value})
-            if TAILSCALE_INTERFACE_TOKEN in lowered:
+            if TAILSCALE_INTERFACE_MARKER in lowered:
                 tailscale.append(value)
             elif address.is_private and not is_virtual:
                 lan.append(value)
