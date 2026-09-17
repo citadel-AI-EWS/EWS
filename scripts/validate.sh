@@ -51,6 +51,7 @@ node --check src/telemetry/router.js
 node tests/report-storage.mjs
 node tests/session-storage.mjs
 node tests/telemetry-storage.mjs
+node tests/presence-storage.mjs
 bash -n controller_deploy.sh scripts/build_site.sh scripts/package_controller.sh scripts/validate.sh
 cfn-lint controller_template.yaml project_stack.yaml
 artifact="$(mktemp --suffix=.zip)"
