@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Build a self-contained Windows CITADEL agent repair package.
 
-This does not change the checked-in agent sources. It stages a reviewed reliability
-patch over the current release, runs from local packaged files, and emits a ZIP.
+The builder stages a reviewed reliability patch over the checked-in agent release,
+validates the staged Python agent, and emits one ZIP containing every install file.
+It deliberately does not add SSH or arbitrary remote execution.
 """
 from __future__ import annotations
 
@@ -29,6 +30,11 @@ def must_replace(text: str, old: str, new: str, label: str) -> str:
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def indented_block(value: str, spaces: int = 8) -> str:
+    block = textwrap.dedent(value).strip("\n") + "\n\n"
+    return textwrap.indent(block, " " * spaces)
 
 
 def patch_v1(path: Path) -> None:
@@ -68,7 +74,7 @@ def patch_v1(path: Path) -> None:
 
 
         def local_network_addresses() -> dict[str, Any]:
-            """Return current host LAN/Tailscale IPv4 addresses without hard-coding DHCP data."""
+            """Discover current host LAN/Tailscale IPv4 addresses without hard-coding DHCP data."""
             lan: list[str] = []
             tailscale: list[str] = []
             interfaces: list[dict[str, str]] = []
@@ -144,44 +150,42 @@ def patch_v1(path: Path) -> None:
         r"    def enroll\(self\) -> str:\n.*?\n    def heartbeat\(self\) -> None:\n",
         re.S,
     )
-    enroll_replacement = textwrap.dedent('''
-            def enroll(self) -> str:
-                if self.enrollment_confirmed and self.identity.node_id:
-                    return self.identity.node_id
-                previous_node_id = self.identity.node_id
-                response = self.api.request(
-                    "POST",
-                    "/api/v1/enroll",
-                    {
-                        "public_key": self.identity.public_jwk(),
-                        "hostname": socket.gethostname(),
-                        "os_name": platform.system() or "Unknown",
-                        "os_version": platform.release(),
-                        "architecture": platform.machine() or "unknown",
-                        "agent_version": VERSION,
-                        "capabilities": self.capabilities,
-                    },
-                    signed=False,
-                )
-                node = response.get("node", {})
-                node_id = str(node.get("node_id") or "")
-                node_number = int(node.get("node_number") or 0)
-                if not node_id.startswith("node_") or node_number <= 0:
-                    raise RuntimeError("controller returned invalid node identity")
-                if previous_node_id != node_id:
-                    self.identity.set_node_id(node_id)
-                self.enrollment_confirmed = True
-                self.log.write(
-                    "node_enrolled",
-                    node_id=node_id,
-                    node_number=node_number,
-                    reconciled=bool(previous_node_id and previous_node_id != node_id),
-                )
-                return node_id
+    enroll_replacement = '''    def enroll(self) -> str:
+        if self.enrollment_confirmed and self.identity.node_id:
+            return self.identity.node_id
+        previous_node_id = self.identity.node_id
+        response = self.api.request(
+            "POST",
+            "/api/v1/enroll",
+            {
+                "public_key": self.identity.public_jwk(),
+                "hostname": socket.gethostname(),
+                "os_name": platform.system() or "Unknown",
+                "os_version": platform.release(),
+                "architecture": platform.machine() or "unknown",
+                "agent_version": VERSION,
+                "capabilities": self.capabilities,
+            },
+            signed=False,
+        )
+        node = response.get("node", {})
+        node_id = str(node.get("node_id") or "")
+        node_number = int(node.get("node_number") or 0)
+        if not node_id.startswith("node_") or node_number <= 0:
+            raise RuntimeError("controller returned invalid node identity")
+        if previous_node_id != node_id:
+            self.identity.set_node_id(node_id)
+        self.enrollment_confirmed = True
+        self.log.write(
+            "node_enrolled",
+            node_id=node_id,
+            node_number=node_number,
+            reconciled=bool(previous_node_id and previous_node_id != node_id),
+        )
+        return node_id
 
-            def heartbeat(self) -> None:
-        ''')
-    enroll_replacement = textwrap.indent(enroll_replacement, "    ").lstrip()
+    def heartbeat(self) -> None:
+'''
     match = enroll_pattern.search(text)
     if not match:
         raise RuntimeError("expected enroll method not found")
@@ -189,21 +193,26 @@ def patch_v1(path: Path) -> None:
 
     text = must_replace(
         text,
+        "    def heartbeat(self) -> None:\n        node_id = self.require_node_id()\n        self.api.request(\n",
+        "    def heartbeat(self) -> None:\n        node_id = self.require_node_id()\n        network = local_network_addresses()\n        self.api.request(\n",
+        "heartbeat network discovery",
+    )
+    text = must_replace(
+        text,
         '                "capabilities": self.capabilities,\n            },\n        )\n        self.last_heartbeat = time.monotonic()',
-        '                "capabilities": self.capabilities,\n                "network": {\n                    "lan_ipv4": local_network_addresses().get("lan_ipv4"),\n                    "tailscale_ipv4": local_network_addresses().get("tailscale_ipv4"),\n                },\n            },\n        )\n        self.last_heartbeat = time.monotonic()',
-        "heartbeat network",
+        '                "capabilities": self.capabilities,\n                "network": {\n                    "lan_ipv4": network.get("lan_ipv4"),\n                    "tailscale_ipv4": network.get("tailscale_ipv4"),\n                },\n            },\n        )\n        self.last_heartbeat = time.monotonic()',
+        "heartbeat network payload",
     )
 
-    bom_test = textwrap.dedent('''
-                bom_json = root / "bom.json"
-                bom_json.write_bytes(b"\\xef\\xbb\\xbf{\\\"ok\\\":true}\\n")
-                require_test(load_json(bom_json, {}).get("ok") is True, "UTF-8 BOM JSON rejected")
-                network = local_network_addresses()
-                require_test(
-                    set(network) == {"lan_ipv4", "tailscale_ipv4", "private_ipv4", "interfaces"},
-                    "network discovery returned an unexpected shape",
-                )
-
+    bom_test = indented_block('''
+        bom_json = root / "bom.json"
+        bom_json.write_bytes(b"\\xef\\xbb\\xbf{\\\"ok\\\":true}\\n")
+        require_test(load_json(bom_json, {}).get("ok") is True, "UTF-8 BOM JSON rejected")
+        network = local_network_addresses()
+        require_test(
+            set(network) == {"lan_ipv4", "tailscale_ipv4", "private_ipv4", "interfaces"},
+            "network discovery returned an unexpected shape",
+        )
     ''')
     text = must_replace(
         text,
@@ -212,25 +221,24 @@ def patch_v1(path: Path) -> None:
         "BOM/network self-test",
     )
 
-    reconcile_test = textwrap.dedent('''
-                reconcile_root = root / "reconcile"
-                reconcile_root.mkdir()
-                reconcile_config = AgentConfig(
-                    "https://example.test",
-                    reconcile_root,
-                    controller_public_x=controller_x,
-                )
-                reconcile_agent = Agent(reconcile_config)
-                reconcile_agent.identity.set_node_id("node_stale")
-                reconcile_agent.api.request = lambda *args, **kwargs: {
-                    "node": {"node_id": "node_reconciled", "node_number": 7}
-                }
-                require_test(
-                    reconcile_agent.enroll() == "node_reconciled"
-                    and reconcile_agent.identity.node_id == "node_reconciled",
-                    "stale node id was not reconciled with Controller",
-                )
-
+    reconcile_test = indented_block('''
+        reconcile_root = root / "reconcile"
+        reconcile_root.mkdir()
+        reconcile_config = AgentConfig(
+            "https://example.test",
+            reconcile_root,
+            controller_public_x=controller_x,
+        )
+        reconcile_agent = Agent(reconcile_config)
+        reconcile_agent.identity.set_node_id("node_stale")
+        reconcile_agent.api.request = lambda *args, **kwargs: {
+            "node": {"node_id": "node_reconciled", "node_number": 7}
+        }
+        require_test(
+            reconcile_agent.enroll() == "node_reconciled"
+            and reconcile_agent.identity.node_id == "node_reconciled",
+            "stale node id was not reconciled with Controller",
+        )
     ''')
     text = must_replace(
         text,
@@ -250,9 +258,12 @@ def patch_v2(path: Path) -> None:
 
 def patch_setup(path: Path, v1_hash: str, v2_hash: str) -> None:
     text = path.read_text(encoding="utf-8")
+    original = text
     text = re.sub(r'\$ExpectedV1Sha256 = "[0-9a-f]{64}"', f'$ExpectedV1Sha256 = "{v1_hash}"', text, count=1)
     text = re.sub(r'\$ExpectedV2Sha256 = "[0-9a-f]{64}"', f'$ExpectedV2Sha256 = "{v2_hash}"', text, count=1)
     text = text.replace('agent_version = "0.3.0"', 'agent_version = "0.3.1"')
+    if text == original:
+        raise RuntimeError("setup_windows.ps1 was not patched")
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
@@ -262,21 +273,21 @@ def write_extras() -> None:
         encoding="utf-8",
         newline="",
     )
-    (STAGE / "README_RU.txt").write_text(
-        """CITADEL/EWS — исправленный самодостаточный пакет 0.3.1\n\n"
+    readme = (
+        "CITADEL/EWS — исправленный самодостаточный пакет 0.3.1\n\n"
         "1. Распакуйте ZIP полностью.\n"
         "2. Запустите START_HERE.cmd.\n"
         "3. Агент использует HTTPS Controller: https://citadel-ai.init1.workers.dev\n\n"
         "Исправлено в этом пакете:\n"
         "- JSON с UTF-8 BOM больше не ломает загрузку конфигурации.\n"
-        "- При каждом запуске агент один раз сверяет свой node_id с Controller по Ed25519 public key; старый локальный ID автоматически исправляется.\n"
+        "- При каждом запуске агент один раз сверяет node_id с Controller по Ed25519 public key; старый локальный ID автоматически исправляется.\n"
         "- localhost / 127.0.0.1 / ::1 согласованы для локального HTTP-теста.\n"
         "- Агент сам определяет текущий LAN IPv4 и Tailscale IPv4; адреса не зашиты в код и могут меняться по DHCP.\n"
         "- LAN/Tailscale входят в system_inventory и отправляются как дополнительное поле heartbeat. Текущий Controller может безопасно игнорировать это поле до серверного обновления.\n"
         "- В архиве находятся сами agent-файлы: установка не скачивает Python-код из GitHub.\n\n"
-        "SSH в этот пакет намеренно не включён: он ещё не прошёл отдельную проверку прав Windows и firewall.\n",
-        encoding="utf-8",
+        "SSH в этот пакет намеренно не включён: он ещё не прошёл отдельную проверку прав Windows и firewall.\n"
     )
+    (STAGE / "README_RU.txt").write_text(readme, encoding="utf-8", newline="\n")
     verify = r'''[CmdletBinding()]
 param()
 $ErrorActionPreference = "Stop"
