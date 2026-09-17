@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 import citadel_node_v1 as v1
 
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 v1.VERSION = VERSION
 v1.USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 
@@ -45,6 +45,9 @@ ALLOWED_EVENTS = {
     "command_completed",
     "agent_updated",
     "agent_update_rolled_back",
+    "agent_update_healthcheck_passed",
+    "agent_update_manual_rollback",
+    "agent_restart_requested",
     "command_failure_ack_failed",
     "command_failed",
 }
@@ -202,13 +205,31 @@ def self_test() -> int:
     return 0
 
 
+def startup_check(config_path: Path) -> int:
+    """Validate the installed release in a fresh process before daemon handoff."""
+    if self_test() != 0:
+        return 2
+    config = v1.AgentConfig.from_file(config_path)
+    agent = Agent(config, config_path)
+    agent.identity.require_key()
+    if not config.data_dir.exists():
+        raise RuntimeError("agent data directory is unavailable")
+    agent.log.write(
+        "agent_update_healthcheck_passed",
+        version=VERSION,
+        phase="fresh_process_startup",
+    )
+    print(f"CITADEL startup health-check {VERSION}: PASS")
+    return 0
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=f"CITADEL/EWS Cloudflare v1 node agent {VERSION}"
     )
     parser.add_argument(
         "command",
-        choices=["doctor", "enroll", "once", "run", "self-test"],
+        choices=["doctor", "enroll", "once", "run", "self-test", "startup-check"],
     )
     parser.add_argument("--config", default="agent/config.json")
     return parser.parse_args(argv)
@@ -218,6 +239,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.command == "self-test":
         return self_test()
+    if args.command == "startup-check":
+        return startup_check(Path(args.config))
     config = v1.AgentConfig.from_file(Path(args.config))
     if args.command == "doctor":
         return v1.doctor(config)
