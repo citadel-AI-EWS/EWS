@@ -1,0 +1,65 @@
+name: Build fixed Windows agent package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/build_fixed_agent_package.py
+      - .github/workflows/build-fixed-agent-package.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: agent/requirements.txt
+      - name: Install agent dependencies
+        run: python -m pip install --disable-pip-version-check --requirement agent/requirements.txt
+      - name: Build self-contained package
+        run: python scripts/build_fixed_agent_package.py
+      - name: Compile staged Python
+        run: |
+          python -m py_compile \
+            dist/CITADEL_FIXED_AGENT_0.3.1_2026-09-17/citadel_node_v1.py \
+            dist/CITADEL_FIXED_AGENT_0.3.1_2026-09-17/citadel_node_v2.py
+      - name: Run staged agent self-test
+        run: python dist/CITADEL_FIXED_AGENT_0.3.1_2026-09-17/citadel_node_v2.py self-test
+      - name: Verify package manifest and installer pins
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib, re
+          root = Path('dist/CITADEL_FIXED_AGENT_0.3.1_2026-09-17')
+          manifest = {}
+          for line in (root / 'SHA256SUMS.txt').read_text(encoding='utf-8').splitlines():
+              digest, name = line.split('  ', 1)
+              manifest[name] = digest
+              actual = hashlib.sha256((root / name).read_bytes()).hexdigest()
+              assert actual == digest, (name, actual, digest)
+          setup = (root / 'setup_windows.ps1').read_text(encoding='utf-8')
+          v1 = hashlib.sha256((root / 'citadel_node_v1.py').read_bytes()).hexdigest()
+          v2 = hashlib.sha256((root / 'citadel_node_v2.py').read_bytes()).hexdigest()
+          assert v1 in setup and v2 in setup
+          assert 'agent_version = "0.3.1"' in setup
+          assert 'Invoke-WebRequest' not in setup
+          assert (root / 'START_HERE.cmd').is_file()
+          assert (root / 'VERIFY_PACKAGE.ps1').is_file()
+          print('Package manifest and offline installer pins: OK')
+          PY
+          unzip -t dist/CITADEL_FIXED_AGENT_0.3.1_2026-09-17.zip
+      - name: Upload verified package
+        uses: actions/upload-artifact@v4
+        with:
+          name: CITADEL_FIXED_AGENT_0.3.1_2026-09-17
+          path: dist/CITADEL_FIXED_AGENT_0.3.1_2026-09-17.zip
+          if-no-files-found: error
+          retention-days: 7
