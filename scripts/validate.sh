@@ -2,12 +2,15 @@
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+
 python -m unittest -v controller_tests.py
 python -m py_compile controller_app.py controller_tests.py agent/citadel_node_v1.py agent/citadel_node_v2.py
 python agent/citadel_node_v2.py self-test
+
 python - <<'PY'
 from pathlib import Path
 import re
+
 for source, target in (
     ("index.html", "/tmp/ews-site.js"),
     ("live-index.html", "/tmp/ews-live-site.js"),
@@ -30,10 +33,21 @@ for source, target in (
     Path(target).write_text(match.group(1), encoding="utf-8")
 
 setup = Path("agent/setup_windows.ps1").read_text(encoding="utf-8").lower()
-for forbidden in ("executionpolicy bypass", "register-scheduledtask", "schtasks", "runonce"):
-    if forbidden in setup:
-        raise SystemExit(f"unsafe Windows setup pattern detected: {forbidden}")
+installer = Path("agent/Install Windows Node.cmd").read_text(encoding="utf-8").lower()
+for forbidden in (
+    "executionpolicy bypass",
+    "-executionpolicy bypass",
+    "register-scheduledtask",
+    "schtasks",
+    "runonce",
+):
+    if forbidden in setup or forbidden in installer:
+        raise SystemExit(f"unsafe Windows installer pattern detected: {forbidden}")
+
+if "https://citadel-ai.init1.workers.dev" not in setup:
+    raise SystemExit("Windows installer Controller URL is missing")
 PY
+
 node --check /tmp/ews-site.js
 node --check /tmp/ews-live-site.js
 node --check /tmp/ews-architect.js
@@ -50,12 +64,16 @@ node --check src/telemetry/ingest.js
 node --check src/telemetry/cursor.js
 node --check src/telemetry/architect.js
 node --check src/telemetry/router.js
+
 node tests/report-storage.mjs
 node tests/session-storage.mjs
 node tests/telemetry-storage.mjs
 node tests/presence-storage.mjs
+node tests/update-integrity.mjs
+
 bash -n controller_deploy.sh scripts/build_site.sh scripts/package_controller.sh scripts/validate.sh
 cfn-lint controller_template.yaml project_stack.yaml
+
 artifact="$(mktemp --suffix=.zip)"
 cleanup_validation_files() {
   for path in "$artifact" /tmp/ews-site.js /tmp/ews-live-site.js /tmp/ews-architect.js /tmp/ews-architect-logs.js /tmp/ews-node-test.js /tmp/ews-hub.js; do
@@ -67,6 +85,7 @@ cleanup_validation_files() {
 trap cleanup_validation_files EXIT
 scripts/package_controller.sh "$artifact"
 unzip -t "$artifact"
+
 site_dir="$(mktemp -d)"
 scripts/build_site.sh "$site_dir"
 test -s "$site_dir/index.html"
@@ -76,4 +95,5 @@ test -s "$site_dir/_headers"
 test -s "$site_dir/architect/logs/index.html"
 find "$site_dir" -mindepth 1 -delete
 rmdir "$site_dir"
+
 git diff --check
