@@ -24,7 +24,4 @@ if [ -z "$lms_bin" ] || [ ! -x "$lms_bin" ]; then
   exit 1
 fi
 
-"$lms_bin" daemon up
-"$lms_bin" server start --port 1234
-
-echo "[CITADEL] LM Studio / llmster is installed and running."
+echo "[CITADEL] LM Studio / llmster is installed; CITADEL agent will start daemon/server."
