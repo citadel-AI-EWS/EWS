@@ -21,7 +21,16 @@ for (const id of [
   "sshUser",
   "sshCommand",
   "missionTask",
-  "missionCreateResult"
+  "missionCreateResult",
+  "updateAllAgentsButton",
+  "updateAllStatus",
+  "projectTitle",
+  "projectTaskText",
+  "checkProjectButton",
+  "createProjectButton",
+  "projectChecks",
+  "projectResult",
+  "projectsList"
 ]) {
   assert.match(architect, new RegExp(`id="${id}"`), `Architect control missing: ${id}`);
 }
@@ -34,6 +43,12 @@ assert.match(architect, /cloudflared access ssh --hostname %h/);
 assert.match(architect, /sendControl\("stop"\)/);
 assert.match(architect, /sendControl\("system_reboot", "REBOOT"\)/);
 assert.match(architect, /sendControl\("system_shutdown", "SHUTDOWN"\)/);
+assert.match(architect, /\/api\/v1\/architect\/update-all/);
+assert.match(architect, /\/api\/v1\/architect\/projects\/check/);
+assert.match(architect, /\/api\/v1\/architect\/projects/);
+assert.match(architect, /Source allowlisting/);
+assert.match(architect, /Deduplication/);
+assert.match(architect, /Safety classification/);
 
 assert.match(index, /"restart", "stop", "rollback"/);
 assert.match(index, /stop: "offline"/);
@@ -41,6 +56,13 @@ assert.match(index, /agent_update_required/);
 assert.match(architect, /node\.agent_version !== currentReleaseVersion/);
 assert.match(index, /task_text: taskText/);
 assert.match(index, /mission_types: \["system_inventory"\]/);
+assert.match(index, /source_allowlisting/);
+assert.match(index, /deduplication/);
+assert.match(index, /safety_classification/);
+assert.match(index, /agent_rollouts/);
+assert.match(index, /ensureRolloutCommandForNode/);
+assert.match(index, /architect_projects/);
+assert.match(index, /project_work_items/);
 assert.match(agent, /"restart", "stop", "rollback"/);
 assert.match(agent, /elif command_type == "stop":/);
 assert.match(agent, /agent_stop_requested/);
