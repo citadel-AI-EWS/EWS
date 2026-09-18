@@ -290,3 +290,32 @@ Next step:
 - After replacing files, the agent launches the newly installed v2 in a fresh `startup-check` process using the real local config. Failure triggers automatic file rollback before daemon handoff.
 - Manual rollback validates the complete local backup with self-test before restoring it.
 - No arbitrary shell/command execution was introduced.
+
+
+## 2026-09-18 — Architect UX review from live operator use
+
+Operator feedback from the live Architect page:
+
+- checkpoint/session controls were confusing and not useful in the main workflow;
+- node control lacked visible IP, health diagnostics and a non-revoking stop action;
+- mission creation did not expose any place to describe the requested task;
+- system-inventory reports looked like completed user work even when they were diagnostics;
+- SSH existed in Hub but was missing from Architect.
+
+Test-branch changes:
+
+- hide checkpoint/session UI from the Architect dashboard while preserving the backend data/schema;
+- add selected-node diagnostics with public IP/presence, CPU, RAM, agent version and last contact;
+- add one-click health-check using the existing bounded `system_inventory` mission;
+- add non-revoking signed `stop` command in agent release 0.3.5; Controller marks a completed stop as offline rather than revoked;
+- keep `uninstall` as the separate revoke/remove operation;
+- add explicit PC reboot/shutdown controls with existing confirmation guards;
+- add mission `task_text` (max 2000 chars) as operator intent; it is stored/reported but never executed as shell/code;
+- rename system-inventory reports in the UI as diagnostics and explain their origin;
+- add Cloudflare Zero-Trust SSH configuration/command block directly to Architect;
+- gate the new stop command to nodes already running the current 0.3.5 release;
+- add `tests/architect-ux-guards.mjs` to prevent regressions.
+
+Release note:
+
+- existing 0.3.4 nodes must first take the normal signed remote update to 0.3.5 before the new stop command becomes available.
