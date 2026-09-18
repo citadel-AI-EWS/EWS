@@ -37,11 +37,17 @@ function addFinding(kind, page, detail) {
 
 async function inspectPage(route, interact) {
   const page = await context.newPage();
-  const entry = { route, url: baseUrl + route, console_errors: [], page_errors: [], failed_requests: [], server_errors: [] };
+  const entry = { route, url: baseUrl + route, console_errors: [], page_errors: [], failed_requests: [], server_errors: [], auth_probe_active: false, expected_auth_401: 0, expected_auth_console_errors: 0 };
   report.pages.push(entry);
 
   page.on("console", msg => {
-    if (msg.type() === "error") entry.console_errors.push(msg.text().slice(0, 1000));
+    if (msg.type() !== "error") return;
+    const value = msg.text().slice(0, 1000);
+    if (entry.auth_probe_active && /status of 401/i.test(value)) {
+      entry.expected_auth_console_errors += 1;
+      return;
+    }
+    entry.console_errors.push(value);
   });
   page.on("pageerror", error => entry.page_errors.push(String(error).slice(0, 1000)));
   page.on("requestfailed", request => {
@@ -49,6 +55,10 @@ async function inspectPage(route, interact) {
     if (!request.url().startsWith("data:")) entry.failed_requests.push({ url: request.url(), failure });
   });
   page.on("response", response => {
+    if (entry.auth_probe_active && response.status() === 401) {
+      entry.expected_auth_401 += 1;
+      return;
+    }
     if (response.status() >= 500) entry.server_errors.push({ url: response.url(), status: response.status() });
   });
 
@@ -97,7 +107,7 @@ await inspectPage("/", async page => {
   }
 });
 
-await inspectPage("/hub/", async page => {
+await inspectPage("/hub/", async (page, entry) => {
   await page.locator("#refreshButton").click();
   await page.waitForTimeout(700);
 
@@ -131,9 +141,12 @@ await inspectPage("/hub/", async page => {
     await page.locator('button[data-lang="ru"]').click();
   }
 
+  entry.auth_probe_active = true;
   await page.locator("#architectToken").fill("synthetic-invalid-token");
   await page.locator("#loginButton").click();
-  await page.waitForTimeout(600);
+  await page.waitForTimeout(900);
+  entry.auth_probe_active = false;
+  if (entry.expected_auth_401 < 1) addFinding("hub_invalid_auth_not_rejected", "/hub/", "invalid token produced no HTTP 401");
   const afterInvalidLogin = (await page.locator("#modeLabel").innerText()).trim();
   if (afterInvalidLogin !== "PUBLIC") addFinding("invalid_auth_escalated", "/hub/", `mode became ${afterInvalidLogin}`);
 
@@ -146,13 +159,16 @@ await inspectPage("/hub/", async page => {
   }
 });
 
-await inspectPage("/architect/", async page => {
+await inspectPage("/architect/", async (page, entry) => {
   const restrictedVisible = await page.locator("#dashboard:not(.hidden)").count();
   if (restrictedVisible) addFinding("architect_content_exposed", "/architect/", "secure content visible before authentication");
 
+  entry.auth_probe_active = true;
   await page.locator("#token").fill("synthetic-invalid-token");
   await page.locator("#loginButton").click();
-  await page.waitForTimeout(600);
+  await page.waitForTimeout(900);
+  entry.auth_probe_active = false;
+  if (entry.expected_auth_401 < 1) addFinding("architect_invalid_auth_not_rejected", "/architect/", "invalid token produced no HTTP 401");
   const stillLocked = await page.locator("#loginCard").isVisible();
   if (!stillLocked) addFinding("architect_invalid_auth", "/architect/", "invalid token appears to unlock Architect");
 
