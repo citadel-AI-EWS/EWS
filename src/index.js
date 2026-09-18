@@ -22,20 +22,20 @@ const ALLOWED_REPORT_SENSITIVITIES = new Set([
 ]);
 const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
-const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "rollback", "uninstall", "system_reboot", "system_shutdown"]);
+const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown"]);
 const POWER_COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.4",
+  version: "0.3.5",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "83c6e6d9ccd99317c067534361f6c4317155efd0da0531687cca9e899dce6dac"
+      sha256: "22f88d10690fef9d5705fadaa18f1d39305b4c022d6d0fa4f21c86d054a65f95"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "30dddd8588143d7e2ff5552b44ab551e5829c24a6204fa2dbadd48633b0d512d"
+      sha256: "7a115adff84f794c434daa759be8978b06c83b6f73e5ef7a5b6bb1b50922e573"
     }
   ]
 });
@@ -1481,7 +1481,7 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
   ];
 
   const nodeStatus = status === "completed"
-    ? { pause: "paused", resume: "online", uninstall: "revoked" }[current.command_type]
+    ? { pause: "paused", resume: "online", stop: "offline", uninstall: "revoked" }[current.command_type]
     : null;
   if (nodeStatus) {
     statements.push(env.DB.prepare(`
@@ -1837,7 +1837,7 @@ function apiDescription() {
       "advisory_analysis",
       "file_hashing"
     ],
-    command_types: ["pause", "resume", "update", "restart", "rollback", "uninstall", "system_reboot", "system_shutdown"],
+    command_types: ["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown"],
     arbitrary_remote_execution: false
   });
 }
