@@ -271,8 +271,20 @@
     const checkProjectButton = document.getElementById("checkProjectButton");
     const createProjectButton = document.getElementById("createProjectButton");
     const projectChecks = document.getElementById("projectChecks");
+    const projectRolePlan = document.getElementById("projectRolePlan");
+    const workRoles = document.getElementById("workRoles");
     const projectResult = document.getElementById("projectResult");
     const projectsList = document.getElementById("projectsList");
+    const liveNodesList = document.getElementById("liveNodesList");
+    const fleetRing = document.getElementById("fleetRing");
+    const fleetPct = document.getElementById("fleetPct");
+    const fleetLegend = document.getElementById("fleetLegend");
+    const cpuChart = document.getElementById("cpuChart");
+    const memoryChart = document.getElementById("memoryChart");
+    const topologySvg = document.getElementById("topologySvg");
+    const operationsAlert = document.getElementById("operationsAlert");
+    const operationsAlertList = document.getElementById("operationsAlertList");
+    const closeOperationsAlert = document.getElementById("closeOperationsAlert");
     const missionType = document.getElementById("missionType");
     const missionTitle = document.getElementById("missionTitle");
     const missionTask = document.getElementById("missionTask");
@@ -293,6 +305,8 @@
     let currentReports = [];
     let currentProjectCheck = null;
     let currentProjects = [];
+    let currentWorkRoles = [];
+    let openingBriefShown = false;
     let activeReportId = null;
     let reportNextOffset = null;
     let sessionNextOffset = null;
@@ -333,6 +347,166 @@
       return currentNodes.find((item) => item.node_id === controlNodeSelect.value) || null;
     }
 
+    function parseControllerTime(value) {
+      if (!value) return null;
+      const raw = String(value);
+      const normalized = /[zZ]|[+-]\d\d:?\d\d$/.test(raw)
+        ? raw
+        : raw.replace(" ", "T") + "Z";
+      const timestamp = Date.parse(normalized);
+      return Number.isFinite(timestamp) ? timestamp : null;
+    }
+
+    function nodeAgeMinutes(node) {
+      const timestamp = parseControllerTime(node.last_seen_at);
+      return timestamp === null ? Infinity : Math.max(0, (Date.now() - timestamp) / 60000);
+    }
+
+    function isNodeLive(node) {
+      return Boolean(node) &&
+        node.status !== "revoked" &&
+        node.status !== "offline" &&
+        nodeAgeMinutes(node) <= 5;
+    }
+
+    function nodeHealth(node) {
+      const live = isNodeLive(node);
+      const cpu = node.cpu_percent == null ? null : Number(node.cpu_percent);
+      const memory = node.memory_percent == null ? null : Number(node.memory_percent);
+      const criticalLoad = (Number.isFinite(cpu) && cpu >= 95) ||
+        (Number.isFinite(memory) && memory >= 95);
+      return {
+        live,
+        healthy: live && !criticalLoad,
+        criticalLoad,
+        cpu,
+        memory
+      };
+    }
+
+    function nodeDisplayName(node) {
+      return node.node_number
+        ? `CITADEL Node ${node.node_number}`
+        : (node.hostname || node.node_id);
+    }
+
+    function agentDisplayName(node) {
+      return node.node_number
+        ? `AG-${String(node.node_number).padStart(2, "0")}`
+        : "Node Agent";
+    }
+
+    function renderBarChart(container, nodes, field) {
+      container.replaceChildren();
+      const visible = nodes.filter((node) => node.status !== "revoked").slice(0, 24);
+      for (const node of visible) {
+        const value = node[field] == null ? null : Math.max(0, Math.min(100, Number(node[field])));
+        const row = document.createElement("div");
+        row.className = "chart-row";
+        addText(row, "span", nodeDisplayName(node), "chart-label");
+        const track = document.createElement("div");
+        track.className = "bar-track";
+        const fill = document.createElement("div");
+        fill.className = `bar-fill ${value !== null && value >= 90 ? "warn" : ""}`.trim();
+        fill.style.width = value === null ? "0%" : `${value}%`;
+        track.appendChild(fill);
+        row.appendChild(track);
+        addText(row, "span", value === null ? "—" : `${value.toFixed(0)}%`, "");
+        container.appendChild(row);
+      }
+      if (!visible.length) addText(container, "div", "Нет активных нод.", "muted");
+    }
+
+    function renderTopology(nodes) {
+      const ns = "http://www.w3.org/2000/svg";
+      topologySvg.replaceChildren();
+      const operational = nodes.filter((node) => node.status !== "revoked").slice(0, 24);
+      const centerX = 280, centerY = 105;
+      const core = document.createElementNS(ns, "circle");
+      core.setAttribute("cx", centerX); core.setAttribute("cy", centerY); core.setAttribute("r", 24);
+      core.setAttribute("class", "topology-node");
+      topologySvg.appendChild(core);
+      const coreText = document.createElementNS(ns, "text");
+      coreText.setAttribute("x", centerX); coreText.setAttribute("y", centerY + 4);
+      coreText.setAttribute("text-anchor", "middle"); coreText.setAttribute("fill", "#dceaff");
+      coreText.setAttribute("font-size", "11"); coreText.textContent = "HUB";
+      topologySvg.appendChild(coreText);
+
+      operational.forEach((node, index) => {
+        const angle = (Math.PI * 2 * index / Math.max(operational.length, 1)) - Math.PI / 2;
+        const radiusX = 215, radiusY = 77;
+        const x = centerX + Math.cos(angle) * radiusX;
+        const y = centerY + Math.sin(angle) * radiusY;
+        const line = document.createElementNS(ns, "line");
+        line.setAttribute("x1", centerX); line.setAttribute("y1", centerY);
+        line.setAttribute("x2", x); line.setAttribute("y2", y);
+        line.setAttribute("class", "topology-line");
+        topologySvg.appendChild(line);
+        const circle = document.createElementNS(ns, "circle");
+        circle.setAttribute("cx", x); circle.setAttribute("cy", y); circle.setAttribute("r", 11);
+        circle.setAttribute("class", `topology-node ${isNodeLive(node) ? "" : "dead"}`.trim());
+        topologySvg.appendChild(circle);
+        const label = document.createElementNS(ns, "text");
+        label.setAttribute("x", x); label.setAttribute("y", y + 25);
+        label.setAttribute("text-anchor", "middle"); label.setAttribute("fill", "#9fb5d5");
+        label.setAttribute("font-size", "9");
+        label.textContent = node.node_number ? `N${node.node_number}` : String(index + 1);
+        topologySvg.appendChild(label);
+      });
+    }
+
+    function renderLiveCharts(nodes) {
+      const health = nodes.map(nodeHealth);
+      const healthy = health.filter((item) => item.healthy).length;
+      const total = nodes.length;
+      const pct = total ? Math.round(healthy / total * 100) : 0;
+      fleetRing.style.setProperty("--pct", String(pct));
+      fleetPct.textContent = `${pct}%`;
+      fleetLegend.textContent = `Здоровы: ${healthy} · Нездоровы/недоступны: ${Math.max(0, total - healthy)} · Всего: ${total}`;
+      renderBarChart(cpuChart, nodes, "cpu_percent");
+      renderBarChart(memoryChart, nodes, "memory_percent");
+      renderTopology(nodes);
+    }
+
+    function renderWorkRoles(roles) {
+      currentWorkRoles = roles || [];
+      workRoles.replaceChildren();
+      for (const role of currentWorkRoles) {
+        const chip = document.createElement("div");
+        chip.className = "role-chip";
+        addText(chip, "b", role.label);
+        addText(chip, "span", role.kind === "human_gate"
+          ? "Human approval gate"
+          : role.origin === "legacy_simulation" ? "legacy worker role" : "Hub specialization");
+        workRoles.appendChild(chip);
+      }
+    }
+
+    function showOperationsBrief(nodes) {
+      operationsAlertList.replaceChildren();
+      const problems = [];
+      for (const node of nodes) {
+        if (node.status === "revoked") continue;
+        const health = nodeHealth(node);
+        if (!health.live) {
+          problems.push(`${nodeDisplayName(node)} не отвечает · последняя связь: ${node.last_seen_at || "нет данных"}`);
+        } else if (!health.healthy) {
+          const parts = [];
+          if (health.cpu !== null && health.cpu >= 95) parts.push(`CPU ${health.cpu.toFixed(0)}%`);
+          if (health.memory !== null && health.memory >= 95) parts.push(`RAM ${health.memory.toFixed(0)}%`);
+          problems.push(`${nodeDisplayName(node)} нездоров · ${parts.join(" · ") || "критическая телеметрия"}`);
+        }
+      }
+      if (!problems.length) {
+        const clear = addText(operationsAlertList, "div", "Критических проблем с нодами сейчас нет.", "brief-item brief-clear");
+        clear.setAttribute("role", "status");
+      } else {
+        problems.forEach((problem) => addText(operationsAlertList, "div", problem, "brief-item"));
+      }
+      operationsAlert.classList.remove("hidden");
+      openingBriefShown = true;
+    }
+
     function renderNodeDiagnostics() {
       const node = selectedNode();
       if (!node) {
@@ -341,8 +515,10 @@
         return;
       }
       const presence = currentPresence.find((item) => item.node_id === node.node_id);
+      const health = nodeHealth(node);
       const lines = [
-        `Узел: ${node.hostname} · ${node.status}`,
+        `Узел: ${nodeDisplayName(node)} · ${node.status}`,
+        `Живой: ${health.live ? "ДА" : "НЕТ"} · Здоровье: ${health.healthy ? "ЗДОРОВ" : "НЕЗДОРОВ"}`,
         `IP: ${presence?.public_ip || "ещё не зафиксирован"}`,
         `География сети: ${[presence?.country, presence?.colo].filter(Boolean).join(" / ") || "нет данных"}${presence?.asn ? ` · ASN ${presence.asn}` : ""}`,
         `CPU: ${node.cpu_percent == null ? "—" : Number(node.cpu_percent).toFixed(1) + "%"} · RAM: ${node.memory_percent == null ? "—" : Number(node.memory_percent).toFixed(1) + "%"}`,
@@ -398,6 +574,15 @@
         const extra = item.classification ? ` · ${item.classification}` : "";
         return `${label}: ${mark} · ${item.detail || "нет результата"}${extra}`;
       }).join("\n");
+      const rolePlan = data?.role_plan || {};
+      const roleLines = Object.entries(rolePlan).map(([role, count]) => {
+        const meta = currentWorkRoles.find((item) => item.id === role);
+        return `${meta?.label || role}: ${count}`;
+      });
+      projectRolePlan.textContent = roleLines.length
+        ? "Hub предлагает специализации:\n" + roleLines.join("\n")
+        : "Hub не определил специализированных рабочих блоков.";
+      projectRolePlan.className = "status";
       const ready = Boolean(data?.ready_for_architect_approval);
       projectChecks.className = `status ${ready ? "good" : "bad"}`;
       createProjectButton.disabled = !ready;
@@ -419,31 +604,92 @@
     }
 
     function renderNodes(nodes) {
-      currentNodes = nodes;
-      const list = document.getElementById("nodesList");
-      list.replaceChildren();
+      const previousControl = controlNodeSelect.value;
+      const previousMission = nodeSelect.value;
+      currentNodes = nodes || [];
+      liveNodesList.replaceChildren();
       nodeSelect.replaceChildren();
       controlNodeSelect.replaceChildren();
-      for (const node of nodes) {
+
+      let liveCount = 0;
+      let unhealthyCount = 0;
+
+      for (const node of currentNodes) {
+        const health = nodeHealth(node);
+        if (health.live) liveCount += 1;
+        if (!health.healthy && node.status !== "revoked") unhealthyCount += 1;
+
         const option = document.createElement("option");
         option.value = node.node_id;
-        option.textContent = `${node.hostname} — ${node.status}`;
+        option.textContent = `${nodeDisplayName(node)} — ${node.status}`;
         option.disabled = node.status === "revoked";
         nodeSelect.appendChild(option);
+        controlNodeSelect.appendChild(option.cloneNode(true));
 
-        const controlOption = option.cloneNode(true);
-        controlNodeSelect.appendChild(controlOption);
+        const presence = currentPresence.find((item) => item.node_id === node.node_id);
+        const card = document.createElement("div");
+        card.className = `node-card ${health.live ? "" : "dead"} ${health.healthy ? "" : "unhealthy"}`.trim();
 
-        const item = document.createElement("div");
-        item.className = `item ${node.status === "online" ? "ok" : "warn"}`;
-        addText(item, "strong", `${node.hostname} — ${node.status}`);
-        addText(item, "div", `Версия: ${node.agent_version}`, "small");
-        addText(item, "div", `Последняя связь: ${node.last_seen_at}`, "small");
-        addText(item, "div", `Node ID: ${node.node_id}`, "small");
-        list.appendChild(item);
+        const top = document.createElement("div");
+        top.className = "node-top";
+        const identity = document.createElement("div");
+        addText(identity, "div", nodeDisplayName(node), "node-name");
+        addText(identity, "div", `Агент ${agentDisplayName(node)} · v${node.agent_version || "—"}`, "node-agent");
+        top.appendChild(identity);
+        const livePill = addText(top, "span", health.live ? "LIVE" : "OFFLINE", health.live ? "state-live" : "state-dead");
+        livePill.style.fontWeight = "900";
+        card.appendChild(top);
+
+        const lines = document.createElement("div");
+        lines.className = "node-status-lines";
+        addText(lines, "div", `Последняя связь: ${node.last_seen_at || "нет данных"}`);
+        addText(lines, "div", `Живой: ${health.live ? "ДА" : "НЕТ"}`, health.live ? "state-live" : "state-dead");
+        const healthLine = document.createElement("div");
+        healthLine.className = "health-line";
+        addText(healthLine, "span", `Здоровье: ${health.healthy ? "ЗДОРОВ" : "НЕЗДОРОВ"}`, health.healthy ? "state-live" : "state-dead");
+        const toggle = addText(healthLine, "button", "+", "detail-toggle");
+        toggle.type = "button";
+        toggle.setAttribute("aria-label", `Показать полную информацию о ${nodeDisplayName(node)}`);
+        lines.appendChild(healthLine);
+        card.appendChild(lines);
+
+        const details = document.createElement("div");
+        details.className = "node-details";
+        const warningParts = [];
+        if (node.agent_version && currentReleaseVersion && node.agent_version !== currentReleaseVersion) {
+          warningParts.push(`Доступно обновление: ${currentReleaseVersion}`);
+        }
+        if (health.cpu !== null && health.cpu >= 85) warningParts.push(`CPU повышен: ${health.cpu.toFixed(1)}%`);
+        if (health.memory !== null && health.memory >= 85) warningParts.push(`RAM повышена: ${health.memory.toFixed(1)}%`);
+        [
+          `Hostname: ${node.hostname || "—"}`,
+          `Node ID: ${node.node_id}`,
+          `Статус Controller: ${node.status}`,
+          `OS: ${[node.os_name, node.os_version].filter(Boolean).join(" ") || "—"} · ${node.architecture || "—"}`,
+          `CPU: ${health.cpu === null ? "—" : health.cpu.toFixed(1) + "%"} · RAM: ${health.memory === null ? "—" : health.memory.toFixed(1) + "%"}`,
+          `Public IP: ${presence?.public_ip || "—"}`,
+          `Network: ${[presence?.country, presence?.colo].filter(Boolean).join(" / ") || "—"}${presence?.asn ? ` · ASN ${presence.asn}` : ""}`,
+          `Enrolled: ${node.enrolled_at || "—"}`,
+          `Agent version: ${node.agent_version || "—"}`,
+          warningParts.length ? `Внимание: ${warningParts.join(" · ")}` : "Предупреждения: нет"
+        ].forEach((line) => addText(details, "div", line));
+        toggle.addEventListener("click", () => {
+          const open = details.classList.toggle("open");
+          toggle.textContent = open ? "−" : "+";
+          toggle.setAttribute("aria-expanded", String(open));
+        });
+        card.appendChild(details);
+        liveNodesList.appendChild(card);
       }
-      if (!nodes.length) addText(list, "p", "Узлы пока не зарегистрированы.", "muted");
+
+      if (!currentNodes.length) addText(liveNodesList, "p", "Узлы пока не зарегистрированы.", "muted");
+      if (previousMission && [...nodeSelect.options].some((o) => o.value === previousMission && !o.disabled)) nodeSelect.value = previousMission;
+      if (previousControl && [...controlNodeSelect.options].some((o) => o.value === previousControl && !o.disabled)) controlNodeSelect.value = previousControl;
+      document.getElementById("nodeCount").textContent = currentNodes.length;
+      document.getElementById("onlineCount").textContent = liveCount;
+      document.getElementById("unhealthyCount").textContent = unhealthyCount;
       createMissionButton.disabled = ![...nodeSelect.options].some((option) => !option.disabled);
+      renderLiveCharts(currentNodes);
       updateControlButtons();
       renderNodeDiagnostics();
     }
@@ -710,46 +956,32 @@
       }
     }
 
-    function renderAudit(events) {
-      const list = document.getElementById("auditList");
-      list.replaceChildren();
-      for (const event of events) {
-        const item = document.createElement("div");
-        item.className = "item";
-        addText(item, "strong", event.action);
-        addText(item, "div", `${event.actor_type}: ${event.actor_id}`, "small");
-        addText(item, "div", event.created_at, "small");
-        list.appendChild(item);
-      }
-      if (!events.length) addText(list, "p", "Событий пока нет.", "muted");
-    }
-
     async function loadDashboard() {
-      setStatus("Загружаю данные…");
-      const [data, reports, sessions, storage, presence, release, projects] = await Promise.all([
+      setStatus("Загружаю Live Operations…");
+      const [data, reports, sessions, storage, presence, release, projects, roles] = await Promise.all([
         api("/api/v1/architect/overview"),
         api("/api/v1/architect/reports?limit=50&offset=0"),
         api("/api/v1/architect/sessions?limit=30&offset=0"),
         api("/api/v1/architect/storage"),
         api("/api/v1/architect/presence"),
         api("/api/v1/architect/release"),
-        api("/api/v1/architect/projects")
+        api("/api/v1/architect/projects"),
+        api("/api/v1/architect/work-roles")
       ]);
       currentPresence = presence.presence || [];
       currentReleaseVersion = release.release?.version || "";
       updateButton.textContent = currentReleaseVersion
         ? `Обновить агент → ${currentReleaseVersion}`
         : "Обновить агент дистанционно";
-      document.getElementById("nodeCount").textContent = data.counts.nodes;
-      document.getElementById("onlineCount").textContent = data.counts.online_nodes;
       document.getElementById("missionCount").textContent = data.counts.missions;
       document.getElementById("reportCount").textContent = data.counts.reports;
       document.getElementById("sessionCount").textContent = data.counts.sessions;
-      document.getElementById("nodesUpdated").textContent = new Date().toLocaleTimeString();
-      renderNodes(data.nodes);
-      renderMissions(data.missions);
+      document.getElementById("projectCount").textContent = (projects.projects || []).length;
+      document.getElementById("nodesUpdated").textContent = `обновлено ${new Date().toLocaleTimeString()}`;
+      renderWorkRoles(roles.roles || []);
+      renderNodes(data.nodes || []);
+      renderMissions(data.missions || []);
       renderCommands(data.commands || []);
-      renderAudit(data.audit_events);
       renderReports(reports.reports || []);
       renderProjects(projects.projects || []);
       reportNextOffset = reports.next_offset ?? null;
@@ -760,7 +992,8 @@
       renderStorageUsage(storage.usage || {});
       loginCard.classList.add("hidden");
       dashboard.classList.remove("hidden");
-      setStatus("Панель подключена к Controller.", "good");
+      if (!openingBriefShown) showOperationsBrief(data.nodes || []);
+      setStatus("Live Operations подключён к Controller.", "good");
     }
 
     function closeReportDetail() {
@@ -779,6 +1012,8 @@
       currentReports = [];
       reportNextOffset = null;
       sessionNextOffset = null;
+      openingBriefShown = false;
+      operationsAlert.classList.add("hidden");
       dashboard.classList.add("hidden");
       loginCard.classList.remove("hidden");
       setStatus(message);
@@ -880,6 +1115,7 @@
     });
 
     logoutButton.addEventListener("click", () => logout());
+    closeOperationsAlert.addEventListener("click", () => operationsAlert.classList.add("hidden"));
     controlNodeSelect.addEventListener("change", () => { updateControlButtons(); renderNodeDiagnostics(); });
 
     async function sendControl(commandType, confirmation = null) {
@@ -996,7 +1232,7 @@
           body: JSON.stringify({ title, task_text: taskText, source_type: "architect_manual" })
         });
         const p = data.project;
-        const assignments = p.work_items.map((item) => `#${item.sequence_no} → ${item.hostname} (${item.node_id})`).join("\n");
+        const assignments = p.work_items.map((item) => `#${item.sequence_no} · ${item.role_name} → ${item.hostname} (${item.node_id})`).join("\n");
         projectResult.textContent = [
           `Project ID: ${p.project_id}`,
           `Hub выбрал узлов: ${p.worker_count}`,
