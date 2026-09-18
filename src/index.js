@@ -840,7 +840,7 @@ function projectAssignmentId(workItemId) {
   return "assignment_" + workItemId;
 }
 
-async function materializeProjectWorkForNode(env, nodeId) {
+async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
   await Promise.all([ensureProjectStorage(env), ensureNodeAiStorage(env)]);
   const node = await env.DB.prepare(`
     SELECT n.node_id, n.status, n.last_seen_at, n.capabilities_json,
@@ -868,10 +868,11 @@ async function materializeProjectWorkForNode(env, nodeId) {
       JOIN architect_projects AS p ON p.project_id = w.project_id
       WHERE w.status = 'planned'
         AND p.status IN ('planned','running')
+        AND (? IS NULL OR w.project_id = ?)
       ORDER BY CASE WHEN w.node_id = ? THEN 0 WHEN w.node_id IS NULL THEN 1 ELSE 2 END,
         datetime(p.created_at) ASC, w.sequence_no ASC
       LIMIT 32
-    `).bind(nodeId).all(),
+    `).bind(projectId, projectId, nodeId).all(),
     env.DB.prepare(`
       SELECT n.node_id, n.capabilities_json, ai.installed, ai.loaded_model, ai.server_running
       FROM nodes AS n
@@ -1192,6 +1193,63 @@ async function architectGetProject(request, env, projectId) {
   `).bind(projectId).first();
   if (!project) throw new ApiError(404, "project_not_found");
 
+  const readinessQuery = await env.DB.prepare(`
+    SELECT
+      n.node_id, n.hostname, n.agent_version, n.status, n.last_seen_at, n.capabilities_json,
+      nn.node_number,
+      CASE WHEN n.status = 'online'
+        AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes')
+        THEN 1 ELSE 0 END AS recently_seen,
+      ai.installed AS lmstudio_installed,
+      ai.loaded_model AS lmstudio_loaded_model,
+      ai.server_running AS lmstudio_server_running
+    FROM nodes AS n
+    LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id
+    LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
+    WHERE n.status != 'revoked'
+    ORDER BY recently_seen DESC, n.last_seen_at DESC, nn.node_number ASC
+    LIMIT 100
+  `).all();
+
+  const workerReadiness = (readinessQuery.results || []).map((node) => {
+    const capabilities = safeJson(node.capabilities_json, []);
+    const hasProjectText = Array.isArray(capabilities) && capabilities.includes("project_text");
+    const live = Number(node.recently_seen || 0) === 1;
+    const installed = Number(node.lmstudio_installed || 0) === 1;
+    const serverRunning = Number(node.lmstudio_server_running || 0) === 1;
+    const loadedModel = typeof node.lmstudio_loaded_model === "string" && node.lmstudio_loaded_model.length > 0;
+    const blockers = [];
+    if (!live) blockers.push("offline");
+    if (!hasProjectText) blockers.push(
+      node.agent_version !== LATEST_NODE_RELEASE.version ? "agent_outdated" : "project_text_missing"
+    );
+    if (!installed) blockers.push("lmstudio_not_installed");
+    else {
+      if (!serverRunning) blockers.push("lmstudio_server_stopped");
+      if (!loadedModel) blockers.push("lmstudio_model_not_loaded");
+    }
+    return {
+      node_id: node.node_id,
+      node_number: node.node_number || null,
+      hostname: node.hostname || null,
+      agent_version: node.agent_version || null,
+      live,
+      project_text: hasProjectText,
+      lmstudio_installed: installed,
+      lmstudio_server_running: serverRunning,
+      lmstudio_loaded_model: node.lmstudio_loaded_model || null,
+      ready: blockers.length === 0,
+      blockers
+    };
+  });
+
+  const readyWorkers = workerReadiness.filter((node) => node.ready);
+  if (project.status === "planned" || project.status === "running") {
+    for (const worker of readyWorkers.slice(0, 6)) {
+      await materializeProjectWorkForNode(env, worker.node_id, projectId);
+    }
+  }
+
   const [workQuery, specializationQuery] = await Promise.all([
     env.DB.prepare(`
       SELECT
@@ -1291,6 +1349,8 @@ async function architectGetProject(request, env, projectId) {
         counts,
         desired_workers: projectWorkerProfile(project.task_text, specializations.filter((item) => item.source === "architect_added").map((item) => item.id)).desired_workers,
         ready_workers_at_creation: Number(project.worker_count || 0),
+        ready_workers_now: readyWorkers.length,
+        worker_readiness: workerReadiness,
         completed_work_items: counts.completed,
         total_work_items: total,
         final_report_ready: finalReportReady,
