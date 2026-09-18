@@ -116,6 +116,7 @@ for migration in sorted(Path("migrations").glob("*.sql")):
 required = {
     "nodes", "missions", "assignments", "results", "commands", "audit_events",
     "agent_reports", "architect_sessions", "node_logs", "node_log_rate_limits",
+    "agent_rollouts", "architect_projects", "project_work_items",
 }
 tables = {
     row[0]
