@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
-PACKAGE_NAME = "CITADEL_FIXED_AGENT_0.3.4_2026-09-18"
+PACKAGE_NAME = "CITADEL_FIXED_AGENT_0.3.5_2026-09-18"
 STAGE = DIST / PACKAGE_NAME
 ZIP_PATH = DIST / f"{PACKAGE_NAME}.zip"
 
@@ -40,7 +40,7 @@ def indented_block(value: str, spaces: int = 8) -> str:
 def patch_v1(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     text = must_replace(text, "import hashlib\n", "import hashlib\nimport ipaddress\n", "ipaddress import")
-    text = must_replace(text, 'VERSION = "0.3.0"', 'VERSION = "0.3.4"', "v1 version")
+    text = must_replace(text, 'VERSION = "0.3.0"', 'VERSION = "0.3.5"', "v1 version")
     text = must_replace(
         text,
         'return json.loads(path.read_text(encoding="utf-8"))',
