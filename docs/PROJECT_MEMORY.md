@@ -290,3 +290,54 @@ Next step:
 - After replacing files, the agent launches the newly installed v2 in a fresh `startup-check` process using the real local config. Failure triggers automatic file rollback before daemon handoff.
 - Manual rollback validates the complete local backup with self-test before restoring it.
 - No arbitrary shell/command execution was introduced.
+
+
+## 2026-09-18 — Legacy CRE archive review and engineering-experience layer
+
+Architect requested:
+
+- inspect the uploaded historical program and all available logs;
+- preserve relevant experience in a separate database kept with the project;
+- selectively reuse only the strongest ideas from the old program;
+- treat the archive as an engineering stage/lesson rather than copying it wholesale.
+
+Reviewed evidence:
+
+- 4,686 extracted files, roughly 280 MiB;
+- all 686 `.log` files included in the inventory/aggregate scan;
+- 650 structured daily run reports;
+- 650/650 structured cycles failed: 649 with `EMPTY_MODEL_OUTPUT_ThreatScout` and one observed structured run with `LM_STUDIO_AUTH_401`;
+- external source acquisition was generally healthy while local-model orchestration was not;
+- legacy source/config contained embedded credential material. Secret values are excluded from EWS and must not be copied into project memory.
+
+Accepted integration:
+
+- Do not import the monolithic CRE runtime.
+- Preserve SHA-256 integrity, atomic state concepts, bounded evidence, source provenance, explicit failure states, cache/stale metadata, regression health contracts and recommend-only model guidance.
+- Preserve defensive defaults: no malware download, no model-driven external code/shell, no automatic firewall blocking, no automatic model download/switch/configuration.
+- Keep threat-intelligence feeds optional rather than part of EWS core.
+- Store historical experience outside operational D1. The repository carries the sanitized reproducible seed at `knowledge/legacy_cre_experience.sql`; the detailed local review database also contains file fingerprints and aggregate log/run analysis.
+- Wire the engineering-experience invariant check into `/api/health`.
+- Add CI tests for the experience policy, evidence-reference validation, DB completeness and accidental PEM credential material.
+
+Implementation:
+
+- branch: `legacy-cre-experience-20260918`;
+- draft PR: #51;
+- `src/experience/policy.js`;
+- `tests/legacy-experience.mjs`;
+- `knowledge/legacy_cre_experience.sql`;
+- `docs/LEGACY_CRE_REVIEW_2026-09-18.md`;
+- `src/worker.js` health integration;
+- `scripts/validate.sh` CI integration.
+
+Security follow-up:
+
+- Treat any credential embedded in the legacy archive as compromised if it might still be valid; rotate/revoke it outside the repository.
+- Never commit the raw legacy archive, raw LM Studio logs, service-account key material, or the legacy config to EWS.
+
+Verification state:
+
+- code/diff review completed;
+- sanitized database seed records all 650 structured runs and observed timing summaries;
+- PR #51 remains draft and must not be merged until the current CI run passes.
