@@ -46,6 +46,13 @@ for required in (
     "/api/v1/architect/nodes/${encodeURIComponent(node.node_id)}/wake",
     'id="nodePicker"',
     'id="siteClock"',
+    'id="lmstudioPanel"',
+    'id="lmstudioModel"',
+    'id="lmstudioInstall"',
+    '"lmstudio_install"',
+    '"lmstudio_model_get"',
+    '"lmstudio_model_load"',
+    "agent/lmstudio",
 ):
     if required not in hub:
         raise SystemExit(f"required real Hub capability missing: {required}")
@@ -161,7 +168,7 @@ required = {
     "nodes", "missions", "assignments", "results", "commands", "audit_events",
     "agent_reports", "architect_sessions", "node_logs", "node_log_rate_limits",
     "agent_rollouts", "architect_projects", "project_work_items",
-    "project_specializations", "node_network_state",
+    "project_specializations", "node_network_state", "node_ai_state",
 }
 tables = {
     row[0]

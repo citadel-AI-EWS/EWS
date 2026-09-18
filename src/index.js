@@ -22,22 +22,41 @@ const ALLOWED_REPORT_SENSITIVITIES = new Set([
 ]);
 const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
-const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown"]);
+const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_model_get", "lmstudio_model_load"]);
 const POWER_COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.6",
+  version: "0.3.7",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "c1883a2b06a0b129acda29d8b002ecf4d34c4cfef96c965baf66145ef8ea5256"
+      sha256: "a58bad76cb41abfee35e23edd9abfa58091dba3669fc9779ba9fc36fa61ac91a"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "3f201a820fb1ac79b7cd3e600fb0e11e981a0f7a720be64e8964b9fd06850d56"
+      sha256: "9061a0b567e0c1fcc9c6f99d1916326322d6de8e47826df30ddde925c8d9ac5c"
     }
   ]
+});
+const LMSTUDIO_INTEGRATION = Object.freeze({
+  github_url: "https://github.com/citadel-AI-EWS/EWS/tree/main/agent/lmstudio",
+  official_url: "https://lmstudio.ai",
+  server_url: "http://127.0.0.1:1234",
+  windows_asset: Object.freeze({
+    path: "install_llmstudio_headless.ps1",
+    url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/install_llmstudio_headless.ps1",
+    sha256: "d9a96026bea2e7729f0b086d8d668c3f4f93b7725b5e0af3f2936b68f89475cf"
+  }),
+  linux_asset: Object.freeze({
+    path: "install_llmstudio_headless.sh",
+    url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/install_llmstudio_headless.sh",
+    sha256: "15dcfd76d3c929ec2ca459a19879d565a9ec6483c33fcf9b3d8ba5a8ef145d39"
+  }),
+  model_presets: Object.freeze([
+    { id: "ibm/granite-4-micro", label: "IBM Granite 4 Micro" },
+    { id: "openai/gpt-oss-20b", label: "OpenAI GPT-OSS 20B" }
+  ])
 });
 const CONTROLLER_COMMAND_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0";
 let reportSchemaPromise;
@@ -47,6 +66,7 @@ let commandIndexPromise;
 let nodeNetworkSchemaPromise;
 let rolloutSchemaPromise;
 let projectSchemaPromise;
+let nodeAiSchemaPromise;
 
 class ApiError extends Error {
   constructor(status, code) {
@@ -377,6 +397,41 @@ async function ensureNodeNetworkStorage(env) {
     });
   }
   await nodeNetworkSchemaPromise;
+}
+
+async function ensureNodeAiStorage(env) {
+  if (!nodeAiSchemaPromise) {
+    nodeAiSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS node_ai_state (
+          node_id TEXT PRIMARY KEY,
+          runtime TEXT NOT NULL DEFAULT 'lmstudio',
+          installed INTEGER NOT NULL DEFAULT 0 CHECK (installed IN (0,1)),
+          selected_model TEXT,
+          loaded_model TEXT,
+          server_running INTEGER NOT NULL DEFAULT 0 CHECK (server_running IN (0,1)),
+          last_action TEXT,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_node_ai_state_updated
+        ON node_ai_state(updated_at DESC)
+      `)
+    ]).catch((error) => {
+      nodeAiSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await nodeAiSchemaPromise;
+}
+
+function lmstudioInstallAssetForNode(node) {
+  const osName = String(node?.os_name || "").toLowerCase();
+  if (osName.includes("windows")) return LMSTUDIO_INTEGRATION.windows_asset;
+  if (osName.includes("linux")) return LMSTUDIO_INTEGRATION.linux_asset;
+  throw new ApiError(409, "lmstudio_platform_not_supported");
 }
 
 async function ensureRolloutStorage(env) {
@@ -1171,6 +1226,14 @@ function normalizeCapabilities(value) {
     requireString(item, "capabilities", 64)
   ))];
   return JSON.stringify(capabilities);
+}
+
+function normalizeLmModelId(value) {
+  const model = requireString(value, "lmstudio_model", 192);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:\/[A-Za-z0-9][A-Za-z0-9._-]{0,95})?(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,31})?$/.test(model)) {
+    throw new ApiError(400, "invalid_lmstudio_model");
+  }
+  return model;
 }
 
 function normalizeMetrics(value) {
@@ -2147,7 +2210,7 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
   }
 
   const current = await env.DB.prepare(`
-    SELECT command_id, command_type, status
+    SELECT command_id, command_type, payload_json, status
     FROM commands
     WHERE command_id = ? AND node_id = ?
   `).bind(commandId, nodeId).first();
@@ -2193,6 +2256,38 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
       SET status = ?, last_seen_at = CURRENT_TIMESTAMP
       WHERE node_id = ?
     `).bind(nodeStatus, nodeId));
+  }
+
+  if (status === "completed" && current.command_type.startsWith("lmstudio_")) {
+    await ensureNodeAiStorage(env);
+    const payload = safeJson(current.payload_json, {});
+    const model = typeof payload.model === "string" ? payload.model : null;
+    if (current.command_type === "lmstudio_install") {
+      statements.push(env.DB.prepare(`
+        INSERT INTO node_ai_state (node_id, installed, server_running, last_action, updated_at)
+        VALUES (?, 1, 1, 'installed', CURRENT_TIMESTAMP)
+        ON CONFLICT(node_id) DO UPDATE SET
+          installed = 1, server_running = 1, last_action = 'installed', updated_at = CURRENT_TIMESTAMP
+      `).bind(nodeId));
+    } else if (current.command_type === "lmstudio_model_get") {
+      statements.push(env.DB.prepare(`
+        INSERT INTO node_ai_state (node_id, installed, selected_model, last_action, updated_at)
+        VALUES (?, 1, ?, 'model_downloaded', CURRENT_TIMESTAMP)
+        ON CONFLICT(node_id) DO UPDATE SET
+          installed = 1, selected_model = excluded.selected_model,
+          last_action = 'model_downloaded', updated_at = CURRENT_TIMESTAMP
+      `).bind(nodeId, model));
+    } else if (current.command_type === "lmstudio_model_load") {
+      statements.push(env.DB.prepare(`
+        INSERT INTO node_ai_state (
+          node_id, installed, selected_model, loaded_model, server_running, last_action, updated_at
+        ) VALUES (?, 1, ?, ?, 1, 'model_loaded', CURRENT_TIMESTAMP)
+        ON CONFLICT(node_id) DO UPDATE SET
+          installed = 1, selected_model = excluded.selected_model,
+          loaded_model = excluded.loaded_model, server_running = 1,
+          last_action = 'model_loaded', updated_at = CURRENT_TIMESTAMP
+      `).bind(nodeId, model, model));
+    }
   }
 
   const results = await env.DB.batch(statements);
@@ -2254,7 +2349,8 @@ async function architectOverview(request, env) {
     ensureSessionStorage(env),
     ensureAutoEnrollmentStorage(env),
     ensureProjectStorage(env),
-    ensureNodeNetworkStorage(env)
+    ensureNodeNetworkStorage(env),
+    ensureNodeAiStorage(env)
   ]);
 
   const [counts, nodesQuery, missionsQuery, commandsQuery] = await Promise.all([
@@ -2276,6 +2372,9 @@ async function architectOverview(request, env) {
       "AND (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-5 minutes')) " +
       "THEN 'offline' ELSE n.status END AS status, n.cpu_percent, n.memory_percent, " +
       "n.enrolled_at, n.last_seen_at, net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json, " +
+      "ai.installed AS lmstudio_installed, ai.selected_model AS lmstudio_selected_model, " +
+      "ai.loaded_model AS lmstudio_loaded_model, ai.server_running AS lmstudio_server_running, " +
+      "ai.last_action AS lmstudio_last_action, ai.updated_at AS lmstudio_updated_at, " +
       "(SELECT nl.event_type FROM node_logs AS nl WHERE nl.node_id = n.node_id " +
       "ORDER BY datetime(nl.created_at) DESC, nl.event_id DESC LIMIT 1) AS last_event_type, " +
       "(SELECT nl.message FROM node_logs AS nl WHERE nl.node_id = n.node_id " +
@@ -2297,6 +2396,7 @@ async function architectOverview(request, env) {
       "FROM nodes AS n " +
       "LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id " +
       "LEFT JOIN node_network_state AS net ON net.node_id = n.node_id " +
+      "LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id " +
       "WHERE n.status != 'revoked' " +
       "ORDER BY n.last_seen_at DESC LIMIT 100"
     ).all(),
@@ -2398,7 +2498,7 @@ async function publicHubNodes(env) {
 
 async function architectRelease(request, env) {
   await authenticateArchitect(request, env);
-  return json({ ok: true, release: LATEST_NODE_RELEASE });
+  return json({ ok: true, release: LATEST_NODE_RELEASE, lmstudio: LMSTUDIO_INTEGRATION });
 }
 
 async function architectCreateCommand(request, env, nodeId) {
@@ -2419,7 +2519,7 @@ async function architectCreateCommand(request, env, nodeId) {
   }
 
   const node = await env.DB.prepare(
-    "SELECT node_id, status, agent_version, last_seen_at, " +
+    "SELECT node_id, status, agent_version, os_name, architecture, last_seen_at, " +
     "CASE WHEN last_seen_at IS NOT NULL " +
     "AND datetime(last_seen_at) >= datetime('now', '-5 minutes') THEN 1 ELSE 0 END AS recently_seen " +
     "FROM nodes WHERE node_id = ?"
@@ -2434,6 +2534,9 @@ async function architectCreateCommand(request, env, nodeId) {
     throw new ApiError(409, "node_offline");
   }
   if (commandType === "stop" && node.agent_version !== LATEST_NODE_RELEASE.version) {
+    throw new ApiError(409, "agent_update_required");
+  }
+  if (commandType.startsWith("lmstudio_") && node.agent_version !== LATEST_NODE_RELEASE.version) {
     throw new ApiError(409, "agent_update_required");
   }
   if (commandType === "pause" && node.status === "paused") {
@@ -2452,7 +2555,21 @@ async function architectCreateCommand(request, env, nodeId) {
   }
 
   const commandId = "command_" + crypto.randomUUID();
-  const payload = commandType === "update" ? LATEST_NODE_RELEASE : {};
+  let payload = {};
+  if (commandType === "update") {
+    payload = LATEST_NODE_RELEASE;
+  } else if (commandType === "lmstudio_install") {
+    payload = { asset: lmstudioInstallAssetForNode(node) };
+  } else if (commandType === "lmstudio_model_get" || commandType === "lmstudio_model_load") {
+    await ensureNodeAiStorage(env);
+    const aiState = await env.DB.prepare(
+      "SELECT installed FROM node_ai_state WHERE node_id = ?"
+    ).bind(nodeId).first();
+    if (Number(aiState?.installed || 0) !== 1) {
+      throw new ApiError(409, "lmstudio_not_installed");
+    }
+    payload = { model: normalizeLmModelId(body.model) };
+  }
   const payloadJson = JSON.stringify(payload);
   const createdAt = new Date().toISOString();
   const signature = await signControllerCommand(
@@ -2688,7 +2805,7 @@ function apiDescription() {
     api_version: "v1",
     authentication: "CITADEL-Ed25519",
     mission_types: ["system_inventory"],
-    command_types: ["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer"],
+    command_types: ["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_model_get", "lmstudio_model_load"],
     arbitrary_remote_execution: false
   });
 }

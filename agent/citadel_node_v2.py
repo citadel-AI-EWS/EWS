@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 import citadel_node_v1 as v1
 
-VERSION = "0.3.6"
+VERSION = "0.3.7"
 v1.VERSION = VERSION
 v1.USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 
@@ -53,6 +53,9 @@ ALLOWED_EVENTS = {
     "system_reboot_scheduled",
     "system_shutdown_scheduled",
     "wake_packet_sent",
+    "lmstudio_installed",
+    "lmstudio_model_downloaded",
+    "lmstudio_model_loaded",
     "command_failure_ack_failed",
     "command_failed",
 }

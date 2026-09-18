@@ -20,8 +20,8 @@ need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_tok
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
 need(setup.includes("$RunArguments"), "Windows paths are not quoted");
 need(setup.includes("refusing to start another copy"), "process inspection is not fail-closed");
-need(agentV1.includes('VERSION = "0.3.6"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.6"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.7"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.7"'), "v2 release not bumped");
 need(agentV2.includes('"windows_sleep_inhibit"'), "agent drops sleep event");
 for (const eventType of [
   "windows_sleep_inhibit",
@@ -33,7 +33,10 @@ for (const eventType of [
   "agent_stop_requested",
   "system_reboot_scheduled",
   "system_shutdown_scheduled",
-  "wake_packet_sent"
+  "wake_packet_sent",
+  "lmstudio_installed",
+  "lmstudio_model_downloaded",
+  "lmstudio_model_loaded"
 ]) {
   need(telemetry.includes(`"${eventType}"`), `controller drops ${eventType}`);
 }
@@ -43,8 +46,14 @@ need(index.includes('"system_reboot", "system_shutdown"'), "restricted power com
 need(agentV1.includes('"system_reboot", "system_shutdown"'), "restricted power commands missing from node allow-list");
 need(index.includes('"wake_peer"'), "wake relay command missing from Controller");
 need(agentV1.includes('"wake_peer"'), "wake relay command missing from node allow-list");
+need(index.includes('"lmstudio_install"'), "LM Studio install command missing from Controller allow-list");
+need(index.includes('"lmstudio_model_get"'), "LM Studio model download command missing from Controller allow-list");
+need(index.includes('"lmstudio_model_load"'), "LM Studio model load command missing from Controller allow-list");
+need(agentV1.includes('"lmstudio_install"'), "LM Studio install command missing from node allow-list");
+need(agentV1.includes("validate_lmstudio_model_payload"), "LM Studio model validation missing");
+need(agentV1.includes("shell=False"), "fixed argv execution guard missing");
 need(!agentV1.includes('"shell" in SUPPORTED_COMMANDS'), "arbitrary shell command registered");
 need(!buildSite.includes("execute-api.*.amazonaws.com"), "invalid CSP API Gateway wildcard returned");
 need(buildSite.includes("connect-src 'self';"), "published CSP must keep same-origin connect-src");
-need(index.includes('version: "0.3.6"'), "Controller release not bumped");
+need(index.includes('version: "0.3.7"'), "Controller release not bumped");
 console.log("Review backlog guards: PASS");

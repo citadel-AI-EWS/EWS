@@ -19,6 +19,7 @@ import http.client
 import json
 import os
 import platform
+import re
 import shutil
 import socket
 # Subprocesses below use a fixed interpreter, allowlisted local scripts and no shell.
@@ -42,13 +43,15 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.6"
+VERSION = "0.3.7"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer"}
+SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_model_get", "lmstudio_model_load"}
 UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
+LMSTUDIO_INSTALL_FILE_NAMES = {"install_llmstudio_headless.ps1", "install_llmstudio_headless.sh"}
+LMSTUDIO_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,95})?(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,31})?$")
 
 
 def now_iso() -> str:
@@ -425,12 +428,13 @@ class Agent:
         self.results = ResultQueue(config.data_dir / "pending-results.json")
         self.stop_path = config.data_dir / "STOP"
         self.paused_path = config.data_dir / "PAUSED"
+        self.lmstudio_state_path = config.data_dir / "lmstudio-state.json"
         self.last_heartbeat = 0.0
         self.enrollment_confirmed = False
 
     @property
     def capabilities(self) -> list[str]:
-        return sorted(HANDLERS)
+        return sorted(set(HANDLERS) | {"lmstudio_remote"})
 
     def require_node_id(self) -> str:
         if not self.identity.node_id:
@@ -586,6 +590,12 @@ class Agent:
         elif command_type == "wake_peer":
             if not self.validate_wake_payload(payload):
                 return False
+        elif command_type == "lmstudio_install":
+            if not self.validate_lmstudio_install_payload(payload):
+                return False
+        elif command_type in {"lmstudio_model_get", "lmstudio_model_load"}:
+            if not self.validate_lmstudio_model_payload(payload):
+                return False
         elif payload != {}:
             return False
         payload_json = json_text(payload)
@@ -654,6 +664,142 @@ class Agent:
         except (ValueError, TypeError):
             return False
         return address.version == 4 and address.is_private
+
+    @staticmethod
+    def validate_lmstudio_install_payload(payload: dict[str, Any]) -> bool:
+        asset = payload.get("asset")
+        if not isinstance(asset, dict):
+            return False
+        name = asset.get("path")
+        url = asset.get("url")
+        digest = asset.get("sha256")
+        if name not in LMSTUDIO_INSTALL_FILE_NAMES:
+            return False
+        parsed = urllib.parse.urlsplit(url) if isinstance(url, str) else None
+        if (
+            parsed is None
+            or parsed.scheme != "https"
+            or parsed.hostname != "raw.githubusercontent.com"
+            or parsed.path != f"/citadel-AI-EWS/EWS/main/agent/lmstudio/{name}"
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+        ):
+            return False
+        expected = "install_llmstudio_headless.ps1" if os.name == "nt" else "install_llmstudio_headless.sh"
+        return name == expected
+
+    @staticmethod
+    def validate_lmstudio_model_payload(payload: dict[str, Any]) -> bool:
+        model = payload.get("model")
+        return isinstance(model, str) and bool(LMSTUDIO_MODEL_RE.fullmatch(model))
+
+    def lmstudio_state(self) -> dict[str, Any]:
+        state = load_json(self.lmstudio_state_path, {}) or {}
+        return state if isinstance(state, dict) else {}
+
+    def save_lmstudio_state(self, **updates: Any) -> None:
+        state = self.lmstudio_state()
+        state.update(updates)
+        state["updated_at"] = now_iso()
+        atomic_write(self.lmstudio_state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+
+    def find_lms(self) -> str | None:
+        candidates: list[str | None] = [shutil.which("lms")]
+        home = Path.home()
+        if os.name == "nt":
+            candidates.extend([
+                str(home / ".lmstudio" / "bin" / "lms.exe"),
+                str(home / ".lmstudio" / "bin" / "lms.cmd"),
+            ])
+        else:
+            candidates.append(str(home / ".lmstudio" / "bin" / "lms"))
+        for candidate in candidates:
+            if candidate and Path(candidate).is_file():
+                return str(Path(candidate))
+        return None
+
+    def run_lms(self, args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
+        executable = self.find_lms()
+        if not executable:
+            raise RuntimeError("lmstudio_not_installed")
+        result = subprocess.run(  # nosec B603
+            [executable, *args],
+            timeout=timeout,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "lms command failed").strip()
+            raise RuntimeError(detail[:500])
+        return result
+
+    def install_lmstudio(self, payload: dict[str, Any]) -> None:
+        if not self.validate_lmstudio_install_payload(payload):
+            raise RuntimeError("invalid lmstudio installer payload")
+        asset = payload["asset"]
+        data = self.download_update_file(asset["url"])
+        if hashlib.sha256(data).hexdigest() != asset["sha256"]:
+            raise RuntimeError("lmstudio installer helper hash mismatch")
+        suffix = ".ps1" if os.name == "nt" else ".sh"
+        fd, temp_name = tempfile.mkstemp(prefix="citadel-lmstudio-", suffix=suffix, dir=self.config.data_dir)
+        os.close(fd)
+        helper = Path(temp_name)
+        try:
+            helper.write_bytes(data)
+            if os.name == "nt":
+                powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+                if not powershell:
+                    raise RuntimeError("PowerShell unavailable")
+                argv = [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(helper)]
+            else:
+                bash = shutil.which("bash")
+                if not bash:
+                    raise RuntimeError("bash unavailable")
+                argv = [bash, str(helper)]
+            result = subprocess.run(  # nosec B603
+                argv,
+                timeout=1800,
+                capture_output=True,
+                text=True,
+                shell=False,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "LM Studio installation failed").strip()
+                raise RuntimeError(detail[:500])
+            if not self.find_lms():
+                raise RuntimeError("lms CLI unavailable after installation")
+            self.save_lmstudio_state(installed=True, last_action="installed")
+            self.log.write("lmstudio_installed")
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                helper.unlink()
+
+    def download_lmstudio_model(self, payload: dict[str, Any]) -> None:
+        if not self.validate_lmstudio_model_payload(payload):
+            raise RuntimeError("invalid lmstudio model")
+        model = payload["model"]
+        self.run_lms(["daemon", "up"], timeout=120)
+        self.run_lms(["get", model, "-y"], timeout=7200)
+        self.save_lmstudio_state(installed=True, selected_model=model, last_action="model_downloaded")
+        self.log.write("lmstudio_model_downloaded", model=model)
+
+    def load_lmstudio_model(self, payload: dict[str, Any]) -> None:
+        if not self.validate_lmstudio_model_payload(payload):
+            raise RuntimeError("invalid lmstudio model")
+        model = payload["model"]
+        self.run_lms(["daemon", "up"], timeout=120)
+        self.run_lms(["server", "start", "--port", "1234"], timeout=120)
+        self.run_lms(["load", model, "-y"], timeout=1800)
+        self.save_lmstudio_state(
+            installed=True,
+            selected_model=model,
+            loaded_model=model,
+            server_running=True,
+            last_action="model_loaded",
+        )
+        self.log.write("lmstudio_model_loaded", model=model)
 
     def send_wake_packet(self, payload: dict[str, Any]) -> None:
         if not self.validate_wake_payload(payload):
@@ -912,6 +1058,12 @@ class Agent:
                     self.schedule_system_power_action(command_type)
                 elif command_type == "wake_peer":
                     self.send_wake_packet(command.get("payload") or {})
+                elif command_type == "lmstudio_install":
+                    self.install_lmstudio(command.get("payload") or {})
+                elif command_type == "lmstudio_model_get":
+                    self.download_lmstudio_model(command.get("payload") or {})
+                elif command_type == "lmstudio_model_load":
+                    self.load_lmstudio_model(command.get("payload") or {})
                 self.ack_command(command_id, "completed")
                 self.log.write(
                     "command_completed",
@@ -1083,8 +1235,8 @@ def self_test() -> int:
             "unapproved command accepted",
         )
         require_test(
-            {"system_reboot", "system_shutdown", "wake_peer"}.issubset(SUPPORTED_COMMANDS),
-            "restricted power/wake commands missing",
+            {"system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_model_get", "lmstudio_model_load"}.issubset(SUPPORTED_COMMANDS),
+            "restricted power/wake/LM Studio commands missing",
         )
         require_test(
             "shell" not in SUPPORTED_COMMANDS,
@@ -1093,6 +1245,14 @@ def self_test() -> int:
         require_test(
             set(HANDLERS) == {"system_inventory"},
             "unexpected handler registered",
+        )
+        require_test(
+            agent.validate_lmstudio_model_payload({"model": "openai/gpt-oss-20b"}),
+            "valid LM Studio model id rejected",
+        )
+        require_test(
+            not agent.validate_lmstudio_model_payload({"model": "x;calc.exe"}),
+            "unsafe LM Studio model id accepted",
         )
 
         bom_json = root / "bom.json"
