@@ -38,7 +38,6 @@ for required in (
     "/api/v1/architect/overview",
     "/api/v1/architect/presence",
     "/api/v1/architect/release",
-    "/api/v1/architect/work-roles",
     "/api/v1/architect/missions",
     "cloudflared access ssh --hostname %h",
     "CONFIGURED LOCALLY",
@@ -63,6 +62,19 @@ for forbidden in (
 
 if "SSH target configured locally; tunnel reachability is not yet verified" not in hub:
     raise SystemExit("Hub must not claim SSH reachability before Tunnel verification")
+
+architect = Path("architect.html").read_text(encoding="utf-8")
+worker = Path("src/index.js").read_text(encoding="utf-8")
+for required in (
+    "/api/v1/architect/work-roles",
+    "LIVE OPERATIONS CENTER",
+    "operationsAlert",
+    "workRoles",
+):
+    if required not in architect:
+        raise SystemExit(f"required Architect Live Operations capability missing: {required}")
+if '/api/v1/architect/work-roles' not in worker or "architectWorkRoles" not in worker:
+    raise SystemExit("Architect work-role API route/handler missing from Worker")
 
 setup = Path("agent/setup_windows.ps1").read_text(encoding="utf-8").lower()
 installer = Path("agent/Install Windows Node.cmd").read_text(encoding="utf-8").lower()
