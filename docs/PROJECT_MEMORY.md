@@ -343,3 +343,37 @@ Current execution boundary:
 
 - Project intake, four-gate approval, storage, work-item creation and node allocation are real.
 - Generic arbitrary-text project execution is not falsely reported as complete: work items are currently planned in `project_work_items`; execution requires an explicit reviewed project-worker capability rather than turning Architect text into arbitrary shell/code.
+
+
+## 2026-09-18 — Live Operations command-center redesign and work specializations
+
+Operator requirements:
+
+- First Architect page is **LIVE OPERATIONS** and must display real Controller data only.
+- Remove the visible **Latest audit events** block from the operations page. Audit storage remains intact for security and forensic accountability.
+- Every node card must show, without opening details:
+  - CITADEL node identity;
+  - derived local agent label tied to the real node number;
+  - last contact;
+  - alive/dead state;
+  - healthy/unhealthy state.
+- Health detail expands with a **+** control and shows hostname, Node ID, Controller status, OS/architecture, CPU/RAM, public IP/presence, enrollment, agent version and warnings.
+- Alive means non-revoked/non-offline with a heartbeat no older than five minutes.
+- Healthy means alive with no critical CPU/RAM signal (critical threshold 95%).
+- On entry, show a closable **OPERATIONS BRIEF** containing only currently important node problems; if there are none, state that no critical node problem is present.
+- Add professional animated visualizations, but never synthetic operational values. Current UI charts use only real node snapshots:
+  - fleet health;
+  - CPU;
+  - RAM;
+  - Controller→node topology.
+- Old simulations are the evidence for these legacy worker concepts:
+  - Planner;
+  - Verifier;
+  - Research;
+  - Report;
+  - Metrics;
+  - Recovery.
+- The Architect explicitly requested additional work specializations Programmer and Mathematician. Security Analyst is included as a new Hub specialization for security/audit blocks.
+- Architect is represented separately as a human approval gate, not as a machine worker.
+- Every project work item now persists `role_name`; deterministic classification assigns a primary specialization before node allocation.
+- Current agent capability reporting only exposes real executable mission handlers (currently `system_inventory`). Therefore role assignment is project metadata/planning and must not be misrepresented as capability-aware execution until worker capabilities are actually implemented.
