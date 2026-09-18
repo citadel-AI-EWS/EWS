@@ -52,6 +52,33 @@ SHA256_HEX_OF_EXACT_BODY
 For a request without a body, hash the empty string. The exact timestamp header
 value is included in the signed message. The private key never leaves the computer.
 
+## Controller-signed commands
+
+Commands returned by `GET /api/v1/nodes/{node_id}/commands` are authenticated
+independently from the node request signature. A node must reject a command unless
+all of the following verify:
+
+- algorithm: Ed25519;
+- trust root: the pinned Controller public JWK whose `x` value is
+  `erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0`;
+- signature: unpadded base64url in the command's `signature` field;
+- payload hash: SHA-256 of the exact UTF-8 bytes of `JSON.stringify(command.payload || {})`;
+- signed UTF-8 message:
+
+```text
+CITADEL-COMMAND-V1
+COMMAND_ID
+NODE_ID
+COMMAND_TYPE
+SHA256_HEX_OF_PAYLOAD_JSON
+CREATED_AT
+```
+
+The private Controller signing key exists only as the protected
+`CONTROLLER_COMMAND_PRIVATE_JWK` deployment secret. Nodes never receive it.
+Unknown command types, a mismatched node ID, an invalid signature, or a command
+outside the local allow-list must be rejected without execution.
+
 ## Durable reports
 
 `POST /api/v1/nodes/{node_id}/results` stores the complete authenticated report
@@ -77,10 +104,16 @@ report can be supplied as `report`:
 The maximum serialized `report` size is 512 KiB. Supported sensitivity labels
 are `public`, `internal`, `confidential`, and `restricted`.
 
-Authenticated architect routes:
+Authenticated Architect routes include:
 
-- `GET /api/v1/architect/reports?limit=50`
+- `GET /api/v1/architect/overview`
+- `POST /api/v1/architect/missions`
+- `POST /api/v1/architect/nodes/{node_id}/commands`
+- `GET /api/v1/architect/reports?limit=50&offset=0`
 - `GET /api/v1/architect/reports/{report_id-or-result_id}`
+- `GET|POST /api/v1/architect/sessions`
+- `GET|PATCH|DELETE /api/v1/architect/sessions/{session_id}`
+- `GET /api/v1/architect/storage`
 
 The list route returns metadata only. Full report content is returned only by
 the detail route. Both require the architect bearer token.
