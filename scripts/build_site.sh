@@ -2,15 +2,56 @@
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT="${1:-$ROOT/public}"
-case "$OUTPUT" in
-  /|"$HOME"|"$ROOT")
-    printf 'Refusing unsafe output directory: %s\n' "$OUTPUT" >&2
-    exit 2
-    ;;
+
+if [[ "$OUTPUT" != /* ]]; then
+  OUTPUT="$PWD/$OUTPUT"
+fi
+OUTPUT="$(python - "$OUTPUT" <<'PY'
+import os
+import sys
+print(os.path.realpath(sys.argv[1]))
+PY
+)"
+
+HOME_CANON=""
+if [[ -n "${HOME:-}" ]]; then
+  HOME_CANON="$(python - "$HOME" <<'PY'
+import os
+import sys
+print(os.path.realpath(sys.argv[1]))
+PY
+)"
+fi
+
+unsafe=0
+if [[ "$OUTPUT" == "/" || "$OUTPUT" == "$ROOT" || ( -n "$HOME_CANON" && "$OUTPUT" == "$HOME_CANON" ) ]]; then
+  unsafe=1
+fi
+case "$ROOT/" in
+  "$OUTPUT/"*) unsafe=1 ;;
 esac
+if [[ -n "$HOME_CANON" ]]; then
+  case "$HOME_CANON/" in
+    "$OUTPUT/"*) unsafe=1 ;;
+  esac
+fi
+if (( unsafe )); then
+  printf 'Refusing unsafe output directory: %s\n' "$OUTPUT" >&2
+  exit 2
+fi
+
+if [[ -L "$OUTPUT" ]]; then
+  printf 'Refusing symlinked output directory: %s\n' "$OUTPUT" >&2
+  exit 2
+fi
+if [[ -e "$OUTPUT" && ! -d "$OUTPUT" ]]; then
+  printf 'Refusing non-directory output path: %s\n' "$OUTPUT" >&2
+  exit 2
+fi
 if [[ -d "$OUTPUT" ]]; then
   find "$OUTPUT" -mindepth 1 -delete
 fi
+
 mkdir -p "$OUTPUT/node-test" "$OUTPUT/architect/logs" "$OUTPUT/hub" "$OUTPUT/prototype"
 cp "$ROOT/live-index.html" "$OUTPUT/index.html"
 cp "$ROOT/index.html" "$OUTPUT/prototype/index.html"
