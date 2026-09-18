@@ -56,6 +56,12 @@ ALLOWED_EVENTS = {
     "lmstudio_installed",
     "lmstudio_model_downloaded",
     "lmstudio_model_loaded",
+    "windows_sleep_hibernate_inhibit",
+    "network_profile_remember_failed",
+    "network_recovery_failed",
+    "network_recovery_attempted",
+    "hybrid_query_completed",
+    "lmstudio_state_report_failed",
     "command_failure_ack_failed",
     "command_failed",
 }
