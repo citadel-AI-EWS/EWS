@@ -30,6 +30,9 @@ export const ALLOWED_EVENT_TYPES = new Set([
   "system_reboot_scheduled",
   "system_shutdown_scheduled",
   "wake_packet_sent",
+  "lmstudio_installed",
+  "lmstudio_model_downloaded",
+  "lmstudio_model_loaded",
   "command_failure_ack_failed",
   "command_failed"
 ]);
