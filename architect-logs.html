@@ -1,183 +1,72 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" dir="ltr">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
-  <title>CITADEL — журнал узлов TEST</title>
-  <style>
-    :root{font-family:system-ui,-apple-system,sans-serif;color:#f2f5ff;background:#080c17}
-    *{box-sizing:border-box}body{margin:0;min-height:100vh;padding:18px;background:#080c17}main{max-width:900px;margin:auto}
-    h1{font-size:28px;margin:8px 0}h2{font-size:19px}.brand,.muted,.small{color:#9aa8c5}.brand{font-size:12px;font-weight:900;letter-spacing:.13em}
-    .card{margin-top:16px;padding:17px;border:1px solid #2b3757;border-radius:16px;background:#11182a}.grid{display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px}
-    label{display:block;margin:8px 0 6px;font-weight:700}input,select,button{width:100%;padding:12px;border-radius:10px;font-size:15px}input,select{border:1px solid #3a496f;background:#090e1b;color:#fff}
-    button{border:0;background:#3478f6;color:#fff;font-weight:800;cursor:pointer}button.secondary{background:#273451}button:disabled{opacity:.55}.toolbar{display:flex;gap:9px;margin-top:12px}.toolbar button{width:auto;flex:1}
-    .status{margin-top:15px;padding:12px;border-radius:10px;background:#0b1222;white-space:pre-wrap}.good{border-left:4px solid #35d07f}.bad{border-left:4px solid #ff6874}
-    .event{margin-top:10px;padding:13px;border-radius:12px;background:#0b1222;border-left:4px solid #5b8fff;overflow-wrap:anywhere}.event.warn{border-left-color:#ffb44f}.event.error{border-left-color:#ff6874}.event.debug{border-left-color:#8d97aa}
-    .event strong{display:block}.details{margin-top:8px;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px;color:#cfd9ee;max-height:220px;overflow:auto}
-    .hidden{display:none!important}@media(max-width:650px){.grid{grid-template-columns:1fr}.toolbar{flex-direction:column}.toolbar button{width:100%}}
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>CITADEL — Node Logs</title>
+<style>
+:root{font-family:system-ui,-apple-system,sans-serif;color:#f2f5ff;background:#080c17}*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:18px;background:#080c17}main{max-width:980px;margin:auto}
+.top{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}.brand,.muted,.small{color:#9aa8c5}.brand{font-size:12px;font-weight:900;letter-spacing:.13em}.lang{display:flex;gap:5px}.lang button{width:auto;margin:0;padding:7px 10px;border:1px solid #2b3757;background:#11182a;color:#93a0ba;border-radius:999px}.lang button.active{border-color:#4e82c8;color:#b9d3ff}
+h1{font-size:28px;margin:8px 0}h2{font-size:19px}.card{margin-top:16px;padding:17px;border:1px solid #2b3757;border-radius:16px;background:#11182a}.grid{display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px}
+label{display:block;margin:8px 0 6px;font-weight:700}input,select,button{width:100%;padding:12px;border-radius:10px;font-size:15px}input,select{border:1px solid #3a496f;background:#090e1b;color:#fff}button{border:0;background:#3478f6;color:#fff;font-weight:800;cursor:pointer}button.secondary{background:#273451}button:disabled{opacity:.55}.toolbar{display:flex;gap:9px;margin-top:12px}.toolbar button{width:auto;flex:1}
+.status{margin-top:15px;padding:12px;border-radius:10px;background:#0b1222;white-space:pre-wrap}.good{border-left:4px solid #35d07f}.bad{border-left:4px solid #ff6874}.event{margin-top:10px;padding:13px;border-radius:12px;background:#0b1222;border-left:4px solid #5b8fff;overflow-wrap:anywhere}.event.warn{border-left-color:#ffb44f}.event.error{border-left-color:#ff6874}.event.debug{border-left-color:#8d97aa}.event strong{display:block}.details{margin-top:8px;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px;color:#cfd9ee;max-height:220px;overflow:auto}.hidden{display:none!important}@media(max-width:650px){.grid{grid-template-columns:1fr}.toolbar{flex-direction:column}.toolbar button{width:100%}}
+</style>
 </head>
 <body>
 <main>
-  <div class="brand">CITADEL / ARCHITECT / TELEMETRY / TEST</div>
-  <h1>Журнал узлов</h1>
-  <p class="muted">Только операционные события. Секретные поля редактируются на сервере; журнал не является каналом команд.</p>
+<div class="top"><div class="brand">CITADEL / ARCHITECT / TELEMETRY</div><div class="lang"><button type="button" data-lang="ru">RU</button><button type="button" data-lang="en">EN</button><button type="button" data-lang="he">HE</button></div></div>
+<h1 data-i18n="title">Журнал узлов</h1>
+<p class="muted" data-i18n="lead">Только реальные операционные события от зарегистрированных агентов. Журнал не является каналом команд.</p>
 
-  <section id="loginCard" class="card">
-    <h2>Защищённый вход</h2>
-    <label for="token">Секрет архитектора</label>
-    <input id="token" type="password" autocomplete="off" spellcheck="false">
-    <button id="loginButton" type="button">Войти</button>
-  </section>
+<section id="loginCard" class="card">
+<h2 data-i18n="loginTitle">Защищённый вход</h2>
+<label for="token" data-i18n="token">Секрет архитектора</label>
+<input id="token" type="password" autocomplete="off" spellcheck="false">
+<button id="loginButton" type="button" data-i18n="login">Войти</button>
+</section>
 
-  <section id="browser" class="hidden">
-    <section class="card">
-      <div id="stats" class="small">Статистика загружается…</div>
-      <div class="grid">
-        <div><label for="nodeFilter">Node ID</label><input id="nodeFilter" maxlength="128" placeholder="все узлы"></div>
-        <div><label for="levelFilter">Уровень</label><select id="levelFilter"><option value="">все</option><option>debug</option><option>info</option><option>warn</option><option>error</option></select></div>
-        <div><label for="typeFilter">Тип</label><select id="typeFilter"><option value="">все</option><option>agent_start</option><option>agent_stop</option><option>node_enrolled</option><option>cycle_error</option><option>resource_guard</option><option>assignment_rejected_local</option><option>result_submitted</option><option>result_queued</option><option>queued_results_flushed</option><option>command_signature_rejected</option><option>command_completed</option><option>command_failure_ack_failed</option><option>command_failed</option></select></div>
-      </div>
-      <div class="toolbar">
-        <button id="refreshButton" type="button">Обновить</button>
-        <button id="moreButton" class="secondary" type="button" disabled>Ещё</button>
-        <button id="logoutButton" class="secondary" type="button">Выйти</button>
-      </div>
-    </section>
-    <section class="card"><div id="events"></div></section>
-  </section>
-  <div id="status" class="status">Ожидаю входа.</div>
+<section id="browser" class="hidden">
+<section class="card">
+<div id="stats" class="small" data-i18n="loadingStats">Статистика загружается…</div>
+<div class="grid">
+<div><label for="nodeFilter">Node ID</label><input id="nodeFilter" maxlength="128" data-ph="allNodes" placeholder="все узлы"></div>
+<div><label for="levelFilter" data-i18n="level">Уровень</label><select id="levelFilter"><option value="" data-i18n="all">все</option><option>debug</option><option>info</option><option>warn</option><option>error</option></select></div>
+<div><label for="typeFilter" data-i18n="type">Тип</label><select id="typeFilter"><option value="" data-i18n="all">все</option><option>agent_start</option><option>agent_stop</option><option>node_enrolled</option><option>cycle_error</option><option>resource_guard</option><option>assignment_rejected_local</option><option>result_submitted</option><option>result_queued</option><option>queued_results_flushed</option><option>command_signature_rejected</option><option>command_completed</option><option>command_failure_ack_failed</option><option>command_failed</option><option>system_reboot_scheduled</option><option>system_shutdown_scheduled</option></select></div>
+</div>
+<div class="toolbar"><button id="refreshButton" type="button" data-i18n="refresh">Обновить</button><button id="moreButton" class="secondary" type="button" disabled data-i18n="more">Ещё</button><button id="logoutButton" class="secondary" type="button" data-i18n="logout">Выйти</button></div>
+</section>
+<section class="card"><div id="events"></div></section>
+</section>
+<div id="status" class="status" data-i18n="waiting">Ожидаю входа.</div>
 </main>
 <script>
-  const loginCard = document.getElementById("loginCard");
-  const browser = document.getElementById("browser");
-  const tokenInput = document.getElementById("token");
-  const loginButton = document.getElementById("loginButton");
-  const refreshButton = document.getElementById("refreshButton");
-  const moreButton = document.getElementById("moreButton");
-  const logoutButton = document.getElementById("logoutButton");
-  const nodeFilter = document.getElementById("nodeFilter");
-  const levelFilter = document.getElementById("levelFilter");
-  const typeFilter = document.getElementById("typeFilter");
-  const eventsElement = document.getElementById("events");
-  const statsElement = document.getElementById("stats");
-  const statusElement = document.getElementById("status");
-  let architectToken = sessionStorage.getItem("citadel-architect-token") || "";
-  let nextCursor = null;
-
-  function setStatus(message, kind = "") {
-    statusElement.textContent = message;
-    statusElement.className = `status ${kind}`.trim();
-  }
-
-  function addText(parent, tag, text, className = "") {
-    const item = document.createElement(tag);
-    item.textContent = text;
-    if (className) item.className = className;
-    parent.appendChild(item);
-    return item;
-  }
-
-  async function api(path) {
-    const response = await fetch(path, {
-      headers: { authorization: `Bearer ${architectToken}` }
-    });
-    const data = await response.json().catch(() => ({ error: "invalid_server_response" }));
-    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-    return data;
-  }
-
-  function queryPath(cursor = null) {
-    const params = new URLSearchParams({ limit: "50" });
-    if (nodeFilter.value.trim()) params.set("node_id", nodeFilter.value.trim());
-    if (levelFilter.value) params.set("level", levelFilter.value);
-    if (typeFilter.value) params.set("event_type", typeFilter.value);
-    if (cursor) params.set("cursor", cursor);
-    return `/api/v1/architect/logs?${params}`;
-  }
-
-  function renderEvent(event) {
-    const item = document.createElement("div");
-    item.className = `event ${event.level}`;
-    addText(item, "strong", `${event.event_type} · ${event.level}`);
-    addText(item, "div", event.message, "small");
-    addText(item, "div", `${event.node_id} · ${event.created_at}`, "small");
-    if (event.details && Object.keys(event.details).length) {
-      addText(item, "pre", JSON.stringify(event.details, null, 2), "details");
-    }
-    eventsElement.appendChild(item);
-  }
-
-  async function loadStats() {
-    const data = await api("/api/v1/architect/logs/stats");
-    const stats = data.stats || {};
-    statsElement.textContent = `Событий: ${stats.event_count || 0} · узлов: ${stats.node_count || 0} · хранение: ${stats.retention_days || 7} дней · максимум: ${stats.per_node_event_cap || 5000} событий на узел`;
-  }
-
-  async function loadLogs(append = false) {
-    setStatus(append ? "Загружаю следующую страницу…" : "Загружаю журнал…");
-    const data = await api(queryPath(append ? nextCursor : null));
-    if (!append) eventsElement.replaceChildren();
-    for (const event of data.logs || []) renderEvent(event);
-    if (!eventsElement.children.length) addText(eventsElement, "p", "Событий по выбранному фильтру нет.", "muted");
-    nextCursor = data.next_cursor || null;
-    moreButton.disabled = !nextCursor;
-    setStatus(`Показано событий: ${eventsElement.querySelectorAll(".event").length}.`, "good");
-  }
-
-  async function openBrowser() {
-    await Promise.all([loadStats(), loadLogs(false)]);
-    loginCard.classList.add("hidden");
-    browser.classList.remove("hidden");
-    sessionStorage.setItem("citadel-architect-token", architectToken);
-  }
-
-  function logout(message = "Сеанс завершён.") {
-    architectToken = "";
-    nextCursor = null;
-    sessionStorage.removeItem("citadel-architect-token");
-    browser.classList.add("hidden");
-    loginCard.classList.remove("hidden");
-    tokenInput.value = "";
-    eventsElement.replaceChildren();
-    setStatus(message);
-  }
-
-  loginButton.addEventListener("click", async () => {
-    const token = tokenInput.value.trim();
-    if (!token) return setStatus("Введите секрет архитектора.", "bad");
-    architectToken = token;
-    loginButton.disabled = true;
-    try {
-      await openBrowser();
-      tokenInput.value = "";
-    } catch (error) {
-      logout(`Вход не выполнен: ${error.message}`);
-      statusElement.classList.add("bad");
-    } finally {
-      loginButton.disabled = false;
-    }
-  });
-
-  refreshButton.addEventListener("click", async () => {
-    refreshButton.disabled = true;
-    try { await Promise.all([loadStats(), loadLogs(false)]); }
-    catch (error) { setStatus(`Журнал не обновлён: ${error.message}`, "bad"); }
-    finally { refreshButton.disabled = false; }
-  });
-  moreButton.addEventListener("click", async () => {
-    if (!nextCursor) return;
-    moreButton.disabled = true;
-    try { await loadLogs(true); }
-    catch (error) { setStatus(`Следующая страница не загружена: ${error.message}`, "bad"); }
-    finally { moreButton.disabled = !nextCursor; }
-  });
-  logoutButton.addEventListener("click", () => logout());
-
-  if (architectToken) {
-    openBrowser().catch(() => logout("Сохранённый сеанс недействителен. Войдите снова."));
-  }
+const I18N={
+ru:{title:"Журнал узлов",lead:"Только реальные операционные события от зарегистрированных агентов. Журнал не является каналом команд.",loginTitle:"Защищённый вход",token:"Секрет архитектора",login:"Войти",loadingStats:"Статистика загружается…",level:"Уровень",type:"Тип",all:"все",refresh:"Обновить",more:"Ещё",logout:"Выйти",waiting:"Ожидаю входа.",allNodes:"все узлы",events:"Событий",nodes:"узлов",retention:"хранение",days:"дней",limit:"максимум",perNode:"событий на узел",loading:"Загружаю журнал…",loadingMore:"Загружаю следующую страницу…",none:"Событий по выбранному фильтру нет.",shown:"Показано событий",tokenRequired:"Введите секрет архитектора.",loginFailed:"Вход не выполнен",loadFailed:"Журнал не обновлён",moreFailed:"Следующая страница не загружена",ended:"Сеанс завершён.",expired:"Сохранённый сеанс недействителен. Войдите снова."},
+en:{title:"Node logs",lead:"Only real operational events from registered agents. The log is not a command channel.",loginTitle:"Secure sign-in",token:"Architect token",login:"Sign in",loadingStats:"Loading statistics…",level:"Level",type:"Type",all:"all",refresh:"Refresh",more:"More",logout:"Sign out",waiting:"Waiting for sign-in.",allNodes:"all nodes",events:"Events",nodes:"nodes",retention:"retention",days:"days",limit:"maximum",perNode:"events per node",loading:"Loading logs…",loadingMore:"Loading next page…",none:"No events match the selected filters.",shown:"Events shown",tokenRequired:"Enter the Architect token.",loginFailed:"Sign-in failed",loadFailed:"Logs were not refreshed",moreFailed:"Next page was not loaded",ended:"Session ended.",expired:"Saved session is invalid. Sign in again."},
+he:{title:"יומן nodes",lead:"רק אירועים תפעוליים אמיתיים מ-agents רשומים. היומן אינו ערוץ פקודות.",loginTitle:"כניסה מאובטחת",token:"Architect token",login:"כניסה",loadingStats:"טוען סטטיסטיקה…",level:"רמה",type:"סוג",all:"הכול",refresh:"רענון",more:"עוד",logout:"יציאה",waiting:"ממתין לכניסה.",allNodes:"כל ה-nodes",events:"אירועים",nodes:"nodes",retention:"שמירה",days:"ימים",limit:"מקסימום",perNode:"אירועים לכל node",loading:"טוען יומן…",loadingMore:"טוען עמוד נוסף…",none:"אין אירועים לפי הסינון שנבחר.",shown:"אירועים מוצגים",tokenRequired:"יש להזין Architect token.",loginFailed:"הכניסה נכשלה",loadFailed:"היומן לא עודכן",moreFailed:"העמוד הבא לא נטען",ended:"הסשן הסתיים.",expired:"הסשן השמור אינו תקף. יש להיכנס שוב."}
+};
+let lang=localStorage.getItem("citadelLogsLang")||"ru";
+const tr=(k)=>I18N[lang]?.[k]||I18N.ru[k]||k;
+function applyLanguage(next){lang=I18N[next]?next:"ru";localStorage.setItem("citadelLogsLang",lang);document.documentElement.lang=lang;document.documentElement.dir=lang==="he"?"rtl":"ltr";document.querySelectorAll("[data-lang]").forEach(b=>b.classList.toggle("active",b.dataset.lang===lang));document.querySelectorAll("[data-i18n]").forEach(el=>{const v=tr(el.dataset.i18n);if(v)el.textContent=v});document.querySelectorAll("[data-ph]").forEach(el=>el.placeholder=tr(el.dataset.ph));}
+document.querySelectorAll("[data-lang]").forEach(b=>b.addEventListener("click",()=>applyLanguage(b.dataset.lang)));
+const loginCard=document.getElementById("loginCard"),browser=document.getElementById("browser"),tokenInput=document.getElementById("token"),loginButton=document.getElementById("loginButton"),refreshButton=document.getElementById("refreshButton"),moreButton=document.getElementById("moreButton"),logoutButton=document.getElementById("logoutButton"),nodeFilter=document.getElementById("nodeFilter"),levelFilter=document.getElementById("levelFilter"),typeFilter=document.getElementById("typeFilter"),eventsElement=document.getElementById("events"),statsElement=document.getElementById("stats"),statusElement=document.getElementById("status");
+let architectToken=sessionStorage.getItem("citadel-architect-token")||"",nextCursor=null;
+function setStatus(message,kind=""){statusElement.textContent=message;statusElement.className=`status ${kind}`.trim()}
+function addText(parent,tag,text,className=""){const item=document.createElement(tag);item.textContent=text;if(className)item.className=className;parent.appendChild(item);return item}
+async function api(path){const response=await fetch(path,{headers:{authorization:`Bearer ${architectToken}`},cache:"no-store"});const data=await response.json().catch(()=>({error:"invalid_server_response"}));if(!response.ok)throw new Error(data.error||`HTTP ${response.status}`);return data}
+function queryPath(cursor=null){const params=new URLSearchParams({limit:"50"});if(nodeFilter.value.trim())params.set("node_id",nodeFilter.value.trim());if(levelFilter.value)params.set("level",levelFilter.value);if(typeFilter.value)params.set("event_type",typeFilter.value);if(cursor)params.set("cursor",cursor);return `/api/v1/architect/logs?${params}`}
+function renderEvent(event){const item=document.createElement("div");item.className=`event ${event.level}`;addText(item,"strong",`${event.event_type} · ${event.level}`);addText(item,"div",event.message,"small");addText(item,"div",`${event.node_id} · ${event.created_at}`,"small");if(event.details&&Object.keys(event.details).length)addText(item,"pre",JSON.stringify(event.details,null,2),"details");eventsElement.appendChild(item)}
+async function loadStats(){const data=await api("/api/v1/architect/logs/stats");const s=data.stats||{};statsElement.textContent=`${tr("events")}: ${s.event_count||0} · ${tr("nodes")}: ${s.node_count||0} · ${tr("retention")}: ${s.retention_days||7} ${tr("days")} · ${tr("limit")}: ${s.per_node_event_cap||5000} ${tr("perNode")}`}
+async function loadLogs(append=false){setStatus(append?tr("loadingMore"):tr("loading"));const data=await api(queryPath(append?nextCursor:null));if(!append)eventsElement.replaceChildren();for(const event of data.logs||[])renderEvent(event);if(!eventsElement.children.length)addText(eventsElement,"p",tr("none"),"muted");nextCursor=data.next_cursor||null;moreButton.disabled=!nextCursor;setStatus(`${tr("shown")}: ${eventsElement.querySelectorAll(".event").length}.`,"good")}
+async function openBrowser(){await Promise.all([loadStats(),loadLogs(false)]);loginCard.classList.add("hidden");browser.classList.remove("hidden");sessionStorage.setItem("citadel-architect-token",architectToken)}
+function logout(message=tr("ended")){architectToken="";nextCursor=null;sessionStorage.removeItem("citadel-architect-token");browser.classList.add("hidden");loginCard.classList.remove("hidden");tokenInput.value="";eventsElement.replaceChildren();setStatus(message)}
+loginButton.addEventListener("click",async()=>{const token=tokenInput.value.trim();if(!token)return setStatus(tr("tokenRequired"),"bad");architectToken=token;loginButton.disabled=true;try{await openBrowser();tokenInput.value=""}catch(error){logout(`${tr("loginFailed")}: ${error.message}`);statusElement.classList.add("bad")}finally{loginButton.disabled=false}});
+refreshButton.addEventListener("click",async()=>{refreshButton.disabled=true;try{await Promise.all([loadStats(),loadLogs(false)])}catch(error){setStatus(`${tr("loadFailed")}: ${error.message}`,"bad")}finally{refreshButton.disabled=false}});
+moreButton.addEventListener("click",async()=>{if(!nextCursor)return;moreButton.disabled=true;try{await loadLogs(true)}catch(error){setStatus(`${tr("moreFailed")}: ${error.message}`,"bad")}finally{moreButton.disabled=!nextCursor}});
+logoutButton.addEventListener("click",()=>logout());
+applyLanguage(lang);
+if(architectToken)openBrowser().catch(()=>logout(tr("expired")));
 </script>
 </body>
 </html>
