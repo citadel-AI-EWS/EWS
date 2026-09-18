@@ -1,0 +1,69 @@
+name: Synthetic User Browser
+
+on:
+  workflow_run:
+    workflows: ["Deploy Cloudflare TEST"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "15 19 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: synthetic-user-browser
+  cancel-in-progress: true
+
+jobs:
+  synthetic-user:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CITADEL_BASE_URL: https://citadel-ai.init1.workers.dev
+      SYNTHETIC_OUT_DIR: synthetic-artifacts
+      SYNTHETIC_TIMEOUT_MS: "20000"
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install repository dependencies
+        run: npm ci
+
+      - name: Install pinned browser test runner
+        run: npm install --no-save --package-lock=false @playwright/test@1.63.0
+
+      - name: Install Chromium for synthetic user
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Nina Synthetic against Cloudflare TEST
+        run: node scripts/synthetic_user.mjs "$CITADEL_BASE_URL"
+
+      - name: Upload synthetic-user evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-user-${{ github.run_id }}
+          path: synthetic-artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### CITADEL Synthetic User" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Persona: Nina Synthetic" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Target: $CITADEL_BASE_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Scope: public UI, safe interactions, negative-auth checks, desktop/mobile" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Destructive actions: never executed" >> "$GITHUB_STEP_SUMMARY"
