@@ -44,6 +44,7 @@ let reportSchemaPromise;
 let legacyReportBackfillPromise;
 let sessionSchemaPromise;
 let commandIndexPromise;
+let nodeNetworkSchemaPromise;
 let rolloutSchemaPromise;
 let projectSchemaPromise;
 
@@ -97,6 +98,51 @@ function optionalPercent(value, field) {
     throw new ApiError(400, `invalid_${field}`);
   }
   return value;
+}
+
+function normalizeIpv4(value, privateOnly = false) {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string") throw new ApiError(400, "invalid_network_ipv4");
+  const parts = value.trim().split(".");
+  if (parts.length !== 4) throw new ApiError(400, "invalid_network_ipv4");
+  const numbers = parts.map((part) => Number(part));
+  if (numbers.some((part, index) =>
+    !Number.isInteger(part) || part < 0 || part > 255 ||
+    String(part) !== String(Number(parts[index]))
+  )) throw new ApiError(400, "invalid_network_ipv4");
+  if (privateOnly) {
+    const [a,b] = numbers;
+    const isPrivate = a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+    if (!isPrivate) return null;
+  }
+  return numbers.join(".");
+}
+
+function normalizeMac(value) {
+  if (typeof value !== "string") return null;
+  const compact = value.replace(/[^0-9a-f]/gi, "").toUpperCase();
+  if (!/^[0-9A-F]{12}$/.test(compact) || compact === "000000000000") return null;
+  return compact.match(/.{2}/g).join(":");
+}
+
+function normalizeNodeNetwork(value) {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ApiError(400, "invalid_network");
+  }
+  const rawMacs = Array.isArray(value.mac_addresses) ? value.mac_addresses : [];
+  if (rawMacs.length > 32) throw new ApiError(400, "too_many_mac_addresses");
+  const macAddresses = [...new Set(rawMacs.map(normalizeMac).filter(Boolean))].slice(0, 16);
+  return {
+    lan_ipv4: normalizeIpv4(value.lan_ipv4, true),
+    tailscale_ipv4: normalizeIpv4(value.tailscale_ipv4, false),
+    mac_addresses: macAddresses
+  };
+}
+
+function subnet24(value) {
+  const parts = typeof value === "string" ? value.split(".") : [];
+  return parts.length === 4 ? parts.slice(0, 3).join(".") : null;
 }
 
 function parseJsonObject(text) {
@@ -306,6 +352,31 @@ async function ensureCommandStorage(env) {
     });
   }
   await commandIndexPromise;
+}
+
+async function ensureNodeNetworkStorage(env) {
+  if (!nodeNetworkSchemaPromise) {
+    nodeNetworkSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS node_network_state (
+          node_id TEXT PRIMARY KEY,
+          lan_ipv4 TEXT,
+          tailscale_ipv4 TEXT,
+          mac_addresses_json TEXT NOT NULL DEFAULT '[]',
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_node_network_lan
+        ON node_network_state(lan_ipv4, updated_at DESC)
+      `)
+    ]).catch((error) => {
+      nodeNetworkSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await nodeNetworkSchemaPromise;
 }
 
 async function ensureRolloutStorage(env) {
@@ -1204,13 +1275,16 @@ async function heartbeat(request, env, nodeId, url) {
   const capabilitiesJson = body.capabilities === undefined
     ? null
     : normalizeCapabilities(body.capabilities);
+  const network = normalizeNodeNetwork(body.network);
+  if (network) await ensureNodeNetworkStorage(env);
   const detailsJson = JSON.stringify({
     cpu_percent: cpuPercent,
     memory_percent: memoryPercent,
-    agent_version: agentVersion
+    agent_version: agentVersion,
+    lan_ipv4: network?.lan_ipv4 || null
   });
 
-  const results = await env.DB.batch([
+  const heartbeatStatements = [
     env.DB.prepare(`
       UPDATE nodes
       SET cpu_percent = COALESCE(?, cpu_percent),
@@ -1228,7 +1302,28 @@ async function heartbeat(request, env, nodeId, url) {
       SELECT 'node', ?, 'node.heartbeat', 'node', ?, ?
       WHERE changes() = 1
     `).bind(nodeId, nodeId, detailsJson)
-  ]);
+  ];
+  if (network) {
+    heartbeatStatements.push(env.DB.prepare(`
+      INSERT INTO node_network_state (
+        node_id, lan_ipv4, tailscale_ipv4, mac_addresses_json, updated_at
+      ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(node_id) DO UPDATE SET
+        lan_ipv4 = COALESCE(excluded.lan_ipv4, node_network_state.lan_ipv4),
+        tailscale_ipv4 = COALESCE(excluded.tailscale_ipv4, node_network_state.tailscale_ipv4),
+        mac_addresses_json = CASE
+          WHEN excluded.mac_addresses_json != '[]' THEN excluded.mac_addresses_json
+          ELSE node_network_state.mac_addresses_json
+        END,
+        updated_at = CURRENT_TIMESTAMP
+    `).bind(
+      nodeId,
+      network.lan_ipv4,
+      network.tailscale_ipv4,
+      JSON.stringify(network.mac_addresses)
+    ));
+  }
+  const results = await env.DB.batch(heartbeatStatements);
 
   if ((results[0]?.meta?.changes || 0) !== 1) {
     throw new ApiError(404, "node_not_found");
@@ -1674,7 +1769,8 @@ async function architectCreateSession(request, env) {
     ui_state: uiState,
     counts: {
       nodes: counts?.nodes || 0,
-      missions: counts?.missions || 0,
+      missions: counts?.active_missions || 0,
+      active_missions: counts?.active_missions || 0,
       results: counts?.results || 0,
       reports: counts?.reports || 0
     }
@@ -1965,16 +2061,20 @@ async function architectOverview(request, env) {
     backfillLegacyReports(env),
     ensureSessionStorage(env),
     ensureAutoEnrollmentStorage(env),
-    ensureProjectStorage(env)
+    ensureProjectStorage(env),
+    ensureNodeNetworkStorage(env)
   ]);
 
   const [counts, nodesQuery, missionsQuery, commandsQuery] = await Promise.all([
     env.DB.prepare(
       "SELECT " +
-      "(SELECT COUNT(*) FROM nodes) AS nodes, " +
+      "(SELECT COUNT(*) FROM nodes WHERE status != 'revoked') AS nodes, " +
       "(SELECT COUNT(*) FROM nodes WHERE status = 'online' " +
       "AND datetime(last_seen_at) >= datetime('now', '-5 minutes')) AS online_nodes, " +
-      "(SELECT COUNT(*) FROM missions) AS missions, " +
+      "(SELECT COUNT(*) FROM missions AS m WHERE m.status NOT IN ('completed','cancelled') " +
+      "AND (m.expires_at IS NULL OR datetime(m.expires_at) > CURRENT_TIMESTAMP) " +
+      "AND EXISTS (SELECT 1 FROM assignments AS a WHERE a.mission_id = m.mission_id " +
+      "AND a.status IN ('assigned','running'))) AS active_missions, " +
       "(SELECT COUNT(*) FROM agent_reports) AS reports, " +
       "(SELECT COUNT(*) FROM architect_sessions) AS sessions"
     ).first(),
@@ -1983,7 +2083,19 @@ async function architectOverview(request, env) {
       "n.agent_version, CASE WHEN n.status = 'online' " +
       "AND (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-5 minutes')) " +
       "THEN 'offline' ELSE n.status END AS status, n.cpu_percent, n.memory_percent, " +
-      "n.enrolled_at, n.last_seen_at, " +
+      "n.enrolled_at, n.last_seen_at, net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json, " +
+      "(SELECT nl.event_type FROM node_logs AS nl WHERE nl.node_id = n.node_id " +
+      "ORDER BY datetime(nl.created_at) DESC, nl.event_id DESC LIMIT 1) AS last_event_type, " +
+      "(SELECT nl.message FROM node_logs AS nl WHERE nl.node_id = n.node_id " +
+      "ORDER BY datetime(nl.created_at) DESC, nl.event_id DESC LIMIT 1) AS last_event_message, " +
+      "(SELECT nl.created_at FROM node_logs AS nl WHERE nl.node_id = n.node_id " +
+      "ORDER BY datetime(nl.created_at) DESC, nl.event_id DESC LIMIT 1) AS last_event_at, " +
+      "(SELECT c.command_type FROM commands AS c WHERE c.node_id = n.node_id " +
+      "ORDER BY datetime(c.created_at) DESC, c.command_id DESC LIMIT 1) AS last_command_type, " +
+      "(SELECT c.status FROM commands AS c WHERE c.node_id = n.node_id " +
+      "ORDER BY datetime(c.created_at) DESC, c.command_id DESC LIMIT 1) AS last_command_status, " +
+      "(SELECT c.completed_at FROM commands AS c WHERE c.node_id = n.node_id " +
+      "ORDER BY datetime(c.created_at) DESC, c.command_id DESC LIMIT 1) AS last_command_at, " +
       "(SELECT pwi.role_name FROM project_work_items AS pwi " +
       "JOIN architect_projects AS ap ON ap.project_id = pwi.project_id " +
       "WHERE pwi.node_id = n.node_id " +
@@ -1992,6 +2104,8 @@ async function architectOverview(request, env) {
       "ORDER BY pwi.created_at DESC, pwi.sequence_no DESC LIMIT 1) AS planned_role " +
       "FROM nodes AS n " +
       "LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id " +
+      "LEFT JOIN node_network_state AS net ON net.node_id = n.node_id " +
+      "WHERE n.status != 'revoked' " +
       "ORDER BY n.last_seen_at DESC LIMIT 100"
     ).all(),
     env.DB.prepare(
@@ -2030,6 +2144,29 @@ async function architectOverview(request, env) {
     };
   });
 
+  const rawNodes = nodesQuery.results || [];
+  const liveRelays = rawNodes.filter((node) =>
+    node.status === "online" &&
+    node.lan_ipv4 &&
+    Date.parse(String(node.last_seen_at).replace(" ", "T") + (String(node.last_seen_at).includes("T") ? "" : "Z")) >= Date.now() - 5 * 60 * 1000
+  );
+  const nodes = rawNodes.map((node) => {
+    const macAddresses = safeJson(node.mac_addresses_json, []);
+    const prefix = subnet24(node.lan_ipv4);
+    const relay = prefix && Array.isArray(macAddresses) && macAddresses.length
+      ? liveRelays.find((candidate) =>
+          candidate.node_id !== node.node_id && subnet24(candidate.lan_ipv4) === prefix
+        )
+      : null;
+    return {
+      ...node,
+      mac_addresses: Array.isArray(macAddresses) ? macAddresses : [],
+      mac_addresses_json: undefined,
+      wake_available: node.status === "offline" && Boolean(relay),
+      wake_relay_node_id: relay?.node_id || null
+    };
+  });
+
   return json({
     ok: true,
     counts: {
@@ -2039,7 +2176,7 @@ async function architectOverview(request, env) {
       reports: counts?.reports || 0,
       sessions: counts?.sessions || 0
     },
-    nodes: nodesQuery.results || [],
+    nodes,
     missions,
     commands: commandsQuery.results || []
   });
@@ -2168,6 +2305,85 @@ async function architectCreateCommand(request, env, nodeId) {
   }, 201);
 }
 
+async function architectWakeNode(request, env, targetNodeId) {
+  await authenticateArchitect(request, env);
+  await Promise.all([ensureNodeNetworkStorage(env), ensureCommandStorage(env)]);
+
+  const target = await env.DB.prepare(`
+    SELECT n.node_id, n.status, n.last_seen_at, net.lan_ipv4, net.mac_addresses_json
+    FROM nodes AS n
+    LEFT JOIN node_network_state AS net ON net.node_id = n.node_id
+    WHERE n.node_id = ?
+  `).bind(targetNodeId).first();
+  if (!target) throw new ApiError(404, "node_not_found");
+  if (target.status === "revoked") throw new ApiError(409, "node_revoked");
+  const targetLive = target.status === "online" && target.last_seen_at &&
+    Date.parse(String(target.last_seen_at).replace(" ", "T") + (String(target.last_seen_at).includes("T") ? "" : "Z")) >= Date.now() - 5 * 60 * 1000;
+  if (targetLive) throw new ApiError(409, "node_already_online");
+
+  const macAddresses = safeJson(target.mac_addresses_json, []);
+  const targetMac = Array.isArray(macAddresses) ? macAddresses.map(normalizeMac).find(Boolean) : null;
+  const prefix = subnet24(target.lan_ipv4);
+  if (!targetMac || !prefix || !target.lan_ipv4) {
+    throw new ApiError(409, "wake_network_identity_unavailable");
+  }
+
+  const relaysQuery = await env.DB.prepare(`
+    SELECT n.node_id, n.last_seen_at, net.lan_ipv4
+    FROM nodes AS n
+    JOIN node_network_state AS net ON net.node_id = n.node_id
+    WHERE n.node_id != ?
+      AND n.status = 'online'
+      AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes')
+    ORDER BY n.last_seen_at DESC
+    LIMIT 100
+  `).bind(targetNodeId).all();
+  const relay = (relaysQuery.results || []).find((candidate) => subnet24(candidate.lan_ipv4) === prefix);
+  if (!relay) throw new ApiError(409, "wake_relay_unavailable");
+
+  const pending = await env.DB.prepare(
+    "SELECT command_id FROM commands WHERE node_id = ? AND status IN ('pending','accepted') LIMIT 1"
+  ).bind(relay.node_id).first();
+  if (pending) throw new ApiError(409, "wake_relay_busy");
+
+  const commandId = "command_" + crypto.randomUUID();
+  const payload = {
+    target_node_id: targetNodeId,
+    target_mac: targetMac,
+    target_lan_ipv4: target.lan_ipv4
+  };
+  const payloadJson = JSON.stringify(payload);
+  const createdAt = new Date().toISOString();
+  const signature = await signControllerCommand(
+    env, commandId, relay.node_id, "wake_peer", payloadJson, createdAt
+  );
+  await env.DB.batch([
+    env.DB.prepare(`
+      INSERT INTO commands (
+        command_id, node_id, command_type, payload_json, signature, status, created_at
+      ) VALUES (?, ?, 'wake_peer', ?, ?, 'pending', ?)
+    `).bind(commandId, relay.node_id, payloadJson, signature, createdAt),
+    env.DB.prepare(`
+      INSERT INTO audit_events (
+        actor_type, actor_id, action, target_type, target_id, details_json
+      ) VALUES ('architect', 'test-console', 'node.wake.requested', 'node', ?, ?)
+    `).bind(targetNodeId, JSON.stringify({
+      relay_node_id: relay.node_id,
+      target_lan_ipv4: target.lan_ipv4
+    }))
+  ]);
+
+  return json({
+    ok: true,
+    wake: {
+      target_node_id: targetNodeId,
+      relay_node_id: relay.node_id,
+      command_id: commandId,
+      status: "pending"
+    }
+  }, 202);
+}
+
 async function architectCreateMission(request, env) {
   await authenticateArchitect(request, env);
   const bodyText = await readBodyText(request, 8 * 1024);
@@ -2279,7 +2495,7 @@ function apiDescription() {
     api_version: "v1",
     authentication: "CITADEL-Ed25519",
     mission_types: ["system_inventory"],
-    command_types: ["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown"],
+    command_types: ["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer"],
     arbitrary_remote_execution: false
   });
 }
@@ -2421,6 +2637,15 @@ async function handleApi(request, env, url) {
           decodeURIComponent(architectReportMatch[1])
         )
       : methodNotAllowed(["GET"]);
+  }
+
+  const architectWakeMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/nodes\/([^/]+)\/wake$/
+  );
+  if (architectWakeMatch) {
+    return request.method === "POST"
+      ? architectWakeNode(request, env, decodeURIComponent(architectWakeMatch[1]))
+      : methodNotAllowed(["POST"]);
   }
 
   const architectMatch = url.pathname.match(
