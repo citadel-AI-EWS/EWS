@@ -40,6 +40,7 @@ const LATEST_NODE_RELEASE = Object.freeze({
 });
 const CONTROLLER_COMMAND_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0";
 let reportSchemaPromise;
+let legacyReportBackfillPromise;
 let sessionSchemaPromise;
 
 class ApiError extends Error {
@@ -116,17 +117,59 @@ function safeJson(value, fallback) {
   }
 }
 
-async function readBodyText(request, maxBytes) {
-  const declaredLength = Number(request.headers.get("content-length") || 0);
-  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-    throw new ApiError(413, "request_too_large");
+async function readBody(request, maxBytes) {
+  const rawLength = request.headers.get("content-length");
+  if (rawLength !== null && rawLength !== "") {
+    if (!/^\d+$/.test(rawLength)) {
+      throw new ApiError(400, "invalid_content_length");
+    }
+    const declaredLength = Number(rawLength);
+    if (!Number.isSafeInteger(declaredLength) || declaredLength > maxBytes) {
+      throw new ApiError(413, "request_too_large");
+    }
   }
 
-  const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > maxBytes) {
-    throw new ApiError(413, "request_too_large");
+  if (!request.body) {
+    return { bytes: new Uint8Array(0), text: "" };
   }
-  return text;
+
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+      total += chunk.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel("request_too_large").catch(() => {});
+        throw new ApiError(413, "request_too_large");
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new ApiError(400, "invalid_utf8");
+  }
+  return { bytes, text };
+}
+
+async function readBodyText(request, maxBytes) {
+  return (await readBody(request, maxBytes)).text;
 }
 
 async function ensureReportStorage(env) {
@@ -163,6 +206,10 @@ async function ensureReportStorage(env) {
       env.DB.prepare(`
         CREATE INDEX IF NOT EXISTS idx_agent_reports_type_created
         ON agent_reports(report_type, created_at DESC)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_agent_reports_created
+        ON agent_reports(created_at DESC)
       `)
     ]).catch((error) => {
       reportSchemaPromise = undefined;
@@ -170,6 +217,41 @@ async function ensureReportStorage(env) {
     });
   }
   await reportSchemaPromise;
+
+  if (!legacyReportBackfillPromise) {
+    legacyReportBackfillPromise = env.DB.prepare(`
+      INSERT OR IGNORE INTO agent_reports (
+        report_id, result_id, assignment_id, mission_id, node_id,
+        report_type, report_json, report_sha256, report_size_bytes,
+        sensitivity, created_at
+      )
+      SELECT
+        'report_' || r.result_id,
+        r.result_id,
+        r.assignment_id,
+        a.mission_id,
+        r.node_id,
+        COALESCE(NULLIF(r.report_type, ''), 'mission_result'),
+        r.report_json,
+        r.report_sha256,
+        r.report_size_bytes,
+        COALESCE(NULLIF(r.sensitivity, ''), 'internal'),
+        r.created_at
+      FROM results AS r
+      JOIN assignments AS a ON a.assignment_id = r.assignment_id
+      WHERE r.report_json IS NOT NULL
+        AND r.report_sha256 IS NOT NULL
+        AND r.report_size_bytes IS NOT NULL
+    `).run().catch((error) => {
+      const message = String(error).toLowerCase();
+      if (message.includes("no such column")) {
+        return { meta: { changes: 0 } };
+      }
+      legacyReportBackfillPromise = undefined;
+      throw error;
+    });
+  }
+  await legacyReportBackfillPromise;
 }
 
 async function ensureSessionStorage(env) {
@@ -192,6 +274,10 @@ async function ensureSessionStorage(env) {
       env.DB.prepare(`
         CREATE INDEX IF NOT EXISTS idx_architect_sessions_status_updated
         ON architect_sessions(status, updated_at DESC)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_architect_sessions_updated
+        ON architect_sessions(updated_at DESC, session_id DESC)
       `)
     ]).catch((error) => {
       sessionSchemaPromise = undefined;
@@ -219,10 +305,12 @@ function bytesToBase64Url(bytes) {
 }
 
 async function sha256Hex(value) {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(value)
-  );
+  const bytes = typeof value === "string"
+    ? new TextEncoder().encode(value)
+    : value instanceof Uint8Array
+      ? value
+      : new Uint8Array(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
   return bytesToHex(digest);
 }
 
@@ -363,12 +451,18 @@ function normalizePublicKey(value) {
     throw new ApiError(400, "invalid_public_key");
   }
 
-  const rawKey = decodeBase64Url(jwk.x);
+  let rawKey;
+  try {
+    rawKey = decodeBase64Url(jwk.x);
+  } catch {
+    throw new ApiError(400, "invalid_public_key");
+  }
   if (rawKey.byteLength !== 32) {
     throw new ApiError(400, "invalid_public_key");
   }
 
-  return JSON.stringify({ kty: "OKP", crv: "Ed25519", x: jwk.x });
+  const canonicalX = bytesToBase64Url(rawKey);
+  return JSON.stringify({ kty: "OKP", crv: "Ed25519", x: canonicalX });
 }
 
 function normalizeCapabilities(value) {
@@ -400,7 +494,7 @@ function normalizeMetrics(value) {
   return serialized;
 }
 
-async function authenticateNode(request, env, nodeId, url, bodyText) {
+async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   const headerNodeId = request.headers.get("x-node-id");
   const timestamp = request.headers.get("x-node-timestamp");
   const signatureValue = request.headers.get("x-node-signature");
@@ -439,7 +533,7 @@ async function authenticateNode(request, env, nodeId, url, bodyText) {
     throw new ApiError(401, "invalid_node_key");
   }
 
-  const bodyHash = await sha256Hex(bodyText);
+  const bodyHash = await sha256Hex(bodyBytes);
   const canonicalRequest = [
     request.method.toUpperCase(),
     `${url.pathname}${url.search}`,
@@ -666,8 +760,8 @@ async function enrollNode(request, env) {
 }
 
 async function heartbeat(request, env, nodeId, url) {
-  const bodyText = await readBodyText(request, MAX_NODE_BODY_BYTES);
-  await authenticateNode(request, env, nodeId, url, bodyText);
+  const { bytes: bodyBytes, text: bodyText } = await readBody(request, MAX_NODE_BODY_BYTES);
+  await authenticateNode(request, env, nodeId, url, bodyBytes);
   const body = parseJsonObject(bodyText);
 
   const cpuPercent = optionalPercent(body.cpu_percent, "cpu_percent");
@@ -713,7 +807,7 @@ async function heartbeat(request, env, nodeId, url) {
 }
 
 async function listAssignments(request, env, nodeId, url) {
-  const node = await authenticateNode(request, env, nodeId, url, "");
+  const node = await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
 
   if (node.status === "paused") {
     return json({ ok: true, node_status: "paused", assignments: [] });
@@ -752,8 +846,8 @@ async function listAssignments(request, env, nodeId, url) {
 }
 
 async function acceptAssignment(request, env, nodeId, assignmentId, url) {
-  const bodyText = await readBodyText(request, 1024);
-  const node = await authenticateNode(request, env, nodeId, url, bodyText);
+  const { bytes: bodyBytes, text: bodyText } = await readBody(request, 1024);
+  const node = await authenticateNode(request, env, nodeId, url, bodyBytes);
   if (node.status === "paused") {
     throw new ApiError(409, "node_paused");
   }
@@ -800,8 +894,8 @@ async function acceptAssignment(request, env, nodeId, assignmentId, url) {
 }
 
 async function submitResult(request, env, nodeId, url) {
-  const bodyText = await readBodyText(request, MAX_RESULT_BODY_BYTES);
-  await authenticateNode(request, env, nodeId, url, bodyText);
+  const { bytes: bodyBytes, text: bodyText } = await readBody(request, MAX_RESULT_BODY_BYTES);
+  await authenticateNode(request, env, nodeId, url, bodyBytes);
   const body = parseJsonObject(bodyText);
 
   const assignmentId = requireString(body.assignment_id, "assignment_id", 128);
@@ -1270,7 +1364,7 @@ async function architectStorageUsage(request, env) {
 }
 
 async function listCommands(request, env, nodeId, url) {
-  const node = await authenticateNode(request, env, nodeId, url, "");
+  const node = await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
 
   const query = await env.DB.prepare(`
     SELECT command_id, command_type, payload_json, signature, status, created_at
@@ -1289,8 +1383,8 @@ async function listCommands(request, env, nodeId, url) {
 }
 
 async function acknowledgeCommand(request, env, nodeId, commandId, url) {
-  const bodyText = await readBodyText(request, 8 * 1024);
-  const node = await authenticateNode(request, env, nodeId, url, bodyText);
+  const { bytes: bodyBytes, text: bodyText } = await readBody(request, 8 * 1024);
+  const node = await authenticateNode(request, env, nodeId, url, bodyBytes);
   const body = parseJsonObject(bodyText);
   const status = requireString(body.status, "status", 16);
   if (!ALLOWED_COMMAND_ACKS.has(status)) {
