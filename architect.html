@@ -33,11 +33,11 @@
     .node-grid{position:relative;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:14px}.node-card{border:1px solid #2a3c5d;border-radius:16px;background:linear-gradient(155deg,#0d1729,#0a1221);padding:15px;transition:.18s transform,.18s border-color,.18s box-shadow}.node-card:hover{transform:translateY(-1px);border-color:#4774b1;box-shadow:0 14px 35px #0005}.node-card.dead{border-color:#613743}.node-card.unhealthy{box-shadow:inset 3px 0 0 #ff6874}.node-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.node-name{font-weight:900;font-size:16px}.node-agent{margin-top:3px;color:#8ea6c9;font-size:12px}.node-status-lines{margin-top:11px;display:grid;gap:6px;font-size:13px}.state-live{color:#62e5a0}.state-dead{color:#ff7b86}.health-line{display:flex;align-items:center;justify-content:space-between;gap:10px}.detail-toggle{width:30px!important;height:30px;margin:0!important;padding:0!important;border-radius:9px!important;background:#223451!important;font-size:19px!important;line-height:1}.node-details{display:none;margin-top:12px;padding-top:12px;border-top:1px solid #243553;font-size:12px;color:#a8b9d3;line-height:1.7}.node-details.open{display:block;animation:detailIn .18s ease-out}@keyframes detailIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
     .topology-wrap{height:210px;position:relative;overflow:hidden;border-radius:12px;background:radial-gradient(circle at 50% 50%,rgba(62,121,211,.13),transparent 45%)}.topology-wrap svg{width:100%;height:100%}.topology-line{stroke:#355e91;stroke-width:1.5;stroke-dasharray:5 6;animation:dashFlow 5s linear infinite}.topology-node{fill:#122743;stroke:#5498ef;stroke-width:1.4}.topology-node.dead{fill:#341923;stroke:#ff6d7a}@keyframes dashFlow{to{stroke-dashoffset:-44}}
     .ops-overlay{position:fixed;inset:0;z-index:999;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(2,7,15,.78);backdrop-filter:blur(10px)}.ops-modal{width:min(620px,100%);border:1px solid #36527e;border-radius:20px;background:linear-gradient(155deg,#111d32,#0a1221);box-shadow:0 35px 100px #000b;padding:22px}.ops-modal h2{margin:4px 0 8px}.brief-list{display:flex;flex-direction:column;gap:8px;margin:14px 0}.brief-item{padding:11px 12px;border-radius:11px;background:#111a2c;border-left:4px solid #ff6874;font-size:13px}.brief-clear{border-left-color:#35d07f}.ops-modal button{margin-top:10px}
-    .role-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}.role-chip{padding:10px;border:1px solid #293b5c;border-radius:11px;background:#0b1425;font-size:12px}.role-chip b{display:block;color:#dce8fb}.role-chip span{color:#8199bb;font-size:11px}
+    .role-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}.role-chip{padding:10px;border:1px solid #293b5c;border-radius:11px;background:#0b1425;font-size:12px}.role-chip b{display:block;color:#dce8fb}.role-chip span{color:#8199bb;font-size:11px}.role-chip.selectable{cursor:pointer;display:flex;align-items:flex-start;gap:9px;transition:.16s border-color,.16s background}.role-chip.selectable:hover{border-color:#4774b1}.role-chip.selectable.selected{border-color:#3b9a70;background:#0d211d}.role-chip.recommended{border-color:#4b79bc;background:#101d32}.role-chip input{width:auto;margin:2px 0 0;accent-color:#35d07f}.role-copy{min-width:0}.role-badge{display:inline-block;margin-top:5px;padding:2px 7px;border-radius:999px;background:#182844;color:#9fc3ff!important;font-size:10px!important}.voice-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px}.voice-row button{width:auto;margin:0;padding:9px 12px;font-size:13px}.collapsible-card>summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:20px;font-weight:850}.collapsible-card>summary::-webkit-details-marker{display:none}.disclosure-plus{font-size:25px;line-height:1;transition:.18s transform}.collapsible-card[open] .disclosure-plus{transform:rotate(45deg)}.collapsible-body{margin-top:16px}.project-report-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.project-report-box{padding:12px;border:1px solid #293b5c;border-radius:12px;background:#0b1222}.project-specializations{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}.project-specialization{padding:6px 9px;border:1px solid #34507a;border-radius:999px;background:#101c30;font-size:12px}.project-work-list{display:grid;gap:8px;margin-top:12px}.project-work{padding:12px;border:1px solid #293b5c;border-radius:12px;background:#0a1221}.project-work strong{display:block;margin-bottom:5px}.project-work details{margin-top:7px}.project-work summary{cursor:pointer;color:#8fa9cd;font-size:12px}.modal-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}.modal-actions button{margin-top:10px}.project-created-summary{display:grid;gap:8px;margin:14px 0}.project-created-line{padding:9px 10px;border-radius:10px;background:#0b1425;border-left:3px solid #4f8ef7}.project-task-preview{max-height:180px;overflow:auto;white-space:pre-wrap}.execution-note{margin-top:12px;padding:12px;border-radius:11px;background:#16180f;border-left:4px solid #e1ad45;color:#e9dfbd;font-size:13px}
     .site-clock{position:fixed;right:12px;bottom:10px;z-index:998;padding:7px 10px;border:1px solid #2b3757;border-radius:10px;background:#080c17e8;color:#aebbd5;font:12px/1.2 ui-monospace,SFMono-Regular,monospace;box-shadow:0 8px 25px #0008}
     [dir="rtl"] .site-clock{right:auto;left:12px}
     @media(max-width:900px){.ops-kpi{grid-column:span 4}.charts-grid,.node-grid{grid-template-columns:1fr}.role-grid{grid-template-columns:1fr 1fr}}
-    @media(max-width:520px){body{padding:12px}.stats{grid-template-columns:1fr}.card,.ops-shell{padding:15px}h1{font-size:27px}.ops-kpi{grid-column:span 6}.chart-row{grid-template-columns:82px 1fr 42px}.role-grid{grid-template-columns:1fr}}
+    @media(max-width:520px){body{padding:12px}.stats{grid-template-columns:1fr}.card,.ops-shell{padding:15px}h1{font-size:27px}.ops-kpi{grid-column:span 6}.chart-row{grid-template-columns:82px 1fr 42px}.role-grid,.project-report-grid,.modal-actions{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
@@ -146,6 +146,10 @@
         <input id="projectTitle" maxlength="160" value="Новый проект">
         <label for="projectTaskText" data-i18n="task">Задание</label>
         <textarea id="projectTaskText" maxlength="20000" placeholder="Опишите, что должен сделать проект..."></textarea>
+        <div class="voice-row">
+          <button id="projectVoiceButton" class="secondary" type="button">🎙️ Диктовать задание</button>
+          <span id="projectVoiceState" class="small">EWS сохранит только распознанный текст; распознавание зависит от браузера.</span>
+        </div>
         <div class="control-buttons">
           <button id="checkProjectButton" class="secondary" type="button" data-i18n="checkText">1. Проверить текст</button>
           <button id="createProjectButton" type="button" disabled data-i18n="createProject">2. Создать проект</button>
@@ -156,10 +160,26 @@
 3. Deduplication
 4. Safety classification</div>
         <div id="projectRolePlan" class="status">Hub ещё не определял требуемые специализации.</div>
-        <div class="small" style="margin-top:12px">Реестр специализаций Hub</div>
+        <div class="small" style="margin-top:12px"><b>Специализации проекта</b> · Hub отмечает обязательные, а вы можете включить дополнительные.</div>
         <div id="workRoles" class="role-grid"></div>
         <div id="projectResult" class="status">После создания здесь будет видно, какие специалисты нужны, сколько рабочих блоков создал Hub и на какие узлы они назначены.</div>
+        <div class="section-head" style="margin-top:14px"><h3 style="margin:0">Проекты</h3><span class="small">У каждого проекта есть живой отчёт состояния.</span></div>
         <div id="projectsList"></div>
+      </section>
+
+      <section id="projectReportCard" class="card hidden">
+        <div class="section-head">
+          <h2 id="projectReportTitle">Отчёт проекта</h2>
+          <button id="closeProjectReportButton" class="secondary" type="button">Закрыть</button>
+        </div>
+        <div id="projectReportMeta" class="small"></div>
+        <div id="projectReportStatus" class="status"></div>
+        <div class="project-report-grid" style="margin-top:12px">
+          <div class="project-report-box"><b>Задание</b><div id="projectReportTask" class="project-task-preview small"></div></div>
+          <div class="project-report-box"><b>Специализации</b><div id="projectReportSpecializations" class="project-specializations"></div></div>
+        </div>
+        <div class="section-head" style="margin-top:16px"><h3 style="margin:0">Рабочие блоки и ноды</h3><span id="projectReportProgress" class="small"></span></div>
+        <div id="projectReportWorkItems" class="project-work-list"></div>
       </section>
 
       <section class="card" id="missionPanel">
@@ -174,6 +194,10 @@
         <input id="missionTitle" maxlength="160" value="Проверка системы">
         <label for="missionTask" data-i18n="whatCheck">Что проверить</label>
         <textarea id="missionTask" maxlength="2000">Проверить состояние компьютера: CPU, RAM, диск, систему, сеть и базовые параметры. Вернуть понятный диагностический отчёт.</textarea>
+        <div class="voice-row">
+          <button id="missionVoiceButton" class="secondary" type="button">🎙️ Диктовать миссию</button>
+          <span id="missionVoiceState" class="small">Можно надиктовать текст вместо набора.</span>
+        </div>
         <label for="expiresHours" data-i18n="expires">Срок действия</label>
         <select id="expiresHours"><option value="1">1 час</option><option value="24" selected>24 часа</option><option value="72">3 дня</option></select>
         <button id="createMissionButton" type="button" data-i18n="createMission">Создать и назначить миссию</button>
@@ -190,15 +214,17 @@
         <div id="missionsList"></div>
       </section>
 
-      <section class="card">
-        <div class="section-head">
-          <h2 data-i18n="reports">Диагностика и системные отчёты узлов</h2>
-          <button id="refreshReportsButton" class="secondary" type="button" data-i18n="refresh">Обновить</button>
+      <details id="reportsDisclosure" class="card collapsible-card">
+        <summary><span data-i18n="reports">Отчёты узлов</span><span class="disclosure-plus">+</span></summary>
+        <div class="collapsible-body">
+          <div class="section-head">
+            <p class="small" style="margin:0">System Inventory — техническая диагностика узла, а не выполненная пользовательская работа.</p>
+            <button id="refreshReportsButton" class="secondary" type="button" data-i18n="refresh">Обновить</button>
+          </div>
+          <div id="reportsList"></div>
+          <button id="loadMoreReportsButton" class="secondary hidden" type="button">Показать ещё отчёты</button>
         </div>
-        <p class="small">System Inventory — это техническая диагностика узла, а не выполненная пользовательская работа. Содержимое загружается только после выбора отчёта.</p>
-        <div id="reportsList"></div>
-        <button id="loadMoreReportsButton" class="secondary hidden" type="button">Показать ещё отчёты</button>
-      </section>
+      </details>
 
       <section id="reportDetailCard" class="card hidden">
         <div class="section-head">
@@ -226,11 +252,24 @@
     </div>
   </div>
 
+  <div id="projectCreatedOverlay" class="ops-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="projectCreatedTitle">
+    <div class="ops-modal">
+      <div class="ops-title">PROJECT CREATED</div>
+      <h2 id="projectCreatedTitle">Проект создан</h2>
+      <p class="small">Hub закончил четыре проверки, построил план и выбрал доступные ноды.</p>
+      <div id="projectCreatedSummary" class="project-created-summary"></div>
+      <div class="modal-actions">
+        <button id="projectGoReportButton" type="button">Перейти к отчёту</button>
+        <button id="projectCreatedCloseButton" class="secondary" type="button">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const I18N = {
-      ru:{pageTitle:"LIVE OPERATIONS",pageLead:"Живой центр управления · показываются только реальные данные Controller.",loginTitle:"Защищённый вход",tokenLabel:"Секрет архитектора",loginButton:"Войти",loginHint:"Секрет хранится только до закрытия этой вкладки.",refresh:"Обновить",logout:"Выйти",opsSub:"Реальные heartbeat, CPU/RAM, presence и состояние Controller. Демонстрационные значения запрещены.",registeredNodes:"зарегистрировано нод",liveNow:"живых сейчас",activeMissions:"активных миссий сейчас",fullReports:"полных отчётов",unhealthy:"нездоровых / недоступных",projects:"проектов",nodes:"Ноды",nodeControl:"Управление узлом",node:"Нода",showIp:"Показать IP",healthCheck:"Проверить здоровье",pause:"Поставить на паузу",resume:"Возобновить",restartAgent:"Перезапустить агент",stopAgent:"Остановить агент",rollback:"Откатить последнее обновление",reboot:"Перезагрузить ПК",shutdown:"Выключить ПК",disconnect:"Отозвать и удалить узел",sshTitle:"SSH / Zero Trust",projectTitleHead:"Python / Создать проект",projectName:"Название проекта",task:"Задание",checkText:"1. Проверить текст",createProject:"2. Создать проект",missionTitleHead:"Создать диагностическую миссию",missionType:"Тип задачи",systemInventory:"Проверка состояния компьютера",name:"Название",whatCheck:"Что проверить",expires:"Срок действия",createMission:"Создать и назначить миссию",commands:"Команды управления",missionsResults:"Действующие миссии",reports:"Диагностика и системные отчёты узлов",reportContent:"Содержимое диагностического отчёта",close:"Закрыть",briefTitle:"Краткая оперативная сводка",briefSub:"Только проблемы, требующие внимания прямо сейчас.",briefClose:"Закрыть и перейти в Live Operations"},
-      en:{pageTitle:"LIVE OPERATIONS",pageLead:"Live control center · only real Controller data is shown.",loginTitle:"Secure sign-in",tokenLabel:"Architect token",loginButton:"Sign in",loginHint:"The token is kept only until this tab is closed.",refresh:"Refresh",logout:"Sign out",opsSub:"Real heartbeats, CPU/RAM, presence, and Controller state. Demo values are prohibited.",registeredNodes:"registered nodes",liveNow:"live now",activeMissions:"active missions now",fullReports:"full reports",unhealthy:"unhealthy / unavailable",projects:"projects",nodes:"Nodes",nodeControl:"Node control",node:"Node",showIp:"Show IP",healthCheck:"Health check",pause:"Pause",resume:"Resume",restartAgent:"Restart agent",stopAgent:"Stop agent",rollback:"Rollback last update",reboot:"Reboot host",shutdown:"Shut down host",disconnect:"Revoke and remove node",sshTitle:"SSH / Zero Trust",projectTitleHead:"Python / Create project",projectName:"Project name",task:"Task",checkText:"1. Check text",createProject:"2. Create project",missionTitleHead:"Create diagnostic mission",missionType:"Task type",systemInventory:"Computer system inventory",name:"Name",whatCheck:"What to check",expires:"Expires",createMission:"Create and assign mission",commands:"Control commands",missionsResults:"Active missions",reports:"Diagnostics and node reports",reportContent:"Diagnostic report",close:"Close",briefTitle:"Operations brief",briefSub:"Only problems that need attention right now.",briefClose:"Close and open Live Operations"},
-      he:{pageTitle:"LIVE OPERATIONS",pageLead:"מרכז שליטה חי · מוצגים רק נתונים אמיתיים מה-Controller.",loginTitle:"כניסה מאובטחת",tokenLabel:"Architect token",loginButton:"כניסה",loginHint:"ה-token נשמר רק עד סגירת הלשונית.",refresh:"רענון",logout:"יציאה",opsSub:"heartbeat, CPU/RAM, presence ומצב Controller אמיתיים בלבד. אין ערכי דמו.",registeredNodes:"nodes רשומים",liveNow:"חיים עכשיו",activeMissions:"משימות פעילות עכשיו",fullReports:"דוחות מלאים",unhealthy:"לא תקינים / לא זמינים",projects:"פרויקטים",nodes:"Nodes",nodeControl:"שליטה ב-node",node:"Node",showIp:"הצג IP",healthCheck:"בדיקת בריאות",pause:"השהה",resume:"המשך",restartAgent:"הפעל agent מחדש",stopAgent:"עצור agent",rollback:"חזרה לעדכון הקודם",reboot:"אתחל מחשב",shutdown:"כבה מחשב",disconnect:"בטל והסר node",sshTitle:"SSH / Zero Trust",projectTitleHead:"Python / יצירת פרויקט",projectName:"שם הפרויקט",task:"משימה",checkText:"1. בדוק טקסט",createProject:"2. צור פרויקט",missionTitleHead:"יצירת משימת אבחון",missionType:"סוג משימה",systemInventory:"בדיקת מצב המחשב",name:"שם",whatCheck:"מה לבדוק",expires:"תוקף",createMission:"צור והקצה משימה",commands:"פקודות שליטה",missionsResults:"משימות פעילות",reports:"אבחון ודוחות nodes",reportContent:"תוכן דוח אבחון",close:"סגור",briefTitle:"סיכום תפעולי",briefSub:"רק בעיות הדורשות תשומת לב עכשיו.",briefClose:"סגור ועבור ל-Live Operations"}
+      ru:{pageTitle:"LIVE OPERATIONS",pageLead:"Живой центр управления · показываются только реальные данные Controller.",loginTitle:"Защищённый вход",tokenLabel:"Секрет архитектора",loginButton:"Войти",loginHint:"Секрет хранится только до закрытия этой вкладки.",refresh:"Обновить",logout:"Выйти",opsSub:"Реальные heartbeat, CPU/RAM, presence и состояние Controller. Демонстрационные значения запрещены.",registeredNodes:"зарегистрировано нод",liveNow:"живых сейчас",activeMissions:"активных миссий сейчас",fullReports:"полных отчётов",unhealthy:"нездоровых / недоступных",projects:"проектов",nodes:"Ноды",nodeControl:"Управление узлом",node:"Нода",showIp:"Показать IP",healthCheck:"Проверить здоровье",pause:"Поставить на паузу",resume:"Возобновить",restartAgent:"Перезапустить агент",stopAgent:"Остановить агент",rollback:"Откатить последнее обновление",reboot:"Перезагрузить ПК",shutdown:"Выключить ПК",disconnect:"Отозвать и удалить узел",sshTitle:"SSH / Zero Trust",projectTitleHead:"Python / Создать проект",projectName:"Название проекта",task:"Задание",checkText:"1. Проверить текст",createProject:"2. Создать проект",missionTitleHead:"Создать диагностическую миссию",missionType:"Тип задачи",systemInventory:"Проверка состояния компьютера",name:"Название",whatCheck:"Что проверить",expires:"Срок действия",createMission:"Создать и назначить миссию",commands:"Команды управления",missionsResults:"Действующие миссии",reports:"Отчёты узлов",reportContent:"Содержимое диагностического отчёта",close:"Закрыть",briefTitle:"Краткая оперативная сводка",briefSub:"Только проблемы, требующие внимания прямо сейчас.",briefClose:"Закрыть и перейти в Live Operations"},
+      en:{pageTitle:"LIVE OPERATIONS",pageLead:"Live control center · only real Controller data is shown.",loginTitle:"Secure sign-in",tokenLabel:"Architect token",loginButton:"Sign in",loginHint:"The token is kept only until this tab is closed.",refresh:"Refresh",logout:"Sign out",opsSub:"Real heartbeats, CPU/RAM, presence, and Controller state. Demo values are prohibited.",registeredNodes:"registered nodes",liveNow:"live now",activeMissions:"active missions now",fullReports:"full reports",unhealthy:"unhealthy / unavailable",projects:"projects",nodes:"Nodes",nodeControl:"Node control",node:"Node",showIp:"Show IP",healthCheck:"Health check",pause:"Pause",resume:"Resume",restartAgent:"Restart agent",stopAgent:"Stop agent",rollback:"Rollback last update",reboot:"Reboot host",shutdown:"Shut down host",disconnect:"Revoke and remove node",sshTitle:"SSH / Zero Trust",projectTitleHead:"Python / Create project",projectName:"Project name",task:"Task",checkText:"1. Check text",createProject:"2. Create project",missionTitleHead:"Create diagnostic mission",missionType:"Task type",systemInventory:"Computer system inventory",name:"Name",whatCheck:"What to check",expires:"Expires",createMission:"Create and assign mission",commands:"Control commands",missionsResults:"Active missions",reports:"Node reports",reportContent:"Diagnostic report",close:"Close",briefTitle:"Operations brief",briefSub:"Only problems that need attention right now.",briefClose:"Close and open Live Operations"},
+      he:{pageTitle:"LIVE OPERATIONS",pageLead:"מרכז שליטה חי · מוצגים רק נתונים אמיתיים מה-Controller.",loginTitle:"כניסה מאובטחת",tokenLabel:"Architect token",loginButton:"כניסה",loginHint:"ה-token נשמר רק עד סגירת הלשונית.",refresh:"רענון",logout:"יציאה",opsSub:"heartbeat, CPU/RAM, presence ומצב Controller אמיתיים בלבד. אין ערכי דמו.",registeredNodes:"nodes רשומים",liveNow:"חיים עכשיו",activeMissions:"משימות פעילות עכשיו",fullReports:"דוחות מלאים",unhealthy:"לא תקינים / לא זמינים",projects:"פרויקטים",nodes:"Nodes",nodeControl:"שליטה ב-node",node:"Node",showIp:"הצג IP",healthCheck:"בדיקת בריאות",pause:"השהה",resume:"המשך",restartAgent:"הפעל agent מחדש",stopAgent:"עצור agent",rollback:"חזרה לעדכון הקודם",reboot:"אתחל מחשב",shutdown:"כבה מחשב",disconnect:"בטל והסר node",sshTitle:"SSH / Zero Trust",projectTitleHead:"Python / יצירת פרויקט",projectName:"שם הפרויקט",task:"משימה",checkText:"1. בדוק טקסט",createProject:"2. צור פרויקט",missionTitleHead:"יצירת משימת אבחון",missionType:"סוג משימה",systemInventory:"בדיקת מצב המחשב",name:"שם",whatCheck:"מה לבדוק",expires:"תוקף",createMission:"צור והקצה משימה",commands:"פקודות שליטה",missionsResults:"משימות פעילות",reports:"דוחות nodes",reportContent:"תוכן דוח אבחון",close:"סגור",briefTitle:"סיכום תפעולי",briefSub:"רק בעיות הדורשות תשומת לב עכשיו.",briefClose:"סגור ועבור ל-Live Operations"}
     };
     let lang = localStorage.getItem("citadelArchitectLang") || "ru";
     function tr(key){ return I18N[lang]?.[key] || I18N.ru[key] || key; }
@@ -289,6 +328,24 @@
     const workRoles = document.getElementById("workRoles");
     const projectResult = document.getElementById("projectResult");
     const projectsList = document.getElementById("projectsList");
+    const projectVoiceButton = document.getElementById("projectVoiceButton");
+    const projectVoiceState = document.getElementById("projectVoiceState");
+    const missionVoiceButton = document.getElementById("missionVoiceButton");
+    const missionVoiceState = document.getElementById("missionVoiceState");
+    const projectReportCard = document.getElementById("projectReportCard");
+    const projectReportTitle = document.getElementById("projectReportTitle");
+    const projectReportMeta = document.getElementById("projectReportMeta");
+    const projectReportStatus = document.getElementById("projectReportStatus");
+    const projectReportTask = document.getElementById("projectReportTask");
+    const projectReportSpecializations = document.getElementById("projectReportSpecializations");
+    const projectReportProgress = document.getElementById("projectReportProgress");
+    const projectReportWorkItems = document.getElementById("projectReportWorkItems");
+    const closeProjectReportButton = document.getElementById("closeProjectReportButton");
+    const projectCreatedOverlay = document.getElementById("projectCreatedOverlay");
+    const projectCreatedSummary = document.getElementById("projectCreatedSummary");
+    const projectGoReportButton = document.getElementById("projectGoReportButton");
+    const projectCreatedCloseButton = document.getElementById("projectCreatedCloseButton");
+    const reportsDisclosure = document.getElementById("reportsDisclosure");
     const liveNodesList = document.getElementById("liveNodesList");
     const fleetRing = document.getElementById("fleetRing");
     const fleetPct = document.getElementById("fleetPct");
@@ -322,6 +379,11 @@
     let currentProjectCheck = null;
     let currentProjects = [];
     let currentWorkRoles = [];
+    let currentRecommendedProjectRoles = new Set();
+    let architectAddedProjectRoles = new Set();
+    let activeProjectId = null;
+    let pendingCreatedProjectId = null;
+    let activeVoiceRecognition = null;
     let openingBriefShown = false;
     let activeReportId = null;
     let reportNextOffset = null;
@@ -410,6 +472,35 @@
       return node.node_number
         ? `AG-${String(node.node_number).padStart(2, "0")}`
         : "Node Agent";
+    }
+
+    function roleDisplayName(roleId, fallback = "") {
+      const labels = {
+        architect: ["Архитектор","Architect","Architect"],
+        planner: ["Планирование","Planning","תכנון"],
+        verifier: ["Проверка","Verification","אימות"],
+        researcher: ["Исследование","Research","מחקר"],
+        reporter: ["Отчёт","Reporting","דיווח"],
+        metrics: ["Метрики","Metrics","מדדים"],
+        recovery: ["Восстановление","Recovery","שחזור"],
+        programmer: ["Программирование","Programming","תכנות"],
+        mathematician: ["Математика","Mathematics","מתמטיקה"],
+        security_analyst: ["Безопасность","Security","אבטחה"]
+      };
+      const value = labels[roleId];
+      if (!value) return fallback || roleId;
+      return lang === "he" ? value[2] : lang === "en" ? value[1] : value[0];
+    }
+
+    function projectNodeDisplay(item) {
+      const live = currentNodes.find((node) => node.node_id === item.node_id);
+      const number = live?.node_number || item.node_number;
+      const hostname = live?.hostname || item.hostname || "";
+      if (number) {
+        const agent = `AG-${String(number).padStart(2, "0")}`;
+        return `CITADEL Node ${number} · ${agent}${hostname ? " · " + hostname : ""}`;
+      }
+      return hostname || "Нода ещё не назначена";
     }
 
     function offlineExplanation(node) {
@@ -522,17 +613,63 @@
       renderTopology(nodes);
     }
 
+    function selectedProjectRoleIds() {
+      return [...new Set([...currentRecommendedProjectRoles, ...architectAddedProjectRoles])];
+    }
+
+    function renderRolePlanSummary(rolePlan = null) {
+      const effective = rolePlan || {};
+      const lines = [];
+      for (const [role, count] of Object.entries(effective)) {
+        lines.push(`${roleDisplayName(role)}: ${count}`);
+      }
+      const extras = [...architectAddedProjectRoles].filter((role) => !currentRecommendedProjectRoles.has(role));
+      if (extras.length) {
+        lines.push("", "Дополнительно выбрано Architect:");
+        extras.forEach((role) => lines.push(`+ ${roleDisplayName(role)}`));
+      }
+      projectRolePlan.textContent = lines.length
+        ? "Hub предлагает специализации:\n" + lines.join("\n")
+        : "Hub ещё не определял требуемые специализации.";
+    }
+
     function renderWorkRoles(roles) {
       currentWorkRoles = roles || [];
       workRoles.replaceChildren();
       for (const role of currentWorkRoles) {
-        const chip = document.createElement("div");
-        chip.className = "role-chip";
-        addText(chip, "b", role.label);
-        addText(chip, "span", role.kind === "human_gate"
-          ? "Human approval gate"
-          : role.origin === "legacy_simulation" ? "legacy worker role" : "Hub specialization");
-        workRoles.appendChild(chip);
+        if (role.kind === "human_gate") {
+          const chip = document.createElement("div");
+          chip.className = "role-chip";
+          addText(chip, "b", roleDisplayName(role.id, role.label));
+          addText(chip, "span", "Human approval gate · управляется Architect");
+          workRoles.appendChild(chip);
+          continue;
+        }
+        const label = document.createElement("label");
+        const recommended = currentRecommendedProjectRoles.has(role.id);
+        const selected = recommended || architectAddedProjectRoles.has(role.id);
+        label.className = `role-chip selectable ${selected ? "selected" : ""} ${recommended ? "recommended" : ""}`.trim();
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = selected;
+        checkbox.disabled = recommended;
+        checkbox.setAttribute("aria-label", roleDisplayName(role.id, role.label));
+        const copy = document.createElement("div");
+        copy.className = "role-copy";
+        addText(copy, "b", roleDisplayName(role.id, role.label));
+        addText(copy, "span", recommended
+          ? "Hub выбрал автоматически"
+          : selected ? "Добавлено Architect" : "Можно добавить к проекту");
+        if (recommended) addText(copy, "span", "HUB", "role-badge");
+        checkbox.addEventListener("change", () => {
+          if (checkbox.checked) architectAddedProjectRoles.add(role.id);
+          else architectAddedProjectRoles.delete(role.id);
+          renderWorkRoles(currentWorkRoles);
+          if (currentProjectCheck) renderRolePlanSummary(currentProjectCheck.role_plan || {});
+        });
+        label.appendChild(checkbox);
+        label.appendChild(copy);
+        workRoles.appendChild(label);
       }
     }
 
@@ -656,14 +793,9 @@
         const extra = item.classification ? ` · ${item.classification}` : "";
         return `${label}: ${mark} · ${item.detail || "нет результата"}${extra}`;
       }).join("\n");
-      const rolePlan = data?.role_plan || {};
-      const roleLines = Object.entries(rolePlan).map(([role, count]) => {
-        const meta = currentWorkRoles.find((item) => item.id === role);
-        return `${meta?.label || role}: ${count}`;
-      });
-      projectRolePlan.textContent = roleLines.length
-        ? "Hub предлагает специализации:\n" + roleLines.join("\n")
-        : "Hub не определил специализированных рабочих блоков.";
+      currentRecommendedProjectRoles = new Set(data?.recommended_roles || Object.keys(data?.recommended_role_plan || data?.role_plan || {}));
+      renderWorkRoles(currentWorkRoles);
+      renderRolePlanSummary(data?.role_plan || {});
       projectRolePlan.className = "status";
       const ready = Boolean(data?.ready_for_architect_approval);
       projectChecks.className = `status ${ready ? "good" : "bad"}`;
@@ -676,13 +808,90 @@
       projectsList.replaceChildren();
       for (const project of currentProjects) {
         const item = document.createElement("div");
-        item.className = `item ${project.status === "completed" ? "ok" : "warn"}`;
+        const completed = Number(project.completed_work_items || 0);
+        const total = Number(project.work_item_count || 0);
+        item.className = `item ${total > 0 && completed === total ? "ok" : "warn"}`;
         addText(item, "strong", `${project.title} — ${project.status}`);
-        addText(item, "div", `Hub workers: ${project.worker_count} · Project ID: ${project.project_id}`, "small");
-        addText(item, "div", project.created_at, "small");
+        addText(item, "div", `Hub workers: ${project.worker_count} · блоки: ${completed}/${total} завершено`, "small");
+        addText(item, "div", `Project ID: ${project.project_id}`, "small");
+        const open = addText(item, "button", "Перейти к отчёту", "secondary");
+        open.type = "button";
+        open.addEventListener("click", () => openProjectReport(project.project_id));
         projectsList.appendChild(item);
       }
       if (!currentProjects.length) addText(projectsList, "p", "Проектов пока нет.", "muted");
+    }
+
+    function renderProjectReport(project) {
+      activeProjectId = project.project_id;
+      projectReportTitle.textContent = `Отчёт проекта · ${project.title}`;
+      projectReportMeta.textContent = `Project ID: ${project.project_id} · создан: ${project.created_at || "—"}`;
+      projectReportTask.textContent = project.task_text || "—";
+      projectReportSpecializations.replaceChildren();
+      for (const role of project.specializations || []) {
+        const chip = addText(projectReportSpecializations, "span", roleDisplayName(role.id || role.role_name, role.label), "project-specialization");
+        chip.title = role.source === "architect_added" ? "Добавлено Architect" : "Выбрано Hub";
+      }
+      if (!(project.specializations || []).length) addText(projectReportSpecializations, "span", "Нет данных", "small");
+
+      const execution = project.execution || {};
+      const done = Number(execution.completed_work_items || 0);
+      const total = Number(execution.total_work_items || 0);
+      projectReportProgress.textContent = `${done}/${total} завершено`;
+      if (execution.state === "planned") {
+        projectReportStatus.textContent = "План создан. Hub выбрал специализации и ноды. Исполнение произвольного проекта ещё не началось: безопасный универсальный Python-worker для этого типа задания пока не подключён.";
+        projectReportStatus.className = "status";
+      } else if (execution.final_report_ready) {
+        projectReportStatus.textContent = "Все рабочие блоки завершены. Финальный статус проекта готов.";
+        projectReportStatus.className = "status good";
+      } else {
+        projectReportStatus.textContent = `Состояние выполнения: ${execution.state || project.status || "неизвестно"}.`;
+        projectReportStatus.className = "status";
+      }
+
+      projectReportWorkItems.replaceChildren();
+      for (const work of project.work_items || []) {
+        const box = document.createElement("div");
+        box.className = "project-work";
+        addText(box, "strong", `#${work.sequence_no} · ${roleDisplayName(work.role_name)} → ${projectNodeDisplay(work)}`);
+        addText(box, "div", `Статус: ${work.status}`, "small");
+        const task = addText(box, "div", work.task_text || "", "small");
+        task.style.marginTop = "6px";
+        const technical = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.textContent = "Технические данные";
+        technical.appendChild(summary);
+        addText(technical, "div", `Node ID: ${work.node_id || "—"}`, "small");
+        addText(technical, "div", `Work item: ${work.work_item_id}`, "small");
+        box.appendChild(technical);
+        projectReportWorkItems.appendChild(box);
+      }
+      if (!(project.work_items || []).length) addText(projectReportWorkItems, "p", "Рабочих блоков нет.", "muted");
+      projectReportCard.classList.remove("hidden");
+    }
+
+    async function openProjectReport(projectId) {
+      try {
+        const data = await api(`/api/v1/architect/projects/${encodeURIComponent(projectId)}`);
+        renderProjectReport(data.project);
+        projectReportCard.scrollIntoView({ behavior: "smooth", block: "start" });
+      } catch (error) {
+        setStatus(`Отчёт проекта не загружен: ${error.message}`, "bad");
+      }
+    }
+
+    function showProjectCreated(project) {
+      pendingCreatedProjectId = project.project_id;
+      projectCreatedSummary.replaceChildren();
+      addText(projectCreatedSummary, "div", `Проект: ${project.title}`, "project-created-line");
+      const nodes = [...new Map((project.work_items || []).map((item) => [item.node_id, projectNodeDisplay(item)])).values()];
+      addText(projectCreatedSummary, "div", `Hub выбрал ноды: ${nodes.join("; ") || "нет"}`, "project-created-line");
+      const roles = (project.specializations || []).map((role) => roleDisplayName(role.id || role.role_name, role.label));
+      addText(projectCreatedSummary, "div", `Специализации: ${roles.join(", ") || "нет"}`, "project-created-line");
+      addText(projectCreatedSummary, "div", `Рабочих блоков: ${project.work_item_count} · состояние: ${project.status}`, "project-created-line");
+      const note = addText(projectCreatedSummary, "div", "Сейчас создан реальный план Controller. Отчёт покажет назначение нод и состояние каждого блока; выдуманный результат до выполнения не создаётся.", "execution-note");
+      note.setAttribute("role", "status");
+      projectCreatedOverlay.classList.remove("hidden");
     }
 
     function selectedMissionNode() {
@@ -869,6 +1078,12 @@
       updateControlButtons();
     }
 
+    function missionTypeDisplay(type) {
+      return type === "system_inventory"
+        ? lt("Диагностика системы","System diagnostics","אבחון מערכת")
+        : type || "Миссия";
+    }
+
     function renderMissions(missions) {
       const list = document.getElementById("missionsList");
       list.replaceChildren();
@@ -880,11 +1095,17 @@
         const item = document.createElement("div");
         item.className = "item warn";
         const node = currentNodes.find((entry) => entry.node_id === mission.node_id);
-        addText(item, "strong", `${mission.title} — ${mission.assignment_status || mission.status}`);
-        addText(item, "div", `Нода: ${node ? nodeDisplayName(node) : mission.node_id || "—"}`, "small");
-        if (mission.task_text) addText(item, "div", `Что поручено: ${mission.task_text}`, "small");
+        addText(item, "strong", `${missionTypeDisplay(mission.mission_type)} · ${mission.title} — ${mission.assignment_status || mission.status}`);
+        addText(item, "div", `Нода: ${node ? `${nodeDisplayName(node)} · ${agentDisplayName(node)}` : "не назначена"}`, "small");
+        if (mission.task_text) addText(item, "div", `Задание: ${mission.task_text}`, "small");
         addText(item, "div", `Создана: ${mission.created_at || "—"} · истекает: ${mission.expires_at || "—"}`, "small");
-        addText(item, "div", `Mission ID: ${mission.mission_id}`, "small");
+        const technical = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.textContent = "Технические данные";
+        technical.appendChild(summary);
+        addText(technical, "div", `Mission ID: ${mission.mission_id}`, "small");
+        if (mission.node_id) addText(technical, "div", `Node ID: ${mission.node_id}`, "small");
+        item.appendChild(technical);
         list.appendChild(item);
       }
       if (!active.length) addText(list, "p", "Сейчас активных миссий нет.", "muted");
@@ -1018,17 +1239,20 @@
       if (!architectToken || liveRefreshBusy) return null;
       liveRefreshBusy = true;
       try {
-        const [data, reports, presence, release] = await Promise.all([
+        const [data, reports, presence, release, projects] = await Promise.all([
           api("/api/v1/architect/overview"),
           api("/api/v1/architect/reports?limit=50&offset=0"),
           api("/api/v1/architect/presence"),
-          api("/api/v1/architect/release")
+          api("/api/v1/architect/release"),
+          api("/api/v1/architect/projects")
         ]);
         currentPresence = presence.presence || [];
         currentReleaseVersion = release.release?.version || "";
         document.getElementById("missionCount").textContent = data.counts.active_missions ?? data.counts.missions ?? 0;
         document.getElementById("reportCount").textContent = data.counts.reports ?? 0;
         document.getElementById("nodesUpdated").textContent = `обновлено ${new Date().toLocaleTimeString()}`;
+        document.getElementById("projectCount").textContent = (projects.projects || []).length;
+        renderProjects(projects.projects || []);
         renderNodes(data.nodes || []);
         renderMissions(data.missions || []);
         renderCommands(data.commands || []);
@@ -1058,6 +1282,10 @@
       reportNextOffset = null;
       openingBriefShown = false;
       operationsAlert.classList.add("hidden");
+      projectCreatedOverlay.classList.add("hidden");
+      projectReportCard.classList.add("hidden");
+      pendingCreatedProjectId = null;
+      activeProjectId = null;
       dashboard.classList.add("hidden");
       loginCard.classList.remove("hidden");
       setStatus(message);
@@ -1209,6 +1437,89 @@
       }
     });
 
+    function invalidateProjectCheck() {
+      if (!currentProjectCheck) return;
+      currentProjectCheck = null;
+      currentRecommendedProjectRoles = new Set();
+      createProjectButton.disabled = true;
+      projectChecks.textContent = "Текст проекта изменён. Запустите четыре проверки снова.";
+      projectChecks.className = "status";
+      renderWorkRoles(currentWorkRoles);
+      renderRolePlanSummary();
+    }
+
+    projectTitle.addEventListener("input", invalidateProjectCheck);
+    projectTaskText.addEventListener("input", invalidateProjectCheck);
+
+    function speechLanguage() {
+      return lang === "he" ? "he-IL" : lang === "en" ? "en-US" : "ru-RU";
+    }
+
+    function startVoiceDictation(button, textarea, stateElement) {
+      const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!Recognition) {
+        stateElement.textContent = "Этот браузер не поддерживает встроенную голосовую диктовку.";
+        stateElement.className = "small";
+        return;
+      }
+      if (activeVoiceRecognition) {
+        try { activeVoiceRecognition.stop(); } catch {}
+        activeVoiceRecognition = null;
+      }
+      const recognition = new Recognition();
+      activeVoiceRecognition = recognition;
+      recognition.lang = speechLanguage();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      const base = textarea.value.trim();
+      let finalText = "";
+      recognition.onstart = () => {
+        button.textContent = "⏹ Остановить диктовку";
+        stateElement.textContent = "Слушаю… говорите обычным голосом.";
+      };
+      recognition.onresult = (event) => {
+        let interim = "";
+        for (let index = event.resultIndex; index < event.results.length; index += 1) {
+          const transcript = event.results[index][0]?.transcript || "";
+          if (event.results[index].isFinal) finalText += transcript + " ";
+          else interim += transcript;
+        }
+        textarea.value = [base, finalText.trim(), interim.trim()].filter(Boolean).join(base ? " " : "");
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      };
+      recognition.onerror = (event) => {
+        stateElement.textContent = `Диктовка остановлена: ${event.error || "ошибка распознавания"}.`;
+      };
+      recognition.onend = () => {
+        if (activeVoiceRecognition === recognition) activeVoiceRecognition = null;
+        button.textContent = textarea === projectTaskText ? "🎙️ Диктовать задание" : "🎙️ Диктовать миссию";
+        stateElement.textContent = "Диктовка завершена. Текст можно отредактировать вручную.";
+      };
+      try { recognition.start(); }
+      catch { stateElement.textContent = "Не удалось запустить микрофон. Проверьте разрешение браузера."; }
+      button.onclick = () => {
+        if (activeVoiceRecognition === recognition) {
+          recognition.stop();
+        } else {
+          startVoiceDictation(button, textarea, stateElement);
+        }
+      };
+    }
+
+    projectVoiceButton.addEventListener("click", () => startVoiceDictation(projectVoiceButton, projectTaskText, projectVoiceState), { once: true });
+    missionVoiceButton.addEventListener("click", () => startVoiceDictation(missionVoiceButton, missionTask, missionVoiceState), { once: true });
+
+    closeProjectReportButton.addEventListener("click", () => {
+      projectReportCard.classList.add("hidden");
+      activeProjectId = null;
+    });
+    projectCreatedCloseButton.addEventListener("click", () => projectCreatedOverlay.classList.add("hidden"));
+    projectGoReportButton.addEventListener("click", async () => {
+      const projectId = pendingCreatedProjectId;
+      projectCreatedOverlay.classList.add("hidden");
+      if (projectId) await openProjectReport(projectId);
+    });
+
     checkProjectButton.addEventListener("click", async () => {
       const title = projectTitle.value.trim();
       const taskText = projectTaskText.value.trim();
@@ -1222,7 +1533,12 @@
         const data = await api("/api/v1/architect/projects/check", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ title, task_text: taskText, source_type: "architect_manual" })
+          body: JSON.stringify({
+            title,
+            task_text: taskText,
+            source_type: "architect_manual",
+            requested_roles: [...architectAddedProjectRoles]
+          })
         });
         renderProjectCheckResult(data);
         setStatus(data.ready_for_architect_approval
@@ -1248,21 +1564,29 @@
         const data = await api("/api/v1/architect/projects", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ title, task_text: taskText, source_type: "architect_manual" })
+          body: JSON.stringify({
+            title,
+            task_text: taskText,
+            source_type: "architect_manual",
+            requested_roles: [...architectAddedProjectRoles]
+          })
         });
         const p = data.project;
-        const assignments = p.work_items.map((item) => `#${item.sequence_no} · ${item.role_name} → ${item.hostname} (${item.node_id})`).join("\n");
+        const assignments = p.work_items.map((item) =>
+          `#${item.sequence_no} · ${roleDisplayName(item.role_name)} → ${projectNodeDisplay(item)}`
+        ).join("\n");
         projectResult.textContent = [
-          `Project ID: ${p.project_id}`,
+          "Проект создан.",
           `Hub выбрал узлов: ${p.worker_count}`,
           `Рабочих блоков: ${p.work_item_count}`,
           assignments,
-          "План распределения записан в Controller."
+          "Нажмите «Перейти к отчёту», чтобы увидеть живое состояние проекта."
         ].join("\n");
         projectResult.className = "status good";
         currentProjectCheck = null;
         createProjectButton.disabled = true;
-        await loadDashboard();
+        showProjectCreated(p);
+        await refreshOperationalData();
       } catch (error) {
         projectResult.textContent = `Проект не создан: ${error.message}`;
         projectResult.className = "status bad";
@@ -1306,7 +1630,7 @@
           if (mission.outcome || mission.result_id || mission.status === "completed") {
             missionCreateResult.textContent = [
               "Миссия завершена.",
-              `Node ID: ${selectedNodeId}`,
+              `Нода: ${nodeDisplayName(currentNodes.find((item) => item.node_id === selectedNodeId) || { node_id: selectedNodeId })}`,
               `Mission ID: ${missionId}`,
               `Результат: ${mission.outcome || "completed"}`,
               "Полный отчёт обновлён ниже."
@@ -1355,7 +1679,8 @@
         const missionId = created.mission.mission_id;
         missionCreateResult.textContent = [
           "Миссия создана и назначена.",
-          `Нода: ${nodeDisplayName(node)} (${selectedNodeId})`,
+          `Нода: ${nodeDisplayName(node)} · ${agentDisplayName(node)}`,
+          `Тип: ${missionTypeDisplay(missionType.value)}`,
           `Mission ID: ${missionId}`,
           `Задание: ${taskText}`,
           "Агент заберёт её в ближайшем цикле. Результат появится ниже."
