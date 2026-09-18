@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS project_work_items (
   project_id TEXT NOT NULL,
   sequence_no INTEGER NOT NULL CHECK (sequence_no >= 1),
   node_id TEXT,
+  role_name TEXT NOT NULL DEFAULT 'planner',
   task_text TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'planned'
     CHECK (status IN ('planned','assigned','running','completed','failed','cancelled')),
