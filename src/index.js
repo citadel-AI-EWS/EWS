@@ -1155,10 +1155,12 @@ async function architectGetProject(request, env, projectId) {
       SELECT
         w.work_item_id, w.sequence_no, w.role_name, w.task_text, w.status,
         w.created_at, w.updated_at, w.node_id,
-        n.hostname, n.agent_version, nn.node_number,
+        n.hostname, n.agent_version, n.status AS node_status, n.last_seen_at AS node_last_seen_at,
+        n.capabilities_json, nn.node_number,
         ai.installed AS lmstudio_installed,
         ai.loaded_model AS lmstudio_loaded_model,
         ai.server_running AS lmstudio_server_running,
+        ai.live_checked_at AS lmstudio_live_checked_at,
         (
           SELECT r.summary FROM results AS r
           WHERE r.assignment_id = ('assignment_' || w.work_item_id)
@@ -1184,11 +1186,32 @@ async function architectGetProject(request, env, projectId) {
     `).bind(projectId).all()
   ]);
 
-  const workItems = (workQuery.results || []).map((item) => ({
-    ...item,
-    result: safeJson(item.result_json, null),
-    result_json: undefined
-  }));
+  const workItems = (workQuery.results || []).map((item) => {
+    const capabilities = safeJson(item.capabilities_json, []);
+    let blockingReason = null;
+    if (item.status === "planned") {
+      const seen = item.node_last_seen_at
+        ? Date.parse(String(item.node_last_seen_at).replace(" ", "T") + (String(item.node_last_seen_at).includes("T") ? "" : "Z"))
+        : NaN;
+      const live = item.node_status === "online" && Number.isFinite(seen) && Date.now() - seen <= 5 * 60 * 1000;
+      if (!item.node_id) blockingReason = "node_not_assigned";
+      else if (!live) blockingReason = "node_offline";
+      else if (item.agent_version !== LATEST_NODE_RELEASE.version) blockingReason = "agent_update_required";
+      else if (!Array.isArray(capabilities) || !capabilities.includes("project_text")) blockingReason = "project_text_capability_missing";
+      else if (Number(item.lmstudio_installed || 0) !== 1) blockingReason = "lmstudio_not_installed";
+      else if (Number(item.lmstudio_server_running || 0) !== 1) blockingReason = "lmstudio_server_not_running";
+      else if (typeof item.lmstudio_loaded_model !== "string" || !item.lmstudio_loaded_model) blockingReason = "lmstudio_model_not_loaded";
+      else blockingReason = "waiting_for_node_poll";
+    }
+    return {
+      ...item,
+      capabilities,
+      capabilities_json: undefined,
+      blocking_reason: blockingReason,
+      result: safeJson(item.result_json, null),
+      result_json: undefined
+    };
+  });
   let specializationRows = specializationQuery.results || [];
   if (!specializationRows.length) {
     specializationRows = [...new Set(workItems.map((item) => item.role_name))].map((roleName) => ({
@@ -1233,6 +1256,16 @@ async function architectGetProject(request, env, projectId) {
       content: typeof item.result.content === "string" ? item.result.content : null,
       status: item.status
     }));
+  const blockers = workItems
+    .filter((item) => item.blocking_reason)
+    .map((item) => ({
+      work_item_id: item.work_item_id,
+      sequence_no: item.sequence_no,
+      node_id: item.node_id,
+      node_number: item.node_number,
+      hostname: item.hostname,
+      reason: item.blocking_reason
+    }));
   const finalReportReady = total > 0 && finished === total;
   const finalResultText = finalReportReady
     ? finalSections
@@ -1256,6 +1289,7 @@ async function architectGetProject(request, env, projectId) {
         total_work_items: total,
         final_report_ready: finalReportReady,
         progress_percent: total ? Math.round((finished / total) * 100) : 0,
+        blockers,
         detail: executionState === "planned"
           ? "waiting_for_lmstudio_project_worker"
           : executionState === "completed"
