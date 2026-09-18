@@ -1961,7 +1961,12 @@ async function authenticateArchitect(request, env) {
 
 async function architectOverview(request, env) {
   await authenticateArchitect(request, env);
-  await Promise.all([backfillLegacyReports(env), ensureSessionStorage(env), ensureAutoEnrollmentStorage(env)]);
+  await Promise.all([
+    backfillLegacyReports(env),
+    ensureSessionStorage(env),
+    ensureAutoEnrollmentStorage(env),
+    ensureProjectStorage(env)
+  ]);
 
   const [counts, nodesQuery, missionsQuery, commandsQuery] = await Promise.all([
     env.DB.prepare(
@@ -1978,7 +1983,14 @@ async function architectOverview(request, env) {
       "n.agent_version, CASE WHEN n.status = 'online' " +
       "AND (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-5 minutes')) " +
       "THEN 'offline' ELSE n.status END AS status, n.cpu_percent, n.memory_percent, " +
-      "n.enrolled_at, n.last_seen_at FROM nodes AS n " +
+      "n.enrolled_at, n.last_seen_at, " +
+      "(SELECT pwi.role_name FROM project_work_items AS pwi " +
+      "JOIN architect_projects AS ap ON ap.project_id = pwi.project_id " +
+      "WHERE pwi.node_id = n.node_id " +
+      "AND pwi.status IN ('planned','assigned','running') " +
+      "AND ap.status IN ('planned','running') " +
+      "ORDER BY pwi.created_at DESC, pwi.sequence_no DESC LIMIT 1) AS planned_role " +
+      "FROM nodes AS n " +
       "LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id " +
       "ORDER BY n.last_seen_at DESC LIMIT 100"
     ).all(),
