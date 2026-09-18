@@ -180,6 +180,10 @@
         </div>
         <div class="section-head" style="margin-top:16px"><h3 style="margin:0">Рабочие блоки и ноды</h3><span id="projectReportProgress" class="small"></span></div>
         <div id="projectReportWorkItems" class="project-work-list"></div>
+        <div id="projectFinalResultBox" class="project-report-box hidden" style="margin-top:16px">
+          <b>Конечный результат проекта</b>
+          <pre id="projectFinalResult" class="report-body" style="margin-top:10px"></pre>
+        </div>
       </section>
 
       <section class="card" id="missionPanel">
@@ -340,6 +344,8 @@
     const projectReportSpecializations = document.getElementById("projectReportSpecializations");
     const projectReportProgress = document.getElementById("projectReportProgress");
     const projectReportWorkItems = document.getElementById("projectReportWorkItems");
+    const projectFinalResultBox = document.getElementById("projectFinalResultBox");
+    const projectFinalResult = document.getElementById("projectFinalResult");
     const closeProjectReportButton = document.getElementById("closeProjectReportButton");
     const projectCreatedOverlay = document.getElementById("projectCreatedOverlay");
     const projectCreatedSummary = document.getElementById("projectCreatedSummary");
@@ -811,8 +817,9 @@
         const completed = Number(project.completed_work_items || 0);
         const total = Number(project.work_item_count || 0);
         item.className = `item ${total > 0 && completed === total ? "ok" : "warn"}`;
+        const percent = total ? Math.round((completed / total) * 100) : 0;
         addText(item, "strong", `${project.title} — ${project.status}`);
-        addText(item, "div", `Нод Hub: ${project.worker_count} · рабочие блоки: ${completed}/${total} завершено`, "small");
+        addText(item, "div", `Нод Hub: ${project.worker_count} · прогресс: ${completed}/${total} · ${percent}% · running: ${Number(project.running_work_items || 0)}`, "small");
         addText(item, "div", `Project ID: ${project.project_id}`, "small");
         const open = addText(item, "button", "Перейти к отчёту", "secondary");
         open.type = "button";
@@ -835,19 +842,34 @@
       if (!(project.specializations || []).length) addText(projectReportSpecializations, "span", "Нет данных", "small");
 
       const execution = project.execution || {};
+      const counts = execution.counts || {};
       const done = Number(execution.completed_work_items || 0);
       const total = Number(execution.total_work_items || 0);
-      projectReportProgress.textContent = `${done}/${total} завершено`;
+      const percent = Number(execution.progress_percent ?? (total ? Math.round((done / total) * 100) : 0));
+      projectReportProgress.textContent =
+        `${done}/${total} · ${percent}% · assigned ${Number(counts.assigned || 0)} · running ${Number(counts.running || 0)} · failed ${Number(counts.failed || 0)}`;
       if (execution.state === "planned") {
-        projectReportStatus.textContent = "План создан. Hub выбрал специализации и ноды. Исполнение произвольного проекта ещё не началось: безопасный универсальный Python-worker для этого типа задания пока не подключён.";
+        projectReportStatus.textContent = "План готов. Controller ждёт живую ноду с агентом project_text и загруженной LM Studio-моделью. Как только такая нода опросит Hub, блоки автоматически перейдут в Assigned и Running.";
         projectReportStatus.className = "status";
-      } else if (execution.final_report_ready) {
-        projectReportStatus.textContent = "Все рабочие блоки завершены. Финальный статус проекта готов.";
+      } else if (execution.state === "assigned") {
+        projectReportStatus.textContent = "Рабочие блоки назначены нодам и ожидают принятия агентом.";
         projectReportStatus.className = "status good";
+      } else if (execution.state === "running") {
+        projectReportStatus.textContent = "Проект выполняется на нодах. Этот отчёт обновляется автоматически каждые 10 секунд.";
+        projectReportStatus.className = "status good";
+      } else if (execution.final_report_ready) {
+        projectReportStatus.textContent = execution.state === "completed_with_failures"
+          ? "Проект завершён с ошибками в части блоков. Доступные результаты собраны ниже."
+          : "Все рабочие блоки завершены. Конечный результат проекта собран ниже.";
+        projectReportStatus.className = execution.state === "completed_with_failures" ? "status bad" : "status good";
       } else {
         projectReportStatus.textContent = `Состояние выполнения: ${execution.state || project.status || "неизвестно"}.`;
         projectReportStatus.className = "status";
       }
+
+      const finalText = project.final_report?.combined_text || "";
+      projectFinalResult.textContent = finalText;
+      projectFinalResultBox.classList.toggle("hidden", !project.final_report?.ready);
 
       projectReportWorkItems.replaceChildren();
       for (const work of project.work_items || []) {
@@ -857,6 +879,20 @@
         addText(box, "div", `Статус: ${work.status}`, "small");
         const task = addText(box, "div", work.task_text || "", "small");
         task.style.marginTop = "6px";
+        if (work.result?.content) {
+          const resultDetails = document.createElement("details");
+          resultDetails.open = work.status === "completed";
+          const resultSummary = document.createElement("summary");
+          resultSummary.textContent = `Результат блока${work.result.model ? " · " + work.result.model : ""}`;
+          resultDetails.appendChild(resultSummary);
+          const resultBody = document.createElement("pre");
+          resultBody.className = "report-body";
+          resultBody.textContent = work.result.content;
+          resultDetails.appendChild(resultBody);
+          box.appendChild(resultDetails);
+        } else if (work.result_summary) {
+          addText(box, "div", `Результат: ${work.result_summary}`, "small");
+        }
         const technical = document.createElement("details");
         const summary = document.createElement("summary");
         summary.textContent = "Технические данные";
@@ -901,7 +937,7 @@
       const roles = (project.specializations || []).map((role) => roleDisplayName(role.id || role.role_name, role.label));
       addText(projectCreatedSummary, "div", `Специализации: ${roles.join(", ") || "нет"}`, "project-created-line");
       addText(projectCreatedSummary, "div", `Рабочих блоков: ${project.work_item_count} · состояние: ${project.status}`, "project-created-line");
-      const note = addText(projectCreatedSummary, "div", "Сейчас создан реальный план Controller. Отчёт покажет назначение нод и состояние каждого блока; выдуманный результат до выполнения не создаётся.", "execution-note");
+      const note = addText(projectCreatedSummary, "div", "План создан. Когда нода с загруженной LM Studio-моделью опросит Controller, блоки автоматически перейдут в Assigned → Running → Completed, а результаты появятся в живом отчёте.", "execution-note");
       note.setAttribute("role", "status");
       projectCreatedOverlay.classList.remove("hidden");
     }
@@ -1271,6 +1307,14 @@
         renderReports(reports.reports || []);
         reportNextOffset = reports.next_offset ?? null;
         loadMoreReportsButton.classList.toggle("hidden", reportNextOffset === null);
+        if (activeProjectId && !projectReportCard.classList.contains("hidden")) {
+          try {
+            const active = await api(`/api/v1/architect/projects/${encodeURIComponent(activeProjectId)}`);
+            renderProjectReport(active.project);
+          } catch {
+            // Keep the last visible project report if a transient refresh fails.
+          }
+        }
         return data;
       } finally {
         liveRefreshBusy = false;
