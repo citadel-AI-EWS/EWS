@@ -60,6 +60,9 @@ class Statement {
     throw new Error(`Unhandled all(): ${this.sql}`);
   }
   async run() {
+    if (this.sql.startsWith("INSERT OR IGNORE INTO agent_reports")) {
+      return { meta: { changes: 0 } };
+    }
     if (this.sql.startsWith("INSERT INTO results")) {
       const [
         result_id,

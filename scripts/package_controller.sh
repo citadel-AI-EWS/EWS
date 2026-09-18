@@ -2,6 +2,12 @@
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT="${1:-$ROOT/controller_lambda.zip}"
+if [[ "$OUTPUT" != /* ]]; then
+  OUTPUT="$PWD/$OUTPUT"
+fi
+OUTPUT_DIR="$(dirname -- "$OUTPUT")"
+mkdir -p "$OUTPUT_DIR"
+
 BUILD_DIR="$(mktemp -d)"
 cleanup_build_dir() {
   if [[ -d "$BUILD_DIR" ]]; then
@@ -10,10 +16,11 @@ cleanup_build_dir() {
   fi
 }
 trap cleanup_build_dir EXIT
+
 cp "$ROOT/controller_app.py" "$BUILD_DIR/app.py"
 cp "$ROOT/project_stack.yaml" "$ROOT/pricing_catalog.json" "$BUILD_DIR/"
-if [[ -e "$OUTPUT" ]]; then
-  unlink "$OUTPUT"
+if [[ -e "$OUTPUT" || -L "$OUTPUT" ]]; then
+  unlink -- "$OUTPUT"
 fi
 ( cd "$BUILD_DIR" && zip -q -X "$OUTPUT" app.py project_stack.yaml pricing_catalog.json )
 unzip -t "$OUTPUT" >/dev/null

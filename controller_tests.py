@@ -149,6 +149,35 @@ class TestControllerBudgetValidation(unittest.TestCase):
                 self.assertEqual(result["statusCode"], 400)
                 self.assertEqual(json.loads(result["body"])["error"], "invalid_estimate_input")
 
+    def test_rejects_non_string_tasks_before_provisioning(self):
+        for task in (None, False, {}, [], 123):
+            with self.subTest(task=task):
+                event = {
+                    "requestContext": {"http": {"method": "POST", "path": "/projects/apply"}},
+                    "headers": {},
+                    "body": json.dumps({"task": task, "budget_limit_usd": 1}),
+                }
+                result = self.app.lambda_handler(event, None)
+                self.assertEqual(result["statusCode"], 400)
+                self.assertEqual(json.loads(result["body"])["error"], "task_required")
+
+    def test_project_record_is_persisted_before_stack_creation(self):
+        events = []
+        def save(item):
+            events.append(("save", item["status"], item["stack_name"]))
+        def create(project_id, task):
+            events.append(("create", project_id, task))
+            return {"stack_name": self.app.safe_stack_name(project_id), "stack_id": "stack-1"}
+
+        with mock.patch.object(self.app, "save_project", side_effect=save), \
+             mock.patch.object(self.app, "create_project_stack", side_effect=create):
+            result = self.call_apply(1)
+
+        self.assertEqual(result["statusCode"], 202)
+        self.assertEqual(events[0][0:2], ("save", "PENDING_PROVISION"))
+        self.assertEqual(events[1][0], "create")
+        self.assertEqual(events[2][0:2], ("save", "PROVISIONING"))
+
     def test_rejects_non_numeric_budget_without_server_error(self):
         result = self.call_apply("not-a-number")
         self.assertEqual(result["statusCode"], 400)
@@ -194,6 +223,28 @@ class TestControllerBudgetValidation(unittest.TestCase):
         item = self.fake_boto3.table.items["PROJECT#expired"]
         self.assertEqual(item["status"], "TERMINATING")
         self.assertEqual(item["task"], "preserved")
+
+    def test_cleanup_retries_delete_failed_terminating_stack(self):
+        deleted = []
+        self.app.cfn = types.SimpleNamespace(
+            delete_stack=lambda **kwargs: deleted.append(kwargs),
+            describe_stacks=lambda **kwargs: {"Stacks": [{"StackStatus": "DELETE_FAILED", "Outputs": []}]},
+        )
+        self.fake_boto3.table.put_item(Item={
+            "pk": "PROJECT#retry-delete",
+            "stack_name": "ews-project-retry-delete",
+            "status": "TERMINATING",
+            "expires_at_epoch": 1,
+        })
+        result = self.app.lambda_handler(
+            {"source": "aws.events", "detail-type": "Scheduled Event"}, None
+        )
+        self.assertEqual(result["expired_stacks_deleted"], 1)
+        self.assertEqual(len(deleted), 1)
+        self.assertEqual(
+            self.fake_boto3.table.items["PROJECT#retry-delete"]["status"],
+            "TERMINATING",
+        )
 
     def test_xplace_sample_runs_as_plan_only(self):
         task = (

@@ -1,15 +1,23 @@
 # Cloudflare TEST deployment
 
-The canonical site is `index.html`; `scripts/build_site.sh` creates an ignored `public/` bundle with
-security headers. `wrangler.jsonc` defines the `citadel-ai` Worker and static assets. CI performs a
-Wrangler dry run. The live site is deployed only by the protected **Deploy Cloudflare TEST** workflow
-and only after the operator types `DEPLOY_TEST`.
+The canonical operational site is built by `scripts/build_site.sh` into an ignored `public/` bundle
+with security headers. `wrangler.jsonc` defines the `citadel-ai` Worker and static assets. CI performs
+the validation gate first. A successful push to `main` automatically triggers the protected
+**Deploy Cloudflare TEST** workflow for that exact CI-approved commit. A manual deployment remains
+available only when the operator explicitly types `DEPLOY_TEST`.
 
 ## One-time GitHub environment configuration
 
 Create the protected GitHub environment `cloudflare-test` and add:
 
-- `CLOUDFLARE_API_TOKEN` — a narrowly scoped token allowed to deploy only this Worker.
+- `CLOUDFLARE_API_TOKEN` — a narrowly scoped token allowed to deploy only this Worker;
+- `ARCHITECT_TOKEN_HASH` — lowercase SHA-256 hex of the Architect bearer token, never the token itself;
+- `CONTROLLER_COMMAND_PRIVATE_JWK` — the protected Ed25519 Controller signing private JWK.
+
+To generate the Architect hash locally without exposing the token, use a trusted shell such as
+`printf %s "$ARCHITECT_TOKEN" | sha256sum` and store only the 64-character digest as the GitHub
+environment secret. Do not paste the bearer token or private signing JWK into issues, commits,
+workflow logs, or chat.
 
 Wrangler discovers the account from the token. `CLOUDFLARE_ACCOUNT_ID` is intentionally not passed,
 which avoids deployment failures caused by a copied Zone ID or an incorrect account identifier.

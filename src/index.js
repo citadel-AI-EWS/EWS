@@ -40,7 +40,9 @@ const LATEST_NODE_RELEASE = Object.freeze({
 });
 const CONTROLLER_COMMAND_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0";
 let reportSchemaPromise;
+let legacyReportBackfillPromise;
 let sessionSchemaPromise;
+let commandIndexPromise;
 
 class ApiError extends Error {
   constructor(status, code) {
@@ -116,17 +118,59 @@ function safeJson(value, fallback) {
   }
 }
 
-async function readBodyText(request, maxBytes) {
-  const declaredLength = Number(request.headers.get("content-length") || 0);
-  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-    throw new ApiError(413, "request_too_large");
+async function readBody(request, maxBytes) {
+  const rawLength = request.headers.get("content-length");
+  if (rawLength !== null && rawLength !== "") {
+    if (!/^\d+$/.test(rawLength)) {
+      throw new ApiError(400, "invalid_content_length");
+    }
+    const declaredLength = Number(rawLength);
+    if (!Number.isSafeInteger(declaredLength) || declaredLength > maxBytes) {
+      throw new ApiError(413, "request_too_large");
+    }
   }
 
-  const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > maxBytes) {
-    throw new ApiError(413, "request_too_large");
+  if (!request.body) {
+    return { bytes: new Uint8Array(0), text: "" };
   }
-  return text;
+
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+      total += chunk.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel("request_too_large").catch(() => {});
+        throw new ApiError(413, "request_too_large");
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new ApiError(400, "invalid_utf8");
+  }
+  return { bytes, text };
+}
+
+async function readBodyText(request, maxBytes) {
+  return (await readBody(request, maxBytes)).text;
 }
 
 async function ensureReportStorage(env) {
@@ -163,6 +207,10 @@ async function ensureReportStorage(env) {
       env.DB.prepare(`
         CREATE INDEX IF NOT EXISTS idx_agent_reports_type_created
         ON agent_reports(report_type, created_at DESC)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_agent_reports_created
+        ON agent_reports(created_at DESC)
       `)
     ]).catch((error) => {
       reportSchemaPromise = undefined;
@@ -170,6 +218,44 @@ async function ensureReportStorage(env) {
     });
   }
   await reportSchemaPromise;
+}
+
+async function backfillLegacyReports(env) {
+  await ensureReportStorage(env);
+  if (!legacyReportBackfillPromise) {
+    legacyReportBackfillPromise = env.DB.prepare(`
+      INSERT OR IGNORE INTO agent_reports (
+        report_id, result_id, assignment_id, mission_id, node_id,
+        report_type, report_json, report_sha256, report_size_bytes,
+        sensitivity, created_at
+      )
+      SELECT
+        'report_' || r.result_id,
+        r.result_id,
+        r.assignment_id,
+        a.mission_id,
+        r.node_id,
+        COALESCE(NULLIF(r.report_type, ''), 'mission_result'),
+        r.report_json,
+        r.report_sha256,
+        r.report_size_bytes,
+        COALESCE(NULLIF(r.sensitivity, ''), 'internal'),
+        r.created_at
+      FROM results AS r
+      JOIN assignments AS a ON a.assignment_id = r.assignment_id
+      WHERE r.report_json IS NOT NULL
+        AND r.report_sha256 IS NOT NULL
+        AND r.report_size_bytes IS NOT NULL
+    `).run().catch((error) => {
+      const message = String(error).toLowerCase();
+      if (message.includes("no such column")) {
+        return { meta: { changes: 0 } };
+      }
+      legacyReportBackfillPromise = undefined;
+      throw error;
+    });
+  }
+  await legacyReportBackfillPromise;
 }
 
 async function ensureSessionStorage(env) {
@@ -192,6 +278,10 @@ async function ensureSessionStorage(env) {
       env.DB.prepare(`
         CREATE INDEX IF NOT EXISTS idx_architect_sessions_status_updated
         ON architect_sessions(status, updated_at DESC)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_architect_sessions_updated
+        ON architect_sessions(updated_at DESC, session_id DESC)
       `)
     ]).catch((error) => {
       sessionSchemaPromise = undefined;
@@ -199,6 +289,20 @@ async function ensureSessionStorage(env) {
     });
   }
   await sessionSchemaPromise;
+}
+
+async function ensureCommandStorage(env) {
+  if (!commandIndexPromise) {
+    commandIndexPromise = env.DB.prepare(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_one_active_per_node
+      ON commands(node_id)
+      WHERE status IN ('pending', 'accepted')
+    `).run().catch((error) => {
+      commandIndexPromise = undefined;
+      throw error;
+    });
+  }
+  await commandIndexPromise;
 }
 
 function bytesToHex(bytes) {
@@ -219,10 +323,12 @@ function bytesToBase64Url(bytes) {
 }
 
 async function sha256Hex(value) {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(value)
-  );
+  const bytes = typeof value === "string"
+    ? new TextEncoder().encode(value)
+    : value instanceof Uint8Array
+      ? value
+      : new Uint8Array(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
   return bytesToHex(digest);
 }
 
@@ -363,12 +469,18 @@ function normalizePublicKey(value) {
     throw new ApiError(400, "invalid_public_key");
   }
 
-  const rawKey = decodeBase64Url(jwk.x);
+  let rawKey;
+  try {
+    rawKey = decodeBase64Url(jwk.x);
+  } catch {
+    throw new ApiError(400, "invalid_public_key");
+  }
   if (rawKey.byteLength !== 32) {
     throw new ApiError(400, "invalid_public_key");
   }
 
-  return JSON.stringify({ kty: "OKP", crv: "Ed25519", x: jwk.x });
+  const canonicalX = bytesToBase64Url(rawKey);
+  return JSON.stringify({ kty: "OKP", crv: "Ed25519", x: canonicalX });
 }
 
 function normalizeCapabilities(value) {
@@ -400,7 +512,7 @@ function normalizeMetrics(value) {
   return serialized;
 }
 
-async function authenticateNode(request, env, nodeId, url, bodyText) {
+async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   const headerNodeId = request.headers.get("x-node-id");
   const timestamp = request.headers.get("x-node-timestamp");
   const signatureValue = request.headers.get("x-node-signature");
@@ -439,7 +551,7 @@ async function authenticateNode(request, env, nodeId, url, bodyText) {
     throw new ApiError(401, "invalid_node_key");
   }
 
-  const bodyHash = await sha256Hex(bodyText);
+  const bodyHash = await sha256Hex(bodyBytes);
   const canonicalRequest = [
     request.method.toUpperCase(),
     `${url.pathname}${url.search}`,
@@ -666,8 +778,8 @@ async function enrollNode(request, env) {
 }
 
 async function heartbeat(request, env, nodeId, url) {
-  const bodyText = await readBodyText(request, MAX_NODE_BODY_BYTES);
-  await authenticateNode(request, env, nodeId, url, bodyText);
+  const { bytes: bodyBytes, text: bodyText } = await readBody(request, MAX_NODE_BODY_BYTES);
+  await authenticateNode(request, env, nodeId, url, bodyBytes);
   const body = parseJsonObject(bodyText);
 
   const cpuPercent = optionalPercent(body.cpu_percent, "cpu_percent");
@@ -713,7 +825,7 @@ async function heartbeat(request, env, nodeId, url) {
 }
 
 async function listAssignments(request, env, nodeId, url) {
-  const node = await authenticateNode(request, env, nodeId, url, "");
+  const node = await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
 
   if (node.status === "paused") {
     return json({ ok: true, node_status: "paused", assignments: [] });
@@ -752,13 +864,13 @@ async function listAssignments(request, env, nodeId, url) {
 }
 
 async function acceptAssignment(request, env, nodeId, assignmentId, url) {
-  const bodyText = await readBodyText(request, 1024);
-  const node = await authenticateNode(request, env, nodeId, url, bodyText);
+  const { bytes: bodyBytes, text: bodyText } = await readBody(request, 1024);
+  const node = await authenticateNode(request, env, nodeId, url, bodyBytes);
   if (node.status === "paused") {
     throw new ApiError(409, "node_paused");
   }
 
-  await env.DB.batch([
+  const acceptResults = await env.DB.batch([
     env.DB.prepare(`
       UPDATE assignments
       SET status = 'running',
@@ -773,6 +885,12 @@ async function acceptAssignment(request, env, nodeId, assignmentId, url) {
           WHERE missions.mission_id = assignments.mission_id
             AND missions.status != 'cancelled'
             AND (missions.expires_at IS NULL OR datetime(missions.expires_at) > CURRENT_TIMESTAMP)
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM nodes
+          WHERE nodes.node_id = assignments.node_id
+            AND nodes.status NOT IN ('paused', 'revoked')
         )
     `).bind(assignmentId, nodeId),
     env.DB.prepare(`
@@ -793,6 +911,17 @@ async function acceptAssignment(request, env, nodeId, assignmentId, url) {
   if (!assignment) {
     throw new ApiError(404, "assignment_not_found");
   }
+  if ((acceptResults[0]?.meta?.changes || 0) === 0 && assignment.status === "assigned") {
+    const currentNode = await env.DB.prepare(
+      "SELECT status FROM nodes WHERE node_id = ?"
+    ).bind(nodeId).first();
+    if (currentNode?.status === "paused") {
+      throw new ApiError(409, "node_paused");
+    }
+    if (currentNode?.status === "revoked") {
+      throw new ApiError(403, "node_revoked");
+    }
+  }
   if (assignment.status !== "running") {
     throw new ApiError(409, "assignment_not_active");
   }
@@ -800,8 +929,8 @@ async function acceptAssignment(request, env, nodeId, assignmentId, url) {
 }
 
 async function submitResult(request, env, nodeId, url) {
-  const bodyText = await readBodyText(request, MAX_RESULT_BODY_BYTES);
-  await authenticateNode(request, env, nodeId, url, bodyText);
+  const { bytes: bodyBytes, text: bodyText } = await readBody(request, MAX_RESULT_BODY_BYTES);
+  await authenticateNode(request, env, nodeId, url, bodyBytes);
   const body = parseJsonObject(bodyText);
 
   const assignmentId = requireString(body.assignment_id, "assignment_id", 128);
@@ -950,28 +1079,45 @@ async function submitResult(request, env, nodeId, url) {
 
 async function architectListReports(request, env, url) {
   await authenticateArchitect(request, env);
-  await ensureReportStorage(env);
+  await backfillLegacyReports(env);
 
   const rawLimit = url.searchParams.get("limit") || "50";
-  if (!/^\d{1,3}$/.test(rawLimit)) {
-    throw new ApiError(400, "invalid_limit");
+  const rawOffset = url.searchParams.get("offset") || "0";
+  if (!/^\d{1,3}$/.test(rawLimit) || !/^\d{1,7}$/.test(rawOffset)) {
+    throw new ApiError(400, "invalid_pagination");
   }
   const limit = Number(rawLimit);
-  if (limit < 1 || limit > 100) {
-    throw new ApiError(400, "invalid_limit");
+  const offset = Number(rawOffset);
+  if (limit < 1 || limit > 100 || offset < 0 || offset > 1000000) {
+    throw new ApiError(400, "invalid_pagination");
   }
 
   const nodeId = optionalString(url.searchParams.get("node_id"), "node_id", 128);
   const missionId = optionalString(url.searchParams.get("mission_id"), "mission_id", 128);
   const reportType = optionalString(url.searchParams.get("report_type"), "report_type", 64);
+  const predicates = [];
+  const bindings = [];
+  if (nodeId) {
+    predicates.push("ar.node_id = ?");
+    bindings.push(nodeId);
+  }
+  if (missionId) {
+    predicates.push("ar.mission_id = ?");
+    bindings.push(missionId);
+  }
+  if (reportType) {
+    predicates.push("ar.report_type = ?");
+    bindings.push(reportType);
+  }
+  const where = predicates.length ? `WHERE ${predicates.join(" AND ")}` : "";
 
   const query = await env.DB.prepare(`
     SELECT
       ar.report_id,
-      r.result_id,
-      r.assignment_id,
-      a.mission_id,
-      r.node_id,
+      ar.result_id,
+      ar.assignment_id,
+      ar.mission_id,
+      ar.node_id,
       r.outcome,
       r.summary,
       r.artifact_key,
@@ -982,39 +1128,30 @@ async function architectListReports(request, env, url) {
       ar.created_at
     FROM agent_reports AS ar
     JOIN results AS r ON r.result_id = ar.result_id
-    JOIN assignments AS a ON a.assignment_id = r.assignment_id
-    WHERE (? IS NULL OR r.node_id = ?)
-      AND (? IS NULL OR a.mission_id = ?)
-      AND (? IS NULL OR ar.report_type = ?)
-    ORDER BY ar.created_at DESC
-    LIMIT ?
-  `).bind(
-    nodeId,
-    nodeId,
-    missionId,
-    missionId,
-    reportType,
-    reportType,
-    limit
-  ).all();
+    ${where}
+    ORDER BY ar.created_at DESC, ar.report_id DESC
+    LIMIT ? OFFSET ?
+  `).bind(...bindings, limit, offset).all();
 
+  const reports = query.results || [];
   return json({
     ok: true,
-    reports: query.results || []
+    reports,
+    next_offset: reports.length === limit ? offset + limit : null
   });
 }
 
 async function architectGetReport(request, env, reportId) {
   await authenticateArchitect(request, env);
-  await ensureReportStorage(env);
+  await backfillLegacyReports(env);
 
   const report = await env.DB.prepare(`
     SELECT
       ar.report_id,
       r.result_id,
-      r.assignment_id,
-      a.mission_id,
-      r.node_id,
+      ar.assignment_id,
+      ar.mission_id,
+      ar.node_id,
       r.outcome,
       r.summary,
       r.artifact_key,
@@ -1027,8 +1164,7 @@ async function architectGetReport(request, env, reportId) {
       ar.created_at
     FROM agent_reports AS ar
     JOIN results AS r ON r.result_id = ar.result_id
-    JOIN assignments AS a ON a.assignment_id = r.assignment_id
-    WHERE ar.report_id = ? OR r.result_id = ?
+    WHERE ar.report_id = ? OR ar.result_id = ?
   `).bind(reportId, reportId).first();
 
   if (!report) {
@@ -1074,23 +1210,30 @@ async function architectListSessions(request, env, url) {
   await ensureSessionStorage(env);
 
   const rawLimit = url.searchParams.get("limit") || "30";
-  if (!/^\d{1,3}$/.test(rawLimit)) {
-    throw new ApiError(400, "invalid_limit");
+  const rawOffset = url.searchParams.get("offset") || "0";
+  if (!/^\d{1,3}$/.test(rawLimit) || !/^\d{1,7}$/.test(rawOffset)) {
+    throw new ApiError(400, "invalid_pagination");
   }
   const limit = Number(rawLimit);
-  if (limit < 1 || limit > 100) {
-    throw new ApiError(400, "invalid_limit");
+  const offset = Number(rawOffset);
+  if (limit < 1 || limit > 100 || offset < 0 || offset > 1000000) {
+    throw new ApiError(400, "invalid_pagination");
   }
 
   const query = await env.DB.prepare(`
     SELECT session_id, name, schema_version, snapshot_sha256,
       snapshot_size_bytes, status, created_at, updated_at
     FROM architect_sessions
-    ORDER BY updated_at DESC
-    LIMIT ?
-  `).bind(limit).all();
+    ORDER BY updated_at DESC, session_id DESC
+    LIMIT ? OFFSET ?
+  `).bind(limit, offset).all();
 
-  return json({ ok: true, sessions: query.results || [] });
+  const sessions = query.results || [];
+  return json({
+    ok: true,
+    sessions,
+    next_offset: sessions.length === limit ? offset + limit : null
+  });
 }
 
 async function architectCreateSession(request, env) {
@@ -1205,13 +1348,14 @@ async function architectUpdateSession(request, env, sessionId) {
     throw new ApiError(400, "session_update_required");
   }
 
+  const updatedAt = new Date().toISOString();
   const result = await env.DB.prepare(`
     UPDATE architect_sessions
     SET name = COALESCE(?, name),
         status = COALESCE(?, status),
-        updated_at = CURRENT_TIMESTAMP
+        updated_at = ?
     WHERE session_id = ?
-  `).bind(name, status, sessionId).run();
+  `).bind(name, status, updatedAt, sessionId).run();
   if ((result?.meta?.changes || 0) !== 1) {
     throw new ApiError(404, "session_not_found");
   }
@@ -1247,7 +1391,7 @@ async function architectDeleteSession(request, env, sessionId) {
 
 async function architectStorageUsage(request, env) {
   await authenticateArchitect(request, env);
-  await Promise.all([ensureReportStorage(env), ensureSessionStorage(env)]);
+  await Promise.all([backfillLegacyReports(env), ensureSessionStorage(env)]);
   const usage = await env.DB.prepare(
     "SELECT " +
     "(SELECT COUNT(*) FROM agent_reports) AS report_count, " +
@@ -1270,7 +1414,7 @@ async function architectStorageUsage(request, env) {
 }
 
 async function listCommands(request, env, nodeId, url) {
-  const node = await authenticateNode(request, env, nodeId, url, "");
+  const node = await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
 
   const query = await env.DB.prepare(`
     SELECT command_id, command_type, payload_json, signature, status, created_at
@@ -1289,8 +1433,8 @@ async function listCommands(request, env, nodeId, url) {
 }
 
 async function acknowledgeCommand(request, env, nodeId, commandId, url) {
-  const bodyText = await readBodyText(request, 8 * 1024);
-  const node = await authenticateNode(request, env, nodeId, url, bodyText);
+  const { bytes: bodyBytes, text: bodyText } = await readBody(request, 8 * 1024);
+  const node = await authenticateNode(request, env, nodeId, url, bodyBytes);
   const body = parseJsonObject(bodyText);
   const status = requireString(body.status, "status", 16);
   if (!ALLOWED_COMMAND_ACKS.has(status)) {
@@ -1400,37 +1544,49 @@ async function authenticateArchitect(request, env) {
 
 async function architectOverview(request, env) {
   await authenticateArchitect(request, env);
-  await Promise.all([ensureReportStorage(env), ensureSessionStorage(env), ensureAutoEnrollmentStorage(env)]);
+  await Promise.all([backfillLegacyReports(env), ensureSessionStorage(env), ensureAutoEnrollmentStorage(env)]);
 
   const [counts, nodesQuery, missionsQuery, commandsQuery, auditQuery] = await Promise.all([
     env.DB.prepare(
       "SELECT " +
       "(SELECT COUNT(*) FROM nodes) AS nodes, " +
-      "(SELECT COUNT(*) FROM nodes WHERE status = 'online') AS online_nodes, " +
+      "(SELECT COUNT(*) FROM nodes WHERE status = 'online' " +
+      "AND datetime(last_seen_at) >= datetime('now', '-5 minutes')) AS online_nodes, " +
       "(SELECT COUNT(*) FROM missions) AS missions, " +
       "(SELECT COUNT(*) FROM agent_reports) AS reports, " +
       "(SELECT COUNT(*) FROM architect_sessions) AS sessions"
     ).first(),
     env.DB.prepare(
       "SELECT n.node_id, nn.node_number, n.hostname, n.os_name, n.os_version, n.architecture, " +
-      "n.agent_version, n.status, n.cpu_percent, n.memory_percent, " +
+      "n.agent_version, CASE WHEN n.status = 'online' " +
+      "AND (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-5 minutes')) " +
+      "THEN 'offline' ELSE n.status END AS status, n.cpu_percent, n.memory_percent, " +
       "n.enrolled_at, n.last_seen_at FROM nodes AS n " +
       "LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id " +
       "ORDER BY n.last_seen_at DESC LIMIT 100"
     ).all(),
     env.DB.prepare(
-      "SELECT m.mission_id, m.title, m.mission_type, m.status, " +
+      "SELECT m.mission_id, m.title, m.mission_type, " +
+      "CASE WHEN m.expires_at IS NOT NULL AND datetime(m.expires_at) <= CURRENT_TIMESTAMP " +
+      "AND m.status NOT IN ('completed', 'cancelled') THEN 'expired' ELSE m.status END AS status, " +
       "m.priority, m.created_at, m.expires_at, a.assignment_id, " +
       "a.node_id, a.status AS assignment_status, r.result_id, " +
       "r.outcome, r.summary, r.metrics_json, " +
       "r.created_at AS result_created_at FROM missions AS m " +
-      "LEFT JOIN assignments AS a ON a.mission_id = m.mission_id " +
-      "LEFT JOIN results AS r ON r.assignment_id = a.assignment_id " +
+      "LEFT JOIN assignments AS a ON a.assignment_id = (" +
+      "SELECT a2.assignment_id FROM assignments AS a2 " +
+      "WHERE a2.mission_id = m.mission_id " +
+      "ORDER BY a2.assigned_at DESC, a2.assignment_id DESC LIMIT 1" +
+      ") LEFT JOIN results AS r ON r.assignment_id = a.assignment_id " +
       "ORDER BY m.created_at DESC LIMIT 100"
     ).all(),
     env.DB.prepare(
       "SELECT command_id, node_id, command_type, status, created_at, completed_at " +
-      "FROM commands ORDER BY created_at DESC LIMIT 50"
+      "FROM commands WHERE status IN ('pending', 'accepted') " +
+      "OR command_id IN (" +
+      "SELECT command_id FROM commands WHERE status NOT IN ('pending', 'accepted') " +
+      "ORDER BY created_at DESC LIMIT 50" +
+      ") ORDER BY created_at DESC"
     ).all(),
     env.DB.prepare(
       "SELECT event_id, actor_type, actor_id, action, target_type, " +
@@ -1489,6 +1645,7 @@ async function architectRelease(request, env) {
 
 async function architectCreateCommand(request, env, nodeId) {
   await authenticateArchitect(request, env);
+  await ensureCommandStorage(env);
   const bodyText = await readBodyText(request, 8 * 1024);
   const body = parseJsonObject(bodyText);
   const commandType = requireString(body.command_type, "command_type", 32);
@@ -1534,18 +1691,26 @@ async function architectCreateCommand(request, env, nodeId) {
   );
   const detailsJson = JSON.stringify({ node_id: nodeId, command_type: commandType });
 
-  await env.DB.batch([
-    env.DB.prepare(
-      "INSERT INTO commands (" +
-      "command_id, node_id, command_type, payload_json, signature, status, created_at" +
-      ") VALUES (?, ?, ?, ?, ?, 'pending', ?)"
-    ).bind(commandId, nodeId, commandType, payloadJson, signature, createdAt),
-    env.DB.prepare(
-      "INSERT INTO audit_events (" +
-      "actor_type, actor_id, action, target_type, target_id, details_json" +
-      ") VALUES ('architect', 'test-console', 'command.created', 'command', ?, ?)"
-    ).bind(commandId, detailsJson)
-  ]);
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO commands (" +
+        "command_id, node_id, command_type, payload_json, signature, status, created_at" +
+        ") VALUES (?, ?, ?, ?, ?, 'pending', ?)"
+      ).bind(commandId, nodeId, commandType, payloadJson, signature, createdAt),
+      env.DB.prepare(
+        "INSERT INTO audit_events (" +
+        "actor_type, actor_id, action, target_type, target_id, details_json" +
+        ") SELECT 'architect', 'test-console', 'command.created', 'command', ?, ? " +
+        "WHERE EXISTS (SELECT 1 FROM commands WHERE command_id = ?)"
+      ).bind(commandId, detailsJson, commandId)
+    ]);
+  } catch (error) {
+    if (String(error).includes("idx_commands_one_active_per_node") || String(error).includes("UNIQUE")) {
+      throw new ApiError(409, "command_already_pending");
+    }
+    throw error;
+  }
 
   return json({
     ok: true,

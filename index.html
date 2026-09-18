@@ -140,7 +140,16 @@ table{width:100%;border-collapse:collapse}th,td{padding:9px 8px;border-bottom:1p
 
   <!-- ARCHITECT WORKSPACE REQUEST -->
   <section id="architectRequest" class="architect-section hidden">
-   <div class="hero"><div><h1>New Request</h1><div class="muted">The system checks admissibility and estimates trial or paid mode before execution.</div></div></div><div class="grid"><div class="card c8"><textarea id="requestText" class="field" rows="8" placeholder="Describe the new request..."></textarea><label class="checkline"><input id="requestPolicy" type="checkbox"><span>I accept the acceptable-use rules.</span></label><div class="row" style="margin-top:10px"><button class="btn alt" onclick="checkRequest()">Check request</button><button class="btn good" onclick="applyProjectFromArchitect()">Architect Apply · start TEST project</button></div><div class="notice tiny" style="margin-top:9px"><b>TEST ONLY.</b> Apply calls the real Controller endpoint when configured. Until production client authentication is implemented, the request also requires the temporary test token stored only in this browser session.</div></div><div class="card c4"><h3>TEST AWS price snapshot</h3><div class="kv"><b>t3.micro · Frankfurt</b><span id="priceT3Hour">≈ $0.012 / h</span></div><div class="kv" style="margin-top:7px"><b>t3.micro · 730h</b><span id="priceT3Month">≈ $8.76 / mo</span></div><div class="kv" style="margin-top:7px"><b>gp3 · 8 GB</b><span id="priceGp3">≈ $0.76 / mo</span></div><div class="kv" style="margin-top:7px"><b>Secrets Manager</b><span id="priceSecret">≈ $0.40 / secret / mo</span></div><div class="kv" style="margin-top:7px"><b>1st TEST worker hour</b><span id="priceFirstHour">≈ $0.0131</span></div><label style="margin-top:10px">TEST project cost cap (USD)<input id="requestBudget" class="field" type="number" min="0.02" step="0.01" value="1.00"></label><div class="notice tiny" style="margin-top:9px"><b>Estimate only · snapshot 04.09.2026.</b> Taxes, transfer and future services are excluded. Actual AWS billing can differ. Before production we will replace the static table with the AWS Price List API.</div><button class="btn alt" style="width:100%;margin-top:9px" onclick="refreshPricing()">Refresh pricing from Controller</button><h3 style="margin-top:16px">Trial</h3><p class="tiny muted">One-day trial for small tasks; intended for jobs that take only a few hours.</p><button class="btn alt" onclick="openTrial()">Free trial</button><h3 style="margin-top:16px">Policy</h3><p class="tiny muted">If a request is prohibited, execution stops and the client receives a reason. If it can be safely reframed, the system can suggest an allowed alternative.</p></div></div>
+   <div class="hero"><div><h1>New Request</h1><div class="muted">The system checks admissibility and estimates trial or paid mode before execution.</div></div></div><div class="grid"><div class="card c8"><textarea id="requestText" class="field" rows="8" placeholder="Describe the new request..."></textarea><label class="checkline"><input id="requestPolicy" type="checkbox"><span>I accept the acceptable-use rules.</span></label><div class="row" style="margin-top:10px"><button class="btn alt" onclick="checkRequest()">Check request</button><button class="btn good" onclick="applyProjectFromArchitect()">Architect Apply · start TEST project</button></div><div class="notice tiny" style="margin-top:9px"><b>TEST ONLY.</b> Apply calls the real Controller endpoint when configured. Until production client authentication is implemented, the request also requires the temporary test token stored only in this browser session.</div>
+<div id="testProjectLifecycle" class="notice hidden" style="margin-top:10px">
+  <b>Active TEST project</b>
+  <div id="testProjectId" class="tiny" style="margin-top:5px"></div>
+  <div id="testProjectStatus" class="tiny muted" style="margin-top:4px">Status not checked yet.</div>
+  <div class="row" style="margin-top:8px">
+    <button id="testProjectStatusButton" class="btn alt small" type="button" onclick="refreshActiveTestProject()">Check status</button>
+    <button id="testProjectTerminateButton" class="btn danger small" type="button" onclick="terminateActiveTestProject()">Terminate TEST project</button>
+  </div>
+</div></div><div class="card c4"><h3>TEST AWS price snapshot</h3><div class="kv"><b>t3.micro · Frankfurt</b><span id="priceT3Hour">≈ $0.012 / h</span></div><div class="kv" style="margin-top:7px"><b>t3.micro · 730h</b><span id="priceT3Month">≈ $8.76 / mo</span></div><div class="kv" style="margin-top:7px"><b>gp3 · 8 GB</b><span id="priceGp3">≈ $0.76 / mo</span></div><div class="kv" style="margin-top:7px"><b>Secrets Manager</b><span id="priceSecret">≈ $0.40 / secret / mo</span></div><div class="kv" style="margin-top:7px"><b>1st TEST worker hour</b><span id="priceFirstHour">≈ $0.0131</span></div><label style="margin-top:10px">TEST project cost cap (USD)<input id="requestBudget" class="field" type="number" min="0.02" step="0.01" value="1.00"></label><div class="notice tiny" style="margin-top:9px"><b>Estimate only · snapshot 04.09.2026.</b> Taxes, transfer and future services are excluded. Actual AWS billing can differ. Before production we will replace the static table with the AWS Price List API.</div><button class="btn alt" style="width:100%;margin-top:9px" onclick="refreshPricing()">Refresh pricing from Controller</button><h3 style="margin-top:16px">Trial</h3><p class="tiny muted">One-day trial for small tasks; intended for jobs that take only a few hours.</p><button class="btn alt" onclick="openTrial()">Free trial</button><h3 style="margin-top:16px">Policy</h3><p class="tiny muted">If a request is prohibited, execution stops and the client receives a reason. If it can be safely reframed, the system can suggest an allowed alternative.</p></div></div>
   </section>
 
   <!-- ARCHITECT WORKSPACE PAYMENT -->
@@ -261,6 +270,8 @@ table{width:100%;border-collapse:collapse}th,td{padding:9px 8px;border-bottom:1p
 <script>
 let lang='ru',role=null,currentNet='SIMULATED',paused=false,recording=false,chartScale=1;
 let controllerPreviewState='PAUSED';
+let verifiedPriceEstimate=null;
+let activeTestProjectId=sessionStorage.getItem('ews-active-test-project-id')||'';
 const archNav=[['+','Загрузка проекта','Project intake','architectIntake'],['W','Рабочая область','Workspace','architectWorkspace'],['S','Песочница проекта','Project sandbox','architectWorkspaceSandbox'],['V','Файлы / Vault','Files / Vault','architectVault'],['C','Графики','Charts','architectCharts'],['L','Логи','Logs','architectLogs'],['Q','Безопасность проекта','Project security','architectWorkspaceSecurity'],['E','Экспорт','Export','architectExport'],['N','Новый запрос','New request','architectRequest'],['$','Цена / Бюджет','Price / Budget','architectPayment'],['F','Отзыв','Feedback','architectFeedback'],['D','Поддержка','Support','architectSupport'],['A','Внешний вид','Appearance','architectAppearance'],['P','Проект / Исполнение','Project / Execution','architectProject'],['O','Контроллер','Controller','architectController'],['|','Pipeline','Pipeline','architectPipeline'],['A','Агенты','Agents','architectAgents'],['C','Клиенты','Clients','architectClients'],['M','Машины','Machines','architectMachines'],['E','Edge Controller','Edge Controller','architectEdge'],['U','Обновления','Updates','architectUpdates'],['F','Firmware Controller','Controller Firmware','architectFirmware'],['K','Ключи / SSH','Keys / SSH','architectKeys'],['R','Daily AI Review','Daily AI Review','architectDailyAI'],['T','Task Factory','Task Factory','architectTaskFactory'],['S','Architect Sandbox','Architect Sandbox','architectSandbox'],['L','Local AI','Local AI','architectLocalAI'],['!','Аварийное свёртывание','Emergency','architectEmergency'],['Q','Security Center','Security Center','architectSecurity'],['G','Project Memory','Project Memory','architectMemory']];
 const stageRU=['Получение задания','Проверка авторизации','Нормализация входных данных','Структурирование задачи','Проверка полноты требований','Планирование','Оценка времени','Оценка ресурсов','Разбиение на рабочие блоки','Выбор стратегии выполнения','Выбор режима ресурсов','Распределение по регионам','Подготовка окружения','Проверка окружения','Запуск исполнения','Сбор промежуточных данных','Контроль ошибок','Независимая проверка','Повтор проблемных участков','Сведение результатов','Sandbox validation','Анализ доказательств','Сбор отчёта','Финальная проверка','Подготовка экспорта','Архивация','Завершение'];
 const stageEN=['Receive task','Authorization check','Normalize input','Structure task','Completeness check','Planning','Time estimate','Resource estimate','Split into work blocks','Execution strategy','Resource mode','Region placement','Prepare environment','Validate environment','Start execution','Collect intermediate data','Error control','Independent verification','Repeat problem areas','Merge results','Sandbox validation','Evidence analysis','Build report','Final check','Prepare export','Archive','Finish'];
@@ -286,10 +297,11 @@ function showAgreement(){modal('Agreement / NDA','<div class="code">DEMO CONFIDE
 function money(n){return '$'+(Number.isFinite(n)?n:0).toFixed(2)}
 function priceInputs(){const value=id=>Math.max(0,Number(document.getElementById(id)?.value||0));return {labor_hours:value('priceHours'),labor_rate_usd:value('priceRate'),aws_workers:value('priceWorkers'),aws_runtime_hours:value('priceAwsHours'),storage_gb:value('priceStorage'),reserve_usd:value('priceReserve')}}
 function showPrice(b,total,source){document.getElementById('priceLabor').textContent=money(b.labor_usd);document.getElementById('priceCompute').textContent=money(b.aws_compute_usd);document.getElementById('priceStorageTotal').textContent=money(b.aws_storage_usd);document.getElementById('priceReserveTotal').textContent=money(b.reserve_usd);document.getElementById('priceGrandTotal').textContent=money(total);document.getElementById('priceSource').textContent=source}
-function calculateProjectPrice(){const p=priceInputs(),labor=p.labor_hours*p.labor_rate_usd,compute=p.aws_workers*p.aws_runtime_hours*.012,storage=p.storage_gb*.76/8*(p.aws_runtime_hours/730),total=labor+compute+storage+p.reserve_usd;showPrice({labor_usd:labor,aws_compute_usd:compute,aws_storage_usd:storage,reserve_usd:p.reserve_usd},total,'LOCAL TEST SNAPSHOT · NOT VERIFIED');return total}
-async function calculateProjectPriceFromController(){const cfg=controllerCfg();if(!cfg.url){calculateProjectPrice();simpleModal('Controller pricing','Controller API не настроен. Показан локальный TEST-расчёт; это не финальный счёт AWS.');return}try{const d=await controllerRequest('/pricing/estimate','POST',priceInputs());const e=d.estimate||{},b=e.breakdown||{};showPrice(b,Number(e.total_usd||0),'CONTROLLER VERIFIED · snapshot '+(e.pricing_snapshot_date||'unknown'));controllerLog('pricing estimate verified · $'+Number(e.total_usd||0).toFixed(2))}catch(e){document.getElementById('priceSource').textContent='CONTROLLER ERROR';simpleModal('Controller pricing','Расчёт не подтверждён: '+e.message)}}
+function priceFingerprint(){return JSON.stringify(priceInputs())}
+function calculateProjectPrice(){verifiedPriceEstimate=null;const p=priceInputs(),labor=p.labor_hours*p.labor_rate_usd,compute=p.aws_workers*p.aws_runtime_hours*.012,storage=p.storage_gb*.76/8*(p.aws_runtime_hours/730),total=labor+compute+storage+p.reserve_usd;showPrice({labor_usd:labor,aws_compute_usd:compute,aws_storage_usd:storage,reserve_usd:p.reserve_usd},total,'LOCAL TEST SNAPSHOT · NOT VERIFIED');return total}
+async function calculateProjectPriceFromController(){const cfg=controllerCfg();if(!cfg.url){calculateProjectPrice();simpleModal('Controller pricing','Controller API не настроен. Показан локальный TEST-расчёт; это не финальный счёт AWS.');return}const inputs=priceInputs(),fingerprint=JSON.stringify(inputs);try{const d=await controllerRequest('/pricing/estimate','POST',inputs);const e=d.estimate||{},b=e.breakdown||{},total=Number(e.total_usd||0);verifiedPriceEstimate={fingerprint,total_usd:total,pricing_snapshot_date:e.pricing_snapshot_date||'unknown'};showPrice(b,total,'CONTROLLER VERIFIED · snapshot '+verifiedPriceEstimate.pricing_snapshot_date);controllerLog('pricing estimate verified · $'+total.toFixed(2))}catch(e){verifiedPriceEstimate=null;document.getElementById('priceSource').textContent='CONTROLLER ERROR';simpleModal('Controller pricing','Расчёт не подтверждён: '+e.message)}}
 function validateIntake(){if(!['att1','att2','att3','nda'].every(id=>document.getElementById(id).checked)){simpleModal('Required confirmation','Please accept all intake confirmations and Agreement / NDA before continuing.');return}document.getElementById('intakeStep1').classList.add('hidden');document.getElementById('intakeStep2').classList.remove('hidden');['w1','w2','w3','w4'].forEach(id=>document.getElementById(id).className='wiz done');document.getElementById('w5').className='wiz active';calculateProjectPrice()}
-function confirmFirstProject(){setHasProject(true);document.getElementById('w5').className='wiz done';const total=calculateProjectPrice();modal('Смета проекта зафиксирована','<p>Все пять этапов завершены. Полная расчётная цена: <b>'+money(total)+'</b>.</p><div class="code">status: PRICE_APPROVED\nAWS: included\nnext route: ARCHITECT_WORKSPACE</div><button class="btn good" onclick="closeModal();showSection(\'architectWorkspace\')">Открыть рабочую область</button>')}
+function confirmFirstProject(){setHasProject(true);document.getElementById('w5').className='wiz done';const sameVerifiedQuote=verifiedPriceEstimate&&verifiedPriceEstimate.fingerprint===priceFingerprint();const total=sameVerifiedQuote?verifiedPriceEstimate.total_usd:calculateProjectPrice();const source=sameVerifiedQuote?'CONTROLLER VERIFIED · snapshot '+verifiedPriceEstimate.pricing_snapshot_date:'LOCAL TEST SNAPSHOT · NOT VERIFIED';modal('Смета проекта зафиксирована','<p>Все пять этапов завершены. Полная расчётная цена: <b>'+money(total)+'</b>.</p><div class="code">status: PRICE_APPROVED\nsource: '+source+'\nAWS: included\nnext route: ARCHITECT_WORKSPACE</div><button class="btn good" onclick="closeModal();showSection(\'architectWorkspace\')">Открыть рабочую область</button>')}
 function renderStages(){const c=document.getElementById('workspaceStages'),a=document.getElementById('architectStages');if(!c||!a)return;c.innerHTML='';a.innerHTML='';const names=lang==='ru'?stageRU:stageEN;names.forEach((n,i)=>{const status=i<17?'good':i===17?'blue':'';const label=i<17?'DONE':i===17?'ACTIVE':'WAIT';const make=()=>{const d=document.createElement('div');d.className='stage';d.onclick=()=>stageModal(i,n);d.innerHTML='<div class="stage-num">'+(i+1)+'</div><div><b>'+n+'</b><div class="tiny muted">'+(i<17?'completed':i===17?'working':'queued')+'</div></div><span class="badge '+status+'">'+label+'</span>';return d};if(i<8)c.appendChild(make());a.appendChild(make())})}
 function stageModal(i,n){modal(n,'<div class="kvgrid"><div class="kv"><b>Stage</b><span>'+(i+1)+'</span></div><div class="kv"><b>Status</b><span>'+(i<17?'DONE':i===17?'ACTIVE':'WAIT')+'</span></div><div class="kv"><b>Time</b><span>'+((i+2)*7)+'m</span></div><div class="kv"><b>Cost</b><span>$'+((i+1)*0.37).toFixed(2)+'</span></div></div><p class="tiny muted">Client receives understandable status; Architect can inspect internal execution from the Architect Project view.</p>')}
 function togglePause(){paused=!paused;document.getElementById('pauseBtn').textContent=paused?'Resume project':'Pause project';simpleModal('Project state',paused?'Project paused at a safe checkpoint.':'Project resumed from the safe checkpoint.')}
@@ -330,12 +342,56 @@ async function applyProjectFromArchitect(){
  try{
   const d=await controllerRequest('/projects/apply','POST',{task,source:'architect-test-ui',budget_limit_usd:budget});
   controllerLog('project apply accepted · '+JSON.stringify(d));
-  modal('TEST project accepted','<div class="safe"><b>Controller accepted the project.</b></div><div class="code" style="margin-top:9px">'+JSON.stringify(d,null,2).replace(/</g,'&lt;')+'</div><p class="tiny muted">The Controller is now creating the project execution stack in AWS. No client can do this without a valid session token in this TEST build.</p>');
+  if(d.project_id){
+   activeTestProjectId=String(d.project_id);
+   sessionStorage.setItem('ews-active-test-project-id',activeTestProjectId);
+   renderActiveTestProject({project_id:activeTestProjectId,status:d.status||'PROVISIONING',stack_status:d.stack_status||''});
+  }
+  modal('TEST project accepted','<div class="safe"><b>Controller accepted the project.</b></div><div class="code" style="margin-top:9px">'+JSON.stringify(d,null,2).replace(/</g,'&lt;')+'</div><p class="tiny muted">Project ID is retained for this browser session. Use the TEST project controls to check status or terminate it.</p>');
  }catch(e){
   controllerLog('project apply ERROR · '+e.message);
   simpleModal('Apply project','Controller request failed: '+e.message);
  }
 }
+function renderActiveTestProject(project){
+ const box=document.getElementById('testProjectLifecycle'),id=document.getElementById('testProjectId'),status=document.getElementById('testProjectStatus'),terminate=document.getElementById('testProjectTerminateButton');
+ if(!box||!id||!status||!terminate)return;
+ if(!activeTestProjectId){box.classList.add('hidden');id.textContent='';status.textContent='';return}
+ box.classList.remove('hidden');
+ id.textContent='Project ID: '+activeTestProjectId;
+ const state=project?.stack_status||project?.status||'UNKNOWN';
+ status.textContent='Status: '+state;
+ terminate.disabled=['TERMINATED','DELETE_COMPLETE'].includes(state);
+}
+async function refreshActiveTestProject(){
+ if(!activeTestProjectId){simpleModal('TEST project','No active TEST project is retained in this browser session.');return}
+ const button=document.getElementById('testProjectStatusButton');if(button)button.disabled=true;
+ try{
+  const d=await controllerRequest('/projects/'+encodeURIComponent(activeTestProjectId),'GET');
+  renderActiveTestProject(d);
+  controllerLog('project status · '+activeTestProjectId+' · '+JSON.stringify(d));
+ }catch(e){
+  controllerLog('project status ERROR · '+activeTestProjectId+' · '+e.message);
+  simpleModal('TEST project status','Status check failed: '+e.message);
+ }finally{if(button)button.disabled=false}
+}
+async function terminateActiveTestProject(){
+ if(!activeTestProjectId){simpleModal('TEST project','No active TEST project is retained in this browser session.');return}
+ const projectId=activeTestProjectId;
+ if(!window.confirm('Terminate TEST project '+projectId+'? This requests CloudFormation stack deletion.'))return;
+ const button=document.getElementById('testProjectTerminateButton');if(button)button.disabled=true;
+ try{
+  const d=await controllerRequest('/projects/'+encodeURIComponent(projectId)+'/terminate','POST',{});
+  renderActiveTestProject(d);
+  controllerLog('project terminate accepted · '+projectId+' · '+JSON.stringify(d));
+  simpleModal('TEST project','Termination requested. Status: '+(d.status||'TERMINATING')+'.');
+ }catch(e){
+  controllerLog('project terminate ERROR · '+projectId+' · '+e.message);
+  simpleModal('TEST project','Termination request failed: '+e.message);
+ }finally{if(button)button.disabled=false}
+}
+function restoreActiveTestProject(){if(activeTestProjectId)renderActiveTestProject({project_id:activeTestProjectId,status:'STATUS NOT CHECKED'})}
+
 async function refreshPricing(){
  const cfg=controllerCfg();
  if(!cfg.url){simpleModal('AWS TEST pricing','Static TEST snapshot 04.09.2026 is active: t3.micro ≈ $0.012/h, ≈ $8.76/730h; gp3 8 GB ≈ $0.76/mo; Secrets Manager ≈ $0.40/secret/mo; first TEST worker hour ≈ $0.0131. Actual AWS billing can differ.');return}
@@ -377,7 +433,7 @@ async function controllerPlanRun(){const task=(document.getElementById('controll
 
 function setupDrag(){const area=document.getElementById('architectWidgetArea');if(!area)return;let dragging=null;area.querySelectorAll('.drag-card').forEach(c=>{c.addEventListener('dragstart',()=>{dragging=c;c.classList.add('dragging')});c.addEventListener('dragend',()=>{c.classList.remove('dragging');dragging=null});c.addEventListener('dragover',e=>{e.preventDefault();if(!dragging||dragging===c)return;const r=c.getBoundingClientRect();area.insertBefore(dragging,e.clientY<r.top+r.height/2?c:c.nextSibling)})})}
 function updateClock(){document.getElementById('clock').textContent=new Date().toLocaleString()}
-renderStages();renderRunHistory();renderAgents();setupDrag();initControllerPanel();updateClock();setInterval(updateClock,1000);
+renderStages();renderRunHistory();renderAgents();setupDrag();initControllerPanel();restoreActiveTestProject();updateClock();setInterval(updateClock,1000);
 </script>
 </body>
 </html>

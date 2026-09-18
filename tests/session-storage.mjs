@@ -60,6 +60,9 @@ class Statement {
     throw new Error(`Unhandled all(): ${this.sql}`);
   }
   async run() {
+    if (this.sql.startsWith("INSERT OR IGNORE INTO agent_reports")) {
+      return { meta: { changes: 0 } };
+    }
     if (this.sql.startsWith("CREATE TABLE") || this.sql.startsWith("CREATE INDEX")) {
       return { meta: { changes: 0 } };
     }
@@ -87,12 +90,12 @@ class Statement {
       return { meta: { changes: 1 } };
     }
     if (this.sql.startsWith("UPDATE architect_sessions")) {
-      const [name, status, sessionId] = this.args;
+      const [name, status, updatedAt, sessionId] = this.args;
       const session = sessions.get(sessionId);
       if (!session) return { meta: { changes: 0 } };
       if (name !== null) session.name = name;
       if (status !== null) session.status = status;
-      session.updated_at = new Date().toISOString();
+      session.updated_at = updatedAt;
       return { meta: { changes: 1 } };
     }
     if (this.sql.startsWith("DELETE FROM architect_sessions")) {

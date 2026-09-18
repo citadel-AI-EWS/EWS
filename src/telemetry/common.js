@@ -62,16 +62,56 @@ export function optionalString(value, field, maxLength) {
   return requireString(value, field, maxLength);
 }
 
+export async function readBody(request, maxBytes) {
+  const rawLength = request.headers.get("content-length");
+  if (rawLength !== null && rawLength !== "") {
+    if (!/^\d+$/.test(rawLength)) {
+      throw new TelemetryError(400, "invalid_content_length");
+    }
+    const declaredLength = Number(rawLength);
+    if (!Number.isSafeInteger(declaredLength) || declaredLength > maxBytes) {
+      throw new TelemetryError(413, "request_too_large");
+    }
+  }
+  if (!request.body) return { bytes: new Uint8Array(0), text: "" };
+
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+      total += chunk.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel("request_too_large").catch(() => {});
+        throw new TelemetryError(413, "request_too_large");
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new TelemetryError(400, "invalid_utf8");
+  }
+  return { bytes, text };
+}
+
 export async function readBodyText(request, maxBytes) {
-  const declaredLength = Number(request.headers.get("content-length") || 0);
-  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-    throw new TelemetryError(413, "request_too_large");
-  }
-  const text = await request.text();
-  if (utf8Bytes(text) > maxBytes) {
-    throw new TelemetryError(413, "request_too_large");
-  }
-  return text;
+  return (await readBody(request, maxBytes)).text;
 }
 
 export function parseJsonObject(text) {
@@ -102,10 +142,12 @@ function bytesToHex(bytes) {
 }
 
 export async function sha256Hex(value) {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(value)
-  );
+  const bytes = typeof value === "string"
+    ? new TextEncoder().encode(value)
+    : value instanceof Uint8Array
+      ? value
+      : new Uint8Array(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
   return bytesToHex(digest);
 }
 
@@ -157,7 +199,7 @@ export async function authenticateArchitect(request, env) {
   }
 }
 
-export async function authenticateNode(request, env, nodeId, url, bodyText) {
+export async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   const headerNodeId = request.headers.get("x-node-id");
   const timestamp = request.headers.get("x-node-timestamp");
   const signatureValue = request.headers.get("x-node-signature");
@@ -187,7 +229,7 @@ export async function authenticateNode(request, env, nodeId, url, bodyText) {
   } catch {
     throw new TelemetryError(401, "invalid_node_key");
   }
-  const bodyHash = await sha256Hex(bodyText);
+  const bodyHash = await sha256Hex(bodyBytes);
   const canonical = [
     request.method.toUpperCase(),
     `${url.pathname}${url.search}`,

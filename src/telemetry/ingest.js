@@ -4,7 +4,7 @@ import {
   authenticateNode,
   json,
   parseJsonObject,
-  readBodyText
+  readBody
 } from "./common.js";
 import { normalizeTelemetryEvent } from "./normalize.js";
 import {
@@ -13,8 +13,11 @@ import {
 } from "./schema.js";
 
 export async function ingestNodeLogs(request, env, nodeId, url) {
-  const bodyText = await readBodyText(request, TELEMETRY_LIMITS.request_bytes);
-  await authenticateNode(request, env, nodeId, url, bodyText);
+  const { bytes: bodyBytes, text: bodyText } = await readBody(
+    request,
+    TELEMETRY_LIMITS.request_bytes
+  );
+  await authenticateNode(request, env, nodeId, url, bodyBytes);
   await ensureTelemetryStorage(env);
   await enforceTelemetryRateLimit(env, nodeId);
 
