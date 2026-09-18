@@ -1287,6 +1287,8 @@ async function architectGetProject(request, env, projectId) {
       execution: {
         state: executionState,
         counts,
+        desired_workers: projectWorkerProfile(project.task_text, specializations.filter((item) => item.source === "architect_added").map((item) => item.id)).desired_workers,
+        ready_workers_at_creation: Number(project.worker_count || 0),
         completed_work_items: counts.completed,
         total_work_items: total,
         final_report_ready: finalReportReady,
