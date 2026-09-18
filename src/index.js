@@ -568,7 +568,7 @@ function projectChecksPassed(checks) {
 
 async function architectCheckProject(request, env) {
   await authenticateArchitect(request, env);
-  const body = parseJsonObject(await readBodyText(request, 24 * 1024));
+  const body = parseJsonObject(await readBodyText(request, 64 * 1024));
   const sourceType = optionalString(body.source_type, "source_type", 40) || "architect_manual";
   const title = requireString(body.title, "title", 160);
   const taskText = requireString(body.task_text, "task_text", 20000);
@@ -582,7 +582,7 @@ async function architectCheckProject(request, env) {
 
 async function architectCreateProject(request, env) {
   await authenticateArchitect(request, env);
-  const body = parseJsonObject(await readBodyText(request, 24 * 1024));
+  const body = parseJsonObject(await readBodyText(request, 64 * 1024));
   const sourceType = optionalString(body.source_type, "source_type", 40) || "architect_manual";
   const title = requireString(body.title, "title", 160);
   const taskText = requireString(body.task_text, "task_text", 20000);
