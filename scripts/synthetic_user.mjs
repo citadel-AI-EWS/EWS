@@ -122,7 +122,7 @@ await inspectPage("/hub/", async page => {
   await page.locator("#sshHost").fill("");
   await page.locator("#sshUser").fill("");
 
-  await page.locator("#architectToken").fill("synthetic-invalid-token");
+  await page.locator("#token").fill("synthetic-invalid-token");
   await page.locator("#loginButton").click();
   await page.waitForTimeout(600);
   const afterInvalidLogin = (await page.locator("#modeLabel").innerText()).trim();
@@ -138,7 +138,7 @@ await inspectPage("/hub/", async page => {
 });
 
 await inspectPage("/architect/", async page => {
-  const restrictedVisible = await page.locator("#secureContent:not(.hidden)").count();
+  const restrictedVisible = await page.locator("#dashboard:not(.hidden)").count();
   if (restrictedVisible) addFinding("architect_content_exposed", "/architect/", "secure content visible before authentication");
 
   await page.locator("#architectToken").fill("synthetic-invalid-token");
@@ -151,7 +151,7 @@ await inspectPage("/architect/", async page => {
   for (const selector of dangerous) {
     if (await page.locator(selector).count()) {
       const disabled = await page.locator(selector).isDisabled().catch(() => true);
-      if (!disabled && await page.locator("#secureContent").isVisible().catch(() => false)) {
+      if (!disabled && await page.locator("#dashboard").isVisible().catch(() => false)) {
         addFinding("dangerous_control_available_unauthenticated", "/architect/", selector);
       }
     }
