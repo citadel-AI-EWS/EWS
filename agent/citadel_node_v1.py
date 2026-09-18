@@ -933,8 +933,6 @@ class Agent:
             "query_id": state.get("query_id"),
             "query_mode": state.get("query_mode"),
             "query_status": state.get("query_status"),
-            "query_prompt": state.get("query_prompt"),
-            "query_answer": state.get("query_answer"),
             "load_config": state.get("load_config"),
             "loaded_models": loaded_models[:8],
             "live_checked_at": now_iso(),
