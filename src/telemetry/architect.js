@@ -35,9 +35,44 @@ export async function architectListLogs(request, env, url) {
   const cursorCreated = cursor?.[0] || null;
   const cursorEventId = cursor?.[1] || null;
   const query = await env.DB.prepare(`
+    WITH combined AS (
+      SELECT
+        event_id,
+        node_id,
+        level,
+        event_type,
+        message,
+        details_json,
+        created_at,
+        received_at,
+        'agent' AS source
+      FROM node_logs
+      UNION ALL
+      SELECT
+        'audit:' || printf('%020d', event_id) AS event_id,
+        CASE
+          WHEN target_type = 'node' THEN target_id
+          WHEN actor_type = 'node' THEN actor_id
+          WHEN json_valid(details_json) THEN COALESCE(json_extract(details_json, '$.node_id'), 'controller')
+          ELSE 'controller'
+        END AS node_id,
+        CASE
+          WHEN action LIKE '%failed%' OR action LIKE '%revoked%' THEN 'warn'
+          ELSE 'info'
+        END AS level,
+        action AS event_type,
+        action || ' · ' || target_type || ' · ' || target_id AS message,
+        details_json,
+        created_at,
+        created_at AS received_at,
+        'controller' AS source
+      FROM audit_events
+      WHERE datetime(created_at) >= datetime('now', '-7 days')
+        AND action != 'node.heartbeat'
+    )
     SELECT event_id, node_id, level, event_type, message, details_json,
-           created_at, received_at
-    FROM node_logs
+           created_at, received_at, source
+    FROM combined
     WHERE (? IS NULL OR node_id = ?)
       AND (? IS NULL OR level = ?)
       AND (? IS NULL OR event_type = ?)
@@ -62,6 +97,7 @@ export async function architectListLogs(request, env, url) {
     details: safeJson(row.details_json, {}),
     details_json: undefined
   }));
+
   return json({
     ok: true,
     logs,
@@ -75,15 +111,46 @@ export async function architectLogStats(request, env) {
   await authenticateArchitect(request, env);
   await pruneExpiredTelemetry(env);
   const totals = await env.DB.prepare(`
+    WITH combined AS (
+      SELECT node_id, created_at, received_at FROM node_logs
+      UNION ALL
+      SELECT
+        CASE
+          WHEN target_type = 'node' THEN target_id
+          WHEN actor_type = 'node' THEN actor_id
+          WHEN json_valid(details_json) THEN COALESCE(json_extract(details_json, '$.node_id'), 'controller')
+          ELSE 'controller'
+        END AS node_id,
+        created_at,
+        created_at AS received_at
+      FROM audit_events
+      WHERE datetime(created_at) >= datetime('now', '-7 days')
+        AND action != 'node.heartbeat'
+    )
     SELECT COUNT(*) AS event_count,
       COUNT(DISTINCT node_id) AS node_count,
       MIN(received_at) AS oldest_received_at,
       MAX(received_at) AS newest_received_at
-    FROM node_logs
+    FROM combined
   `).first();
   const byNode = await env.DB.prepare(`
+    WITH combined AS (
+      SELECT node_id, created_at FROM node_logs
+      UNION ALL
+      SELECT
+        CASE
+          WHEN target_type = 'node' THEN target_id
+          WHEN actor_type = 'node' THEN actor_id
+          WHEN json_valid(details_json) THEN COALESCE(json_extract(details_json, '$.node_id'), 'controller')
+          ELSE 'controller'
+        END AS node_id,
+        created_at
+      FROM audit_events
+      WHERE datetime(created_at) >= datetime('now', '-7 days')
+        AND action != 'node.heartbeat'
+    )
     SELECT node_id, COUNT(*) AS event_count, MAX(created_at) AS newest_created_at
-    FROM node_logs
+    FROM combined
     GROUP BY node_id
     ORDER BY event_count DESC, node_id ASC
     LIMIT 100

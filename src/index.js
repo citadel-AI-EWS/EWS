@@ -25,17 +25,17 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown"]);
 const POWER_COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.5",
+  version: "0.3.6",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "e02639c2997e9a95e6338b6fe5c209d37bba03adde1135532c1b251d4292b961"
+      sha256: "c1883a2b06a0b129acda29d8b002ecf4d34c4cfef96c965baf66145ef8ea5256"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "7a115adff84f794c434daa759be8978b06c83b6f73e5ef7a5b6bb1b50922e573"
+      sha256: "3f201a820fb1ac79b7cd3e600fb0e11e981a0f7a720be64e8964b9fd06850d56"
     }
   ]
 });
@@ -44,6 +44,7 @@ let reportSchemaPromise;
 let legacyReportBackfillPromise;
 let sessionSchemaPromise;
 let commandIndexPromise;
+let nodeNetworkSchemaPromise;
 let rolloutSchemaPromise;
 let projectSchemaPromise;
 
@@ -97,6 +98,51 @@ function optionalPercent(value, field) {
     throw new ApiError(400, `invalid_${field}`);
   }
   return value;
+}
+
+function normalizeIpv4(value, privateOnly = false) {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string") throw new ApiError(400, "invalid_network_ipv4");
+  const parts = value.trim().split(".");
+  if (parts.length !== 4) throw new ApiError(400, "invalid_network_ipv4");
+  const numbers = parts.map((part) => Number(part));
+  if (numbers.some((part, index) =>
+    !Number.isInteger(part) || part < 0 || part > 255 ||
+    String(part) !== String(Number(parts[index]))
+  )) throw new ApiError(400, "invalid_network_ipv4");
+  if (privateOnly) {
+    const [a,b] = numbers;
+    const isPrivate = a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+    if (!isPrivate) return null;
+  }
+  return numbers.join(".");
+}
+
+function normalizeMac(value) {
+  if (typeof value !== "string") return null;
+  const compact = value.replace(/[^0-9a-f]/gi, "").toUpperCase();
+  if (!/^[0-9A-F]{12}$/.test(compact) || compact === "000000000000") return null;
+  return compact.match(/.{2}/g).join(":");
+}
+
+function normalizeNodeNetwork(value) {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ApiError(400, "invalid_network");
+  }
+  const rawMacs = Array.isArray(value.mac_addresses) ? value.mac_addresses : [];
+  if (rawMacs.length > 32) throw new ApiError(400, "too_many_mac_addresses");
+  const macAddresses = [...new Set(rawMacs.map(normalizeMac).filter(Boolean))].slice(0, 16);
+  return {
+    lan_ipv4: normalizeIpv4(value.lan_ipv4, true),
+    tailscale_ipv4: normalizeIpv4(value.tailscale_ipv4, false),
+    mac_addresses: macAddresses
+  };
+}
+
+function subnet24(value) {
+  const parts = typeof value === "string" ? value.split(".") : [];
+  return parts.length === 4 ? parts.slice(0, 3).join(".") : null;
 }
 
 function parseJsonObject(text) {
@@ -308,6 +354,31 @@ async function ensureCommandStorage(env) {
   await commandIndexPromise;
 }
 
+async function ensureNodeNetworkStorage(env) {
+  if (!nodeNetworkSchemaPromise) {
+    nodeNetworkSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS node_network_state (
+          node_id TEXT PRIMARY KEY,
+          lan_ipv4 TEXT,
+          tailscale_ipv4 TEXT,
+          mac_addresses_json TEXT NOT NULL DEFAULT '[]',
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_node_network_lan
+        ON node_network_state(lan_ipv4, updated_at DESC)
+      `)
+    ]).catch((error) => {
+      nodeNetworkSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await nodeNetworkSchemaPromise;
+}
+
 async function ensureRolloutStorage(env) {
   if (!rolloutSchemaPromise) {
     rolloutSchemaPromise = env.DB.batch([
@@ -431,6 +502,33 @@ const WORK_ROLE_REGISTRY = Object.freeze([
   { id: "security_analyst", label: "Security Analyst", kind: "worker", origin: "architect_extension_2026_09_18" }
 ]);
 
+const WORKER_ROLE_IDS = new Set(
+  WORK_ROLE_REGISTRY.filter((role) => role.kind === "worker").map((role) => role.id)
+);
+
+function normalizeRequestedProjectRoles(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > WORKER_ROLE_IDS.size) {
+    throw new ApiError(400, "invalid_requested_roles");
+  }
+  const roles = [];
+  for (const raw of value) {
+    const role = requireString(raw, "requested_role", 64);
+    if (!WORKER_ROLE_IDS.has(role)) throw new ApiError(400, "project_role_not_allowed");
+    if (!roles.includes(role)) roles.push(role);
+  }
+  return roles;
+}
+
+function roleMetadata(roleId) {
+  return WORK_ROLE_REGISTRY.find((role) => role.id === roleId) || {
+    id: roleId,
+    label: roleId,
+    kind: "worker",
+    origin: "unknown"
+  };
+}
+
 function classifyWorkRole(text) {
   const value = String(text || "").toLowerCase();
   const tests = [
@@ -506,6 +604,21 @@ async function ensureProjectStorage(env) {
       env.DB.prepare(`
         CREATE INDEX IF NOT EXISTS idx_project_work_items_node_status
         ON project_work_items(node_id, status, created_at)
+      `),
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS project_specializations (
+          project_id TEXT NOT NULL,
+          role_name TEXT NOT NULL,
+          source TEXT NOT NULL
+            CHECK (source IN ('hub_recommended','architect_added')),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (project_id, role_name),
+          FOREIGN KEY (project_id) REFERENCES architect_projects(project_id) ON DELETE CASCADE
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_project_specializations_project
+        ON project_specializations(project_id, created_at)
       `)
     ]).catch((error) => {
       projectSchemaPromise = undefined;
@@ -569,12 +682,26 @@ function splitProjectText(text, maxChars = 2000) {
   return blocks.length ? blocks : [text];
 }
 
-function planProjectWork(text) {
-  return splitProjectText(text).map((taskText, index) => ({
+function planProjectWork(text, requestedRoles = []) {
+  const items = splitProjectText(text).map((taskText, index) => ({
     sequence_no: index + 1,
     role_name: classifyWorkRole(taskText),
-    task_text: taskText
+    task_text: taskText,
+    role_source: "hub_recommended"
   }));
+  const existing = new Set(items.map((item) => item.role_name));
+  for (const roleName of requestedRoles) {
+    if (existing.has(roleName)) continue;
+    const focusText = text.length > 1850 ? text.slice(0, 1850) + "…" : text;
+    items.push({
+      sequence_no: items.length + 1,
+      role_name: roleName,
+      task_text: `Role focus: ${roleName}\n\n${focusText}`,
+      role_source: "architect_added"
+    });
+    existing.add(roleName);
+  }
+  return items;
 }
 
 async function evaluateProjectChecks(env, sourceType, title, taskText) {
@@ -623,13 +750,25 @@ async function architectCheckProject(request, env) {
   const sourceType = optionalString(body.source_type, "source_type", 40) || "architect_manual";
   const title = requireString(body.title, "title", 160);
   const taskText = requireString(body.task_text, "task_text", 20000);
+  const requestedRoles = normalizeRequestedProjectRoles(body.requested_roles);
   const result = await evaluateProjectChecks(env, sourceType, title, taskText);
-  const plannedWork = planProjectWork(taskText);
+  const recommendedWork = planProjectWork(taskText);
+  const plannedWork = planProjectWork(taskText, requestedRoles);
+  const recommendedRolePlan = rolePlanSummary(recommendedWork);
+  const selectedRolePlan = rolePlanSummary(plannedWork);
   return json({
     ok: true,
     ready_for_architect_approval: projectChecksPassed(result.checks),
-    role_plan: rolePlanSummary(plannedWork),
-    work_preview: plannedWork.map(({ sequence_no, role_name }) => ({ sequence_no, role_name })),
+    recommended_role_plan: recommendedRolePlan,
+    recommended_roles: Object.keys(recommendedRolePlan),
+    requested_roles: requestedRoles,
+    selected_roles: Object.keys(selectedRolePlan),
+    role_plan: selectedRolePlan,
+    work_preview: plannedWork.map(({ sequence_no, role_name, role_source }) => ({
+      sequence_no,
+      role_name,
+      role_source
+    })),
     ...result
   });
 }
@@ -640,23 +779,32 @@ async function architectCreateProject(request, env) {
   const sourceType = optionalString(body.source_type, "source_type", 40) || "architect_manual";
   const title = requireString(body.title, "title", 160);
   const taskText = requireString(body.task_text, "task_text", 20000);
+  const requestedRoles = normalizeRequestedProjectRoles(body.requested_roles);
   const evaluated = await evaluateProjectChecks(env, sourceType, title, taskText);
   if (!projectChecksPassed(evaluated.checks)) {
     throw new ApiError(409, "project_checks_failed");
   }
 
   const nodesQuery = await env.DB.prepare(
-    "SELECT node_id, hostname, agent_version FROM nodes " +
-    "WHERE status = 'online' AND datetime(last_seen_at) >= datetime('now', '-5 minutes') " +
-    "ORDER BY last_seen_at DESC, node_id ASC"
+    "SELECT n.node_id, n.hostname, n.agent_version, nn.node_number FROM nodes AS n " +
+    "LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id " +
+    "WHERE n.status = 'online' AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes') " +
+    "ORDER BY n.last_seen_at DESC, n.node_id ASC"
   ).all();
   const nodes = nodesQuery.results || [];
   if (!nodes.length) throw new ApiError(409, "no_available_nodes");
 
-  const plannedWork = planProjectWork(taskText);
+  const recommendedWork = planProjectWork(taskText);
+  const recommendedRoles = new Set(recommendedWork.map((item) => item.role_name));
+  const plannedWork = planProjectWork(taskText, requestedRoles);
   const workerCount = Math.min(nodes.length, plannedWork.length);
   const projectId = "project_" + crypto.randomUUID();
   const checksJson = JSON.stringify(evaluated.checks);
+  const selectedRoleNames = [...new Set(plannedWork.map((item) => item.role_name))];
+  const specializationSummary = selectedRoleNames.map((roleName) => ({
+    ...roleMetadata(roleName),
+    source: recommendedRoles.has(roleName) ? "hub_recommended" : "architect_added"
+  }));
   const statements = [
     env.DB.prepare(
       "INSERT INTO architect_projects (" +
@@ -666,8 +814,18 @@ async function architectCreateProject(request, env) {
     env.DB.prepare(
       "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
       "VALUES ('architect', 'test-console', 'project.created', 'project', ?, ?)"
-    ).bind(projectId, JSON.stringify({ worker_count: workerCount, work_items: plannedWork.length, roles: rolePlanSummary(plannedWork) }))
+    ).bind(projectId, JSON.stringify({
+      worker_count: workerCount,
+      work_items: plannedWork.length,
+      roles: rolePlanSummary(plannedWork),
+      requested_roles: requestedRoles
+    }))
   ];
+  for (const specialization of specializationSummary) {
+    statements.push(env.DB.prepare(
+      "INSERT INTO project_specializations (project_id, role_name, source) VALUES (?, ?, ?)"
+    ).bind(projectId, specialization.id, specialization.source));
+  }
 
   const workItems = [];
   for (let index = 0; index < plannedWork.length; index += 1) {
@@ -680,7 +838,9 @@ async function architectCreateProject(request, env) {
       role_name: planned.role_name,
       node_id: node.node_id,
       hostname: node.hostname,
+      node_number: node.node_number || null,
       task_text: planned.task_text,
+      role_source: planned.role_source,
       status: "planned"
     });
     statements.push(
@@ -701,11 +861,17 @@ async function architectCreateProject(request, env) {
       worker_count: workerCount,
       work_item_count: plannedWork.length,
       role_plan: rolePlanSummary(plannedWork),
+      recommended_roles: [...recommendedRoles],
+      requested_roles: requestedRoles,
+      specializations: specializationSummary,
       checks: evaluated.checks,
       work_items: workItems
     },
     execution: {
       state: "planned",
+      completed_work_items: 0,
+      total_work_items: plannedWork.length,
+      final_report_ready: false,
       detail: "hub_plan_created_waiting_for_project_worker_execution"
     }
   }, 201);
@@ -715,10 +881,104 @@ async function architectListProjects(request, env) {
   await authenticateArchitect(request, env);
   await ensureProjectStorage(env);
   const rows = await env.DB.prepare(
-    "SELECT project_id, title, status, worker_count, created_at, updated_at " +
-    "FROM architect_projects ORDER BY created_at DESC LIMIT 50"
+    "SELECT p.project_id, p.title, p.status, p.worker_count, p.created_at, p.updated_at, " +
+    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id) AS work_item_count, " +
+    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'completed') AS completed_work_items, " +
+    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'running') AS running_work_items " +
+    "FROM architect_projects AS p ORDER BY p.created_at DESC LIMIT 50"
   ).all();
   return json({ ok: true, projects: rows.results || [] });
+}
+
+async function architectGetProject(request, env, projectId) {
+  await authenticateArchitect(request, env);
+  await ensureProjectStorage(env);
+  const project = await env.DB.prepare(`
+    SELECT project_id, title, source_type, task_text, checks_json,
+      architect_approved, status, worker_count, created_at, updated_at
+    FROM architect_projects
+    WHERE project_id = ?
+  `).bind(projectId).first();
+  if (!project) throw new ApiError(404, "project_not_found");
+
+  const [workQuery, specializationQuery] = await Promise.all([
+    env.DB.prepare(`
+      SELECT
+        w.work_item_id, w.sequence_no, w.role_name, w.task_text, w.status,
+        w.created_at, w.updated_at, w.node_id,
+        n.hostname, n.agent_version, nn.node_number
+      FROM project_work_items AS w
+      LEFT JOIN nodes AS n ON n.node_id = w.node_id
+      LEFT JOIN node_numbers AS nn ON nn.node_id = w.node_id
+      WHERE w.project_id = ?
+      ORDER BY w.sequence_no ASC, w.work_item_id ASC
+    `).bind(projectId).all(),
+    env.DB.prepare(`
+      SELECT role_name, source, created_at
+      FROM project_specializations
+      WHERE project_id = ?
+      ORDER BY created_at ASC, role_name ASC
+    `).bind(projectId).all()
+  ]);
+
+  const workItems = workQuery.results || [];
+  let specializationRows = specializationQuery.results || [];
+  if (!specializationRows.length) {
+    specializationRows = [...new Set(workItems.map((item) => item.role_name))].map((roleName) => ({
+      role_name: roleName,
+      source: "hub_recommended",
+      created_at: project.created_at
+    }));
+  }
+  const specializations = specializationRows.map((item) => ({
+    ...roleMetadata(item.role_name),
+    source: item.source,
+    created_at: item.created_at
+  }));
+
+  const counts = {
+    planned: 0,
+    assigned: 0,
+    running: 0,
+    completed: 0,
+    failed: 0,
+    cancelled: 0
+  };
+  for (const item of workItems) {
+    if (Object.hasOwn(counts, item.status)) counts[item.status] += 1;
+  }
+  const total = workItems.length;
+  const finished = counts.completed + counts.failed + counts.cancelled;
+  const executionState = total > 0 && finished === total
+    ? counts.failed > 0 ? "completed_with_failures" : "completed"
+    : counts.running > 0
+      ? "running"
+      : counts.assigned > 0
+        ? "assigned"
+        : "planned";
+  return json({
+    ok: true,
+    project: {
+      ...project,
+      checks: safeJson(project.checks_json, {}),
+      checks_json: undefined,
+      role_plan: rolePlanSummary(workItems),
+      specializations,
+      work_items: workItems,
+      execution: {
+        state: executionState,
+        counts,
+        completed_work_items: counts.completed,
+        total_work_items: total,
+        final_report_ready: total > 0 && finished === total,
+        detail: executionState === "planned"
+          ? "hub_plan_created_waiting_for_project_worker_execution"
+          : executionState === "completed"
+            ? "all_project_work_items_completed"
+            : executionState
+      }
+    }
+  });
 }
 
 function bytesToHex(bytes) {
@@ -1204,13 +1464,16 @@ async function heartbeat(request, env, nodeId, url) {
   const capabilitiesJson = body.capabilities === undefined
     ? null
     : normalizeCapabilities(body.capabilities);
+  const network = normalizeNodeNetwork(body.network);
+  if (network) await ensureNodeNetworkStorage(env);
   const detailsJson = JSON.stringify({
     cpu_percent: cpuPercent,
     memory_percent: memoryPercent,
-    agent_version: agentVersion
+    agent_version: agentVersion,
+    lan_ipv4: network?.lan_ipv4 || null
   });
 
-  const results = await env.DB.batch([
+  const heartbeatStatements = [
     env.DB.prepare(`
       UPDATE nodes
       SET cpu_percent = COALESCE(?, cpu_percent),
@@ -1228,7 +1491,28 @@ async function heartbeat(request, env, nodeId, url) {
       SELECT 'node', ?, 'node.heartbeat', 'node', ?, ?
       WHERE changes() = 1
     `).bind(nodeId, nodeId, detailsJson)
-  ]);
+  ];
+  if (network) {
+    heartbeatStatements.push(env.DB.prepare(`
+      INSERT INTO node_network_state (
+        node_id, lan_ipv4, tailscale_ipv4, mac_addresses_json, updated_at
+      ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(node_id) DO UPDATE SET
+        lan_ipv4 = COALESCE(excluded.lan_ipv4, node_network_state.lan_ipv4),
+        tailscale_ipv4 = COALESCE(excluded.tailscale_ipv4, node_network_state.tailscale_ipv4),
+        mac_addresses_json = CASE
+          WHEN excluded.mac_addresses_json != '[]' THEN excluded.mac_addresses_json
+          ELSE node_network_state.mac_addresses_json
+        END,
+        updated_at = CURRENT_TIMESTAMP
+    `).bind(
+      nodeId,
+      network.lan_ipv4,
+      network.tailscale_ipv4,
+      JSON.stringify(network.mac_addresses)
+    ));
+  }
+  const results = await env.DB.batch(heartbeatStatements);
 
   if ((results[0]?.meta?.changes || 0) !== 1) {
     throw new ApiError(404, "node_not_found");
@@ -1662,8 +1946,11 @@ async function architectCreateSession(request, env) {
 
   const counts = await env.DB.prepare(
     "SELECT " +
-    "(SELECT COUNT(*) FROM nodes) AS nodes, " +
-    "(SELECT COUNT(*) FROM missions) AS missions, " +
+    "(SELECT COUNT(*) FROM nodes WHERE status != 'revoked') AS nodes, " +
+    "(SELECT COUNT(*) FROM missions AS m WHERE m.status NOT IN ('completed','cancelled') " +
+    "AND (m.expires_at IS NULL OR datetime(m.expires_at) > CURRENT_TIMESTAMP) " +
+    "AND EXISTS (SELECT 1 FROM assignments AS a WHERE a.mission_id = m.mission_id " +
+    "AND a.status IN ('assigned','running'))) AS active_missions, " +
     "(SELECT COUNT(*) FROM results) AS results, " +
     "(SELECT COUNT(*) FROM agent_reports) AS reports"
   ).first();
@@ -1674,7 +1961,8 @@ async function architectCreateSession(request, env) {
     ui_state: uiState,
     counts: {
       nodes: counts?.nodes || 0,
-      missions: counts?.missions || 0,
+      missions: counts?.active_missions || 0,
+      active_missions: counts?.active_missions || 0,
       results: counts?.results || 0,
       reports: counts?.reports || 0
     }
@@ -1965,16 +2253,20 @@ async function architectOverview(request, env) {
     backfillLegacyReports(env),
     ensureSessionStorage(env),
     ensureAutoEnrollmentStorage(env),
-    ensureProjectStorage(env)
+    ensureProjectStorage(env),
+    ensureNodeNetworkStorage(env)
   ]);
 
   const [counts, nodesQuery, missionsQuery, commandsQuery] = await Promise.all([
     env.DB.prepare(
       "SELECT " +
-      "(SELECT COUNT(*) FROM nodes) AS nodes, " +
+      "(SELECT COUNT(*) FROM nodes WHERE status != 'revoked') AS nodes, " +
       "(SELECT COUNT(*) FROM nodes WHERE status = 'online' " +
       "AND datetime(last_seen_at) >= datetime('now', '-5 minutes')) AS online_nodes, " +
-      "(SELECT COUNT(*) FROM missions) AS missions, " +
+      "(SELECT COUNT(*) FROM missions AS m WHERE m.status NOT IN ('completed','cancelled') " +
+      "AND (m.expires_at IS NULL OR datetime(m.expires_at) > CURRENT_TIMESTAMP) " +
+      "AND EXISTS (SELECT 1 FROM assignments AS a WHERE a.mission_id = m.mission_id " +
+      "AND a.status IN ('assigned','running'))) AS active_missions, " +
       "(SELECT COUNT(*) FROM agent_reports) AS reports, " +
       "(SELECT COUNT(*) FROM architect_sessions) AS sessions"
     ).first(),
@@ -1983,7 +2275,19 @@ async function architectOverview(request, env) {
       "n.agent_version, CASE WHEN n.status = 'online' " +
       "AND (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-5 minutes')) " +
       "THEN 'offline' ELSE n.status END AS status, n.cpu_percent, n.memory_percent, " +
-      "n.enrolled_at, n.last_seen_at, " +
+      "n.enrolled_at, n.last_seen_at, net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json, " +
+      "(SELECT nl.event_type FROM node_logs AS nl WHERE nl.node_id = n.node_id " +
+      "ORDER BY datetime(nl.created_at) DESC, nl.event_id DESC LIMIT 1) AS last_event_type, " +
+      "(SELECT nl.message FROM node_logs AS nl WHERE nl.node_id = n.node_id " +
+      "ORDER BY datetime(nl.created_at) DESC, nl.event_id DESC LIMIT 1) AS last_event_message, " +
+      "(SELECT nl.created_at FROM node_logs AS nl WHERE nl.node_id = n.node_id " +
+      "ORDER BY datetime(nl.created_at) DESC, nl.event_id DESC LIMIT 1) AS last_event_at, " +
+      "(SELECT c.command_type FROM commands AS c WHERE c.node_id = n.node_id " +
+      "ORDER BY datetime(c.created_at) DESC, c.command_id DESC LIMIT 1) AS last_command_type, " +
+      "(SELECT c.status FROM commands AS c WHERE c.node_id = n.node_id " +
+      "ORDER BY datetime(c.created_at) DESC, c.command_id DESC LIMIT 1) AS last_command_status, " +
+      "(SELECT c.completed_at FROM commands AS c WHERE c.node_id = n.node_id " +
+      "ORDER BY datetime(c.created_at) DESC, c.command_id DESC LIMIT 1) AS last_command_at, " +
       "(SELECT pwi.role_name FROM project_work_items AS pwi " +
       "JOIN architect_projects AS ap ON ap.project_id = pwi.project_id " +
       "WHERE pwi.node_id = n.node_id " +
@@ -1992,6 +2296,8 @@ async function architectOverview(request, env) {
       "ORDER BY pwi.created_at DESC, pwi.sequence_no DESC LIMIT 1) AS planned_role " +
       "FROM nodes AS n " +
       "LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id " +
+      "LEFT JOIN node_network_state AS net ON net.node_id = n.node_id " +
+      "WHERE n.status != 'revoked' " +
       "ORDER BY n.last_seen_at DESC LIMIT 100"
     ).all(),
     env.DB.prepare(
@@ -2030,16 +2336,40 @@ async function architectOverview(request, env) {
     };
   });
 
+  const rawNodes = nodesQuery.results || [];
+  const liveRelays = rawNodes.filter((node) =>
+    node.status === "online" &&
+    node.lan_ipv4 &&
+    Date.parse(String(node.last_seen_at).replace(" ", "T") + (String(node.last_seen_at).includes("T") ? "" : "Z")) >= Date.now() - 5 * 60 * 1000
+  );
+  const nodes = rawNodes.map((node) => {
+    const macAddresses = safeJson(node.mac_addresses_json, []);
+    const prefix = subnet24(node.lan_ipv4);
+    const relay = prefix && Array.isArray(macAddresses) && macAddresses.length
+      ? liveRelays.find((candidate) =>
+          candidate.node_id !== node.node_id && subnet24(candidate.lan_ipv4) === prefix
+        )
+      : null;
+    return {
+      ...node,
+      mac_addresses: Array.isArray(macAddresses) ? macAddresses : [],
+      mac_addresses_json: undefined,
+      wake_available: node.status === "offline" && Boolean(relay),
+      wake_relay_node_id: relay?.node_id || null
+    };
+  });
+
   return json({
     ok: true,
     counts: {
       nodes: counts?.nodes || 0,
       online_nodes: counts?.online_nodes || 0,
-      missions: counts?.missions || 0,
+      missions: counts?.active_missions || 0,
+      active_missions: counts?.active_missions || 0,
       reports: counts?.reports || 0,
       sessions: counts?.sessions || 0
     },
-    nodes: nodesQuery.results || [],
+    nodes,
     missions,
     commands: commandsQuery.results || []
   });
@@ -2168,6 +2498,85 @@ async function architectCreateCommand(request, env, nodeId) {
   }, 201);
 }
 
+async function architectWakeNode(request, env, targetNodeId) {
+  await authenticateArchitect(request, env);
+  await Promise.all([ensureNodeNetworkStorage(env), ensureCommandStorage(env)]);
+
+  const target = await env.DB.prepare(`
+    SELECT n.node_id, n.status, n.last_seen_at, net.lan_ipv4, net.mac_addresses_json
+    FROM nodes AS n
+    LEFT JOIN node_network_state AS net ON net.node_id = n.node_id
+    WHERE n.node_id = ?
+  `).bind(targetNodeId).first();
+  if (!target) throw new ApiError(404, "node_not_found");
+  if (target.status === "revoked") throw new ApiError(409, "node_revoked");
+  const targetLive = target.status === "online" && target.last_seen_at &&
+    Date.parse(String(target.last_seen_at).replace(" ", "T") + (String(target.last_seen_at).includes("T") ? "" : "Z")) >= Date.now() - 5 * 60 * 1000;
+  if (targetLive) throw new ApiError(409, "node_already_online");
+
+  const macAddresses = safeJson(target.mac_addresses_json, []);
+  const targetMac = Array.isArray(macAddresses) ? macAddresses.map(normalizeMac).find(Boolean) : null;
+  const prefix = subnet24(target.lan_ipv4);
+  if (!targetMac || !prefix || !target.lan_ipv4) {
+    throw new ApiError(409, "wake_network_identity_unavailable");
+  }
+
+  const relaysQuery = await env.DB.prepare(`
+    SELECT n.node_id, n.last_seen_at, net.lan_ipv4
+    FROM nodes AS n
+    JOIN node_network_state AS net ON net.node_id = n.node_id
+    WHERE n.node_id != ?
+      AND n.status = 'online'
+      AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes')
+    ORDER BY n.last_seen_at DESC
+    LIMIT 100
+  `).bind(targetNodeId).all();
+  const relay = (relaysQuery.results || []).find((candidate) => subnet24(candidate.lan_ipv4) === prefix);
+  if (!relay) throw new ApiError(409, "wake_relay_unavailable");
+
+  const pending = await env.DB.prepare(
+    "SELECT command_id FROM commands WHERE node_id = ? AND status IN ('pending','accepted') LIMIT 1"
+  ).bind(relay.node_id).first();
+  if (pending) throw new ApiError(409, "wake_relay_busy");
+
+  const commandId = "command_" + crypto.randomUUID();
+  const payload = {
+    target_node_id: targetNodeId,
+    target_mac: targetMac,
+    target_lan_ipv4: target.lan_ipv4
+  };
+  const payloadJson = JSON.stringify(payload);
+  const createdAt = new Date().toISOString();
+  const signature = await signControllerCommand(
+    env, commandId, relay.node_id, "wake_peer", payloadJson, createdAt
+  );
+  await env.DB.batch([
+    env.DB.prepare(`
+      INSERT INTO commands (
+        command_id, node_id, command_type, payload_json, signature, status, created_at
+      ) VALUES (?, ?, 'wake_peer', ?, ?, 'pending', ?)
+    `).bind(commandId, relay.node_id, payloadJson, signature, createdAt),
+    env.DB.prepare(`
+      INSERT INTO audit_events (
+        actor_type, actor_id, action, target_type, target_id, details_json
+      ) VALUES ('architect', 'test-console', 'node.wake.requested', 'node', ?, ?)
+    `).bind(targetNodeId, JSON.stringify({
+      relay_node_id: relay.node_id,
+      target_lan_ipv4: target.lan_ipv4
+    }))
+  ]);
+
+  return json({
+    ok: true,
+    wake: {
+      target_node_id: targetNodeId,
+      relay_node_id: relay.node_id,
+      command_id: commandId,
+      status: "pending"
+    }
+  }, 202);
+}
+
 async function architectCreateMission(request, env) {
   await authenticateArchitect(request, env);
   const bodyText = await readBodyText(request, 8 * 1024);
@@ -2279,7 +2688,7 @@ function apiDescription() {
     api_version: "v1",
     authentication: "CITADEL-Ed25519",
     mission_types: ["system_inventory"],
-    command_types: ["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown"],
+    command_types: ["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer"],
     arbitrary_remote_execution: false
   });
 }
@@ -2359,6 +2768,15 @@ async function handleApi(request, env, url) {
     return methodNotAllowed(["GET", "POST"]);
   }
 
+  const architectProjectMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/projects\/([^/]+)$/
+  );
+  if (architectProjectMatch) {
+    return request.method === "GET"
+      ? architectGetProject(request, env, decodeURIComponent(architectProjectMatch[1]))
+      : methodNotAllowed(["GET"]);
+  }
+
   if (url.pathname === "/api/v1/hub/nodes") {
     return request.method === "GET"
       ? publicHubNodes(env)
@@ -2421,6 +2839,15 @@ async function handleApi(request, env, url) {
           decodeURIComponent(architectReportMatch[1])
         )
       : methodNotAllowed(["GET"]);
+  }
+
+  const architectWakeMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/nodes\/([^/]+)\/wake$/
+  );
+  if (architectWakeMatch) {
+    return request.method === "POST"
+      ? architectWakeNode(request, env, decodeURIComponent(architectWakeMatch[1]))
+      : methodNotAllowed(["POST"]);
   }
 
   const architectMatch = url.pathname.match(

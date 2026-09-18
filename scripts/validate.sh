@@ -43,6 +43,9 @@ for required in (
     "CONFIGURED LOCALLY",
     "prefers-reduced-motion",
     "system_inventory",
+    "/api/v1/architect/nodes/${encodeURIComponent(node.node_id)}/wake",
+    'id="nodePicker"',
+    'id="siteClock"',
 ):
     if required not in hub:
         raise SystemExit(f"required real Hub capability missing: {required}")
@@ -70,22 +73,32 @@ for required in (
     "LIVE OPERATIONS CENTER",
     "operationsAlert",
     "workRoles",
+    "projectCreatedOverlay",
+    "projectReportCard",
+    "projectVoiceButton",
+    "missionVoiceButton",
+    "reportsDisclosure",
 ):
     if required not in architect:
         raise SystemExit(f"required Architect Live Operations capability missing: {required}")
 if '/api/v1/architect/work-roles' not in worker or "architectWorkRoles" not in worker:
     raise SystemExit("Architect work-role API route/handler missing from Worker")
+for required in ("architectGetProject", "project_specializations", "requested_roles"):
+    if required not in worker:
+        raise SystemExit(f"Project report/specialization backend missing: {required}")
 
 for forbidden in ("Контрольные точки", "Последние события аудита"):
     if forbidden in architect:
         raise SystemExit(f"obsolete Architect UI surfaced again: {forbidden}")
-for required in ('data-lang="ru"', 'data-lang="en"', 'data-lang="he"', "missionNodeState", "readableReport"):
+for required in ('data-lang="ru"', 'data-lang="en"', 'data-lang="he"', "missionNodeState", "readableReport", "wakeButton", "updateAgentState", "siteClock"):
     if required not in architect:
         raise SystemExit(f"Architect production UI capability missing: {required}")
 
 logs = Path("architect-logs.html").read_text(encoding="utf-8")
 home = Path("live-index.html").read_text(encoding="utf-8")
 for page_name, page in (("home", home), ("hub", hub), ("architect", architect), ("logs", logs)):
+    if 'id="siteClock"' not in page:
+        raise SystemExit(f"{page_name} missing current date/time clock")
     for language in ('data-lang="ru"', 'data-lang="en"', 'data-lang="he"'):
         if language not in page:
             raise SystemExit(f"{page_name} missing language selector: {language}")
@@ -148,6 +161,7 @@ required = {
     "nodes", "missions", "assignments", "results", "commands", "audit_events",
     "agent_reports", "architect_sessions", "node_logs", "node_log_rate_limits",
     "agent_rollouts", "architect_projects", "project_work_items",
+    "project_specializations", "node_network_state",
 }
 tables = {
     row[0]

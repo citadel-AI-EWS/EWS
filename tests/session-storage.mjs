@@ -28,7 +28,7 @@ class Statement {
   }
   async first() {
     if (this.sql.includes("AS nodes") && this.sql.includes("AS results")) {
-      return { nodes: 1, missions: 2, results: 3, reports: 4 };
+      return { nodes: 1, active_missions: 2, results: 3, reports: 4 };
     }
     if (this.sql.includes("AS report_count") && this.sql.includes("AS session_count")) {
       return {
@@ -151,7 +151,7 @@ assert.match(created.snapshot_sha256, /^[a-f0-9]{64}$/);
 
 const stored = sessions.get(created.session_id);
 const snapshot = JSON.parse(stored.snapshot_json);
-assert.deepEqual(snapshot.counts, { nodes: 1, missions: 2, results: 3, reports: 4 });
+assert.deepEqual(snapshot.counts, { nodes: 1, missions: 2, active_missions: 2, results: 3, reports: 4 });
 assert.equal(snapshot.ui_state.selected_node_id, "node_example");
 assert.equal("secret" in snapshot.ui_state, false);
 

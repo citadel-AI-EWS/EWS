@@ -29,6 +29,7 @@ export const ALLOWED_EVENT_TYPES = new Set([
   "agent_stop_requested",
   "system_reboot_scheduled",
   "system_shutdown_scheduled",
+  "wake_packet_sent",
   "command_failure_ack_failed",
   "command_failed"
 ]);
