@@ -539,7 +539,7 @@ class Agent:
         connection = http.client.HTTPConnection(
             "127.0.0.1",
             1234,
-            timeout=max(120, self.config.request_timeout_seconds),
+            timeout=max(1800, self.config.request_timeout_seconds),
         )
         try:
             connection.request(
