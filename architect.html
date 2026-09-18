@@ -896,7 +896,10 @@
     }
 
     function renderProjectStages(execution) {
-      const stages = ["PLAN","ASSIGNED","RUNNING","COMPLETED","REPORT"];
+      const waitingForWorker = execution?.state === "planned" && Number(execution?.ready_workers_now || 0) === 0;
+      const stages = waitingForWorker
+        ? ["WAITING MODEL","ASSIGNED","RUNNING","COMPLETED","REPORT"]
+        : ["PLAN","ASSIGNED","RUNNING","COMPLETED","REPORT"];
       const current = projectStageIndex(execution?.state, execution?.final_report_ready);
       projectStageTrack.replaceChildren();
       stages.forEach((name, index) => {
@@ -942,6 +945,12 @@
           addText(row, "div", `project_text · LM Studio · model: ${worker.lmstudio_loaded_model || "—"}`, "small");
         } else {
           addText(row, "div", (worker.blockers || []).map((code) => workerBlockerText(code, worker)).join(" · "), "small");
+          const prepare = addText(row, "button", "Подготовить ноду в Hub", "secondary");
+          prepare.type = "button";
+          prepare.style.marginTop = "8px";
+          prepare.addEventListener("click", () => {
+            location.href = `/hub/?lmnode=${encodeURIComponent(worker.node_id)}`;
+          });
         }
         projectWorkerReadiness.appendChild(row);
       }
@@ -969,10 +978,11 @@
       renderProjectStages(execution);
       renderWorkerReadiness(execution);
       if (execution.state === "planned") {
-        projectReportStatus.textContent = Number(execution.ready_workers_now || 0) > 0
-          ? "Готовая нода найдена. Scheduler уже создаёт assignment; следующий автоматический refresh должен показать ASSIGNED/RUNNING."
-          : "PLAN остановлен не из-за задания: ниже показано, чего не хватает каждой ноде для запуска. Как только одна нода станет READY, этот старый проект будет запущен автоматически.";
-        projectReportStatus.className = "status";
+        const readyNow = Number(execution.ready_workers_now || 0);
+        projectReportStatus.textContent = readyNow > 0
+          ? "PLAN принят. READY-нода найдена: Controller автоматически создаёт assignment. Следующая стадия — ASSIGNED/RUNNING."
+          : "WAITING FOR MODEL — проект сохранён, но сейчас нет ни одной READY-ноды. Нужны: агент 0.3.8, LM Studio/llmster и загруженная языковая модель. Нажмите «Подготовить ноду в Hub» ниже. После загрузки модели этот проект запустится автоматически — создавать его заново не нужно.";
+        projectReportStatus.className = `status ${readyNow > 0 ? "good" : "bad"}`;
       } else if (execution.state === "assigned") {
         projectReportStatus.textContent = "Рабочие блоки назначены нодам и ожидают принятия агентом.";
         projectReportStatus.className = "status good";
