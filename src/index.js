@@ -1567,7 +1567,7 @@ async function architectOverview(request, env) {
       "ORDER BY n.last_seen_at DESC LIMIT 100"
     ).all(),
     env.DB.prepare(
-      "SELECT m.mission_id, m.title, m.mission_type, " +
+      "SELECT m.mission_id, m.title, m.mission_type, m.payload_json, " +
       "CASE WHEN m.expires_at IS NOT NULL AND datetime(m.expires_at) <= CURRENT_TIMESTAMP " +
       "AND m.status NOT IN ('completed', 'cancelled') THEN 'expired' ELSE m.status END AS status, " +
       "m.priority, m.created_at, m.expires_at, a.assignment_id, " +
@@ -1596,11 +1596,16 @@ async function architectOverview(request, env) {
     ).all()
   ]);
 
-  const missions = (missionsQuery.results || []).map((row) => ({
-    ...row,
-    metrics: safeJson(row.metrics_json, {}),
-    metrics_json: undefined
-  }));
+  const missions = (missionsQuery.results || []).map((row) => {
+    const payload = safeJson(row.payload_json, {});
+    return {
+      ...row,
+      task_text: typeof payload.task_text === "string" ? payload.task_text : null,
+      payload_json: undefined,
+      metrics: safeJson(row.metrics_json, {}),
+      metrics_json: undefined
+    };
+  });
 
   return json({
     ok: true,
@@ -1739,6 +1744,8 @@ async function architectCreateMission(request, env) {
 
   const nodeId = requireString(body.node_id, "node_id", 128);
   const title = requireString(body.title, "title", 160);
+  const taskText = optionalString(body.task_text, "task_text", 2000) ||
+    "Проверить состояние выбранного компьютера.";
   const missionType = body.mission_type === undefined
     ? "system_inventory"
     : requireString(body.mission_type, "mission_type", 64);
@@ -1771,6 +1778,7 @@ async function architectCreateMission(request, env) {
   const missionId = "mission_" + crypto.randomUUID();
   const assignmentId = "assignment_" + crypto.randomUUID();
   const payloadJson = JSON.stringify({
+    task_text: taskText,
     collect: ["language", "timezone", "screen_size"],
     network_access: false
   });
@@ -1817,6 +1825,7 @@ async function architectCreateMission(request, env) {
       assignment_id: assignmentId,
       node_id: nodeId,
       mission_type: missionType,
+      task_text: taskText,
       status: "assigned",
       expires_at: expiresAt
     }
@@ -1829,14 +1838,7 @@ function apiDescription() {
     service: "citadel-ai",
     api_version: "v1",
     authentication: "CITADEL-Ed25519",
-    mission_types: [
-      "system_inventory",
-      "log_analysis",
-      "config_audit",
-      "dependency_audit",
-      "advisory_analysis",
-      "file_hashing"
-    ],
+    mission_types: ["system_inventory"],
     command_types: ["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown"],
     arbitrary_remote_execution: false
   });
