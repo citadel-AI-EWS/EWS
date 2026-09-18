@@ -51,6 +51,12 @@ need(index.includes('"lmstudio_model_get"'), "LM Studio model download command m
 need(index.includes('"lmstudio_model_load"'), "LM Studio model load command missing from Controller allow-list");
 need(agentV1.includes('"lmstudio_install"'), "LM Studio install command missing from node allow-list");
 need(agentV1.includes("validate_lmstudio_model_payload"), "LM Studio model validation missing");
+need(agentV1.includes("execute_project_text"), "LM Studio project text worker missing");
+need(agentV1.includes('"project_text"'), "project_text capability missing");
+need(agentV1.includes('"127.0.0.1"'), "project worker must stay on local LM Studio endpoint");
+need(index.includes("materializeProjectWorkForNode"), "planned project materializer missing");
+need(index.includes("waiting_for_lmstudio_project_worker"), "planned project waiting reason missing");
+need(index.includes("final_report:"), "project final report aggregation missing");
 need(agentV1.includes("shell=False"), "fixed argv execution guard missing");
 need(!agentV1.includes('"shell" in SUPPORTED_COMMANDS'), "arbitrary shell command registered");
 need(!buildSite.includes("execute-api.*.amazonaws.com"), "invalid CSP API Gateway wildcard returned");
