@@ -362,11 +362,13 @@ def local_network_addresses() -> dict[str, Any]:
     }
 
 
-def system_inventory(_: dict[str, Any]) -> dict[str, Any]:
+def system_inventory(payload: dict[str, Any]) -> dict[str, Any]:
     disk = shutil.disk_usage(Path.home())
     memory = psutil.virtual_memory()
+    requested_task = str(payload.get("task_text") or "").strip()[:2000]
     return {
         "captured_at": now_iso(),
+        "requested_task": requested_task or None,
         "hostname": socket.gethostname(),
         "platform": platform.system(),
         "platform_release": platform.release(),
