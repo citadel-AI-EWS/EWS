@@ -20,8 +20,8 @@ need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_tok
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
 need(setup.includes("$RunArguments"), "Windows paths are not quoted");
 need(setup.includes("refusing to start another copy"), "process inspection is not fail-closed");
-need(agentV1.includes('VERSION = "0.3.7"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.7"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.8"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.8"'), "v2 release not bumped");
 need(agentV2.includes('"windows_sleep_inhibit"'), "agent drops sleep event");
 for (const eventType of [
   "windows_sleep_inhibit",
@@ -61,5 +61,5 @@ need(agentV1.includes("shell=False"), "fixed argv execution guard missing");
 need(!agentV1.includes('"shell" in SUPPORTED_COMMANDS'), "arbitrary shell command registered");
 need(!buildSite.includes("execute-api.*.amazonaws.com"), "invalid CSP API Gateway wildcard returned");
 need(buildSite.includes("connect-src 'self';"), "published CSP must keep same-origin connect-src");
-need(index.includes('version: "0.3.7"'), "Controller release not bumped");
+need(index.includes('version: "0.3.8"'), "Controller release not bumped");
 console.log("Review backlog guards: PASS");
