@@ -44,6 +44,8 @@ let reportSchemaPromise;
 let legacyReportBackfillPromise;
 let sessionSchemaPromise;
 let commandIndexPromise;
+let rolloutSchemaPromise;
+let projectSchemaPromise;
 
 class ApiError extends Error {
   constructor(status, code) {
@@ -306,6 +308,106 @@ async function ensureCommandStorage(env) {
   await commandIndexPromise;
 }
 
+async function ensureRolloutStorage(env) {
+  if (!rolloutSchemaPromise) {
+    rolloutSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS agent_rollouts (
+          rollout_id TEXT PRIMARY KEY,
+          target_version TEXT NOT NULL,
+          release_json TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active'
+            CHECK (status IN ('active', 'completed', 'cancelled')),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `),
+      env.DB.prepare(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_rollouts_one_active
+        ON agent_rollouts(status)
+        WHERE status = 'active'
+      `)
+    ]).catch((error) => {
+      rolloutSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await rolloutSchemaPromise;
+}
+
+async function startUpdateAllRollout(request, env) {
+  await authenticateArchitect(request, env);
+  await ensureRolloutStorage(env);
+  const releaseJson = JSON.stringify(LATEST_NODE_RELEASE);
+  const rolloutId = "rollout_" + crypto.randomUUID();
+  await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE agent_rollouts SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE status = 'active'"
+    ),
+    env.DB.prepare(
+      "INSERT INTO agent_rollouts (rollout_id, target_version, release_json, status) VALUES (?, ?, ?, 'active')"
+    ).bind(rolloutId, LATEST_NODE_RELEASE.version, releaseJson),
+    env.DB.prepare(
+      "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+      "VALUES ('architect', 'test-console', 'agent.rollout.started', 'rollout', ?, ?)"
+    ).bind(rolloutId, JSON.stringify({ target_version: LATEST_NODE_RELEASE.version }))
+  ]);
+  const counts = await env.DB.prepare(
+    "SELECT COUNT(*) AS total, " +
+    "SUM(CASE WHEN status != 'revoked' AND agent_version != ? THEN 1 ELSE 0 END) AS outdated " +
+    "FROM nodes"
+  ).bind(LATEST_NODE_RELEASE.version).first();
+  return json({
+    ok: true,
+    rollout: {
+      rollout_id: rolloutId,
+      target_version: LATEST_NODE_RELEASE.version,
+      status: "active",
+      registered_nodes: Number(counts?.total || 0),
+      nodes_waiting_for_update: Number(counts?.outdated || 0)
+    }
+  }, 201);
+}
+
+async function ensureRolloutCommandForNode(env, nodeId) {
+  await Promise.all([ensureRolloutStorage(env), ensureCommandStorage(env)]);
+  const [rollout, node, pending] = await Promise.all([
+    env.DB.prepare(
+      "SELECT rollout_id, target_version, release_json FROM agent_rollouts WHERE status = 'active' ORDER BY created_at DESC LIMIT 1"
+    ).first(),
+    env.DB.prepare(
+      "SELECT node_id, status, agent_version FROM nodes WHERE node_id = ?"
+    ).bind(nodeId).first(),
+    env.DB.prepare(
+      "SELECT command_id FROM commands WHERE node_id = ? AND status IN ('pending', 'accepted') LIMIT 1"
+    ).bind(nodeId).first()
+  ]);
+  if (!rollout || !node || pending || node.status === "revoked" || node.agent_version === rollout.target_version) {
+    return;
+  }
+  if (rollout.target_version !== LATEST_NODE_RELEASE.version) return;
+  const commandId = "command_" + crypto.randomUUID();
+  const payloadJson = rollout.release_json;
+  const createdAt = new Date().toISOString();
+  const signature = await signControllerCommand(
+    env, commandId, nodeId, "update", payloadJson, createdAt
+  );
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO commands (command_id, node_id, command_type, payload_json, signature, status, created_at) " +
+        "VALUES (?, ?, 'update', ?, ?, 'pending', ?)"
+      ).bind(commandId, nodeId, payloadJson, signature, createdAt),
+      env.DB.prepare(
+        "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+        "VALUES ('controller', ?, 'agent.rollout.command_created', 'command', ?, ?)"
+      ).bind(rollout.rollout_id, commandId, JSON.stringify({ node_id: nodeId, target_version: rollout.target_version }))
+    ]);
+  } catch (error) {
+    if (!String(error).includes("UNIQUE")) throw error;
+  }
+}
+
 function bytesToHex(bytes) {
   return [...new Uint8Array(bytes)]
     .map((byte) => byte.toString(16).padStart(2, "0"))
@@ -535,7 +637,7 @@ async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   }
 
   const node = await env.DB.prepare(
-    "SELECT node_id, public_key, status FROM nodes WHERE node_id = ?"
+    "SELECT node_id, public_key, status, agent_version FROM nodes WHERE node_id = ?"
   ).bind(nodeId).first();
 
   if (!node) {
@@ -1416,6 +1518,7 @@ async function architectStorageUsage(request, env) {
 
 async function listCommands(request, env, nodeId, url) {
   const node = await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
+  await ensureRolloutCommandForNode(env, nodeId);
 
   const query = await env.DB.prepare(`
     SELECT command_id, command_type, payload_json, signature, status, created_at
@@ -1896,6 +1999,12 @@ async function handleApi(request, env, url) {
     return request.method === "GET"
       ? architectRelease(request, env)
       : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/update-all") {
+    return request.method === "POST"
+      ? startUpdateAllRollout(request, env)
+      : methodNotAllowed(["POST"]);
   }
 
   if (url.pathname === "/api/v1/hub/nodes") {
