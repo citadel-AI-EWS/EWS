@@ -430,3 +430,9 @@ Required behavior:
 
 Implementation is being delivered in the same reviewed LM Studio release branch so project execution and per-node model control stay consistent.
 
+### Release correction — project worker is 0.3.8
+
+- LM Studio installation/model controls remain the historical 0.3.7 release.
+- The executable `project_text` worker and live project progress/final-report pipeline are released as agent 0.3.8.
+- This version bump is required so existing 0.3.7 nodes are recognized as outdated and receive the signed project-worker update instead of being incorrectly treated as current.
+
