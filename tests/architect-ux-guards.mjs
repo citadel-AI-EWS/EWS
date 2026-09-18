@@ -52,6 +52,8 @@ for (const id of [
   "projectGoReportButton",
   "projectReportCard",
   "projectReportWorkItems",
+  "projectFinalResultBox",
+  "projectFinalResult",
   "projectVoiceButton",
   "missionVoiceButton",
   "reportsDisclosure"
@@ -107,6 +109,16 @@ assert.match(index, /project_specializations/);
 assert.match(index, /architectGetProject/);
 assert.match(index, /normalizeRequestedProjectRoles/);
 assert.match(index, /final_report_ready/);
+assert.match(index, /materializeProjectWorkForNode/);
+assert.match(index, /mission_type, payload_json/);
+assert.match(index, /'project_text'/);
+assert.match(index, /waiting_for_lmstudio_project_worker/);
+assert.match(index, /final_report:/);
+assert.match(agent, /execute_project_text/);
+assert.match(agent, /127\.0\.0\.1/);
+assert.match(agent, /\/v1\/chat\/completions/);
+assert.match(agent, /"project_text" in agent\.capabilities/);
+assert.doesNotMatch(agent, /shell=True/);
 assert.match(index, /WORK_ROLE_REGISTRY/);
 assert.match(index, /legacy_simulation/);
 assert.match(index, /"programmer"/);
