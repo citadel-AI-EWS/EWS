@@ -46,7 +46,15 @@ for (const id of [
   "wakeButton",
   "wakeState",
   "updateAgentState",
-  "siteClock"
+  "siteClock",
+  "projectCreatedOverlay",
+  "projectCreatedSummary",
+  "projectGoReportButton",
+  "projectReportCard",
+  "projectReportWorkItems",
+  "projectVoiceButton",
+  "missionVoiceButton",
+  "reportsDisclosure"
 ]) {
   assert.match(architect, new RegExp(`id="${id}"`), `Architect control missing: ${id}`);
 }
@@ -62,6 +70,12 @@ assert.match(architect, /sendControl\("system_shutdown", "SHUTDOWN"\)/);
 assert.match(architect, /\/api\/v1\/architect\/update-all/);
 assert.match(architect, /\/api\/v1\/architect\/projects\/check/);
 assert.match(architect, /\/api\/v1\/architect\/projects/);
+assert.match(architect, /\/api\/v1\/architect\/projects\/\$\{encodeURIComponent\(projectId\)\}/);
+assert.match(architect, /requested_roles:/);
+assert.match(architect, /SpeechRecognition|webkitSpeechRecognition/);
+assert.match(architect, /Перейти к отчёту/);
+assert.match(architect, /<details id="reportsDisclosure"/);
+assert.match(architect, /Hub выбрал автоматически/);
 assert.match(architect, /Source allowlisting/);
 assert.match(architect, /Deduplication/);
 assert.match(architect, /Safety classification/);
@@ -89,6 +103,10 @@ assert.match(index, /agent_rollouts/);
 assert.match(index, /ensureRolloutCommandForNode/);
 assert.match(index, /architect_projects/);
 assert.match(index, /project_work_items/);
+assert.match(index, /project_specializations/);
+assert.match(index, /architectGetProject/);
+assert.match(index, /normalizeRequestedProjectRoles/);
+assert.match(index, /final_report_ready/);
 assert.match(index, /WORK_ROLE_REGISTRY/);
 assert.match(index, /legacy_simulation/);
 assert.match(index, /"programmer"/);
