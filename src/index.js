@@ -22,19 +22,20 @@ const ALLOWED_REPORT_SENSITIVITIES = new Set([
 ]);
 const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
-const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "rollback", "uninstall"]);
+const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "rollback", "uninstall", "system_reboot", "system_shutdown"]);
+const POWER_COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.3",
+  version: "0.3.4",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "02b4afa121574217ec050a38502d58d9a27c6e6b473e7a67f64e16d225e0513d"
+      sha256: "83c6e6d9ccd99317c067534361f6c4317155efd0da0531687cca9e899dce6dac"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "a78bffa05def286a356761a1ef3157c4f89cf9b0704b1784a97541a3708d3ed8"
+      sha256: "30dddd8588143d7e2ff5552b44ab551e5829c24a6204fa2dbadd48633b0d512d"
     }
   ]
 });
@@ -1652,6 +1653,13 @@ async function architectCreateCommand(request, env, nodeId) {
   if (!ALLOWED_ARCHITECT_COMMAND_TYPES.has(commandType)) {
     throw new ApiError(400, "command_type_not_allowed");
   }
+  const requiredPowerConfirmation = POWER_COMMAND_CONFIRMATIONS[commandType];
+  if (requiredPowerConfirmation) {
+    const confirmation = typeof body.confirmation === "string" ? body.confirmation.trim() : "";
+    if (confirmation !== requiredPowerConfirmation) {
+      throw new ApiError(400, "power_confirmation_required");
+    }
+  }
 
   const node = await env.DB.prepare(
     "SELECT node_id, status FROM nodes WHERE node_id = ?"
@@ -1829,7 +1837,7 @@ function apiDescription() {
       "advisory_analysis",
       "file_hashing"
     ],
-    command_types: ["pause", "resume", "update", "uninstall"],
+    command_types: ["pause", "resume", "update", "restart", "rollback", "uninstall", "system_reboot", "system_shutdown"],
     arbitrary_remote_execution: false
   });
 }

@@ -79,6 +79,28 @@ The private Controller signing key exists only as the protected
 Unknown command types, a mismatched node ID, an invalid signature, or a command
 outside the local allow-list must be rejected without execution.
 
+### Restricted host power controls
+
+The allow-list includes two host-level power operations:
+
+- `system_reboot` — schedule an operating-system reboot;
+- `system_shutdown` — schedule an operating-system shutdown.
+
+These are not arbitrary SSH or shell commands. The node maps each command type to
+fixed local argv and always uses `shell=False`; the Controller cannot supply an
+executable, flags, script, path, service name, or other command text. The
+Architect API also requires the exact confirmation word `REBOOT` or `SHUTDOWN`
+before it will queue the corresponding signed command.
+
+The node never performs privilege escalation. The account running CITADEL must
+already have the operating-system permission required to reboot or power off the
+machine. Windows schedules the action with the built-in shutdown utility after a
+short delay; POSIX systems schedule it through the local shutdown utility, giving
+the agent time to acknowledge and log the request first.
+
+Read-only diagnostics such as inventory, CPU/RAM, network state and operational
+logs remain separate bounded APIs/missions rather than shell commands.
+
 ## Durable reports
 
 `POST /api/v1/nodes/{node_id}/results` stores the complete authenticated report

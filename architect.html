@@ -246,7 +246,7 @@
       currentCommands = commands;
       const list = document.getElementById("commandsList");
       list.replaceChildren();
-      const labels = { pause: "Пауза", resume: "Возобновление", update: "Обновление", restart: "Перезапуск", rollback: "Откат", uninstall: "Отключение" };
+      const labels = { pause: "Пауза", resume: "Возобновление", update: "Обновление", restart: "Перезапуск агента", rollback: "Откат", uninstall: "Отключение", system_reboot: "Перезагрузка ПК", system_shutdown: "Выключение ПК" };
       for (const command of commands) {
         const item = document.createElement("div");
         item.className = `item ${command.status === "completed" ? "ok" : "warn"}`;

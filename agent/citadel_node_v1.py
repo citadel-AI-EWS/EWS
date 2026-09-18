@@ -42,11 +42,11 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.3"
+VERSION = "0.3.4"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "rollback", "uninstall"}
+SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "rollback", "uninstall", "system_reboot", "system_shutdown"}
 UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
 
@@ -724,6 +724,69 @@ class Agent:
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
+    def schedule_system_power_action(self, command_type: str) -> None:
+        """Schedule a signed, allowlisted OS reboot or shutdown without a shell.
+
+        This method never accepts command text or arguments from the Controller.
+        The argv is fixed locally. The agent does not attempt privilege escalation:
+        the operating-system account running CITADEL must already have the required
+        reboot/shutdown permission.
+        """
+        if command_type not in {"system_reboot", "system_shutdown"}:
+            raise RuntimeError("unsupported system power action")
+
+        if os.name == "nt":
+            executable = shutil.which("shutdown.exe") or shutil.which("shutdown")
+            if not executable:
+                raise RuntimeError("Windows shutdown utility unavailable")
+            mode = "/r" if command_type == "system_reboot" else "/s"
+            comment = (
+                "CITADEL signed system reboot"
+                if command_type == "system_reboot"
+                else "CITADEL signed system shutdown"
+            )
+            argv = [
+                executable,
+                mode,
+                "/t",
+                "15",
+                "/d",
+                "p:0:0",
+                "/c",
+                comment,
+            ]
+        elif os.name == "posix":
+            executable = shutil.which("shutdown")
+            if not executable:
+                raise RuntimeError("POSIX shutdown utility unavailable")
+            mode = "-r" if command_type == "system_reboot" else "-h"
+            message = (
+                "CITADEL signed system reboot"
+                if command_type == "system_reboot"
+                else "CITADEL signed system shutdown"
+            )
+            # One minute gives the node time to upload telemetry and close cleanly.
+            argv = [executable, mode, "+1", message]
+        else:
+            raise RuntimeError("system power control unsupported on this OS")
+
+        result = subprocess.run(  # nosec B603
+            argv,
+            timeout=15,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "power command failed").strip()
+            raise RuntimeError(detail[:300])
+        event = (
+            "system_reboot_scheduled"
+            if command_type == "system_reboot"
+            else "system_shutdown_scheduled"
+        )
+        self.log.write(event)
+
     def ack_command(self, command_id: str, status: str) -> None:
         node_id = self.require_node_id()
         quoted = urllib.parse.quote(command_id, safe="")
@@ -766,6 +829,8 @@ class Agent:
                     restart_after = True
                 elif command_type == "uninstall":
                     atomic_write(self.stop_path, "controller stop " + now_iso() + "\n")
+                elif command_type in {"system_reboot", "system_shutdown"}:
+                    self.schedule_system_power_action(command_type)
                 self.ack_command(command_id, "completed")
                 self.log.write(
                     "command_completed",
@@ -933,6 +998,14 @@ def self_test() -> int:
         require_test(
             not agent.verify_controller_command(command),
             "unapproved command accepted",
+        )
+        require_test(
+            {"system_reboot", "system_shutdown"}.issubset(SUPPORTED_COMMANDS),
+            "restricted power commands missing",
+        )
+        require_test(
+            "shell" not in SUPPORTED_COMMANDS,
+            "arbitrary shell command registered",
         )
         require_test(
             set(HANDLERS) == {"system_inventory"},
