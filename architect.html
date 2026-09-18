@@ -509,6 +509,20 @@
       return hostname || "Нода ещё не назначена";
     }
 
+    function projectBlockerText(item) {
+      const labels = {
+        node_not_assigned: "нода ещё не назначена",
+        node_offline: "нода offline — ждём heartbeat",
+        agent_update_required: `нужно обновить агент до ${currentReleaseVersion || "актуальной версии"}`,
+        project_text_capability_missing: "агент ещё не поддерживает project_text",
+        lmstudio_not_installed: "LM Studio / llmster не установлен",
+        lmstudio_server_not_running: "LM Studio установлен, но локальный сервер не работает",
+        lmstudio_model_not_loaded: "языковая модель не загружена в память",
+        waiting_for_node_poll: "всё готово — ждём следующий опрос ноды"
+      };
+      return labels[item?.blocking_reason] || item?.blocking_reason || "";
+    }
+
     function offlineExplanation(node) {
       if (!node || isNodeLive(node)) return "";
       if (node.last_command_type === "system_shutdown" && node.last_command_status === "completed") {
@@ -748,7 +762,7 @@
         wakeState.textContent = "MAC известен, но сейчас нет живой relay-ноды в той же локальной сети.";
         wakeState.className = "status";
       } else {
-        wakeState.textContent = "Wake пока недоступен: эта нода ещё не передала MAC/LAN телеметрию версии 0.3.7.";
+        wakeState.textContent = "Wake пока недоступен: эта нода ещё не передала MAC/LAN телеметрию версии 0.3.8.";
         wakeState.className = "status";
       }
     }
@@ -851,7 +865,13 @@
       projectReportProgress.textContent =
         `${done}/${total} · ${percent}% · assigned ${Number(counts.assigned || 0)} · running ${Number(counts.running || 0)} · failed ${Number(counts.failed || 0)}`;
       if (execution.state === "planned") {
-        projectReportStatus.textContent = "План готов. Controller ждёт живую ноду с агентом project_text и загруженной LM Studio-моделью. Как только такая нода опросит Hub, блоки автоматически перейдут в Assigned и Running.";
+        const blockers = (execution.blockers || []).map((item) => {
+          const work = (project.work_items || []).find((entry) => entry.work_item_id === item.work_item_id) || item;
+          return `#${item.sequence_no} · ${projectNodeDisplay(work)} → ${projectBlockerText(work)}`;
+        });
+        projectReportStatus.textContent = blockers.length
+          ? "План создан, но выполнение ещё не началось:\n" + blockers.join("\n")
+          : "План готов. Все условия выполнены; Controller ждёт следующий опрос ноды.";
         projectReportStatus.className = "status";
       } else if (execution.state === "assigned") {
         projectReportStatus.textContent = "Рабочие блоки назначены нодам и ожидают принятия агентом.";
@@ -879,6 +899,9 @@
         box.className = "project-work";
         addText(box, "strong", `#${work.sequence_no} · ${roleDisplayName(work.role_name)} → ${projectNodeDisplay(work)}`);
         addText(box, "div", `Статус: ${work.status}`, "small");
+        if (work.blocking_reason) {
+          addText(box, "div", `Ожидание: ${projectBlockerText(work)}`, "small");
+        }
         const task = addText(box, "div", work.task_text || "", "small");
         task.style.marginTop = "6px";
         if (work.result?.content) {
