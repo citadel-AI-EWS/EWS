@@ -38,6 +38,7 @@ for required in (
     "/api/v1/architect/overview",
     "/api/v1/architect/presence",
     "/api/v1/architect/release",
+    "/api/v1/architect/work-roles",
     "/api/v1/architect/missions",
     "cloudflared access ssh --hostname %h",
     "CONFIGURED LOCALLY",
