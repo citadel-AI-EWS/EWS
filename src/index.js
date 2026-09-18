@@ -1056,7 +1056,10 @@ async function architectListProjects(request, env) {
     "SELECT p.project_id, p.title, p.status, p.worker_count, p.created_at, p.updated_at, " +
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id) AS work_item_count, " +
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'completed') AS completed_work_items, " +
-    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'running') AS running_work_items " +
+    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'failed') AS failed_work_items, " +
+    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'assigned') AS assigned_work_items, " +
+    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'running') AS running_work_items, " +
+    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status IN ('completed','failed','cancelled')) AS finished_work_items " +
     "FROM architect_projects AS p ORDER BY p.created_at DESC LIMIT 50"
   ).all();
   return json({ ok: true, projects: rows.results || [] });
@@ -1064,7 +1067,7 @@ async function architectListProjects(request, env) {
 
 async function architectGetProject(request, env, projectId) {
   await authenticateArchitect(request, env);
-  await ensureProjectStorage(env);
+  await Promise.all([ensureProjectStorage(env), ensureNodeAiStorage(env), ensureReportStorage(env)]);
   const project = await env.DB.prepare(`
     SELECT project_id, title, source_type, task_text, checks_json,
       architect_approved, status, worker_count, created_at, updated_at
