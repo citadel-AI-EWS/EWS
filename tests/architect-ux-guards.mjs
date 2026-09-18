@@ -37,6 +37,8 @@ assert.match(architect, /sendControl\("system_shutdown", "SHUTDOWN"\)/);
 
 assert.match(index, /"restart", "stop", "rollback"/);
 assert.match(index, /stop: "offline"/);
+assert.match(index, /agent_update_required/);
+assert.match(architect, /node\.agent_version !== currentReleaseVersion/);
 assert.match(index, /task_text: taskText/);
 assert.match(index, /mission_types: \["system_inventory"\]/);
 assert.match(agent, /"restart", "stop", "rollback"/);
