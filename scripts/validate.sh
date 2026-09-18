@@ -73,11 +73,19 @@ for required in (
     "LIVE OPERATIONS CENTER",
     "operationsAlert",
     "workRoles",
+    "projectCreatedOverlay",
+    "projectReportCard",
+    "projectVoiceButton",
+    "missionVoiceButton",
+    "reportsDisclosure",
 ):
     if required not in architect:
         raise SystemExit(f"required Architect Live Operations capability missing: {required}")
 if '/api/v1/architect/work-roles' not in worker or "architectWorkRoles" not in worker:
     raise SystemExit("Architect work-role API route/handler missing from Worker")
+for required in ("architectGetProject", "project_specializations", "requested_roles"):
+    if required not in worker:
+        raise SystemExit(f"Project report/specialization backend missing: {required}")
 
 for forbidden in ("Контрольные точки", "Последние события аудита"):
     if forbidden in architect:
@@ -153,7 +161,7 @@ required = {
     "nodes", "missions", "assignments", "results", "commands", "audit_events",
     "agent_reports", "architect_sessions", "node_logs", "node_log_rate_limits",
     "agent_rollouts", "architect_projects", "project_work_items",
-    "node_network_state",
+    "project_specializations", "node_network_state",
 }
 tables = {
     row[0]
