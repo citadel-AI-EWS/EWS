@@ -1667,13 +1667,16 @@ async function architectCreateCommand(request, env, nodeId) {
   }
 
   const node = await env.DB.prepare(
-    "SELECT node_id, status FROM nodes WHERE node_id = ?"
+    "SELECT node_id, status, agent_version FROM nodes WHERE node_id = ?"
   ).bind(nodeId).first();
   if (!node) {
     throw new ApiError(404, "node_not_found");
   }
   if (node.status === "revoked") {
     throw new ApiError(409, "node_revoked");
+  }
+  if (commandType === "stop" && node.agent_version !== LATEST_NODE_RELEASE.version) {
+    throw new ApiError(409, "agent_update_required");
   }
   if (commandType === "pause" && node.status === "paused") {
     throw new ApiError(409, "node_already_paused");
