@@ -815,9 +815,11 @@
       for (const project of currentProjects) {
         const item = document.createElement("div");
         const completed = Number(project.completed_work_items || 0);
+        const failed = Number(project.failed_work_items || 0);
+        const finished = Number(project.finished_work_items ?? (completed + failed));
         const total = Number(project.work_item_count || 0);
-        item.className = `item ${total > 0 && completed === total ? "ok" : "warn"}`;
-        const percent = total ? Math.round((completed / total) * 100) : 0;
+        item.className = `item ${total > 0 && finished === total && failed === 0 ? "ok" : "warn"}`;
+        const percent = total ? Math.round((finished / total) * 100) : 0;
         addText(item, "strong", `${project.title} — ${project.status}`);
         addText(item, "div", `Нод Hub: ${project.worker_count} · прогресс: ${completed}/${total} · ${percent}% · running: ${Number(project.running_work_items || 0)}`, "small");
         addText(item, "div", `Project ID: ${project.project_id}`, "small");
