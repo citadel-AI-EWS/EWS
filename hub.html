@@ -79,7 +79,7 @@
     <section class="metrics" aria-label="Live metrics">
       <article class="metric"><div class="metricLabel" data-i18n="online">Online</div><div class="metricValue" id="onlineCount">0</div><div class="metricSub" data-i18n="onlineSub">active nodes now</div></article>
       <article class="metric"><div class="metricLabel" data-i18n="registered">Registered</div><div class="metricValue" id="totalCount">0</div><div class="metricSub" data-i18n="registeredSub">real enrolled nodes</div></article>
-      <article class="metric"><div class="metricLabel" data-i18n="commands">Commands</div><div class="metricValue" id="commandCount">—</div><div class="metricSub" data-i18n="commandsSub">recent controller queue</div></article>
+      <article class="metric"><div class="metricLabel" data-i18n="attention">Attention</div><div class="metricValue" id="attentionCount">—</div><div class="metricSub" data-i18n="attentionSub">nodes needing attention</div></article>
       <article class="metric"><div class="metricLabel" data-i18n="release">Release</div><div class="metricValue" id="releaseVersion">—</div><div class="metricSub" data-i18n="releaseSub">signed agent release</div></article>
       <article class="metric"><div class="metricLabel" data-i18n="mode">Mode</div><div class="metricValue" id="modeLabel">PUBLIC</div><div class="metricSub" data-i18n="modeSub">privileged data locked</div></article>
     </section>
@@ -113,15 +113,6 @@
           <div id="sshNotice" class="notice warn" data-i18n="sshNotice">SSH не открывает порт 22 в интернет. Нужны Cloudflare Tunnel + Access и работающий SSH server на node.</div>
         </section>
 
-        <section class="panel">
-          <div class="panelHead"><h2 data-i18n="commandFeed">Command feed</h2><span id="pendingCount">0 pending</span></div>
-          <div id="commandTimeline" class="timeline"><div class="empty" data-i18n="secureRequired">Secure mode required.</div></div>
-        </section>
-
-        <section class="panel">
-          <div class="panelHead"><h2 data-i18n="auditFeed">Audit feed</h2><span>server events</span></div>
-          <div id="auditTimeline" class="timeline"><div class="empty" data-i18n="secureRequired">Secure mode required.</div></div>
-        </section>
       </aside>
     </div>
 
@@ -136,9 +127,9 @@
     let architectToken = "", releaseVersion = "", lastOverview = null, lastPresence = [], lastPublic = [], refreshBusy = false, lang = localStorage.getItem("citadelHubLang") || "ru";
 
     const I18N = {
-      ru:{eyebrow:"REAL-TIME NODE CONTROL",title:"Живой центр управления.",subtitle:"Только реальные зарегистрированные компьютеры. Никаких демонстрационных счётчиков: состояние, IP, команды и обновления берутся из Controller.",secureAccess:"Architect secure access",tokenLabel:"Architect token",secureMode:"Защищённый режим",logout:"Выйти",authHint:"IP, команды, audit и обновление агента доступны только после авторизации.",online:"Online",onlineSub:"active nodes now",registered:"Registered",registeredSub:"real enrolled nodes",commands:"Commands",commandsSub:"recent controller queue",release:"Release",releaseSub:"signed agent release",mode:"Mode",modeSub:"privileged data locked",refresh:"Обновить сейчас",export:"Экспорт snapshot",updateAll:"Обновить все",pauseAll:"Пауза всем",nodesTitle:"Nodes / компьютеры",sshNotReady:"Secure tunnel not configured",sshHost:"Cloudflare Access hostname",sshUser:"SSH user",copyCommand:"Копировать команду",browserSsh:"Browser SSH",sshNotice:"SSH не открывает порт 22 в интернет. Нужны Cloudflare Tunnel + Access и работающий SSH server на node.",commandFeed:"Command feed",auditFeed:"Audit feed",secureRequired:"Secure mode required.",architectPanel:"Architect panel",logs:"Logs"},
-      he:{eyebrow:"REAL-TIME NODE CONTROL",title:"מרכז שליטה חי.",subtitle:"רק מחשבים רשומים אמיתיים. ללא מונים מדומים: מצב, IP, פקודות ועדכונים מגיעים ישירות מה-Controller.",secureAccess:"גישה מאובטחת ל-Architect",tokenLabel:"Architect token",secureMode:"מצב מאובטח",logout:"יציאה",authHint:"IP, פקודות, audit ועדכון agent זמינים רק לאחר אימות.",online:"מחוברים",onlineSub:"nodes פעילים עכשיו",registered:"רשומים",registeredSub:"nodes שנרשמו באמת",commands:"פקודות",commandsSub:"תור פקודות אחרונות",release:"גרסה",releaseSub:"גרסת agent חתומה",mode:"מצב",modeSub:"מידע מורשה נעול",refresh:"רענן עכשיו",export:"ייצוא snapshot",updateAll:"עדכן את כולם",pauseAll:"עצור את כולם",nodesTitle:"Nodes / מחשבים",sshNotReady:"מנהרת SSH מאובטחת עדיין לא מוגדרת",sshHost:"Cloudflare Access hostname",sshUser:"משתמש SSH",copyCommand:"העתק פקודה",browserSsh:"SSH בדפדפן",sshNotice:"SSH לא פותח את פורט 22 לאינטרנט. נדרשים Cloudflare Tunnel + Access ושרת SSH פעיל ב-node.",commandFeed:"תור פקודות",auditFeed:"Audit",secureRequired:"נדרש מצב מאובטח.",architectPanel:"Architect panel",logs:"Logs"},
-      en:{eyebrow:"REAL-TIME NODE CONTROL",title:"Live operations center.",subtitle:"Only real registered computers. No demo counters: status, IP, commands and updates come directly from the Controller.",secureAccess:"Architect secure access",tokenLabel:"Architect token",secureMode:"Secure mode",logout:"Sign out",authHint:"IP, commands, audit and agent updates are available only after authentication.",online:"Online",onlineSub:"active nodes now",registered:"Registered",registeredSub:"real enrolled nodes",commands:"Commands",commandsSub:"recent controller queue",release:"Release",releaseSub:"signed agent release",mode:"Mode",modeSub:"privileged data locked",refresh:"Refresh now",export:"Export snapshot",updateAll:"Update all",pauseAll:"Pause all",nodesTitle:"Nodes / computers",sshNotReady:"Secure tunnel not configured",sshHost:"Cloudflare Access hostname",sshUser:"SSH user",copyCommand:"Copy command",browserSsh:"Browser SSH",sshNotice:"SSH does not expose port 22 to the Internet. Cloudflare Tunnel + Access and a running SSH server on the node are required.",commandFeed:"Command feed",auditFeed:"Audit feed",secureRequired:"Secure mode required.",architectPanel:"Architect panel",logs:"Logs"}
+      ru:{eyebrow:"REAL-TIME NODE CONTROL",title:"Живой центр управления.",subtitle:"Только реальные зарегистрированные компьютеры. Никаких демонстрационных счётчиков: состояние, IP, команды и обновления берутся из Controller.",secureAccess:"Architect secure access",tokenLabel:"Architect token",secureMode:"Защищённый режим",logout:"Выйти",authHint:"IP, управление узлами и обновление агента доступны только после авторизации.",online:"Online",onlineSub:"active nodes now",registered:"Registered",registeredSub:"real enrolled nodes",attention:"Требуют внимания",attentionSub:"offline / degraded nodes",release:"Release",releaseSub:"signed agent release",mode:"Mode",modeSub:"privileged data locked",refresh:"Обновить сейчас",export:"Экспорт snapshot",updateAll:"Обновить все",pauseAll:"Пауза всем",nodesTitle:"Nodes / компьютеры",sshNotReady:"Secure tunnel not configured",sshHost:"Cloudflare Access hostname",sshUser:"SSH user",copyCommand:"Копировать команду",browserSsh:"Browser SSH",sshNotice:"SSH не открывает порт 22 в интернет. Нужны Cloudflare Tunnel + Access и работающий SSH server на node.",commandFeed:"Command feed",auditFeed:"Audit feed",secureRequired:"Secure mode required.",architectPanel:"Architect panel",logs:"Logs"},
+      he:{eyebrow:"REAL-TIME NODE CONTROL",title:"מרכז שליטה חי.",subtitle:"רק מחשבים רשומים אמיתיים. ללא מונים מדומים: מצב, IP, פקודות ועדכונים מגיעים ישירות מה-Controller.",secureAccess:"גישה מאובטחת ל-Architect",tokenLabel:"Architect token",secureMode:"מצב מאובטח",logout:"יציאה",authHint:"IP, שליטה ב-nodes ועדכון agent זמינים רק לאחר אימות.",online:"מחוברים",onlineSub:"nodes פעילים עכשיו",registered:"רשומים",registeredSub:"nodes שנרשמו באמת",attention:"דורשים תשומת לב",attentionSub:"offline / degraded nodes",release:"גרסה",releaseSub:"גרסת agent חתומה",mode:"מצב",modeSub:"מידע מורשה נעול",refresh:"רענן עכשיו",export:"ייצוא snapshot",updateAll:"עדכן את כולם",pauseAll:"עצור את כולם",nodesTitle:"Nodes / מחשבים",sshNotReady:"מנהרת SSH מאובטחת עדיין לא מוגדרת",sshHost:"Cloudflare Access hostname",sshUser:"משתמש SSH",copyCommand:"העתק פקודה",browserSsh:"SSH בדפדפן",sshNotice:"SSH לא פותח את פורט 22 לאינטרנט. נדרשים Cloudflare Tunnel + Access ושרת SSH פעיל ב-node.",commandFeed:"תור פקודות",auditFeed:"Audit",secureRequired:"נדרש מצב מאובטח.",architectPanel:"Architect panel",logs:"Logs"},
+      en:{eyebrow:"REAL-TIME NODE CONTROL",title:"Live operations center.",subtitle:"Only real registered computers. No demo counters: status, IP, commands and updates come directly from the Controller.",secureAccess:"Architect secure access",tokenLabel:"Architect token",secureMode:"Secure mode",logout:"Sign out",authHint:"IP, node control, and agent updates are available only after authentication.",online:"Online",onlineSub:"active nodes now",registered:"Registered",registeredSub:"real enrolled nodes",attention:"Needs attention",attentionSub:"offline / degraded nodes",release:"Release",releaseSub:"signed agent release",mode:"Mode",modeSub:"privileged data locked",refresh:"Refresh now",export:"Export snapshot",updateAll:"Update all",pauseAll:"Pause all",nodesTitle:"Nodes / computers",sshNotReady:"Secure tunnel not configured",sshHost:"Cloudflare Access hostname",sshUser:"SSH user",copyCommand:"Copy command",browserSsh:"Browser SSH",sshNotice:"SSH does not expose port 22 to the Internet. Cloudflare Tunnel + Access and a running SSH server on the node are required.",commandFeed:"Command feed",auditFeed:"Audit feed",secureRequired:"Secure mode required.",architectPanel:"Architect panel",logs:"Logs"}
     };
     function applyLanguage(next){lang=I18N[next]?next:"ru";localStorage.setItem("citadelHubLang",lang);document.documentElement.lang=lang;document.documentElement.dir=lang==="he"?"rtl":"ltr";document.querySelectorAll("[data-lang]").forEach(b=>b.classList.toggle("active",b.dataset.lang===lang));document.querySelectorAll("[data-i18n]").forEach(el=>{const k=el.dataset.i18n;if(I18N[lang][k])el.textContent=I18N[lang][k]});searchInput.placeholder=lang==="he"?"חיפוש לפי hostname, node ID, IP, מערכת…":lang==="en"?"Search hostname, node ID, IP, OS…":"Поиск hostname, node ID, IP, OS…";renderCurrent()}
     document.querySelectorAll("[data-lang]").forEach(b=>b.addEventListener("click",()=>applyLanguage(b.dataset.lang)));
@@ -157,36 +148,129 @@
 
     function publicCard(node){const el=document.createElement("article");const state=freshness(node);el.className=`node ${state}`;el.dataset.search=`${node.display_name||""} ${node.agent_version||""} ${node.status||""}`.toLowerCase();el.innerHTML=`<div class="nodeTop"><div><div class="nodeName"></div><div class="nodeId"></div></div><span class="badge ${state}"></span></div><dl class="nodeMeta"><dt>AGENT</dt><dd></dd><dt>LAST SEEN</dt><dd></dd></dl>`;el.querySelector(".nodeName").textContent=node.display_name||`Node ${node.node_number}`;el.querySelector(".nodeId").textContent=`#${esc(node.node_number)}`;el.querySelector(".badge").textContent=state;const dds=el.querySelectorAll("dd");dds[0].textContent=esc(node.agent_version);dds[1].textContent=`${relativeTime(node.last_seen_at)} · ${esc(node.last_seen_at)}`;return el}
 
-    function secureCard(node,presence,commands){const el=document.createElement("article"),state=freshness(node),ip=presence?.public_ip||"—";el.className=`node ${state}`;el.dataset.search=`${node.hostname||""} ${node.node_id||""} ${ip} ${node.os_name||""} ${node.os_version||""} ${node.agent_version||""}`.toLowerCase();const pending=commands.some(c=>c.node_id===node.node_id&&["pending","accepted"].includes(c.status));const current=releaseVersion&&node.agent_version===releaseVersion;el.innerHTML=`<div class="nodeTop"><div><div class="nodeName"></div><div class="nodeId"></div></div><span class="badge ${state}"></span></div><div class="nodeMetrics"><div class="nodeMetric"><span>CPU</span><b class="cpu"></b><div class="bar"><i class="cpuBar"></i></div></div><div class="nodeMetric"><span>RAM</span><b class="ram"></b><div class="bar"><i class="ramBar"></i></div></div></div><dl class="nodeMeta"><dt>IP</dt><dd class="ip"></dd><dt>OS</dt><dd class="os"></dd><dt>ARCH</dt><dd class="arch"></dd><dt>AGENT</dt><dd class="agent"></dd><dt>LAST SEEN</dt><dd class="seen"></dd></dl><div class="nodeActions"></div>`;
-      el.querySelector(".nodeName").textContent=node.hostname||node.node_id;el.querySelector(".nodeId").textContent=node.node_id;el.querySelector(".badge").textContent=state;el.querySelector(".cpu").textContent=node.cpu_percent==null?"—":`${Number(node.cpu_percent).toFixed(1)}%`;el.querySelector(".ram").textContent=node.memory_percent==null?"—":`${Number(node.memory_percent).toFixed(1)}%`;el.querySelector(".cpuBar").style.width=`${pct(node.cpu_percent)}%`;el.querySelector(".ramBar").style.width=`${pct(node.memory_percent)}%`;el.querySelector(".ip").textContent=ip;el.querySelector(".os").textContent=`${esc(node.os_name)} ${esc(node.os_version)}`;el.querySelector(".arch").textContent=esc(node.architecture);el.querySelector(".agent").textContent=`${esc(node.agent_version)}${releaseVersion?current?" · CURRENT":` · target ${releaseVersion}`:""}`;el.querySelector(".seen").textContent=`${relativeTime(node.last_seen_at)} · ${esc(node.last_seen_at)}`;
-      const actions=el.querySelector(".nodeActions");const add=(label,cls,fn,disabled=false)=>{const b=document.createElement("button");b.type="button";b.className=`btn ${cls||""}`;b.textContent=label;b.disabled=disabled;b.addEventListener("click",fn);actions.append(b);return b};
-      add(lang==="he"?"אבחון":lang==="en"?"Diagnostics":"Диагностика","cyan",()=>sendDiagnostic(node.node_id));
-      add(current?(lang==="he"?"מעודכן":lang==="en"?"Up to date":"Актуально"):(lang==="he"?"עדכון":lang==="en"?"Update":"Обновить"),"good",()=>sendCommand(node.node_id,"update"),pending||current||node.status==="revoked");
-      if(node.status==="paused")add(lang==="he"?"המשך":lang==="en"?"Resume":"Продолжить","",()=>sendCommand(node.node_id,"resume"),pending);else add(lang==="he"?"השהה":lang==="en"?"Pause":"Пауза","warn",()=>sendCommand(node.node_id,"pause"),pending||node.status==="revoked");
-      add(lang==="he"?"הפעל agent מחדש":lang==="en"?"Restart agent":"Перезапустить агент","warn",()=>sendCommand(node.node_id,"restart"),pending||node.status==="revoked");
-      add(lang==="he"?"אתחל מחשב":lang==="en"?"Reboot host":"Перезагрузить ПК","warn",()=>sendCommand(node.node_id,"system_reboot"),pending||node.status==="revoked");
-      add(lang==="he"?"כבה מחשב":lang==="en"?"Shutdown host":"Выключить ПК","danger",()=>sendCommand(node.node_id,"system_shutdown"),pending||node.status==="revoked");
-      add(lang==="he"?"חזרה לגרסה קודמת":lang==="en"?"Rollback":"Откатить","danger",()=>sendCommand(node.node_id,"rollback"),pending||node.status==="revoked");
+    function offlineReason(node){
+      const state=freshness(node);
+      if(state==="online")return"";
+      if(state==="revoked")return lang==="he"?"ה-node בוטל ב-Controller.":lang==="en"?"The node is revoked in the Controller.":"Узел отозван в Controller.";
+      const seen=esc(node.last_seen_at);
+      return lang==="he"
+        ? `אין heartbeat מאז ${seen}. הסיבה המקומית המדויקת אינה ידועה עד שה-node יחזור לקשר.`
+        : lang==="en"
+          ? `No heartbeat since ${seen}. The exact local cause is unavailable until the node reconnects.`
+          : `Heartbeat не поступает с ${seen}. Точная локальная причина неизвестна до восстановления связи.`;
+    }
+
+    function secureCard(node,presence,commands){
+      const el=document.createElement("article"),state=freshness(node),live=state==="online",ip=presence?.public_ip||"—";
+      el.className=`node ${state}`;
+      el.dataset.search=`${node.hostname||""} ${node.node_id||""} ${ip} ${node.os_name||""} ${node.os_version||""} ${node.agent_version||""}`.toLowerCase();
+      const pending=commands.some(c=>c.node_id===node.node_id&&["pending","accepted"].includes(c.status));
+      const current=releaseVersion&&node.agent_version===releaseVersion;
+      el.innerHTML=`<div class="nodeTop"><div><div class="nodeName"></div><div class="nodeId"></div></div><span class="badge ${state}"></span></div><div class="nodeMetrics"><div class="nodeMetric"><span>CPU</span><b class="cpu"></b><div class="bar"><i class="cpuBar"></i></div></div><div class="nodeMetric"><span>RAM</span><b class="ram"></b><div class="bar"><i class="ramBar"></i></div></div></div><dl class="nodeMeta"><dt>IP</dt><dd class="ip"></dd><dt>OS</dt><dd class="os"></dd><dt>ARCH</dt><dd class="arch"></dd><dt>AGENT</dt><dd class="agent"></dd><dt>LAST SEEN</dt><dd class="seen"></dd></dl><div class="offlineReason micro"></div><div class="nodeActions"></div>`;
+      el.querySelector(".nodeName").textContent=node.hostname||node.node_id;
+      el.querySelector(".nodeId").textContent=node.node_id;
+      el.querySelector(".badge").textContent=state;
+      el.querySelector(".cpu").textContent=node.cpu_percent==null?"—":`${Number(node.cpu_percent).toFixed(1)}%`;
+      el.querySelector(".ram").textContent=node.memory_percent==null?"—":`${Number(node.memory_percent).toFixed(1)}%`;
+      el.querySelector(".cpuBar").style.width=`${pct(node.cpu_percent)}%`;
+      el.querySelector(".ramBar").style.width=`${pct(node.memory_percent)}%`;
+      el.querySelector(".ip").textContent=ip;
+      el.querySelector(".os").textContent=`${esc(node.os_name)} ${esc(node.os_version)}`;
+      el.querySelector(".arch").textContent=esc(node.architecture);
+      el.querySelector(".agent").textContent=`${esc(node.agent_version)}${releaseVersion?current?" · CURRENT":` · target ${releaseVersion}`:""}`;
+      el.querySelector(".seen").textContent=`${relativeTime(node.last_seen_at)} · ${esc(node.last_seen_at)}`;
+      const reason=el.querySelector(".offlineReason");
+      reason.textContent=offlineReason(node);
+      reason.hidden=live;
+      if(!live){reason.className="notice warn"}
+
+      const actions=el.querySelector(".nodeActions");
+      const add=(label,cls,fn,disabled=false)=>{const b=document.createElement("button");b.type="button";b.className=`btn ${cls||""}`;b.textContent=label;b.disabled=disabled;b.addEventListener("click",fn);actions.append(b);return b};
+      add(lang==="he"?"אבחון":lang==="en"?"Diagnostics":"Диагностика","cyan",()=>sendDiagnostic(node.node_id),!live);
+      add(current?(lang==="he"?"מעודכן":lang==="en"?"Up to date":"Актуально"):(lang==="he"?"עדכון":lang==="en"?"Update":"Обновить"),"good",()=>sendCommand(node.node_id,"update"),!live||pending||current);
+      if(node.status==="paused")add(lang==="he"?"המשך":lang==="en"?"Resume":"Продолжить","",()=>sendCommand(node.node_id,"resume"),!live||pending);
+      else add(lang==="he"?"השהה":lang==="en"?"Pause":"Пауза","warn",()=>sendCommand(node.node_id,"pause"),!live||pending);
+      add(lang==="he"?"הפעל agent מחדש":lang==="en"?"Restart agent":"Перезапустить агент","warn",()=>sendCommand(node.node_id,"restart"),!live||pending);
+      add(lang==="he"?"אתחל מחשב":lang==="en"?"Reboot host":"Перезагрузить ПК","warn",()=>sendCommand(node.node_id,"system_reboot"),!live||pending);
+      add(lang==="he"?"כבה מחשב":lang==="en"?"Shutdown host":"Выключить ПК","danger",()=>sendCommand(node.node_id,"system_shutdown"),!live||pending);
+      add(lang==="he"?"חזרה לגרסה קודמת":lang==="en"?"Rollback":"Откатить","danger",()=>sendCommand(node.node_id,"rollback"),!live||pending);
       if(presence?.public_ip)add(lang==="he"?"העתק IP":lang==="en"?"Copy IP":"Копировать IP","",()=>navigator.clipboard.writeText(presence.public_ip).then(()=>toast("IP",presence.public_ip)));
-      add("SSH","",()=>focusSsh(node),!safeHost($("sshHost").value));
-      return el}
+      add("SSH","",()=>focusSsh(node),!live||!safeHost($("sshHost").value));
+      return el
+    }
 
     function render(items){const q=searchInput.value.trim().toLowerCase();const visible=q?items.filter(el=>el.dataset.search.includes(q)):items;nodesEl.replaceChildren(...visible);if(!visible.length){const empty=document.createElement("div");empty.className="empty";empty.textContent=q?(lang==="he"?"לא נמצאו nodes.":lang==="en"?"No nodes match the filter.":"По фильтру ничего не найдено."):(lang==="he"?"אין nodes רשומים כרגע.":lang==="en"?"No registered nodes yet.":"Зарегистрированных узлов пока нет.");nodesEl.append(empty)}$("nodeSummary").textContent=`${visible.length} visible`}
-    function renderCurrent(){if(architectToken&&lastOverview){const p=new Map(lastPresence.map(x=>[x.node_id,x]));render((lastOverview.nodes||[]).map(n=>secureCard(n,p.get(n.node_id),lastOverview.commands||[])));renderFeeds(lastOverview)}else render((lastPublic||[]).map(publicCard))}
+    function renderCurrent(){if(architectToken&&lastOverview){const p=new Map(lastPresence.map(x=>[x.node_id,x]));render((lastOverview.nodes||[]).map(n=>secureCard(n,p.get(n.node_id),lastOverview.commands||[])))}else render((lastPublic||[]).map(publicCard))}
 
-    function renderFeeds(overview){const commands=overview?.commands||[],audit=overview?.audit_events||[];$("commandCount").textContent=commands.length;$("pendingCount").textContent=`${commands.filter(c=>["pending","accepted"].includes(c.status)).length} pending`;const cmdEls=commands.slice(0,18).map(c=>{const el=document.createElement("div");el.className=`event ${c.status==="completed"?"ok":["pending","accepted"].includes(c.status)?"warn":""}`;const top=document.createElement("div");top.className="eventTop";const s=document.createElement("strong");s.textContent=`${c.command_type} · ${c.status}`;const time=document.createElement("time");time.textContent=relativeTime(c.completed_at||c.created_at);top.append(s,time);const txt=document.createElement("div");txt.className="eventText";txt.textContent=`${c.node_id} · ${c.command_id}`;el.append(top,txt);return el});$("commandTimeline").replaceChildren(...cmdEls);if(!cmdEls.length)$("commandTimeline").innerHTML='<div class="empty">No command history.</div>';
-      const auditEls=audit.slice(0,18).map(a=>{const el=document.createElement("div");el.className="event";const top=document.createElement("div");top.className="eventTop";const s=document.createElement("strong");s.textContent=a.action||"event";const time=document.createElement("time");time.textContent=relativeTime(a.created_at);top.append(s,time);const txt=document.createElement("div");txt.className="eventText";txt.textContent=`${esc(a.actor_type)}:${esc(a.actor_id)} → ${esc(a.target_type)} ${esc(a.target_id)}`;el.append(top,txt);return el});$("auditTimeline").replaceChildren(...auditEls);if(!auditEls.length)$("auditTimeline").innerHTML='<div class="empty">No audit events.</div>'}
-
-    async function refreshPublic(){const data=await api("/api/v1/hub/nodes");lastPublic=data.nodes||[];lastOverview=null;renderCurrent();$("totalCount").textContent=lastPublic.length;$("onlineCount").textContent=lastPublic.filter(n=>n.status==="online").length;$("commandCount").textContent="—";$("releaseVersion").textContent="—";$("modeLabel").textContent="PUBLIC";$("modeChip").innerHTML='MODE <strong>PUBLIC</strong>';$("controllerStatus").textContent="CONTROLLER — LIVE";$("controllerStatus").className="statusPill ok";$("presenceStatus").textContent="PRESENCE — LOCKED";$("releaseStatus").textContent="RELEASE — LOCKED";setState(`Live public data · ${new Date().toLocaleTimeString()}`)}
-    async function refreshSecure(){const [overview,presenceData,release]=await Promise.all([api("/api/v1/architect/overview"),api("/api/v1/architect/presence"),api("/api/v1/architect/release")]);lastOverview=overview;lastPresence=presenceData.presence||[];releaseVersion=release.release?.version||"";renderCurrent();$("totalCount").textContent=overview.counts?.nodes||0;$("onlineCount").textContent=overview.counts?.online_nodes||0;$("releaseVersion").textContent=releaseVersion||"—";$("modeLabel").textContent="SECURE";$("modeChip").innerHTML='MODE <strong>SECURE</strong>';$("controllerStatus").textContent="CONTROLLER — AUTHENTICATED";$("controllerStatus").className="statusPill ok";$("presenceStatus").textContent="PRESENCE — READY";$("presenceStatus").className="statusPill ok";$("releaseStatus").textContent=releaseVersion?`RELEASE — ${releaseVersion}`:"RELEASE — UNKNOWN";$("releaseStatus").className=releaseVersion?"statusPill ok":"statusPill warn";loginButton.hidden=true;logoutButton.hidden=false;tokenInput.disabled=true;updateAllButton.disabled=false;pauseAllButton.disabled=false;exportButton.disabled=false;setState(`Secure controller data · ${new Date().toLocaleTimeString()}`)}
+    function attentionCount(nodes){return (nodes||[]).filter(n=>freshness(n)!=="online"&&n.status!=="revoked").length}
+    function syncUpdateAllState(){
+      const nodes=lastOverview?.nodes||[];
+      const outdated=nodes.filter(n=>n.status!=="revoked"&&releaseVersion&&n.agent_version!==releaseVersion).length;
+      updateAllButton.disabled=!architectToken||!releaseVersion||outdated===0;
+      updateAllButton.textContent=outdated===0
+        ? (lang==="he"?"הכול מעודכן":lang==="en"?"All up to date":"Все актуальны")
+        : (lang==="he"?`עדכן ${outdated}`:lang==="en"?`Update ${outdated}`:`Обновить ${outdated}`);
+    }
+    async function refreshPublic(){
+      const data=await api("/api/v1/hub/nodes");
+      lastPublic=data.nodes||[];lastOverview=null;renderCurrent();
+      $("totalCount").textContent=lastPublic.length;
+      $("onlineCount").textContent=lastPublic.filter(n=>freshness(n)==="online").length;
+      $("attentionCount").textContent=attentionCount(lastPublic);
+      $("releaseVersion").textContent="—";$("modeLabel").textContent="PUBLIC";
+      $("modeChip").innerHTML='MODE <strong>PUBLIC</strong>';
+      $("controllerStatus").textContent="CONTROLLER — LIVE";$("controllerStatus").className="statusPill ok";
+      $("presenceStatus").textContent="PRESENCE — LOCKED";$("releaseStatus").textContent="RELEASE — LOCKED";
+      updateAllButton.disabled=true;
+      setState(`Live public data · ${new Date().toLocaleTimeString()}`)
+    }
+    async function refreshSecure(){
+      const [overview,presenceData,release]=await Promise.all([
+        api("/api/v1/architect/overview"),
+        api("/api/v1/architect/presence"),
+        api("/api/v1/architect/release")
+      ]);
+      lastOverview=overview;lastPresence=presenceData.presence||[];releaseVersion=release.release?.version||"";
+      renderCurrent();
+      $("totalCount").textContent=overview.counts?.nodes||0;
+      $("onlineCount").textContent=overview.counts?.online_nodes||0;
+      $("attentionCount").textContent=attentionCount(overview.nodes||[]);
+      $("releaseVersion").textContent=releaseVersion||"—";$("modeLabel").textContent="SECURE";
+      $("modeChip").innerHTML='MODE <strong>SECURE</strong>';
+      $("controllerStatus").textContent="CONTROLLER — AUTHENTICATED";$("controllerStatus").className="statusPill ok";
+      $("presenceStatus").textContent="PRESENCE — READY";$("presenceStatus").className="statusPill ok";
+      $("releaseStatus").textContent=releaseVersion?`RELEASE — ${releaseVersion}`:"RELEASE — UNKNOWN";$("releaseStatus").className=releaseVersion?"statusPill ok":"statusPill warn";
+      loginButton.hidden=true;logoutButton.hidden=false;tokenInput.disabled=true;pauseAllButton.disabled=false;exportButton.disabled=false;
+      syncUpdateAllState();
+      setState(`Secure controller data · ${new Date().toLocaleTimeString()}`)
+    }
     async function refresh(){if(refreshBusy)return;refreshBusy=true;$("networkChip").innerHTML='NETWORK <strong>SYNC</strong>';try{if(architectToken)await refreshSecure();else await refreshPublic();$("networkChip").innerHTML='NETWORK <strong>ONLINE</strong>'}catch(error){$("networkChip").innerHTML='NETWORK <strong>ERROR</strong>';$("controllerStatus").textContent=`CONTROLLER — ${error.message}`;$("controllerStatus").className="statusPill bad";if(architectToken&&["architect_authentication_required","invalid_architect_token"].includes(error.message)){architectToken="";tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;toast("Authentication failed",error.message,"bad");await refreshPublic()}else setState(`Controller error: ${error.message}`)}finally{refreshBusy=false}}
 
     async function sendCommand(nodeId,type){const labels={update:"update",pause:"pause",resume:"resume",restart:"restart agent",rollback:"rollback",uninstall:"disconnect",system_reboot:"REBOOT HOST",system_shutdown:"SHUTDOWN HOST"};let confirmation;if(type==="system_reboot"||type==="system_shutdown"){const expected=type==="system_reboot"?"REBOOT":"SHUTDOWN";confirmation=prompt(`${labels[type]}: ${nodeId}\nType ${expected} to confirm.`)||"";if(confirmation.trim()!==expected)return}else if(!confirm(`${labels[type]||type}: ${nodeId}?`))return;try{const body={command_type:type};if(confirmation)body.confirmation=confirmation.trim();await api(`/api/v1/architect/nodes/${encodeURIComponent(nodeId)}/commands`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});toast("Command queued",`${type} → ${nodeId}`);await refresh()}catch(e){toast("Command failed",e.message,"bad")}}
     async function sendDiagnostic(nodeId){try{await api("/api/v1/architect/missions",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({node_id:nodeId,title:`Hub diagnostics ${new Date().toISOString()}`,mission_type:"system_inventory",priority:100,expires_in_hours:1})});toast("Diagnostics queued",nodeId);await refresh()}catch(e){toast("Diagnostics failed",e.message,"bad")}}
     async function bulkCommand(type){const nodes=(lastOverview?.nodes||[]).filter(n=>n.status!=="revoked"&&(type!=="pause"||n.status!=="paused"));if(!nodes.length)return toast("Nothing to do","No eligible nodes");if(!confirm(`${type.toUpperCase()} ${nodes.length} nodes?`))return;let ok=0,failed=0;for(const n of nodes){try{await api(`/api/v1/architect/nodes/${encodeURIComponent(n.node_id)}/commands`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({command_type:type})});ok++}catch{failed++}}toast("Bulk command",`${ok} queued · ${failed} skipped/failed`,failed?"bad":"ok");await refresh()}
 
-    loginButton.addEventListener("click",async()=>{const value=tokenInput.value.trim();if(!value)return toast("Token required","Enter Architect token","bad");architectToken=value;tokenInput.value="";await refresh()});logoutButton.addEventListener("click",async()=>{architectToken="";releaseVersion="";lastOverview=null;lastPresence=[];tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;$("commandTimeline").innerHTML='<div class="empty">Secure mode required.</div>';$("auditTimeline").innerHTML='<div class="empty">Secure mode required.</div>';await refreshPublic()});$("refreshButton").addEventListener("click",refresh);searchInput.addEventListener("input",renderCurrent);updateAllButton.addEventListener("click",()=>bulkCommand("update"));pauseAllButton.addEventListener("click",()=>bulkCommand("pause"));
-    exportButton.addEventListener("click",()=>{if(!lastOverview)return;const snapshot={exported_at:new Date().toISOString(),counts:lastOverview.counts,nodes:lastOverview.nodes,presence:lastPresence,commands:lastOverview.commands,audit_events:lastOverview.audit_events,release_version:releaseVersion};const blob=new Blob([JSON.stringify(snapshot,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`citadel-hub-${new Date().toISOString().replace(/[:.]/g,"-")}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);toast("Snapshot exported","Real controller data only")});
+    async function startSignedRollout(){
+      const nodes=lastOverview?.nodes||[];
+      const outdated=nodes.filter(n=>n.status!=="revoked"&&releaseVersion&&n.agent_version!==releaseVersion).length;
+      if(!outdated)return toast(lang==="he"?"מעודכן":lang==="en"?"Up to date":"Актуально",lang==="he"?"אין agents לעדכון":lang==="en"?"No agents need an update":"Нет агентов, которым нужно обновление");
+      if(!confirm(lang==="he"?`לעדכן ${outdated} agents לגרסה ${releaseVersion}?`:lang==="en"?`Update ${outdated} agents to ${releaseVersion}?`:`Обновить ${outdated} агентов до ${releaseVersion}?`))return;
+      updateAllButton.disabled=true;
+      try{
+        const data=await api("/api/v1/architect/update-all",{method:"POST"});
+        const r=data.rollout||{};
+        toast("Signed rollout",`${r.nodes_waiting_for_update||0} → ${r.target_version||releaseVersion}`);
+        await refresh();
+      }catch(e){toast("Rollout failed",e.message,"bad");syncUpdateAllState()}
+    }
+
+    loginButton.addEventListener("click",async()=>{const value=tokenInput.value.trim();if(!value)return toast("Token required","Enter Architect token","bad");architectToken=value;tokenInput.value="";await refresh()});
+    logoutButton.addEventListener("click",async()=>{architectToken="";releaseVersion="";lastOverview=null;lastPresence=[];tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;await refreshPublic()});
+    $("refreshButton").addEventListener("click",refresh);
+    searchInput.addEventListener("input",renderCurrent);
+    updateAllButton.addEventListener("click",startSignedRollout);
+    pauseAllButton.addEventListener("click",()=>bulkCommand("pause"));
+    exportButton.addEventListener("click",()=>{if(!lastOverview)return;const snapshot={exported_at:new Date().toISOString(),counts:lastOverview.counts,nodes:lastOverview.nodes,presence:lastPresence,release_version:releaseVersion};const blob=new Blob([JSON.stringify(snapshot,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`citadel-hub-${new Date().toISOString().replace(/[:.]/g,"-")}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);toast("Snapshot exported","Real controller data only")});
 
     const sshHost=$("sshHost"),sshUser=$("sshUser");sshHost.value=sessionStorage.getItem("citadelSshHost")||"";sshUser.value=sessionStorage.getItem("citadelSshUser")||"";
     function updateSsh(){const host=safeHost(sshHost.value),user=safeUser(sshUser.value);sessionStorage.setItem("citadelSshHost",host);sessionStorage.setItem("citadelSshUser",user);const ready=Boolean(host&&user);$("sshLight").classList.toggle("ready",ready);$("sshMode").textContent=ready?"CONFIGURED LOCALLY":"NOT CONFIGURED";$("sshStateText").textContent=ready?(lang==="he"?"יעד SSH הוגדר מקומית; זמינות המנהרה עדיין לא אומתה":lang==="en"?"SSH target configured locally; tunnel reachability is not yet verified":"SSH цель настроена локально; доступность Tunnel ещё не подтверждена"):I18N[lang].sshNotReady;const cmd=ready?`ssh -o ProxyCommand="cloudflared access ssh --hostname %h" ${user}@${host}`:"cloudflared Access hostname is required.";$("sshCommand").textContent=cmd;$("copySshButton").disabled=!ready;$("openSshButton").disabled=!ready;renderCurrent()}
