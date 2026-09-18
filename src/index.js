@@ -218,7 +218,10 @@ async function ensureReportStorage(env) {
     });
   }
   await reportSchemaPromise;
+}
 
+async function backfillLegacyReports(env) {
+  await ensureReportStorage(env);
   if (!legacyReportBackfillPromise) {
     legacyReportBackfillPromise = env.DB.prepare(`
       INSERT OR IGNORE INTO agent_reports (
@@ -1076,7 +1079,7 @@ async function submitResult(request, env, nodeId, url) {
 
 async function architectListReports(request, env, url) {
   await authenticateArchitect(request, env);
-  await ensureReportStorage(env);
+  await backfillLegacyReports(env);
 
   const rawLimit = url.searchParams.get("limit") || "50";
   const rawOffset = url.searchParams.get("offset") || "0";
@@ -1140,7 +1143,7 @@ async function architectListReports(request, env, url) {
 
 async function architectGetReport(request, env, reportId) {
   await authenticateArchitect(request, env);
-  await ensureReportStorage(env);
+  await backfillLegacyReports(env);
 
   const report = await env.DB.prepare(`
     SELECT
@@ -1235,7 +1238,7 @@ async function architectListSessions(request, env, url) {
 
 async function architectCreateSession(request, env) {
   await authenticateArchitect(request, env);
-  await Promise.all([ensureReportStorage(env), ensureSessionStorage(env)]);
+  await Promise.all([backfillLegacyReports(env), ensureSessionStorage(env)]);
   const bodyText = await readBodyText(request, MAX_SESSION_BODY_BYTES);
   const body = parseJsonObject(bodyText);
   const name = requireString(body.name, "session_name", 120);
@@ -1541,7 +1544,7 @@ async function authenticateArchitect(request, env) {
 
 async function architectOverview(request, env) {
   await authenticateArchitect(request, env);
-  await Promise.all([ensureReportStorage(env), ensureSessionStorage(env), ensureAutoEnrollmentStorage(env)]);
+  await Promise.all([backfillLegacyReports(env), ensureSessionStorage(env), ensureAutoEnrollmentStorage(env)]);
 
   const [counts, nodesQuery, missionsQuery, commandsQuery, auditQuery] = await Promise.all([
     env.DB.prepare(
