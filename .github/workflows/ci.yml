@@ -42,7 +42,7 @@ jobs:
       - run: node --check scripts/synthetic_user.mjs
 
   agent-package:
-    name: Agent package integrity
+    name: Agent packages integrity
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -88,6 +88,43 @@ jobs:
           print("Agent package integrity: OK")
           PY
           unzip -t "$package_zip"
+
+      - name: Build self-contained Linux package
+        run: python scripts/build_fixed_linux_agent_package.py
+      - name: Verify Linux package
+        run: |
+          set -euo pipefail
+          linux_dir="$(find dist -mindepth 1 -maxdepth 1 -type d -name 'CITADEL_LINUX_AGENT_*' | head -n 1)"
+          linux_tar="${linux_dir}.tar.gz"
+          test -n "$linux_dir"
+          test -f "$linux_tar"
+          bash -n "$linux_dir/setup_linux.sh" "$linux_dir/Install Linux Node.sh" "$linux_dir/START_HERE.sh"
+          python -m py_compile "$linux_dir/citadel_node_v1.py" "$linux_dir/citadel_node_v2.py"
+          python "$linux_dir/citadel_node_v2.py" self-test
+          python - "$linux_dir" <<'PY'
+          from pathlib import Path
+          import hashlib, sys
+          root = Path(sys.argv[1])
+          seen = set()
+          for line in (root / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines():
+              digest, name = line.split("  ", 1)
+              path = root / name
+              assert path.is_file(), name
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, name
+              seen.add(name)
+          required = {
+              "citadel_node_v1.py", "citadel_node_v2.py", "requirements.txt",
+              "setup_linux.sh", "Install Linux Node.sh", "START_HERE.sh",
+              "README_LINUX.md"
+          }
+          assert required <= seen, sorted(required - seen)
+          setup = (root / "setup_linux.sh").read_text(encoding="utf-8").lower()
+          assert "curl |" not in setup
+          assert "wget |" not in setup
+          assert "eval " not in setup
+          print("Linux package integrity: OK")
+          PY
+          tar -tzf "$linux_tar" >/dev/null
 
   windows-agent:
     name: Windows agent validation

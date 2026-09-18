@@ -831,6 +831,58 @@
       if (!currentProjects.length) addText(projectsList, "p", "Проектов пока нет.", "muted");
     }
 
+    function sectionStorageKey(section, index) {
+      return "citadelArchitectSection:" + (section.id || "section-" + index);
+    }
+
+    function setSectionCollapsed(section, collapsed, persist = true) {
+      const header = section._collapseHeader;
+      const button = section._collapseButton;
+      if (!header || !button) return;
+      for (const child of [...section.children]) {
+        if (child === header) continue;
+        child.classList.toggle("section-collapsed-child", collapsed);
+      }
+      button.textContent = collapsed ? "+" : "−";
+      button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      section.classList.toggle("section-collapsed", collapsed);
+      if (persist) localStorage.setItem(section._collapseKey, collapsed ? "1" : "0");
+    }
+
+    function expandSection(section) {
+      if (section?._collapseHeader) setSectionCollapsed(section, false);
+    }
+
+    function installSectionCollapsers() {
+      const sections = [...dashboard.querySelectorAll(":scope > section")];
+      sections.forEach((section, index) => {
+        if (section.dataset.collapseReady === "1") return;
+        const heading = section.querySelector(":scope > h2, :scope > .section-head h2, :scope > .ops-head h2");
+        if (!heading) return;
+        const header = [...section.children].find((child) => child === heading || child.contains(heading));
+        if (!header) return;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "section-toggle-button";
+        button.setAttribute("aria-label", "Свернуть или открыть раздел");
+        heading.classList.add("section-toggle-title");
+        heading.appendChild(button);
+        section._collapseHeader = header;
+        section._collapseButton = button;
+        section._collapseKey = sectionStorageKey(section, index);
+        section.dataset.collapseReady = "1";
+        const saved = localStorage.getItem(section._collapseKey);
+        const defaultCollapsed = section.id !== "liveOperations";
+        const collapsed = saved === null ? defaultCollapsed : saved === "1";
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setSectionCollapsed(section, !section.classList.contains("section-collapsed"));
+        });
+        setSectionCollapsed(section, collapsed, false);
+      });
+    }
+
     function renderProjectReport(project) {
       activeProjectId = project.project_id;
       projectReportTitle.textContent = `Отчёт проекта · ${project.title}`;
@@ -849,7 +901,7 @@
       const total = Number(execution.total_work_items || 0);
       const percent = Number(execution.progress_percent ?? (total ? Math.round((done / total) * 100) : 0));
       projectReportProgress.textContent =
-        `${done}/${total} · ${percent}% · assigned ${Number(counts.assigned || 0)} · running ${Number(counts.running || 0)} · failed ${Number(counts.failed || 0)}`;
+        `${done}/${total} · ${percent}% · Hub workers ${Number(execution.ready_workers_at_creation ?? project.worker_count ?? 0)}/${Number(execution.desired_workers ?? total)} ready · assigned ${Number(counts.assigned || 0)} · running ${Number(counts.running || 0)} · failed ${Number(counts.failed || 0)}`;
       if (execution.state === "planned") {
         projectReportStatus.textContent = "План готов. Controller ждёт живую ноду с агентом project_text и загруженной LM Studio-моделью. Как только такая нода опросит Hub, блоки автоматически перейдут в Assigned и Running.";
         projectReportStatus.className = "status";
@@ -906,6 +958,7 @@
       }
       if (!(project.work_items || []).length) addText(projectReportWorkItems, "p", "Рабочих блоков нет.", "muted");
       projectReportCard.classList.remove("hidden");
+      expandSection(projectReportCard);
     }
 
     async function openProjectReport(projectId) {
@@ -938,7 +991,7 @@
       addText(projectCreatedSummary, "div", `Hub выбрал ноды: ${nodes.join("; ") || "нет"}`, "project-created-line");
       const roles = (project.specializations || []).map((role) => roleDisplayName(role.id || role.role_name, role.label));
       addText(projectCreatedSummary, "div", `Специализации: ${roles.join(", ") || "нет"}`, "project-created-line");
-      addText(projectCreatedSummary, "div", `Рабочих блоков: ${project.work_item_count} · состояние: ${project.status}`, "project-created-line");
+      addText(projectCreatedSummary, "div", `Hub решил: ${project.desired_workers || project.work_item_count} workers · реально готовы: ${project.worker_count} · рабочих блоков: ${project.work_item_count} · состояние: ${project.status}`, "project-created-line");
       const note = addText(projectCreatedSummary, "div", "План создан. Когда нода с загруженной LM Studio-моделью опросит Controller, блоки автоматически перейдут в Assigned → Running → Completed, а результаты появятся в живом отчёте.", "execution-note");
       note.setAttribute("role", "status");
       projectCreatedOverlay.classList.remove("hidden");
@@ -1779,6 +1832,7 @@
       if (host) window.open(`https://${host}`, "_blank", "noopener,noreferrer");
     });
     updateSshPanel();
+    installSectionCollapsers();
     applyLanguage(lang);
     updateSiteClock();
     setInterval(updateSiteClock, 15000);

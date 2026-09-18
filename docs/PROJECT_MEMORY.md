@@ -436,3 +436,26 @@ Implementation is being delivered in the same reviewed LM Studio release branch 
 - The executable `project_text` worker and live project progress/final-report pipeline are released as agent 0.3.8.
 - This version bump is required so existing 0.3.7 nodes are recognized as outdated and receive the signed project-worker update instead of being incorrectly treated as current.
 
+## 2026-09-18 — Adaptive Hub workers, collapsible UI, Linux package
+
+Architect requirements:
+
+- Every major Architect/Hub category must be collapsible with a visible `+` / `−` control; collapse state is remembered locally.
+- Project `Plan` is not a terminal state. The report must show Assigned/Running/Completed/Failed, percentage progress, block results, and a combined final result.
+- Hub chooses the number of workers from task complexity instead of always using one node:
+  - simple focused task may use 1 worker;
+  - tasks needing independent implementation/verification may use 2;
+  - cybersecurity, multi-perspective comparison, or research-style tasks normally use 3;
+  - large tasks may scale higher, bounded by 6 work blocks per planning pass and actual ready-node capacity.
+- Worker allocation counts only real project-ready nodes: live `project_text` capability + LM Studio installed + server running + a loaded model.
+- A ready node should prefer its own assigned blocks and must not steal blocks assigned to another ready node. It may recover a block from an unavailable/non-ready node.
+- The regression suite contains five Hub questions spanning mathematics, programming, defensive cybersecurity, philosophy, and safe lab web-security testing. It verifies final answer aggregation and worker-count variation `[1,2,3,3,3]`.
+- Linux must have a verified installer/package comparable to Windows:
+  - SHA-256-pinned agent files;
+  - private venv;
+  - doctor/self-test/enroll/live-cycle;
+  - explicit systemd service;
+  - repeatable repair/update preserving identity;
+  - no arbitrary remote shell.
+- Android is a separate lightweight-client/node track. The full desktop/headless LM Studio runtime is not assumed available on Android; do not present Android LM Studio installation as supported unless upstream adds it.
+

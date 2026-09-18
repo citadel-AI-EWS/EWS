@@ -737,26 +737,99 @@ function splitProjectText(text, maxChars = 2000) {
   return blocks.length ? blocks : [text];
 }
 
+function projectWorkerProfile(text, requestedRoles = []) {
+  const value = String(text || "").toLowerCase();
+  const roles = [];
+  const add = (role) => { if (!roles.includes(role)) roles.push(role); };
+
+  const isMath = /(math|equation|formula|algebra|geometry|calculus|probab|combin|математ|формул|уравнен|алгебр|геометр|вероятност|сумм[ау]|числ)/.test(value);
+  const isCode = /(python|javascript|typescript|java|code|coding|program|algorithm|api|sql|database|html|css|код|программ|алгоритм|функц|скрипт|база данных)/.test(value);
+  const isCyber = /(cyber|security|secure|vulnerab|threat|malware|phishing|sql injection|xss|pentest|hacking|hack|кибер|безопас|уязв|угроз|фишинг|инъекц|взлом)/.test(value);
+  const isPhilosophy = /(philosoph|ethic|utilitarian|deontolog|morality|moral|философ|этик|утилитар|деонтолог|морал)/.test(value);
+  const asksCompare = /(compare|versus|pros and cons|strength|weakness|сравн|плюс|минус|сильн|слаб)/.test(value);
+  const asksVerify = /(verify|check|prove|validate|test|провер|доказ|валид|тест)/.test(value);
+  const asksResearch = /(research|source|evidence|investig|search|исслед|источник|доказательств|поиск)/.test(value);
+
+  let desired = 1;
+  if (isCyber) {
+    desired = 3;
+    add("security_analyst"); add("verifier"); add("researcher");
+  } else if (isPhilosophy) {
+    desired = asksCompare ? 3 : 2;
+    add("researcher"); add("planner"); add("verifier");
+  } else if (isCode) {
+    desired = 2;
+    add("programmer"); add("verifier"); add("researcher");
+  } else if (isMath) {
+    desired = asksVerify ? 2 : 1;
+    add("mathematician"); add("verifier"); add("reporter");
+  } else {
+    add(classifyWorkRole(text));
+    add("verifier");
+    add("reporter");
+  }
+
+  if (asksCompare || asksResearch) desired = Math.max(desired, 2);
+  if (String(text || "").length > 700) desired = Math.max(desired, 3);
+  if (String(text || "").length > 1800) desired = Math.max(desired, 4);
+  for (const role of requestedRoles) add(role);
+  desired = Math.max(desired, Math.min(requestedRoles.length, 6));
+  desired = Math.max(1, Math.min(6, desired));
+  return { desired_workers: desired, suggested_roles: roles.slice(0, desired) };
+}
+
+function projectFinalText(sections) {
+  return (sections || [])
+    .filter((item) => typeof item?.content === "string" && item.content.trim())
+    .map((item) => `#${item.sequence_no} ${item.role_name}\n${item.content.trim()}`)
+    .join("\n\n");
+}
+
 function planProjectWork(text, requestedRoles = []) {
-  const items = splitProjectText(text).map((taskText, index) => ({
+  const sourceText = String(text || "").trim();
+  const profile = projectWorkerProfile(sourceText, requestedRoles);
+  const blocks = splitProjectText(sourceText);
+  const items = blocks.map((taskText, index) => ({
     sequence_no: index + 1,
-    role_name: classifyWorkRole(taskText),
+    role_name: blocks.length === 1 && index === 0
+      ? (profile.suggested_roles[0] || classifyWorkRole(taskText))
+      : classifyWorkRole(taskText),
     task_text: taskText,
     role_source: "hub_recommended"
   }));
-  const existing = new Set(items.map((item) => item.role_name));
-  for (const roleName of requestedRoles) {
-    if (existing.has(roleName)) continue;
-    const focusText = text.length > 1850 ? text.slice(0, 1850) + "…" : text;
+
+  const usedRoles = new Set(items.map((item) => item.role_name));
+  const roleQueue = [...profile.suggested_roles, ...requestedRoles];
+  for (const roleName of roleQueue) {
+    if (items.length >= profile.desired_workers && requestedRoles.every((role) => usedRoles.has(role))) break;
+    if (usedRoles.has(roleName)) continue;
+    const prefix = roleName === "verifier"
+      ? "Independently verify the reasoning and identify any errors or unsupported claims."
+      : roleName === "researcher"
+        ? "Analyze the question from an evidence/research perspective and identify relevant facts or assumptions."
+        : roleName === "reporter"
+          ? "Produce a concise synthesis suitable for the final project report."
+          : `Analyze this task from the ${roleName} specialization.`;
     items.push({
       sequence_no: items.length + 1,
       role_name: roleName,
-      task_text: `Role focus: ${roleName}\n\n${focusText}`,
-      role_source: "architect_added"
+      task_text: `${prefix}\n\nOriginal task:\n${sourceText}`,
+      role_source: requestedRoles.includes(roleName) ? "architect_added" : "hub_recommended"
     });
-    existing.add(roleName);
+    usedRoles.add(roleName);
   }
-  return items;
+
+  while (items.length < profile.desired_workers) {
+    const roleName = profile.suggested_roles[items.length % Math.max(1, profile.suggested_roles.length)] || "planner";
+    items.push({
+      sequence_no: items.length + 1,
+      role_name: roleName,
+      task_text: `Provide an independent ${roleName} analysis of the original task.\n\nOriginal task:\n${sourceText}`,
+      role_source: "hub_recommended"
+    });
+  }
+
+  return items.map((item, index) => ({ ...item, sequence_no: index + 1 }));
 }
 
 function projectMissionId(workItemId) {
@@ -787,20 +860,47 @@ async function materializeProjectWorkForNode(env, nodeId) {
     node.loaded_model.length > 0;
   if (!ready) return 0;
 
-  const planned = await env.DB.prepare(`
-    SELECT w.work_item_id, w.project_id, w.sequence_no, w.role_name, w.task_text,
-      p.title AS project_title
-    FROM project_work_items AS w
-    JOIN architect_projects AS p ON p.project_id = w.project_id
-    WHERE w.status = 'planned'
-      AND p.status IN ('planned','running')
-    ORDER BY CASE WHEN w.node_id = ? THEN 0 ELSE 1 END,
-      datetime(p.created_at) ASC, w.sequence_no ASC
-    LIMIT 8
-  `).bind(nodeId).all();
+  const [planned, readyNodesQuery] = await Promise.all([
+    env.DB.prepare(`
+      SELECT w.work_item_id, w.project_id, w.sequence_no, w.role_name, w.task_text,
+        w.node_id AS preferred_node_id, p.title AS project_title
+      FROM project_work_items AS w
+      JOIN architect_projects AS p ON p.project_id = w.project_id
+      WHERE w.status = 'planned'
+        AND p.status IN ('planned','running')
+      ORDER BY CASE WHEN w.node_id = ? THEN 0 WHEN w.node_id IS NULL THEN 1 ELSE 2 END,
+        datetime(p.created_at) ASC, w.sequence_no ASC
+      LIMIT 32
+    `).bind(nodeId).all(),
+    env.DB.prepare(`
+      SELECT n.node_id, n.capabilities_json, ai.installed, ai.loaded_model, ai.server_running
+      FROM nodes AS n
+      LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
+      WHERE n.status = 'online'
+        AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes')
+    `).all()
+  ]);
+  const readyNodeIds = new Set(
+    (readyNodesQuery.results || [])
+      .filter((candidate) => {
+        const candidateCapabilities = safeJson(candidate.capabilities_json, []);
+        return Array.isArray(candidateCapabilities) &&
+          candidateCapabilities.includes("project_text") &&
+          Number(candidate.installed || 0) === 1 &&
+          Number(candidate.server_running || 0) === 1 &&
+          typeof candidate.loaded_model === "string" &&
+          candidate.loaded_model.length > 0;
+      })
+      .map((candidate) => candidate.node_id)
+  );
 
   let created = 0;
-  for (const work of planned.results || []) {
+  const candidates = (planned.results || []).filter((work) =>
+    !work.preferred_node_id ||
+    work.preferred_node_id === nodeId ||
+    !readyNodeIds.has(work.preferred_node_id)
+  ).slice(0, 2);
+  for (const work of candidates) {
     const missionId = projectMissionId(work.work_item_id);
     const assignmentId = projectAssignmentId(work.work_item_id);
     const payloadJson = JSON.stringify({
@@ -935,6 +1035,7 @@ async function architectCheckProject(request, env) {
     recommended_roles: Object.keys(recommendedRolePlan),
     requested_roles: requestedRoles,
     selected_roles: Object.keys(selectedRolePlan),
+    desired_workers: projectWorkerProfile(taskText, requestedRoles).desired_workers,
     role_plan: selectedRolePlan,
     work_preview: plannedWork.map(({ sequence_no, role_name, role_source }) => ({
       sequence_no,
@@ -957,14 +1058,28 @@ async function architectCreateProject(request, env) {
     throw new ApiError(409, "project_checks_failed");
   }
 
+  await ensureNodeAiStorage(env);
   const nodesQuery = await env.DB.prepare(
-    "SELECT n.node_id, n.hostname, n.agent_version, nn.node_number FROM nodes AS n " +
+    "SELECT n.node_id, n.hostname, n.agent_version, n.capabilities_json, nn.node_number, " +
+    "ai.installed AS lmstudio_installed, ai.loaded_model AS lmstudio_loaded_model, " +
+    "ai.server_running AS lmstudio_server_running " +
+    "FROM nodes AS n " +
     "LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id " +
+    "LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id " +
     "WHERE n.status = 'online' AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes') " +
     "ORDER BY n.last_seen_at DESC, n.node_id ASC"
   ).all();
-  const nodes = nodesQuery.results || [];
-  if (!nodes.length) throw new ApiError(409, "no_available_nodes");
+  const onlineNodes = nodesQuery.results || [];
+  if (!onlineNodes.length) throw new ApiError(409, "no_available_nodes");
+  const nodes = onlineNodes.filter((node) => {
+    const capabilities = safeJson(node.capabilities_json, []);
+    return Array.isArray(capabilities) &&
+      capabilities.includes("project_text") &&
+      Number(node.lmstudio_installed || 0) === 1 &&
+      Number(node.lmstudio_server_running || 0) === 1 &&
+      typeof node.lmstudio_loaded_model === "string" &&
+      node.lmstudio_loaded_model.length > 0;
+  });
 
   const recommendedWork = planProjectWork(taskText);
   const recommendedRoles = new Set(recommendedWork.map((item) => item.role_name));
@@ -1001,16 +1116,16 @@ async function architectCreateProject(request, env) {
 
   const workItems = [];
   for (let index = 0; index < plannedWork.length; index += 1) {
-    const node = nodes[index % workerCount];
+    const node = workerCount > 0 ? nodes[index % workerCount] : null;
     const planned = plannedWork[index];
     const workItemId = "work_" + crypto.randomUUID();
     workItems.push({
       work_item_id: workItemId,
       sequence_no: planned.sequence_no,
       role_name: planned.role_name,
-      node_id: node.node_id,
-      hostname: node.hostname,
-      node_number: node.node_number || null,
+      node_id: node?.node_id || null,
+      hostname: node?.hostname || null,
+      node_number: node?.node_number || null,
       task_text: planned.task_text,
       role_source: planned.role_source,
       status: "planned"
@@ -1019,7 +1134,7 @@ async function architectCreateProject(request, env) {
       env.DB.prepare(
         "INSERT INTO project_work_items (work_item_id, project_id, sequence_no, node_id, role_name, task_text, status) " +
         "VALUES (?, ?, ?, ?, ?, ?, 'planned')"
-      ).bind(workItemId, projectId, planned.sequence_no, node.node_id, planned.role_name, planned.task_text)
+      ).bind(workItemId, projectId, planned.sequence_no, node?.node_id || null, planned.role_name, planned.task_text)
     );
   }
   await env.DB.batch(statements);
@@ -1031,6 +1146,7 @@ async function architectCreateProject(request, env) {
       status: "planned",
       architect_approved: true,
       worker_count: workerCount,
+      desired_workers: projectWorkerProfile(taskText, requestedRoles).desired_workers,
       work_item_count: plannedWork.length,
       role_plan: rolePlanSummary(plannedWork),
       recommended_roles: [...recommendedRoles],
@@ -1160,12 +1276,7 @@ async function architectGetProject(request, env, projectId) {
       status: item.status
     }));
   const finalReportReady = total > 0 && finished === total;
-  const finalResultText = finalReportReady
-    ? finalSections
-        .filter((item) => item.content)
-        .map((item) => `#${item.sequence_no} ${item.role_name}\n${item.content}`)
-        .join("\n\n")
-    : null;
+  const finalResultText = finalReportReady ? projectFinalText(finalSections) : null;
   return json({
     ok: true,
     project: {
@@ -1178,6 +1289,8 @@ async function architectGetProject(request, env, projectId) {
       execution: {
         state: executionState,
         counts,
+        desired_workers: projectWorkerProfile(project.task_text, specializations.filter((item) => item.source === "architect_added").map((item) => item.id)).desired_workers,
+        ready_workers_at_creation: Number(project.worker_count || 0),
         completed_work_items: counts.completed,
         total_work_items: total,
         final_report_ready: finalReportReady,
@@ -3277,6 +3390,13 @@ async function handleApi(request, env, url) {
 
   return json({ ok: false, error: "not_found" }, 404);
 }
+
+export {
+  classifyWorkRole,
+  projectWorkerProfile,
+  planProjectWork,
+  projectFinalText
+};
 
 export default {
   async fetch(request, env) {

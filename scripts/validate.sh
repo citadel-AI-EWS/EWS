@@ -53,6 +53,8 @@ for required in (
     '"lmstudio_model_get"',
     '"lmstudio_model_load"',
     "agent/lmstudio",
+    "installHubCollapsers",
+    "panelToggle",
 ):
     if required not in hub:
         raise SystemExit(f"required real Hub capability missing: {required}")
@@ -85,6 +87,8 @@ for required in (
     "projectVoiceButton",
     "missionVoiceButton",
     "reportsDisclosure",
+    "installSectionCollapsers",
+    "section-toggle-button",
 ):
     if required not in architect:
         raise SystemExit(f"required Architect Live Operations capability missing: {required}")
@@ -128,6 +132,22 @@ for forbidden in (
 
 if "https://citadel-ai.init1.workers.dev" not in setup:
     raise SystemExit("Windows installer Controller URL is missing")
+
+linux_setup = Path("agent/setup_linux.sh").read_text(encoding="utf-8")
+linux_entry = Path("agent/Install Linux Node.sh").read_text(encoding="utf-8")
+for required in (
+    "https://citadel-ai.init1.workers.dev",
+    "systemctl",
+    "citadel_node_v2.py",
+    "self-test",
+    "enroll",
+    "sha256sum",
+):
+    if required not in linux_setup:
+        raise SystemExit(f"Linux installer capability missing: {required}")
+for forbidden in ("curl |", "wget |", "eval ", "nohup "):
+    if forbidden in linux_setup or forbidden in linux_entry:
+        raise SystemExit(f"unsafe Linux installer pattern detected: {forbidden}")
 PY
 
 node --check /tmp/ews-site.js
@@ -154,6 +174,7 @@ node tests/presence-storage.mjs
 node tests/update-integrity.mjs
 node tests/review-backlog-guards.mjs
 node tests/architect-ux-guards.mjs
+node tests/hub-five-questions.mjs
 
 python - <<'PY'
 from pathlib import Path
@@ -191,7 +212,7 @@ for column in ("report_type", "report_json", "report_sha256", "report_size_bytes
 print("Fresh D1 migration chain: OK")
 PY
 
-bash -n controller_deploy.sh scripts/build_site.sh scripts/package_controller.sh scripts/validate.sh
+bash -n controller_deploy.sh scripts/build_site.sh scripts/package_controller.sh scripts/validate.sh agent/setup_linux.sh "agent/Install Linux Node.sh"
 cfn-lint controller_template.yaml project_stack.yaml
 
 artifact="$(mktemp --suffix=.zip)"
