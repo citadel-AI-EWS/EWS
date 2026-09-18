@@ -319,3 +319,27 @@ Test-branch changes:
 Release note:
 
 - existing 0.3.4 nodes must first take the normal signed remote update to 0.3.5 before the new stop command becomes available.
+
+
+## 2026-09-18 — Correction: Architect text is a real project input
+
+Operator correction:
+
+- The large Architect text field is not a note attached to diagnostics.
+- It is the real project request that must travel through the project intake pipeline.
+- The four automatic gates are, in order:
+  1. source allowlisting;
+  2. validation;
+  3. deduplication;
+  4. safety classification.
+- Architect approval is a separate gate after those four checks.
+- After approval, Hub/Controller creates a project, builds work items and automatically selects available Python nodes.
+- The Hub decides worker allocation from one node up to the currently available eligible pool; large-scale operation must be implemented through queue/shard architecture rather than a browser loop.
+- Architect now has a visible **Python / Создать проект** workflow showing the four checks and the resulting Hub allocation.
+- **Обновить все агенты** is a server-side rollout: one Architect action records the target signed release; each outdated node materializes its own signed update command on the next command poll.
+- A 10-minute completed-update guard prevents an updated node from receiving the same rollout twice before its next heartbeat refreshes agent_version.
+
+Current execution boundary:
+
+- Project intake, four-gate approval, storage, work-item creation and node allocation are real.
+- Generic arbitrary-text project execution is not falsely reported as complete: work items are currently planned in `project_work_items`; execution requires an explicit reviewed project-worker capability rather than turning Architect text into arbitrary shell/code.
