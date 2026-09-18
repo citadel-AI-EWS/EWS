@@ -172,7 +172,13 @@ def create_project_stack(project_id: str, task: str) -> Dict[str, Any]:
 
 
 def stack_status(stack_name: str) -> Dict[str, Any]:
-    stacks = cfn.describe_stacks(StackName=stack_name).get("Stacks", [])
+    try:
+        stacks = cfn.describe_stacks(StackName=stack_name).get("Stacks", [])
+    except Exception as exc:
+        message = str(exc).lower()
+        if "does not exist" in message or "not exist" in message:
+            return {"stack_status": "DELETE_COMPLETE"}
+        raise
     if not stacks:
         return {"stack_status": "UNKNOWN"}
     s = stacks[0]
@@ -246,9 +252,22 @@ def cleanup_expired_projects(now: datetime | None = None) -> Dict[str, int]:
     while True:
         page = table.scan(**scan_kwargs)
         for item in page.get("Items", []):
-            if item.get("status") in {"TERMINATING", "TERMINATED"}:
+            status = item.get("status")
+            if status == "TERMINATED":
                 continue
             try:
+                if status == "TERMINATING":
+                    current_stack_status = stack_status(item["stack_name"]).get("stack_status")
+                    if current_stack_status in {"DELETE_COMPLETE", "UNKNOWN"}:
+                        table.update_item(
+                            Key={"pk": item["pk"]},
+                            UpdateExpression="SET #status = :status, updated_at = :updated",
+                            ExpressionAttributeNames={"#status": "status"},
+                            ExpressionAttributeValues={":status": "TERMINATED", ":updated": utc_now()},
+                        )
+                        continue
+                    if current_stack_status == "DELETE_IN_PROGRESS":
+                        continue
                 cfn.delete_stack(StackName=item["stack_name"], RoleARN=PROJECT_STACK_ROLE_ARN)
                 table.update_item(
                     Key={"pk": item["pk"]},
@@ -331,9 +350,10 @@ def lambda_handler(event, context):
         if state["controller_state"] != "ENABLED":
             return response(409, {"ok": False, "error": "controller_paused", "message": "Start Controller first"}, event)
         body = parse_json_body(event)
-        task = str(body.get("task", "")).strip()
-        if not task:
+        raw_task = body.get("task")
+        if not isinstance(raw_task, str) or not raw_task.strip():
             return response(400, {"ok": False, "error": "task_required"}, event)
+        task = raw_task.strip()
         return response(200, {
             "ok": True,
             "run_id": "plan-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
@@ -352,9 +372,10 @@ def lambda_handler(event, context):
         if state["controller_state"] != "ENABLED":
             return response(409, {"ok": False, "error": "controller_paused", "message": "Start Controller before Apply"}, event)
         body = parse_json_body(event)
-        task = str(body.get("task", "")).strip()
-        if not task:
+        raw_task = body.get("task")
+        if not isinstance(raw_task, str) or not raw_task.strip():
             return response(400, {"ok": False, "error": "task_required"}, event)
+        task = raw_task.strip()
         raw_budget = body.get("budget_limit_usd", 1.0)
         if isinstance(raw_budget, bool):
             return response(400, {"ok": False, "error": "invalid_budget", "message": "budget_limit_usd must be a finite positive number"}, event)
@@ -385,17 +406,18 @@ def lambda_handler(event, context):
         if ttl_hours < 1 or ttl_hours > 24:
             return response(400, {"ok": False, "error": "invalid_ttl", "message": "ttl_hours must be an integer from 1 to 24"}, event)
         project_id = project_id_now()
-        created = create_project_stack(project_id, task)
         created_at = datetime.now(timezone.utc)
         expires_at = created_at + timedelta(hours=ttl_hours)
+        stack_name = safe_stack_name(project_id)
         item = {
             "pk": project_key(project_id),
             "project_id": project_id,
             "task": task[:2000],
-            "status": "PROVISIONING",
-            "stack_name": created["stack_name"],
-            "stack_id": created["stack_id"],
+            "status": "PENDING_PROVISION",
+            "stack_name": stack_name,
+            "stack_id": "",
             "created_at": created_at.isoformat(),
+            "updated_at": created_at.isoformat(),
             "expires_at": expires_at.isoformat(),
             "expires_at_epoch": int(expires_at.timestamp()),
             "ttl_hours": ttl_hours,
@@ -407,7 +429,35 @@ def lambda_handler(event, context):
             "estimated_first_hour_usd": first_hour,
             "pricing_snapshot_date": PRICING_CATALOG["snapshot_date"],
         }
+
+        # Persist the cleanup-discoverable project record before CloudFormation can
+        # create billable resources. A later write failure therefore cannot orphan
+        # a stack outside the scheduled TTL cleanup path.
         save_project(item)
+        try:
+            created = create_project_stack(project_id, task)
+        except Exception:
+            item["status"] = "PROVISION_FAILED"
+            item["updated_at"] = utc_now()
+            try:
+                save_project(item)
+            except Exception:
+                log.exception("failed to record provisioning failure", extra={"project_id": project_id})
+            raise
+
+        item["status"] = "PROVISIONING"
+        item["stack_name"] = created["stack_name"]
+        item["stack_id"] = created["stack_id"]
+        item["updated_at"] = utc_now()
+        try:
+            save_project(item)
+        except Exception:
+            try:
+                cfn.delete_stack(StackName=created["stack_name"], RoleARN=PROJECT_STACK_ROLE_ARN)
+            except Exception:
+                log.exception("failed to compensate stack after project persistence failure", extra={"project_id": project_id})
+            raise
+
         log.info(json.dumps({"event": "project_apply", **item}))
         return response(202, {"ok": True, **item}, event)
 
