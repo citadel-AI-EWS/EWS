@@ -336,8 +336,9 @@ Security follow-up:
 - Treat any credential embedded in the legacy archive as compromised if it might still be valid; rotate/revoke it outside the repository.
 - Never commit the raw legacy archive, raw LM Studio logs, service-account key material, or the legacy config to EWS.
 
-Verification state:
+Verification:
 
 - code/diff review completed;
-- sanitized database seed records all 650 structured runs and observed timing summaries;
-- PR #51 remains draft and must not be merged until the current CI run passes.
+- sanitized database seed records all 650 structured runs and observed average/median timing summaries;
+- PR #51 CI run 137 passed all gates: Linux validation, Cloudflare build/check, Bandit, Windows agent validation and agent-package integrity;
+- PR #51 remains draft for deliberate review; `main` is unchanged.
