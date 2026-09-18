@@ -174,7 +174,7 @@
     const $ = (id) => document.getElementById(id);
     const nodesEl = $("nodes"), tokenInput = $("architectToken"), loginButton = $("loginButton"), logoutButton = $("logoutButton");
     const searchInput = $("nodeSearch"), nodePicker = $("nodePicker"), updateAllButton = $("updateAllButton"), pauseAllButton = $("pauseAllButton"), exportButton = $("exportButton");
-    let architectToken = "", releaseVersion = "", lmstudioConfig = null, lmstudioNodeId = "", lmstudioModelSource = "catalog", modelSearchTimer = null, hybridNodeId = "", hybridMode = "python", hybridPollTimer = null, lastOverview = null, lastPresence = [], lastPublic = [], refreshBusy = false, lang = localStorage.getItem("citadelHubLang") || "ru";
+    let architectToken = "", releaseVersion = "", lmstudioConfig = null, lmstudioNodeId = "", lmstudioModelSource = "catalog", modelSearchTimer = null, lmstudioPollTimer = null, hybridNodeId = "", hybridMode = "python", hybridPollTimer = null, lastOverview = null, lastPresence = [], lastPublic = [], refreshBusy = false, lang = localStorage.getItem("citadelHubLang") || "ru";
 
     const I18N = {
       ru:{eyebrow:"REAL-TIME NODE CONTROL",title:"Живой центр управления.",subtitle:"Только реальные зарегистрированные компьютеры. Никаких демонстрационных счётчиков: состояние, IP, команды и обновления берутся из Controller.",secureAccess:"Architect secure access",tokenLabel:"Architect token",secureMode:"Защищённый режим",logout:"Выйти",authHint:"IP, управление узлами и обновление агента доступны только после авторизации.",online:"Online",onlineSub:"active nodes now",registered:"Registered",registeredSub:"real enrolled nodes",attention:"Требуют внимания",attentionSub:"offline / degraded nodes",release:"Release",releaseSub:"signed agent release",mode:"Mode",modeSub:"privileged data locked",refresh:"Обновить сейчас",export:"Экспорт snapshot",updateAll:"Обновить все",pauseAll:"Пауза всем",nodesTitle:"Nodes / компьютеры",sshNotReady:"Secure tunnel not configured",sshHost:"Cloudflare Access hostname",sshUser:"SSH user",copyCommand:"Копировать команду",browserSsh:"Browser SSH",sshNotice:"SSH не открывает порт 22 в интернет. Нужны Cloudflare Tunnel + Access и работающий SSH server на node.",architectPanel:"Architect panel",logs:"Logs"},
@@ -224,6 +224,10 @@
     function lmstudioNode(){
       return (lastOverview?.nodes||[]).find(n=>n.node_id===lmstudioNodeId)||null;
     }
+    function aiStateFresh(node){
+      const t=parseTimestamp(node?.lmstudio_live_checked_at||node?.lmstudio_updated_at);
+      return Number.isFinite(t)&&Date.now()-t<=120000;
+    }
     function hybridNode(){
       return (lastOverview?.nodes||[]).find(n=>n.node_id===hybridNodeId)||null;
     }
@@ -258,8 +262,9 @@
       $("lmstudioNode").textContent=(node.node_number?"CITADEL Node "+node.node_number:(node.hostname||node.node_id))+" · "+(node.hostname||"—");
       if(lmstudioConfig?.github_url)$("lmstudioGithub").href=lmstudioConfig.github_url;
       const pending=lmstudioPending(node.node_id);
-      const installed=Number(node.lmstudio_installed||0)===1;
-      const liveServer=Number(node.lmstudio_server_running||0)===1;
+      const verified=aiStateFresh(node);
+      const installed=verified&&Number(node.lmstudio_installed||0)===1;
+      const liveServer=verified&&Number(node.lmstudio_server_running||0)===1;
       const currentAgent=Boolean(releaseVersion&&node.agent_version===releaseVersion);
       const loaded=node.lmstudio_loaded_model||"";
       $("lmstudioStatus").textContent=installed
@@ -271,11 +276,35 @@
       $("lmstudioGet").disabled=!installed||!liveServer||pending||freshness(node)!=="online";
       $("lmstudioLoad").disabled=!installed||!liveServer||pending||freshness(node)!=="online";
     }
+    function startLmstudioPolling(){
+      clearInterval(lmstudioPollTimer);
+      lmstudioPollTimer=setInterval(refreshLmstudioState,1200);
+      refreshLmstudioState();
+    }
+    async function refreshLmstudioState(){
+      if(!lmstudioNodeId||$("lmstudioPanel").hidden||!architectToken)return;
+      try{
+        const data=await api("/api/v1/architect/nodes/"+encodeURIComponent(lmstudioNodeId)+"/ai-state");
+        const node=(lastOverview?.nodes||[]).find(n=>n.node_id===lmstudioNodeId);
+        if(node&&data.ai){
+          Object.assign(node,{
+            lmstudio_installed:data.ai.installed,lmstudio_selected_model:data.ai.selected_model,
+            lmstudio_loaded_model:data.ai.loaded_model,lmstudio_server_running:data.ai.server_running,
+            lmstudio_last_action:data.ai.last_action,lmstudio_progress_phase:data.ai.progress_phase,
+            lmstudio_progress_current:data.ai.progress_current,lmstudio_progress_total:data.ai.progress_total,
+            lmstudio_progress_bytes:data.ai.progress_bytes,lmstudio_progress_total_bytes:data.ai.progress_total_bytes,
+            lmstudio_progress_detail:data.ai.progress_detail,lmstudio_download_job_id:data.ai.download_job_id,
+            lmstudio_live_checked_at:data.ai.live_checked_at,lmstudio_updated_at:data.ai.updated_at,
+            lmstudio_load_config:data.ai.load_config
+          });
+        }
+        syncLmstudioPanel();renderCurrent();
+      }catch{}
+    }
     async function openLmstudio(node){
       lmstudioNodeId=node.node_id; lmstudioModelSource="catalog";
       $("lmstudioModel").value=node.lmstudio_selected_model||"";
-      setPanelOpen("lmstudioPanel",true);
-      syncLmstudioPanel();
+      setPanelOpen("lmstudioPanel",true);syncLmstudioPanel();startLmstudioPolling();
       if(node.agent_version===releaseVersion&&!lmstudioPending(node.node_id)){
         try{await sendLmstudio("lmstudio_probe",false)}catch{}
       }
@@ -381,7 +410,7 @@
       el.querySelector(".os").textContent=`${esc(node.os_name)} ${esc(node.os_version)}`;
       el.querySelector(".arch").textContent=esc(node.architecture);
       el.querySelector(".agent").textContent=`${current?"✓":"✕"} ${esc(node.agent_version)}${releaseVersion?current?" · CURRENT":` · target ${releaseVersion}`:""}`;
-      const aiReady=Number(node.lmstudio_installed||0)===1&&Number(node.lmstudio_server_running||0)===1;
+      const aiReady=aiStateFresh(node)&&Number(node.lmstudio_installed||0)===1&&Number(node.lmstudio_server_running||0)===1;
       el.querySelector(".ai").textContent=aiReady?`✓ LM Studio · ${node.lmstudio_loaded_model||"no model"}`:"—";
       el.querySelector(".seen").textContent=`${relativeTime(node.last_seen_at)} · ${esc(node.last_seen_at)}`;
       const reason=el.querySelector(".offlineReason");
@@ -515,7 +544,7 @@
       }catch(e){toast("Rollout failed",e.message,"bad");syncUpdateAllState()}
     }
 
-    $("lmstudioClose").addEventListener("click",()=>{lmstudioNodeId="";setPanelOpen("lmstudioPanel",false)});
+    $("lmstudioClose").addEventListener("click",()=>{clearInterval(lmstudioPollTimer);lmstudioPollTimer=null;lmstudioNodeId="";setPanelOpen("lmstudioPanel",false)});
     $("lmstudioInstall").addEventListener("click",()=>sendLmstudio("lmstudio_install").catch(e=>toast("LM Studio",e.message,"bad")));
     $("lmstudioProbe").addEventListener("click",()=>sendLmstudio("lmstudio_probe").catch(e=>toast("LM Studio",e.message,"bad")));
     $("lmstudioGet").addEventListener("click",()=>sendLmstudio("lmstudio_model_get").catch(e=>toast("LM Studio",e.message,"bad")));
@@ -526,7 +555,7 @@
     $("hybridSend").addEventListener("click",sendHybrid);
 
     loginButton.addEventListener("click",async()=>{const value=tokenInput.value.trim();if(!value)return toast("Token required","Enter Architect token","bad");architectToken=value;tokenInput.value="";await refresh()});
-    logoutButton.addEventListener("click",async()=>{lmstudioNodeId="";setPanelOpen("lmstudioPanel",false);closeHybrid();architectToken="";releaseVersion="";lastOverview=null;lastPresence=[];tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;await refreshPublic()});
+    logoutButton.addEventListener("click",async()=>{clearInterval(lmstudioPollTimer);lmstudioPollTimer=null;lmstudioNodeId="";setPanelOpen("lmstudioPanel",false);closeHybrid();architectToken="";releaseVersion="";lastOverview=null;lastPresence=[];tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;await refreshPublic()});
     $("refreshButton").addEventListener("click",refresh);
     searchInput.addEventListener("input",()=>{nodePicker.value="";renderCurrent()});
     nodePicker.addEventListener("change",()=>{searchInput.value=nodePicker.value;renderCurrent()});
