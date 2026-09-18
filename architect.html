@@ -456,9 +456,10 @@
     }
 
     function renderLiveCharts(nodes) {
-      const health = nodes.map(nodeHealth);
+      const operational = nodes.filter((node) => node.status !== "revoked");
+      const health = operational.map(nodeHealth);
       const healthy = health.filter((item) => item.healthy).length;
-      const total = nodes.length;
+      const total = operational.length;
       const pct = total ? Math.round(healthy / total * 100) : 0;
       fleetRing.style.setProperty("--pct", String(pct));
       fleetPct.textContent = `${pct}%`;
