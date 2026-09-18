@@ -102,6 +102,7 @@ node tests/telemetry-storage.mjs
 node tests/presence-storage.mjs
 node tests/update-integrity.mjs
 node tests/review-backlog-guards.mjs
+node tests/architect-ux-guards.mjs
 
 python - <<'PY'
 from pathlib import Path
