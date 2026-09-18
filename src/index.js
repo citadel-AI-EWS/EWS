@@ -791,7 +791,9 @@ function planProjectWork(text, requestedRoles = []) {
   const blocks = splitProjectText(sourceText);
   const items = blocks.map((taskText, index) => ({
     sequence_no: index + 1,
-    role_name: classifyWorkRole(taskText),
+    role_name: blocks.length === 1 && index === 0
+      ? (profile.suggested_roles[0] || classifyWorkRole(taskText))
+      : classifyWorkRole(taskText),
     task_text: taskText,
     role_source: "hub_recommended"
   }));
@@ -800,7 +802,7 @@ function planProjectWork(text, requestedRoles = []) {
   const roleQueue = [...profile.suggested_roles, ...requestedRoles];
   for (const roleName of roleQueue) {
     if (items.length >= profile.desired_workers && requestedRoles.every((role) => usedRoles.has(role))) break;
-    if (usedRoles.has(roleName) && items.length >= profile.desired_workers) continue;
+    if (usedRoles.has(roleName)) continue;
     const prefix = roleName === "verifier"
       ? "Independently verify the reasoning and identify any errors or unsupported claims."
       : roleName === "researcher"
