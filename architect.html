@@ -48,7 +48,7 @@
         <div class="stat"><b id="nodeCount">0</b><span>всего узлов</span></div>
         <div class="stat"><b id="onlineCount">0</b><span>узлов online</span></div>
         <div class="stat"><b id="missionCount">0</b><span>миссий</span></div>
-        <div class="stat"><b id="reportCount">0</b><span>полных отчётов</span></div>
+        <div class="stat"><b id="reportCount">0</b><span>диагностических отчётов</span></div>
         <div class="stat hidden"><b id="sessionCount">0</b><span>контрольных точек</span></div>
       </div>
 
@@ -217,6 +217,7 @@
     let currentNodes = [];
     let currentCommands = [];
     let currentPresence = [];
+    let currentReleaseVersion = "";
     let currentReports = [];
     let activeReportId = null;
     let reportNextOffset = null;
@@ -351,7 +352,10 @@
       resumeButton.disabled = unavailable || pending || node.status !== "paused";
       updateButton.disabled = unavailable || pending;
       restartButton.disabled = unavailable || pending;
-      stopButton.disabled = unavailable || pending;
+      stopButton.disabled = unavailable || pending || node.agent_version !== currentReleaseVersion;
+      stopButton.title = node && node.agent_version !== currentReleaseVersion
+        ? `Сначала обновите агент до ${currentReleaseVersion || "текущей версии"}`
+        : "";
       rollbackButton.disabled = unavailable || pending;
       rebootButton.disabled = unavailable || pending;
       shutdownButton.disabled = unavailable || pending;
@@ -614,14 +618,19 @@
 
     async function loadDashboard() {
       setStatus("Загружаю данные…");
-      const [data, reports, sessions, storage, presence] = await Promise.all([
+      const [data, reports, sessions, storage, presence, release] = await Promise.all([
         api("/api/v1/architect/overview"),
         api("/api/v1/architect/reports?limit=50&offset=0"),
         api("/api/v1/architect/sessions?limit=30&offset=0"),
         api("/api/v1/architect/storage"),
-        api("/api/v1/architect/presence")
+        api("/api/v1/architect/presence"),
+        api("/api/v1/architect/release")
       ]);
       currentPresence = presence.presence || [];
+      currentReleaseVersion = release.release?.version || "";
+      updateButton.textContent = currentReleaseVersion
+        ? `Обновить агент → ${currentReleaseVersion}`
+        : "Обновить агент дистанционно";
       document.getElementById("nodeCount").textContent = data.counts.nodes;
       document.getElementById("onlineCount").textContent = data.counts.online_nodes;
       document.getElementById("missionCount").textContent = data.counts.missions;
