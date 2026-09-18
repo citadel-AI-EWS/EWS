@@ -32,12 +32,12 @@
     .heroCard{padding:28px;position:relative;overflow:hidden;min-height:245px}.heroCard::after{content:"";position:absolute;width:340px;height:340px;border:1px solid #55d7ff17;border-radius:50%;right:-120px;top:-110px;box-shadow:0 0 0 50px #55d7ff08,0 0 0 100px #55d7ff05}.eyebrow{font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--cyan);font-weight:800}.hero h1{font-size:clamp(42px,6vw,84px);line-height:.9;letter-spacing:-.055em;margin:18px 0 16px;max-width:900px}.hero p{max-width:760px;color:var(--muted);line-height:1.65;margin:0}.heroStatus{display:flex;gap:10px;flex-wrap:wrap;margin-top:24px}.statusPill{padding:8px 11px;border:1px solid var(--line2);border-radius:10px;background:#0a1b22;color:#b7d1d9;font-size:12px}.statusPill.ok{color:#96f3c5;border-color:#1e6149}.statusPill.warn{color:#ffd999;border-color:#5e4c21}.statusPill.bad{color:#ff9da2;border-color:#6b2d33}
     .auth{padding:18px;display:flex;flex-direction:column;gap:12px}.authTitle{display:flex;justify-content:space-between;align-items:center;gap:12px}.authTitle strong{font-size:14px}.authTitle span{font-size:11px;color:var(--muted)}.field label{display:block;color:var(--muted);font-size:12px;margin-bottom:7px}.field input{width:100%;border:1px solid var(--line2);border-radius:12px;background:#041016;color:var(--text);padding:12px 13px;outline:none}.field input:focus{border-color:#3d8fa1;box-shadow:0 0 0 3px #55d7ff10}.btnrow{display:flex;gap:8px;flex-wrap:wrap}.btn{border:1px solid var(--line2);border-radius:11px;background:#0d222c;color:var(--text);padding:10px 12px;cursor:pointer;transition:.18s ease}.btn:hover{transform:translateY(-1px);border-color:#3e8294;background:#102a35}.btn.good{background:#0c3025;border-color:#236346;color:#9bf1c7}.btn.cyan{background:#0b2932;border-color:#225f6e;color:#9feaff}.btn.warn{background:#32280e;border-color:#65501b;color:#ffe0a0}.btn.danger{background:#321419;border-color:#6f2d35;color:#ffb0b4}.btn:disabled{opacity:.38;cursor:not-allowed;transform:none}.micro{font-size:11px;color:#6f8d98;line-height:1.5}
     .metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:0 0 18px}.metric{padding:16px;min-height:102px;animation:rise .28s ease both}.metricLabel{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#6f909d}.metricValue{font-size:32px;font-weight:850;letter-spacing:-.035em;margin-top:10px}.metricSub{font-size:11px;color:var(--muted);margin-top:5px}
-    .toolbar{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:12px;align-items:center;margin:0 0 18px}.search{position:relative}.search input{width:100%;padding:12px 14px 12px 40px;background:#07141b;border:1px solid var(--line);border-radius:14px;color:var(--text);outline:none}.search::before{content:"⌕";position:absolute;left:14px;top:9px;color:var(--cyan);font-size:20px}.actionsTop{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+    .toolbar{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:12px;align-items:center;margin:0 0 18px}.search{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px}.search input{width:100%;padding:12px 14px 12px 40px;background:#07141b;border:1px solid var(--line);border-radius:14px;color:var(--text);outline:none}.search select{max-width:230px;padding:11px 34px 11px 11px;background:#07141b;border:1px solid var(--line2);border-radius:14px;color:var(--text);outline:none;cursor:pointer}.search::before{content:"⌕";position:absolute;left:14px;top:9px;color:var(--cyan);font-size:20px;z-index:1}.actionsTop{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
     .layout{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(320px,.65fr);gap:18px}.panel{padding:18px;min-width:0}.panelHead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.panelHead h2{margin:0;font-size:16px}.panelHead span{font-size:11px;color:var(--muted)}
     .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}.node{padding:16px;position:relative;overflow:hidden;animation:rise .32s ease both}.node::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:#35515e}.node.online::before{background:var(--green);box-shadow:0 0 20px #5af2b055}.node.stale::before{background:var(--amber)}.node.revoked::before{background:var(--red)}.nodeTop{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}.nodeName{font-size:17px;font-weight:800;overflow-wrap:anywhere}.nodeId{font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:#60808c;margin-top:4px;overflow-wrap:anywhere}.badge{font-size:10px;border:1px solid var(--line2);border-radius:999px;padding:5px 7px;color:#a9c3cc;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap}.badge.online{border-color:#24684e;color:#8cf0bf}.badge.stale{border-color:#6b5520;color:#ffd487}.badge.revoked{border-color:#6b2e35;color:#ff9ba0}.nodeMetrics{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}.nodeMetric{border:1px solid #17313d;border-radius:12px;padding:10px;background:#071219}.nodeMetric span{display:block;color:#6e8d99;font-size:10px;text-transform:uppercase;letter-spacing:.08em}.nodeMetric b{display:block;margin-top:5px;font-size:16px}.bar{height:4px;background:#102730;border-radius:999px;overflow:hidden;margin-top:7px}.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--green),var(--cyan));border-radius:inherit;transition:width .35s ease}.nodeMeta{display:grid;grid-template-columns:98px 1fr;gap:5px 10px;font-size:12px;line-height:1.45}.nodeMeta dt{color:#678795}.nodeMeta dd{margin:0;color:#b7ccd4;overflow-wrap:anywhere}.nodeActions{display:flex;gap:7px;flex-wrap:wrap;margin-top:14px}.nodeActions .btn{padding:8px 10px;font-size:11px}
     .empty{grid-column:1/-1;border:1px dashed #24434f;border-radius:16px;padding:32px;text-align:center;color:var(--muted);background:#071119}.sideStack{display:flex;flex-direction:column;gap:18px}.timeline{display:flex;flex-direction:column;gap:8px;max-height:380px;overflow:auto;padding-right:4px}.event{border:1px solid #17313d;border-radius:12px;padding:10px;background:#071219}.eventTop{display:flex;justify-content:space-between;gap:8px;font-size:11px}.eventTop strong{color:#cfe0e5}.eventTop time{color:#627f8a}.eventText{font-size:11px;color:#7f9ca7;margin-top:5px;overflow-wrap:anywhere}.event.ok{border-color:#1d4d3b}.event.warn{border-color:#5a481e}
     .sshPanel{padding:18px}.sshState{display:flex;align-items:center;gap:9px;margin:8px 0 14px}.light{width:9px;height:9px;border-radius:50%;background:#55656b}.light.ready{background:var(--green);box-shadow:0 0 14px var(--green)}.sshGrid{display:grid;grid-template-columns:1fr 1fr;gap:9px}.sshGrid .field:first-child{grid-column:1/-1}.cmd{margin-top:10px;padding:11px;border:1px solid #17333e;border-radius:12px;background:#030b0f;color:#9feaff;font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere;min-height:54px}.notice{padding:12px;border-radius:12px;border:1px solid #2c4622;background:#15200e;color:#d7e8b8;font-size:11px;line-height:1.55;margin-top:10px}.notice.warn{border-color:#5e4b20;background:#211b0b;color:#ffe0a0}
-    .footer{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:20px;color:#5f7b86;font-size:11px}.footer a{color:#83dfff;text-decoration:none}.toast{position:fixed;right:22px;bottom:22px;z-index:50;min-width:260px;max-width:420px;border:1px solid var(--line2);background:#07141bea;border-radius:14px;padding:12px 14px;box-shadow:var(--shadow);transform:translateY(20px);opacity:0;pointer-events:none;transition:.2s ease}.toast.show{transform:none;opacity:1}.toast.ok{border-color:#27634c}.toast.bad{border-color:#6b3038}.toast strong{display:block;font-size:12px}.toast span{display:block;font-size:11px;color:var(--muted);margin-top:4px}
+    .site-clock{position:fixed;right:12px;bottom:10px;z-index:45;padding:7px 10px;border:1px solid var(--line2);border-radius:10px;background:#07141bea;color:#a9c3cc;font:12px/1.2 ui-monospace,SFMono-Regular,monospace;box-shadow:var(--shadow)}[dir="rtl"] .site-clock{right:auto;left:12px}.footer{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:20px;color:#5f7b86;font-size:11px}.footer a{color:#83dfff;text-decoration:none}.toast{position:fixed;right:22px;bottom:22px;z-index:50;min-width:260px;max-width:420px;border:1px solid var(--line2);background:#07141bea;border-radius:14px;padding:12px 14px;box-shadow:var(--shadow);transform:translateY(20px);opacity:0;pointer-events:none;transition:.2s ease}.toast.show{transform:none;opacity:1}.toast.ok{border-color:#27634c}.toast.bad{border-color:#6b3038}.toast strong{display:block;font-size:12px}.toast span{display:block;font-size:11px;color:var(--muted);margin-top:4px}
     @media(max-width:1100px){.metrics{grid-template-columns:repeat(3,1fr)}.layout,.hero{grid-template-columns:1fr}.topbar{position:relative;top:0}}@media(max-width:720px){.shell{width:min(100% - 18px,1480px);padding-top:9px}.topbar{grid-template-columns:1fr}.toptools{justify-content:flex-start}.heroCard{padding:20px}.metrics{grid-template-columns:1fr 1fr}.toolbar{grid-template-columns:1fr}.actionsTop{justify-content:flex-start}.grid{grid-template-columns:1fr}.sshGrid{grid-template-columns:1fr}.sshGrid .field:first-child{grid-column:auto}.nodeMeta{grid-template-columns:86px 1fr}.footer{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
@@ -85,7 +85,7 @@
     </section>
 
     <section class="toolbar">
-      <div class="search"><input id="nodeSearch" type="search" autocomplete="off" placeholder="Search hostname, node ID, IP, OS…" aria-label="Search nodes"></div>
+      <div class="search"><input id="nodeSearch" type="search" autocomplete="off" placeholder="Search hostname, node ID, IP, OS…" aria-label="Search nodes"><select id="nodePicker" aria-label="Choose node"><option value="">▼ Все ноды</option></select></div>
       <div class="actionsTop">
         <button id="refreshButton" class="btn cyan" type="button" data-i18n="refresh">Обновить сейчас</button>
         <button id="exportButton" class="btn" type="button" disabled data-i18n="export">Экспорт snapshot</button>
@@ -118,12 +118,13 @@
 
     <footer class="footer"><span id="footerState">Auto-refresh every 10 seconds · real controller data only</span><span><a href="/architect/" data-i18n="architectPanel">Architect panel</a> · <a href="/architect/logs/" data-i18n="logs">Logs</a></span></footer>
   </main>
+  <div id="siteClock" class="site-clock" aria-label="Current date and time">—</div>
   <div id="toast" class="toast"><strong id="toastTitle"></strong><span id="toastText"></span></div>
 
   <script>
     const $ = (id) => document.getElementById(id);
     const nodesEl = $("nodes"), tokenInput = $("architectToken"), loginButton = $("loginButton"), logoutButton = $("logoutButton");
-    const searchInput = $("nodeSearch"), updateAllButton = $("updateAllButton"), pauseAllButton = $("pauseAllButton"), exportButton = $("exportButton");
+    const searchInput = $("nodeSearch"), nodePicker = $("nodePicker"), updateAllButton = $("updateAllButton"), pauseAllButton = $("pauseAllButton"), exportButton = $("exportButton");
     let architectToken = "", releaseVersion = "", lastOverview = null, lastPresence = [], lastPublic = [], refreshBusy = false, lang = localStorage.getItem("citadelHubLang") || "ru";
 
     const I18N = {
@@ -151,13 +152,24 @@
     function offlineReason(node){
       const state=freshness(node);
       if(state==="online")return"";
-      if(state==="revoked")return lang==="he"?"ה-node בוטל ב-Controller.":lang==="en"?"The node is revoked in the Controller.":"Узел отозван в Controller.";
       const seen=esc(node.last_seen_at);
+      if(node.last_command_type==="system_shutdown"&&node.last_command_status==="completed"){
+        return lang==="he"?"פקודת ה-Controller האחרונה שאושרה הייתה כיבוי המחשב.":lang==="en"?"The last confirmed Controller command was host shutdown.":"Последняя подтверждённая команда Controller — выключение ПК.";
+      }
+      if(node.last_command_type==="stop"&&node.last_command_status==="completed"){
+        return lang==="he"?"ה-agent נעצר בפקודת Controller חתומה.":lang==="en"?"The agent was stopped by a signed Controller command.":"Агент был остановлен подписанной командой Controller.";
+      }
+      if(node.last_command_type==="system_reboot"&&node.last_command_status==="completed"){
+        return lang==="he"?"אתחול אושר; ממתינים לחזרת heartbeat.":lang==="en"?"A reboot was confirmed; waiting for heartbeat to return.":"Перезагрузка была подтверждена; ждём возврата heartbeat.";
+      }
+      if(["cycle_error","command_failed","command_failure_ack_failed"].includes(node.last_event_type)){
+        return lang==="he"?`אירוע הבעיה האחרון: ${node.last_event_type} · ${node.last_event_at||"—"}`:lang==="en"?`Last problem event: ${node.last_event_type} · ${node.last_event_at||"—"}`:`Последнее проблемное событие: ${node.last_event_type} · ${node.last_event_at||"—"}`;
+      }
       return lang==="he"
-        ? `אין heartbeat מאז ${seen}. הסיבה המקומית המדויקת אינה ידועה עד שה-node יחזור לקשר.`
+        ? `אין heartbeat מאז ${seen}. ייתכן חשמל, רשת, אתחול Windows או עצירת agent; הסיבה המדויקת תתברר לאחר חזרת הקשר.`
         : lang==="en"
-          ? `No heartbeat since ${seen}. The exact local cause is unavailable until the node reconnects.`
-          : `Heartbeat не поступает с ${seen}. Точная локальная причина неизвестна до восстановления связи.`;
+          ? `No heartbeat since ${seen}. Power, network, Windows restart, or an agent stop are possible; exact cause is known only after reconnect.`
+          : `Heartbeat не поступает с ${seen}. Возможны питание, сеть, перезапуск Windows или остановка агента; точную причину узнаем после возврата связи.`;
     }
 
     function secureCard(node,presence,commands){
@@ -166,7 +178,7 @@
       el.dataset.search=`${node.hostname||""} ${node.node_id||""} ${ip} ${node.os_name||""} ${node.os_version||""} ${node.agent_version||""}`.toLowerCase();
       const pending=commands.some(c=>c.node_id===node.node_id&&["pending","accepted"].includes(c.status));
       const current=releaseVersion&&node.agent_version===releaseVersion;
-      el.innerHTML=`<div class="nodeTop"><div><div class="nodeName"></div><div class="nodeId"></div></div><span class="badge ${state}"></span></div><div class="nodeMetrics"><div class="nodeMetric"><span>CPU</span><b class="cpu"></b><div class="bar"><i class="cpuBar"></i></div></div><div class="nodeMetric"><span>RAM</span><b class="ram"></b><div class="bar"><i class="ramBar"></i></div></div></div><dl class="nodeMeta"><dt>IP</dt><dd class="ip"></dd><dt>OS</dt><dd class="os"></dd><dt>ARCH</dt><dd class="arch"></dd><dt>AGENT</dt><dd class="agent"></dd><dt>LAST SEEN</dt><dd class="seen"></dd></dl><div class="offlineReason micro"></div><div class="nodeActions"></div>`;
+      el.innerHTML=`<div class="nodeTop"><div><div class="nodeName"></div><div class="nodeId"></div></div><span class="badge ${state}"></span></div><div class="nodeMetrics"><div class="nodeMetric"><span>CPU</span><b class="cpu"></b><div class="bar"><i class="cpuBar"></i></div></div><div class="nodeMetric"><span>RAM</span><b class="ram"></b><div class="bar"><i class="ramBar"></i></div></div></div><dl class="nodeMeta"><dt>IP</dt><dd class="ip"></dd><dt>LAN</dt><dd class="lan"></dd><dt>OS</dt><dd class="os"></dd><dt>ARCH</dt><dd class="arch"></dd><dt>AGENT</dt><dd class="agent"></dd><dt>LAST SEEN</dt><dd class="seen"></dd></dl><div class="offlineReason micro"></div><div class="nodeActions"></div>`;
       el.querySelector(".nodeName").textContent=node.hostname||node.node_id;
       el.querySelector(".nodeId").textContent=node.node_id;
       el.querySelector(".badge").textContent=state;
@@ -175,9 +187,10 @@
       el.querySelector(".cpuBar").style.width=`${pct(node.cpu_percent)}%`;
       el.querySelector(".ramBar").style.width=`${pct(node.memory_percent)}%`;
       el.querySelector(".ip").textContent=ip;
+      el.querySelector(".lan").textContent=node.lan_ipv4||"—";
       el.querySelector(".os").textContent=`${esc(node.os_name)} ${esc(node.os_version)}`;
       el.querySelector(".arch").textContent=esc(node.architecture);
-      el.querySelector(".agent").textContent=`${esc(node.agent_version)}${releaseVersion?current?" · CURRENT":` · target ${releaseVersion}`:""}`;
+      el.querySelector(".agent").textContent=`${current?"✓":"✕"} ${esc(node.agent_version)}${releaseVersion?current?" · CURRENT":` · target ${releaseVersion}`:""}`;
       el.querySelector(".seen").textContent=`${relativeTime(node.last_seen_at)} · ${esc(node.last_seen_at)}`;
       const reason=el.querySelector(".offlineReason");
       reason.textContent=offlineReason(node);
@@ -194,13 +207,45 @@
       add(lang==="he"?"אתחל מחשב":lang==="en"?"Reboot host":"Перезагрузить ПК","warn",()=>sendCommand(node.node_id,"system_reboot"),!live||pending);
       add(lang==="he"?"כבה מחשב":lang==="en"?"Shutdown host":"Выключить ПК","danger",()=>sendCommand(node.node_id,"system_shutdown"),!live||pending);
       add(lang==="he"?"חזרה לגרסה קודמת":lang==="en"?"Rollback":"Откатить","danger",()=>sendCommand(node.node_id,"rollback"),!live||pending);
+      if(!live){
+        add(
+          node.wake_available?(lang==="he"?"הער מחשב":lang==="en"?"Wake PC":"Разбудить ПК"):(lang==="he"?"Wake לא זמין":lang==="en"?"Wake unavailable":"Wake недоступен"),
+          "cyan",
+          ()=>wakeNode(node),
+          !node.wake_available||pending
+        );
+      }
       if(presence?.public_ip)add(lang==="he"?"העתק IP":lang==="en"?"Copy IP":"Копировать IP","",()=>navigator.clipboard.writeText(presence.public_ip).then(()=>toast("IP",presence.public_ip)));
       add("SSH","",()=>focusSsh(node),!live||!safeHost($("sshHost").value));
       return el
     }
 
     function render(items){const q=searchInput.value.trim().toLowerCase();const visible=q?items.filter(el=>el.dataset.search.includes(q)):items;nodesEl.replaceChildren(...visible);if(!visible.length){const empty=document.createElement("div");empty.className="empty";empty.textContent=q?(lang==="he"?"לא נמצאו nodes.":lang==="en"?"No nodes match the filter.":"По фильтру ничего не найдено."):(lang==="he"?"אין nodes רשומים כרגע.":lang==="en"?"No registered nodes yet.":"Зарегистрированных узлов пока нет.");nodesEl.append(empty)}$("nodeSummary").textContent=`${visible.length} visible`}
-    function renderCurrent(){if(architectToken&&lastOverview){const p=new Map(lastPresence.map(x=>[x.node_id,x]));render((lastOverview.nodes||[]).map(n=>secureCard(n,p.get(n.node_id),lastOverview.commands||[])))}else render((lastPublic||[]).map(publicCard))}
+    function refreshNodePicker(){
+      const previous=nodePicker.value;
+      const nodes=architectToken?(lastOverview?.nodes||[]):lastPublic;
+      nodePicker.replaceChildren();
+      const all=document.createElement("option");all.value="";all.textContent=lang==="he"?"▼ כל ה-nodes":lang==="en"?"▼ All nodes":"▼ Все ноды";nodePicker.appendChild(all);
+      const pmap=new Map(lastPresence.map((item)=>[item.node_id,item]));
+      for(const node of nodes){
+        const option=document.createElement("option");
+        const secure=Boolean(node.node_id);
+        const label=secure
+          ? `${node.node_number?"A"+node.node_number:(node.hostname||node.node_id)} · ${node.hostname||"—"} · ${node.node_id} · ${pmap.get(node.node_id)?.public_ip||node.lan_ipv4||"—"} · ${node.os_name||"—"}`
+          : `${node.display_name||"Node "+node.node_number} · v${node.agent_version||"—"} · ${node.status||"—"}`;
+        option.value=secure?(node.node_id||node.hostname||label):(node.display_name||String(node.node_number));
+        option.textContent=label;
+        nodePicker.appendChild(option);
+      }
+      if([...nodePicker.options].some((option)=>option.value===previous))nodePicker.value=previous;
+    }
+
+    function updateSiteClock(){
+      const locale=lang==="he"?"he-IL":lang==="en"?"en-GB":"ru-RU";
+      $("siteClock").textContent=new Intl.DateTimeFormat(locale,{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}).format(new Date());
+    }
+
+    function renderCurrent(){refreshNodePicker();if(architectToken&&lastOverview){const p=new Map(lastPresence.map(x=>[x.node_id,x]));render((lastOverview.nodes||[]).map(n=>secureCard(n,p.get(n.node_id),lastOverview.commands||[])))}else render((lastPublic||[]).map(publicCard))}
 
     function attentionCount(nodes){return (nodes||[]).filter(n=>freshness(n)!=="online"&&n.status!=="revoked").length}
     function syncUpdateAllState(){
@@ -246,6 +291,16 @@
     }
     async function refresh(){if(refreshBusy)return;refreshBusy=true;$("networkChip").innerHTML='NETWORK <strong>SYNC</strong>';try{if(architectToken)await refreshSecure();else await refreshPublic();$("networkChip").innerHTML='NETWORK <strong>ONLINE</strong>'}catch(error){$("networkChip").innerHTML='NETWORK <strong>ERROR</strong>';$("controllerStatus").textContent=`CONTROLLER — ${error.message}`;$("controllerStatus").className="statusPill bad";if(architectToken&&["architect_authentication_required","invalid_architect_token"].includes(error.message)){architectToken="";tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;toast("Authentication failed",error.message,"bad");await refreshPublic()}else setState(`Controller error: ${error.message}`)}finally{refreshBusy=false}}
 
+    async function wakeNode(node){
+      if(!node?.wake_available)return toast("Wake-on-LAN",lang==="he"?"אין relay חי או MAC/LAN עדיין לא ידועים":lang==="en"?"No live relay, or MAC/LAN is not known yet":"Нет живой relay-ноды или MAC/LAN ещё неизвестны","bad");
+      if(!confirm(lang==="he"?`להעיר את ${node.hostname||node.node_id} דרך ${node.wake_relay_node_id}?`:lang==="en"?`Wake ${node.hostname||node.node_id} through ${node.wake_relay_node_id}?`:`Разбудить ${node.hostname||node.node_id} через ${node.wake_relay_node_id}?`))return;
+      try{
+        const data=await api(`/api/v1/architect/nodes/${encodeURIComponent(node.node_id)}/wake`,{method:"POST"});
+        toast("Wake-on-LAN",`${data.wake.relay_node_id} → ${node.node_id}; waiting for heartbeat`);
+        await refresh();
+      }catch(e){toast("Wake failed",e.message,"bad")}
+    }
+
     async function sendCommand(nodeId,type){const labels={update:"update",pause:"pause",resume:"resume",restart:"restart agent",rollback:"rollback",uninstall:"disconnect",system_reboot:"REBOOT HOST",system_shutdown:"SHUTDOWN HOST"};let confirmation;if(type==="system_reboot"||type==="system_shutdown"){const expected=type==="system_reboot"?"REBOOT":"SHUTDOWN";confirmation=prompt(`${labels[type]}: ${nodeId}\nType ${expected} to confirm.`)||"";if(confirmation.trim()!==expected)return}else if(!confirm(`${labels[type]||type}: ${nodeId}?`))return;try{const body={command_type:type};if(confirmation)body.confirmation=confirmation.trim();await api(`/api/v1/architect/nodes/${encodeURIComponent(nodeId)}/commands`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});toast("Command queued",`${type} → ${nodeId}`);await refresh()}catch(e){toast("Command failed",e.message,"bad")}}
     async function sendDiagnostic(nodeId){try{await api("/api/v1/architect/missions",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({node_id:nodeId,title:`Hub diagnostics ${new Date().toISOString()}`,mission_type:"system_inventory",priority:100,expires_in_hours:1})});toast("Diagnostics queued",nodeId);await refresh()}catch(e){toast("Diagnostics failed",e.message,"bad")}}
     async function bulkCommand(type){const nodes=(lastOverview?.nodes||[]).filter(n=>n.status!=="revoked"&&(type!=="pause"||n.status!=="paused"));if(!nodes.length)return toast("Nothing to do","No eligible nodes");if(!confirm(`${type.toUpperCase()} ${nodes.length} nodes?`))return;let ok=0,failed=0;for(const n of nodes){try{await api(`/api/v1/architect/nodes/${encodeURIComponent(n.node_id)}/commands`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({command_type:type})});ok++}catch{failed++}}toast("Bulk command",`${ok} queued · ${failed} skipped/failed`,failed?"bad":"ok");await refresh()}
@@ -267,7 +322,8 @@
     loginButton.addEventListener("click",async()=>{const value=tokenInput.value.trim();if(!value)return toast("Token required","Enter Architect token","bad");architectToken=value;tokenInput.value="";await refresh()});
     logoutButton.addEventListener("click",async()=>{architectToken="";releaseVersion="";lastOverview=null;lastPresence=[];tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;await refreshPublic()});
     $("refreshButton").addEventListener("click",refresh);
-    searchInput.addEventListener("input",renderCurrent);
+    searchInput.addEventListener("input",()=>{nodePicker.value="";renderCurrent()});
+    nodePicker.addEventListener("change",()=>{searchInput.value=nodePicker.value;renderCurrent()});
     updateAllButton.addEventListener("click",startSignedRollout);
     pauseAllButton.addEventListener("click",()=>bulkCommand("pause"));
     exportButton.addEventListener("click",()=>{if(!lastOverview)return;const snapshot={exported_at:new Date().toISOString(),counts:lastOverview.counts,nodes:lastOverview.nodes,presence:lastPresence,release_version:releaseVersion};const blob=new Blob([JSON.stringify(snapshot,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`citadel-hub-${new Date().toISOString().replace(/[:.]/g,"-")}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);toast("Snapshot exported","Real controller data only")});
@@ -276,7 +332,12 @@
     function updateSsh(){const host=safeHost(sshHost.value),user=safeUser(sshUser.value);sessionStorage.setItem("citadelSshHost",host);sessionStorage.setItem("citadelSshUser",user);const ready=Boolean(host&&user);$("sshLight").classList.toggle("ready",ready);$("sshMode").textContent=ready?"CONFIGURED LOCALLY":"NOT CONFIGURED";$("sshStateText").textContent=ready?(lang==="he"?"יעד SSH הוגדר מקומית; זמינות המנהרה עדיין לא אומתה":lang==="en"?"SSH target configured locally; tunnel reachability is not yet verified":"SSH цель настроена локально; доступность Tunnel ещё не подтверждена"):I18N[lang].sshNotReady;const cmd=ready?`ssh -o ProxyCommand="cloudflared access ssh --hostname %h" ${user}@${host}`:"cloudflared Access hostname is required.";$("sshCommand").textContent=cmd;$("copySshButton").disabled=!ready;$("openSshButton").disabled=!ready;renderCurrent()}
     sshHost.addEventListener("input",updateSsh);sshUser.addEventListener("input",updateSsh);$("copySshButton").addEventListener("click",()=>navigator.clipboard.writeText($("sshCommand").textContent).then(()=>toast("SSH","Command copied")));$("openSshButton").addEventListener("click",()=>{const host=safeHost(sshHost.value);if(host)window.open(`https://${host}`,"_blank","noopener,noreferrer")});function focusSsh(node){sshUser.focus();document.querySelector(".sshPanel").scrollIntoView({behavior:"smooth",block:"center"});toast("SSH",`${node.hostname||node.node_id}: configure Access hostname + user`)}
 
-    setInterval(()=>{$("clock").textContent=new Date().toLocaleTimeString([], {hour12:false});renderCurrent()},1000);applyLanguage(lang);updateSsh();refresh();setInterval(refresh,10000);
+    function updateClocks(){
+      const now=new Date();
+      $("clock").textContent=now.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",hour12:false});
+      updateSiteClock();
+    }
+    updateClocks();setInterval(updateClocks,15000);applyLanguage(lang);updateSsh();refresh();setInterval(refresh,10000);
   </script>
 </body>
 </html>
