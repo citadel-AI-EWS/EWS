@@ -403,3 +403,36 @@ Release decision:
 - Agent release 0.3.7 introduces bounded signed commands `lmstudio_install`, `lmstudio_model_get`, and `lmstudio_model_load`.
 - Arbitrary remote command execution remains prohibited.
 
+## 2026-09-18 — Project Plan must execute, report progress, and produce a final result
+
+Operator found that real projects created from Architect text remained permanently in `Plan`.
+
+Root cause:
+
+- `architectCreateProject` stored `project_work_items` as `planned` but created no executable node assignments.
+- The UI could therefore show a plan and selected nodes, but no actual progress, work result, or final report.
+
+Required behavior:
+
+- `Plan` is only the first state. Project work must advance through `Assigned → Running → Completed/Failed`.
+- Existing projects already stuck in `planned` must be recoverable automatically; the Architect must not recreate them.
+- A live node with the `project_text` capability and a loaded/running LM Studio model may claim planned project blocks.
+- Project text execution is bounded local inference through `127.0.0.1:1234/v1/chat/completions`; it does not enable shell, host modification, credential access, or arbitrary remote command execution.
+- Controller must persist each real node result against the original project work item.
+- Project report UI must show:
+  - completed/total;
+  - percentage;
+  - assigned/running/failed counts;
+  - per-block result and model;
+  - automatic refresh while the report is open;
+  - a combined final project result when all blocks reach a terminal state.
+- Projects with failed blocks may finish with a failure status while still preserving available completed-block outputs.
+
+Implementation is being delivered in the same reviewed LM Studio release branch so project execution and per-node model control stay consistent.
+
+### Release correction — project worker is 0.3.8
+
+- LM Studio installation/model controls remain the historical 0.3.7 release.
+- The executable `project_text` worker and live project progress/final-report pipeline are released as agent 0.3.8.
+- This version bump is required so existing 0.3.7 nodes are recognized as outdated and receive the signed project-worker update instead of being incorrectly treated as current.
+

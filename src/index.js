@@ -25,17 +25,17 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_model_get", "lmstudio_model_load"]);
 const POWER_COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.7",
+  version: "0.3.8",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "a58bad76cb41abfee35e23edd9abfa58091dba3669fc9779ba9fc36fa61ac91a"
+      sha256: "2426a6552ff5909e18abc53768dd734696b2d79b9723fe3d1d68e8de3595b304"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "9061a0b567e0c1fcc9c6f99d1916326322d6de8e47826df30ddde925c8d9ac5c"
+      sha256: "596bf53cffb589cdcd002d65ac76e03630e38e707639473cd8e844566bc197c9"
     }
   ]
 });
@@ -759,6 +759,123 @@ function planProjectWork(text, requestedRoles = []) {
   return items;
 }
 
+function projectMissionId(workItemId) {
+  return "mission_" + workItemId;
+}
+
+function projectAssignmentId(workItemId) {
+  return "assignment_" + workItemId;
+}
+
+async function materializeProjectWorkForNode(env, nodeId) {
+  await Promise.all([ensureProjectStorage(env), ensureNodeAiStorage(env)]);
+  const node = await env.DB.prepare(`
+    SELECT n.node_id, n.status, n.last_seen_at, n.capabilities_json,
+      ai.installed, ai.loaded_model, ai.server_running
+    FROM nodes AS n
+    LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
+    WHERE n.node_id = ?
+  `).bind(nodeId).first();
+  if (!node || node.status !== "online") return 0;
+  const capabilities = safeJson(node.capabilities_json, []);
+  const ready =
+    Array.isArray(capabilities) &&
+    capabilities.includes("project_text") &&
+    Number(node.installed || 0) === 1 &&
+    Number(node.server_running || 0) === 1 &&
+    typeof node.loaded_model === "string" &&
+    node.loaded_model.length > 0;
+  if (!ready) return 0;
+
+  const planned = await env.DB.prepare(`
+    SELECT w.work_item_id, w.project_id, w.sequence_no, w.role_name, w.task_text,
+      p.title AS project_title
+    FROM project_work_items AS w
+    JOIN architect_projects AS p ON p.project_id = w.project_id
+    WHERE w.status = 'planned'
+      AND p.status IN ('planned','running')
+    ORDER BY CASE WHEN w.node_id = ? THEN 0 ELSE 1 END,
+      datetime(p.created_at) ASC, w.sequence_no ASC
+    LIMIT 8
+  `).bind(nodeId).all();
+
+  let created = 0;
+  for (const work of planned.results || []) {
+    const missionId = projectMissionId(work.work_item_id);
+    const assignmentId = projectAssignmentId(work.work_item_id);
+    const payloadJson = JSON.stringify({
+      project_id: work.project_id,
+      work_item_id: work.work_item_id,
+      role_name: work.role_name,
+      task_text: work.task_text
+    });
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const results = await env.DB.batch([
+      env.DB.prepare(`
+        UPDATE project_work_items
+        SET node_id = ?, status = 'assigned', updated_at = CURRENT_TIMESTAMP
+        WHERE work_item_id = ? AND status = 'planned'
+      `).bind(nodeId, work.work_item_id),
+      env.DB.prepare(`
+        INSERT OR IGNORE INTO missions (
+          mission_id, title, role_name, mission_type, payload_json,
+          priority, status, expires_at
+        )
+        SELECT ?, ?, ?, 'project_text', ?, 40, 'assigned', ?
+        WHERE EXISTS (
+          SELECT 1 FROM project_work_items
+          WHERE work_item_id = ? AND node_id = ? AND status = 'assigned'
+        )
+      `).bind(
+        missionId,
+        `Project: ${work.project_title} · block ${work.sequence_no}`,
+        work.role_name,
+        payloadJson,
+        expiresAt,
+        work.work_item_id,
+        nodeId
+      ),
+      env.DB.prepare(`
+        INSERT OR IGNORE INTO assignments (
+          assignment_id, mission_id, node_id, status
+        )
+        SELECT ?, ?, ?, 'assigned'
+        WHERE EXISTS (
+          SELECT 1 FROM project_work_items
+          WHERE work_item_id = ? AND node_id = ? AND status = 'assigned'
+        )
+      `).bind(assignmentId, missionId, nodeId, work.work_item_id, nodeId),
+      env.DB.prepare(`
+        UPDATE architect_projects
+        SET status = 'running', updated_at = CURRENT_TIMESTAMP
+        WHERE project_id = ? AND status = 'planned'
+          AND EXISTS (
+            SELECT 1 FROM project_work_items
+            WHERE work_item_id = ? AND node_id = ? AND status = 'assigned'
+          )
+      `).bind(work.project_id, work.work_item_id, nodeId),
+      env.DB.prepare(`
+        INSERT INTO audit_events (
+          actor_type, actor_id, action, target_type, target_id, details_json
+        )
+        SELECT 'controller', 'project-scheduler', 'project.work.assigned',
+          'project_work_item', ?, ?
+        WHERE EXISTS (
+          SELECT 1 FROM assignments
+          WHERE assignment_id = ? AND node_id = ?
+        )
+      `).bind(
+        work.work_item_id,
+        JSON.stringify({ project_id: work.project_id, node_id: nodeId, role_name: work.role_name }),
+        assignmentId,
+        nodeId
+      )
+    ]);
+    if ((results[0]?.meta?.changes || 0) === 1) created += 1;
+  }
+  return created;
+}
+
 async function evaluateProjectChecks(env, sourceType, title, taskText) {
   await ensureProjectStorage(env);
   const sourceAllowed = sourceType === "architect_manual";
@@ -939,7 +1056,10 @@ async function architectListProjects(request, env) {
     "SELECT p.project_id, p.title, p.status, p.worker_count, p.created_at, p.updated_at, " +
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id) AS work_item_count, " +
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'completed') AS completed_work_items, " +
-    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'running') AS running_work_items " +
+    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'failed') AS failed_work_items, " +
+    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'assigned') AS assigned_work_items, " +
+    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'running') AS running_work_items, " +
+    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status IN ('completed','failed','cancelled')) AS finished_work_items " +
     "FROM architect_projects AS p ORDER BY p.created_at DESC LIMIT 50"
   ).all();
   return json({ ok: true, projects: rows.results || [] });
@@ -947,7 +1067,7 @@ async function architectListProjects(request, env) {
 
 async function architectGetProject(request, env, projectId) {
   await authenticateArchitect(request, env);
-  await ensureProjectStorage(env);
+  await Promise.all([ensureProjectStorage(env), ensureNodeAiStorage(env), ensureReportStorage(env)]);
   const project = await env.DB.prepare(`
     SELECT project_id, title, source_type, task_text, checks_json,
       architect_approved, status, worker_count, created_at, updated_at
@@ -961,10 +1081,24 @@ async function architectGetProject(request, env, projectId) {
       SELECT
         w.work_item_id, w.sequence_no, w.role_name, w.task_text, w.status,
         w.created_at, w.updated_at, w.node_id,
-        n.hostname, n.agent_version, nn.node_number
+        n.hostname, n.agent_version, nn.node_number,
+        ai.installed AS lmstudio_installed,
+        ai.loaded_model AS lmstudio_loaded_model,
+        ai.server_running AS lmstudio_server_running,
+        (
+          SELECT r.summary FROM results AS r
+          WHERE r.assignment_id = ('assignment_' || w.work_item_id)
+          LIMIT 1
+        ) AS result_summary,
+        (
+          SELECT ar.report_json FROM agent_reports AS ar
+          WHERE ar.assignment_id = ('assignment_' || w.work_item_id)
+          ORDER BY datetime(ar.created_at) DESC LIMIT 1
+        ) AS result_json
       FROM project_work_items AS w
       LEFT JOIN nodes AS n ON n.node_id = w.node_id
       LEFT JOIN node_numbers AS nn ON nn.node_id = w.node_id
+      LEFT JOIN node_ai_state AS ai ON ai.node_id = w.node_id
       WHERE w.project_id = ?
       ORDER BY w.sequence_no ASC, w.work_item_id ASC
     `).bind(projectId).all(),
@@ -976,7 +1110,11 @@ async function architectGetProject(request, env, projectId) {
     `).bind(projectId).all()
   ]);
 
-  const workItems = workQuery.results || [];
+  const workItems = (workQuery.results || []).map((item) => ({
+    ...item,
+    result: safeJson(item.result_json, null),
+    result_json: undefined
+  }));
   let specializationRows = specializationQuery.results || [];
   if (!specializationRows.length) {
     specializationRows = [...new Set(workItems.map((item) => item.role_name))].map((roleName) => ({
@@ -1011,6 +1149,23 @@ async function architectGetProject(request, env, projectId) {
       : counts.assigned > 0
         ? "assigned"
         : "planned";
+  const finalSections = workItems
+    .filter((item) => item.result && typeof item.result === "object")
+    .map((item) => ({
+      sequence_no: item.sequence_no,
+      role_name: item.role_name,
+      node_id: item.node_id,
+      model: item.result.model || null,
+      content: typeof item.result.content === "string" ? item.result.content : null,
+      status: item.status
+    }));
+  const finalReportReady = total > 0 && finished === total;
+  const finalResultText = finalReportReady
+    ? finalSections
+        .filter((item) => item.content)
+        .map((item) => `#${item.sequence_no} ${item.role_name}\n${item.content}`)
+        .join("\n\n")
+    : null;
   return json({
     ok: true,
     project: {
@@ -1025,12 +1180,18 @@ async function architectGetProject(request, env, projectId) {
         counts,
         completed_work_items: counts.completed,
         total_work_items: total,
-        final_report_ready: total > 0 && finished === total,
+        final_report_ready: finalReportReady,
+        progress_percent: total ? Math.round((finished / total) * 100) : 0,
         detail: executionState === "planned"
-          ? "hub_plan_created_waiting_for_project_worker_execution"
+          ? "waiting_for_lmstudio_project_worker"
           : executionState === "completed"
             ? "all_project_work_items_completed"
             : executionState
+      },
+      final_report: {
+        ready: finalReportReady,
+        sections: finalSections,
+        combined_text: finalResultText
       }
     }
   });
@@ -1594,6 +1755,8 @@ async function listAssignments(request, env, nodeId, url) {
     return json({ ok: true, node_status: "paused", assignments: [] });
   }
 
+  await materializeProjectWorkForNode(env, nodeId);
+
   const query = await env.DB.prepare(`
     SELECT
       a.assignment_id,
@@ -1662,7 +1825,24 @@ async function acceptAssignment(request, env, nodeId, assignmentId, url) {
       )
       SELECT 'node', ?, 'assignment.accepted', 'assignment', ?, '{}'
       WHERE changes() = 1
-    `).bind(nodeId, assignmentId)
+    `).bind(nodeId, assignmentId),
+    env.DB.prepare(`
+      UPDATE project_work_items
+      SET status = 'running', updated_at = CURRENT_TIMESTAMP
+      WHERE ('assignment_' || work_item_id) = ?
+        AND node_id = ?
+        AND status = 'assigned'
+    `).bind(assignmentId, nodeId),
+    env.DB.prepare(`
+      UPDATE architect_projects
+      SET status = 'running', updated_at = CURRENT_TIMESTAMP
+      WHERE project_id = (
+        SELECT project_id FROM project_work_items
+        WHERE ('assignment_' || work_item_id) = ?
+        LIMIT 1
+      )
+        AND status IN ('planned','running')
+    `).bind(assignmentId)
   ]);
 
   const assignment = await env.DB.prepare(`
@@ -1744,80 +1924,129 @@ async function submitResult(request, env, nodeId, url) {
   const assignmentStatus = outcome === "failed" ? "failed" : "completed";
   const detailsJson = JSON.stringify({ result_id: resultId, outcome });
 
+  const isProjectAssignment = assignmentId.startsWith("assignment_work_");
+  if (isProjectAssignment) await ensureProjectStorage(env);
+
+  const resultStatements = [
+    env.DB.prepare(`
+      INSERT INTO results (
+        result_id, assignment_id, node_id, outcome,
+        summary, artifact_key, metrics_json
+      )
+      SELECT ?, ?, ?, ?, ?, ?, ?
+      FROM assignments
+      WHERE assignment_id = ?
+        AND node_id = ?
+        AND status IN ('assigned', 'running')
+    `).bind(
+      resultId,
+      assignmentId,
+      nodeId,
+      outcome,
+      summary,
+      artifactKey,
+      metricsJson,
+      assignmentId,
+      nodeId
+    ),
+    env.DB.prepare(`
+      INSERT INTO agent_reports (
+        report_id, result_id, assignment_id, mission_id, node_id,
+        report_type, report_json, report_sha256,
+        report_size_bytes, sensitivity
+      )
+      SELECT ?, r.result_id, r.assignment_id, a.mission_id, r.node_id,
+             ?, ?, ?, ?, ?
+      FROM results AS r
+      JOIN assignments AS a ON a.assignment_id = r.assignment_id
+      WHERE r.result_id = ?
+    `).bind(
+      reportId,
+      reportType,
+      reportJson,
+      reportSha256,
+      reportSizeBytes,
+      sensitivity,
+      resultId
+    ),
+    env.DB.prepare(`
+      UPDATE assignments
+      SET status = ?,
+          started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
+          completed_at = CURRENT_TIMESTAMP
+      WHERE assignment_id = ? AND node_id = ? AND changes() = 1
+    `).bind(assignmentStatus, assignmentId, nodeId)
+  ];
+
+  if (isProjectAssignment) {
+    resultStatements.push(
+      env.DB.prepare(`
+        UPDATE project_work_items
+        SET status = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE ('assignment_' || work_item_id) = ?
+          AND node_id = ?
+          AND status IN ('assigned','running')
+          AND EXISTS (SELECT 1 FROM results WHERE result_id = ?)
+      `).bind(assignmentStatus, assignmentId, nodeId, resultId),
+      env.DB.prepare(`
+        UPDATE architect_projects
+        SET status = CASE
+          WHEN EXISTS (
+            SELECT 1 FROM project_work_items AS wf
+            WHERE wf.project_id = architect_projects.project_id
+              AND wf.status = 'failed'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM project_work_items AS wu
+            WHERE wu.project_id = architect_projects.project_id
+              AND wu.status IN ('planned','assigned','running')
+          ) THEN 'blocked'
+          WHEN NOT EXISTS (
+            SELECT 1 FROM project_work_items AS wu
+            WHERE wu.project_id = architect_projects.project_id
+              AND wu.status IN ('planned','assigned','running')
+          ) THEN 'completed'
+          ELSE 'running'
+        END,
+        updated_at = CURRENT_TIMESTAMP
+        WHERE project_id = (
+          SELECT project_id FROM project_work_items
+          WHERE ('assignment_' || work_item_id) = ?
+          LIMIT 1
+        )
+          AND EXISTS (SELECT 1 FROM results WHERE result_id = ?)
+      `).bind(assignmentId, resultId)
+    );
+  }
+
+  resultStatements.push(
+    env.DB.prepare(`
+      UPDATE missions
+      SET status = 'completed'
+      WHERE mission_id = (
+        SELECT mission_id FROM assignments WHERE assignment_id = ?
+      )
+        AND status != 'cancelled'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM assignments
+          WHERE assignments.mission_id = missions.mission_id
+            AND assignments.status IN ('assigned', 'running')
+        )
+        AND EXISTS (SELECT 1 FROM results WHERE result_id = ?)
+    `).bind(assignmentId, resultId),
+    env.DB.prepare(`
+      INSERT INTO audit_events (
+        actor_type, actor_id, action, target_type, target_id, details_json
+      )
+      SELECT 'node', ?, 'result.submitted', 'assignment', ?, ?
+      WHERE EXISTS (SELECT 1 FROM results WHERE result_id = ?)
+    `).bind(nodeId, assignmentId, detailsJson, resultId)
+  );
+
   let statements;
   try {
-    statements = await env.DB.batch([
-      env.DB.prepare(`
-        INSERT INTO results (
-          result_id, assignment_id, node_id, outcome,
-          summary, artifact_key, metrics_json
-        )
-        SELECT ?, ?, ?, ?, ?, ?, ?
-        FROM assignments
-        WHERE assignment_id = ?
-          AND node_id = ?
-          AND status IN ('assigned', 'running')
-      `).bind(
-        resultId,
-        assignmentId,
-        nodeId,
-        outcome,
-        summary,
-        artifactKey,
-        metricsJson,
-        assignmentId,
-        nodeId
-      ),
-      env.DB.prepare(`
-        INSERT INTO agent_reports (
-          report_id, result_id, assignment_id, mission_id, node_id,
-          report_type, report_json, report_sha256,
-          report_size_bytes, sensitivity
-        )
-        SELECT ?, r.result_id, r.assignment_id, a.mission_id, r.node_id,
-               ?, ?, ?, ?, ?
-        FROM results AS r
-        JOIN assignments AS a ON a.assignment_id = r.assignment_id
-        WHERE r.result_id = ?
-      `).bind(
-        reportId,
-        reportType,
-        reportJson,
-        reportSha256,
-        reportSizeBytes,
-        sensitivity,
-        resultId
-      ),
-      env.DB.prepare(`
-        UPDATE assignments
-        SET status = ?,
-            started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
-            completed_at = CURRENT_TIMESTAMP
-        WHERE assignment_id = ? AND node_id = ? AND changes() = 1
-      `).bind(assignmentStatus, assignmentId, nodeId),
-      env.DB.prepare(`
-        UPDATE missions
-        SET status = 'completed'
-        WHERE mission_id = (
-          SELECT mission_id FROM assignments WHERE assignment_id = ?
-        )
-          AND status != 'cancelled'
-          AND NOT EXISTS (
-            SELECT 1
-            FROM assignments
-            WHERE assignments.mission_id = missions.mission_id
-              AND assignments.status IN ('assigned', 'running')
-          )
-          AND EXISTS (SELECT 1 FROM results WHERE result_id = ?)
-      `).bind(assignmentId, resultId),
-      env.DB.prepare(`
-        INSERT INTO audit_events (
-          actor_type, actor_id, action, target_type, target_id, details_json
-        )
-        SELECT 'node', ?, 'result.submitted', 'assignment', ?, ?
-        WHERE EXISTS (SELECT 1 FROM results WHERE result_id = ?)
-      `).bind(nodeId, assignmentId, detailsJson, resultId)
-    ]);
+    statements = await env.DB.batch(resultStatements);
   } catch (error) {
     if (String(error).includes("results.assignment_id")) {
       throw new ApiError(409, "result_already_exists");

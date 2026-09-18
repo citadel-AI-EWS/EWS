@@ -43,7 +43,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.7"
+VERSION = "0.3.8"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -434,7 +434,7 @@ class Agent:
 
     @property
     def capabilities(self) -> list[str]:
-        return sorted(set(HANDLERS) | {"lmstudio_remote"})
+        return sorted(set(HANDLERS) | {"lmstudio_remote", "project_text"})
 
     def require_node_id(self) -> str:
         if not self.identity.node_id:
@@ -507,12 +507,86 @@ class Agent:
         node_id = self.require_node_id()
         self.api.request("POST", f"/api/v1/nodes/{node_id}/results", result)
 
+    def execute_project_text(self, payload: dict[str, Any]) -> dict[str, Any]:
+        task_text = str(payload.get("task_text") or "").strip()
+        role_name = str(payload.get("role_name") or "planner").strip()
+        project_id = str(payload.get("project_id") or "").strip()
+        work_item_id = str(payload.get("work_item_id") or "").strip()
+        if not task_text or len(task_text) > 20000:
+            raise RuntimeError("invalid project task")
+        if not role_name or len(role_name) > 64:
+            raise RuntimeError("invalid project role")
+
+        state = self.lmstudio_state()
+        model = str(state.get("loaded_model") or "").strip()
+        if not model or not LMSTUDIO_MODEL_RE.fullmatch(model):
+            raise RuntimeError("lmstudio_model_not_loaded")
+
+        system_prompt = (
+            "You are the CITADEL project worker for role: " + role_name + ". "
+            "Work only on the supplied text task. Return a useful factual result in plain text. "
+            "Do not execute commands, access credentials, modify the host, or claim actions you did not perform."
+        )
+        request_body = json_text({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": task_text},
+            ],
+            "temperature": 0.2,
+            "max_tokens": 4096,
+        })
+        connection = http.client.HTTPConnection(
+            "127.0.0.1",
+            1234,
+            timeout=max(1800, self.config.request_timeout_seconds),
+        )
+        try:
+            connection.request(
+                "POST",
+                "/v1/chat/completions",
+                body=request_body.encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "User-Agent": USER_AGENT,
+                },
+            )
+            response = connection.getresponse()
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
+            if len(raw) > MAX_RESPONSE_BYTES:
+                raise RuntimeError("lmstudio_response_too_large")
+            if response.status != 200:
+                raise RuntimeError(f"lmstudio_http_{response.status}")
+        finally:
+            connection.close()
+
+        try:
+            decoded = json.loads(raw.decode("utf-8"))
+            content = decoded["choices"][0]["message"]["content"]
+        except (UnicodeDecodeError, json.JSONDecodeError, KeyError, IndexError, TypeError):
+            raise RuntimeError("lmstudio_invalid_response")
+        if not isinstance(content, str) or not content.strip():
+            raise RuntimeError("lmstudio_empty_response")
+        content = content.strip()
+        if len(content) > 180000:
+            content = content[:180000] + "\n\n[truncated]"
+        return {
+            "project_id": project_id or None,
+            "work_item_id": work_item_id or None,
+            "role_name": role_name,
+            "model": model,
+            "content": content,
+            "completed_at": now_iso(),
+        }
+
     def execute_assignment(self, assignment: dict[str, Any]) -> None:
         node_id = self.require_node_id()
         assignment_id = str(assignment.get("assignment_id") or "")
         mission_type = str(assignment.get("mission_type") or "")
         handler = HANDLERS.get(mission_type)
-        if not assignment_id or handler is None:
+        is_project_text = mission_type == "project_text"
+        if not assignment_id or (handler is None and not is_project_text):
             self.log.write(
                 "assignment_rejected_local",
                 assignment_id=assignment_id,
@@ -531,7 +605,11 @@ class Agent:
         )
         started = time.monotonic()
         try:
-            report = handler(assignment.get("payload") or {})
+            report = (
+                self.execute_project_text(assignment.get("payload") or {})
+                if is_project_text
+                else handler(assignment.get("payload") or {})
+            )
             result = {
                 "assignment_id": assignment_id,
                 "outcome": "success",
@@ -1245,6 +1323,10 @@ def self_test() -> int:
         require_test(
             set(HANDLERS) == {"system_inventory"},
             "unexpected handler registered",
+        )
+        require_test(
+            "project_text" in agent.capabilities,
+            "project text capability missing",
         )
         require_test(
             agent.validate_lmstudio_model_payload({"model": "openai/gpt-oss-20b"}),
