@@ -8,7 +8,7 @@
   <style>
     :root{font-family:system-ui,-apple-system,sans-serif;color:#f2f5ff;background:#080c17}
     *{box-sizing:border-box}body{margin:0;min-height:100vh;padding:20px;background:radial-gradient(circle at top,#172441,#080c17 55%)}
-    main{max-width:760px;margin:auto}.brand{color:#8fb5ff;font-size:13px;font-weight:900;letter-spacing:.13em}
+    main{max-width:1480px;margin:auto}.brand{color:#8fb5ff;font-size:13px;font-weight:900;letter-spacing:.13em}
     h1{font-size:29px;line-height:1.15;margin:11px 0}h2{font-size:20px;margin:0 0 15px}p{color:#aeb9d2;line-height:1.45}
     .card{margin-top:17px;padding:19px;border:1px solid #2b3757;border-radius:18px;background:#11182a;box-shadow:0 18px 55px #0007}
     label{display:block;margin:12px 0 7px;font-weight:750}input,select,textarea{width:100%;padding:13px;border:1px solid #3a496f;border-radius:11px;background:#090e1b;color:#fff;font-size:16px}textarea{min-height:110px;resize:vertical;font-family:inherit}
@@ -21,14 +21,27 @@
     .good{border-left:4px solid #35d07f}.bad{border-left:4px solid #ff6874}.muted{color:#93a0ba}.section-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
     .section-head button,.item button{width:auto;margin:0;padding:10px 12px}.report-body{margin:12px 0 0;padding:13px;border-radius:11px;background:#080e1d;color:#dfe7fb;white-space:pre-wrap;overflow-wrap:anywhere;max-height:55vh;overflow:auto}
     .control-buttons{display:grid;grid-template-columns:1fr 1fr;gap:9px}.control-buttons button{margin-top:10px}.control-buttons .full{grid-column:1/-1}
-    @media(max-width:520px){body{padding:17px}.stats{grid-template-columns:1fr}.card{padding:17px}h1{font-size:27px}}
+    .ops-shell{position:relative;overflow:hidden;margin-top:17px;padding:22px;border:1px solid #2c4368;border-radius:22px;background:linear-gradient(145deg,rgba(12,24,43,.98),rgba(8,14,28,.98));box-shadow:0 24px 80px #0008}
+    .ops-shell:before{content:"";position:absolute;inset:0;pointer-events:none;background-image:linear-gradient(rgba(93,143,220,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(93,143,220,.055) 1px,transparent 1px);background-size:28px 28px;mask-image:linear-gradient(to bottom,black,transparent 88%)}
+    .ops-head{position:relative;display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex-wrap:wrap}.ops-title{font-size:13px;font-weight:950;letter-spacing:.18em;color:#83b5ff}.ops-head h2{font-size:27px;margin:5px 0}.ops-sub{color:#8ca4c8;font-size:13px}
+    .live-badge{display:inline-flex;align-items:center;gap:9px;padding:8px 12px;border:1px solid #285941;border-radius:999px;background:#0d281f;color:#bff5d8;font-size:12px;font-weight:850}.live-dot{width:9px;height:9px;border-radius:50%;background:#38dc84;box-shadow:0 0 0 0 rgba(56,220,132,.5);animation:livePulse 1.9s infinite}
+    @keyframes livePulse{0%{box-shadow:0 0 0 0 rgba(56,220,132,.45)}70%{box-shadow:0 0 0 9px rgba(56,220,132,0)}100%{box-shadow:0 0 0 0 rgba(56,220,132,0)}}
+    .ops-grid{position:relative;display:grid;grid-template-columns:repeat(12,1fr);gap:14px;margin-top:18px}.ops-kpi{grid-column:span 3;padding:15px;border:1px solid #273857;border-radius:15px;background:rgba(8,16,31,.78)}.ops-kpi b{display:block;font-size:27px}.ops-kpi span{font-size:12px;color:#8fa4c4}
+    .charts-grid{position:relative;display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.chart-card{padding:16px;border:1px solid #273857;border-radius:16px;background:rgba(8,16,31,.8);min-height:180px}.chart-card h3{margin:0 0 12px;font-size:14px;letter-spacing:.04em}.chart-rows{display:flex;flex-direction:column;gap:9px}.chart-row{display:grid;grid-template-columns:minmax(92px,150px) 1fr 48px;gap:9px;align-items:center;font-size:12px}.chart-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#c8d8f0}.bar-track{height:9px;border-radius:999px;background:#121d30;overflow:hidden}.bar-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#4c91ff,#70e6c1);transform-origin:left;animation:barGrow .55s ease-out}.bar-fill.warn{background:linear-gradient(90deg,#ffb44f,#ff6d72)}@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+    .fleet-ring-wrap{display:flex;gap:18px;align-items:center}.fleet-ring{--pct:0;flex:0 0 auto;width:112px;height:112px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#38d889 calc(var(--pct)*1%),#1a2941 0);position:relative;box-shadow:0 0 34px rgba(56,216,137,.12)}.fleet-ring:after{content:"";position:absolute;width:78px;height:78px;border-radius:50%;background:#0a1221;border:1px solid #263a5c}.fleet-ring b{position:relative;z-index:1;font-size:22px}.fleet-legend{font-size:12px;color:#9eb1cc;line-height:1.8}
+    .node-grid{position:relative;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:14px}.node-card{border:1px solid #2a3c5d;border-radius:16px;background:linear-gradient(155deg,#0d1729,#0a1221);padding:15px;transition:.18s transform,.18s border-color,.18s box-shadow}.node-card:hover{transform:translateY(-1px);border-color:#4774b1;box-shadow:0 14px 35px #0005}.node-card.dead{border-color:#613743}.node-card.unhealthy{box-shadow:inset 3px 0 0 #ff6874}.node-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.node-name{font-weight:900;font-size:16px}.node-agent{margin-top:3px;color:#8ea6c9;font-size:12px}.node-status-lines{margin-top:11px;display:grid;gap:6px;font-size:13px}.state-live{color:#62e5a0}.state-dead{color:#ff7b86}.health-line{display:flex;align-items:center;justify-content:space-between;gap:10px}.detail-toggle{width:30px!important;height:30px;margin:0!important;padding:0!important;border-radius:9px!important;background:#223451!important;font-size:19px!important;line-height:1}.node-details{display:none;margin-top:12px;padding-top:12px;border-top:1px solid #243553;font-size:12px;color:#a8b9d3;line-height:1.7}.node-details.open{display:block;animation:detailIn .18s ease-out}@keyframes detailIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+    .topology-wrap{height:210px;position:relative;overflow:hidden;border-radius:12px;background:radial-gradient(circle at 50% 50%,rgba(62,121,211,.13),transparent 45%)}.topology-wrap svg{width:100%;height:100%}.topology-line{stroke:#355e91;stroke-width:1.5;stroke-dasharray:5 6;animation:dashFlow 5s linear infinite}.topology-node{fill:#122743;stroke:#5498ef;stroke-width:1.4}.topology-node.dead{fill:#341923;stroke:#ff6d7a}@keyframes dashFlow{to{stroke-dashoffset:-44}}
+    .ops-overlay{position:fixed;inset:0;z-index:999;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(2,7,15,.78);backdrop-filter:blur(10px)}.ops-modal{width:min(620px,100%);border:1px solid #36527e;border-radius:20px;background:linear-gradient(155deg,#111d32,#0a1221);box-shadow:0 35px 100px #000b;padding:22px}.ops-modal h2{margin:4px 0 8px}.brief-list{display:flex;flex-direction:column;gap:8px;margin:14px 0}.brief-item{padding:11px 12px;border-radius:11px;background:#111a2c;border-left:4px solid #ff6874;font-size:13px}.brief-clear{border-left-color:#35d07f}.ops-modal button{margin-top:10px}
+    .role-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}.role-chip{padding:10px;border:1px solid #293b5c;border-radius:11px;background:#0b1425;font-size:12px}.role-chip b{display:block;color:#dce8fb}.role-chip span{color:#8199bb;font-size:11px}
+    @media(max-width:900px){.ops-kpi{grid-column:span 6}.charts-grid,.node-grid{grid-template-columns:1fr}.role-grid{grid-template-columns:1fr 1fr}}
+    @media(max-width:520px){body{padding:12px}.stats{grid-template-columns:1fr}.card,.ops-shell{padding:15px}h1{font-size:27px}.ops-kpi{grid-column:span 6}.chart-row{grid-template-columns:82px 1fr 42px}.role-grid{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
   <main>
-    <div class="brand">CITADEL / ARCHITECT</div>
-    <h1>Панель архитектора</h1>
-    <p>Контролируемое управление узлами и разрешёнными миссиями. Произвольные команды отключены.</p>
+    <div class="brand">CITADEL / OPERATIONS</div>
+    <h1>LIVE OPERATIONS</h1>
+    <p>Живой центр управления · показываются только реальные данные Controller.</p>
 
     <section id="loginCard" class="card">
       <h2>Защищённый вход</h2>
@@ -44,12 +57,43 @@
         <button id="logoutButton" class="danger" type="button">Выйти</button>
       </div>
 
-      <div class="stats">
-        <div class="stat"><b id="nodeCount">0</b><span>всего узлов</span></div>
-        <div class="stat"><b id="onlineCount">0</b><span>узлов online</span></div>
-        <div class="stat"><b id="missionCount">0</b><span>миссий</span></div>
-        <div class="stat"><b id="reportCount">0</b><span>диагностических отчётов</span></div>
-        <div class="stat hidden"><b id="sessionCount">0</b><span>контрольных точек</span></div>
+      <section id="liveOperations" class="ops-shell">
+        <div class="ops-head">
+          <div>
+            <div class="ops-title">LIVE OPERATIONS CENTER</div>
+            <h2>Operational picture</h2>
+            <div class="ops-sub">Реальные heartbeat, CPU/RAM, presence и состояние Controller. Демонстрационные значения запрещены.</div>
+          </div>
+          <div class="live-badge"><span class="live-dot"></span> CONTROLLER LIVE</div>
+        </div>
+        <div class="ops-grid">
+          <div class="ops-kpi"><b id="nodeCount">0</b><span>зарегистрировано нод</span></div>
+          <div class="ops-kpi"><b id="onlineCount">0</b><span>живых сейчас</span></div>
+          <div class="ops-kpi"><b id="unhealthyCount">0</b><span>нездоровых / недоступных</span></div>
+          <div class="ops-kpi"><b id="projectCount">0</b><span>проектов</span></div>
+        </div>
+        <div class="charts-grid">
+          <div class="chart-card">
+            <h3>Fleet health</h3>
+            <div class="fleet-ring-wrap">
+              <div id="fleetRing" class="fleet-ring"><b id="fleetPct">0%</b></div>
+              <div id="fleetLegend" class="fleet-legend">Нет данных.</div>
+            </div>
+          </div>
+          <div class="chart-card">
+            <h3>Live topology</h3>
+            <div class="topology-wrap"><svg id="topologySvg" viewBox="0 0 560 210" role="img" aria-label="Live node topology"></svg></div>
+          </div>
+          <div class="chart-card"><h3>CPU · текущая телеметрия</h3><div id="cpuChart" class="chart-rows"></div></div>
+          <div class="chart-card"><h3>RAM · текущая телеметрия</h3><div id="memoryChart" class="chart-rows"></div></div>
+        </div>
+        <div class="section-head" style="margin-top:18px">
+          <h2 style="margin:0">Ноды</h2><span id="nodesUpdated" class="small"></span>
+        </div>
+        <div id="liveNodesList" class="node-grid"></div>
+      </section>
+      <div class="hidden">
+        <b id="missionCount">0</b><b id="reportCount">0</b><b id="sessionCount">0</b>
       </div>
 
       <section class="card hidden" aria-hidden="true">
@@ -120,7 +164,10 @@
 2. Validation
 3. Deduplication
 4. Safety classification</div>
-        <div id="projectResult" class="status">После создания здесь будет видно, сколько рабочих блоков создал Hub и на какие узлы они назначены.</div>
+        <div id="projectRolePlan" class="status">Hub ещё не определял требуемые специализации.</div>
+        <div class="small" style="margin-top:12px">Реестр специализаций Hub</div>
+        <div id="workRoles" class="role-grid"></div>
+        <div id="projectResult" class="status">После создания здесь будет видно, какие специалисты нужны, сколько рабочих блоков создал Hub и на какие узлы они назначены.</div>
         <div id="projectsList"></div>
       </section>
 
@@ -138,11 +185,6 @@
         <select id="expiresHours"><option value="1">1 час</option><option value="24" selected>24 часа</option><option value="72">3 дня</option></select>
         <button id="createMissionButton" type="button">Отправить диагностику узлу</button>
         <div id="missionCreateResult" class="status">Служебная диагностика.</div>
-      </section>
-
-      <section class="card">
-        <div class="section-head"><h2>Узлы</h2><span id="nodesUpdated" class="small"></span></div>
-        <div id="nodesList"></div>
       </section>
 
       <section class="card">
@@ -174,14 +216,20 @@
         <pre id="reportDetailBody" class="report-body"></pre>
       </section>
 
-      <section class="card">
-        <h2>Последние события аудита</h2>
-        <div id="auditList"></div>
-      </section>
     </section>
 
     <div id="status" class="status">Панель ожидает входа.</div>
   </main>
+
+  <div id="operationsAlert" class="ops-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="operationsAlertTitle">
+    <div class="ops-modal">
+      <div class="ops-title">OPERATIONS BRIEF</div>
+      <h2 id="operationsAlertTitle">Краткая оперативная сводка</h2>
+      <p class="small">Только проблемы, требующие внимания прямо сейчас.</p>
+      <div id="operationsAlertList" class="brief-list"></div>
+      <button id="closeOperationsAlert" type="button">Закрыть и перейти в Live Operations</button>
+    </div>
+  </div>
 
   <script>
     const loginCard = document.getElementById("loginCard");
