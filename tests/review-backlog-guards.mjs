@@ -36,7 +36,12 @@ for (const eventType of [
   "wake_packet_sent",
   "lmstudio_installed",
   "lmstudio_model_downloaded",
-  "lmstudio_model_loaded"
+  "lmstudio_model_loaded",
+  "lmstudio_state_report_failed",
+  "hybrid_query_completed",
+  "network_recovery_attempted",
+  "network_recovery_failed",
+  "windows_sleep_hibernate_inhibit"
 ]) {
   need(telemetry.includes(`"${eventType}"`), `controller drops ${eventType}`);
 }
@@ -56,6 +61,15 @@ need(agentV1.includes("recover_network"), "network recovery missing");
 need(agentV1.includes("validate_hybrid_payload"), "Hybrid payload validation missing");
 need(index.includes('"hybrid_query"'), "Hybrid command missing from Controller allow-list");
 need(index.includes('"lmstudio_probe"'), "LM Studio probe command missing from Controller allow-list");
+need(index.includes("architectSearchModels"), "Hugging Face model search missing");
+need(index.includes("nodeUpdateAiState"), "signed node AI-state endpoint missing");
+need(index.includes("progress_total_bytes"), "real model download progress missing");
+need(index.includes("blocking_reason"), "exact project blocking reasons missing");
+need(agentV1.includes("lmstudio_http_json"), "LM Studio native REST client missing");
+need(agentV1.includes("/api/v1/models/download/status/"), "LM Studio byte download progress polling missing");
+need(agentV1.includes("stream_lmstudio_answer"), "streaming Hybrid LM answer missing");
+need(agentV1.includes("ipconfig, \"/renew\"") || agentV1.includes("[ipconfig, \"/renew\"]"), "Windows DHCP recovery missing");
+need(agentV1.includes("nmcli") && agentV1.includes("connection"), "Linux saved-network recovery missing");
 need(agentV1.includes("execute_project_text"), "LM Studio project text worker missing");
 need(agentV1.includes('"project_text"'), "project_text capability missing");
 need(agentV1.includes('"127.0.0.1"'), "project worker must stay on local LM Studio endpoint");
