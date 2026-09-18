@@ -65,7 +65,7 @@ assert.match(architect, /LIVE OPERATIONS CENTER/);
 assert.match(architect, /показываются только реальные данные Controller/);
 assert.match(architect, /function nodeHealth/);
 assert.match(architect, /function showOperationsBrief/);
-assert.match(architect, /Здоровье:/);
+assert.match(architect, /lt\("Здоровье","Health","בריאות"\)/);
 assert.match(architect, /detail-toggle/);
 assert.match(architect, /\/api\/v1\/architect\/work-roles/);
 assert.doesNotMatch(architect, /Последние события аудита/);
