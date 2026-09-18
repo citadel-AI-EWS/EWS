@@ -189,18 +189,34 @@
     const storageUsage = document.getElementById("storageUsage");
     const nodeSelect = document.getElementById("nodeSelect");
     const controlNodeSelect = document.getElementById("controlNodeSelect");
+    const nodeDiagnostics = document.getElementById("nodeDiagnostics");
+    const ipButton = document.getElementById("ipButton");
+    const healthButton = document.getElementById("healthButton");
     const pauseButton = document.getElementById("pauseButton");
     const resumeButton = document.getElementById("resumeButton");
     const updateButton = document.getElementById("updateButton");
     const restartButton = document.getElementById("restartButton");
+    const stopButton = document.getElementById("stopButton");
     const rollbackButton = document.getElementById("rollbackButton");
+    const rebootButton = document.getElementById("rebootButton");
+    const shutdownButton = document.getElementById("shutdownButton");
     const disconnectButton = document.getElementById("disconnectButton");
+    const missionType = document.getElementById("missionType");
     const missionTitle = document.getElementById("missionTitle");
+    const missionTask = document.getElementById("missionTask");
+    const missionCreateResult = document.getElementById("missionCreateResult");
     const expiresHours = document.getElementById("expiresHours");
+    const sshHost = document.getElementById("sshHost");
+    const sshUser = document.getElementById("sshUser");
+    const sshState = document.getElementById("sshState");
+    const sshCommand = document.getElementById("sshCommand");
+    const copySshButton = document.getElementById("copySshButton");
+    const openSshButton = document.getElementById("openSshButton");
     const statusElement = document.getElementById("status");
     let architectToken = sessionStorage.getItem("citadel-architect-token") || "";
     let currentNodes = [];
     let currentCommands = [];
+    let currentPresence = [];
     let currentReports = [];
     let activeReportId = null;
     let reportNextOffset = null;
@@ -226,6 +242,71 @@
       const data = await response.json().catch(() => ({ error: "invalid_server_response" }));
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       return data;
+    }
+
+    function safeHost(value) {
+      const host = String(value || "").trim().toLowerCase();
+      return /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(host) && host.includes(".") ? host : "";
+    }
+
+    function safeUser(value) {
+      const user = String(value || "").trim();
+      return /^[a-zA-Z0-9._-]{1,64}$/.test(user) ? user : "";
+    }
+
+    function selectedNode() {
+      return currentNodes.find((item) => item.node_id === controlNodeSelect.value) || null;
+    }
+
+    function renderNodeDiagnostics() {
+      const node = selectedNode();
+      if (!node) {
+        nodeDiagnostics.textContent = "Выберите узел — здесь появятся IP, состояние, CPU/RAM, версия и последняя связь.";
+        nodeDiagnostics.className = "status";
+        return;
+      }
+      const presence = currentPresence.find((item) => item.node_id === node.node_id);
+      const lines = [
+        `Узел: ${node.hostname} · ${node.status}`,
+        `IP: ${presence?.public_ip || "ещё не зафиксирован"}`,
+        `География сети: ${[presence?.country, presence?.colo].filter(Boolean).join(" / ") || "нет данных"}${presence?.asn ? ` · ASN ${presence.asn}` : ""}`,
+        `CPU: ${node.cpu_percent == null ? "—" : Number(node.cpu_percent).toFixed(1) + "%"} · RAM: ${node.memory_percent == null ? "—" : Number(node.memory_percent).toFixed(1) + "%"}`,
+        `Агент: ${node.agent_version || "—"} · Последняя связь: ${node.last_seen_at || "—"}`
+      ];
+      nodeDiagnostics.textContent = lines.join("\n");
+      nodeDiagnostics.className = `status ${node.status === "online" ? "good" : "warn"}`;
+    }
+
+    function updateSshPanel() {
+      const host = safeHost(sshHost.value);
+      const user = safeUser(sshUser.value);
+      sessionStorage.setItem("citadelSshHost", host);
+      sessionStorage.setItem("citadelSshUser", user);
+      const ready = Boolean(host && user);
+      const command = ready
+        ? `ssh -o ProxyCommand="cloudflared access ssh --hostname %h" ${user}@${host}`
+        : "Укажите корректные hostname и пользователя.";
+      sshCommand.textContent = command;
+      sshState.textContent = ready
+        ? "SSH цель настроена локально; доступность Cloudflare Tunnel ещё не проверена."
+        : "SSH цель ещё не настроена.";
+      sshState.className = `status ${ready ? "good" : ""}`.trim();
+      copySshButton.disabled = !ready;
+      openSshButton.disabled = !ready;
+    }
+
+    async function createInventoryMission(nodeId, title, taskText, expiresInHours) {
+      return api("/api/v1/architect/missions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          node_id: nodeId,
+          title,
+          task_text: taskText,
+          mission_type: "system_inventory",
+          expires_in_hours: expiresInHours
+        })
+      });
     }
 
     function renderNodes(nodes) {
@@ -255,26 +336,33 @@
       if (!nodes.length) addText(list, "p", "Узлы пока не зарегистрированы.", "muted");
       createMissionButton.disabled = ![...nodeSelect.options].some((option) => !option.disabled);
       updateControlButtons();
+      renderNodeDiagnostics();
     }
 
     function updateControlButtons() {
-      const node = currentNodes.find((item) => item.node_id === controlNodeSelect.value);
+      const node = selectedNode();
       const pending = currentCommands.some((command) =>
         command.node_id === node?.node_id && ["pending", "accepted"].includes(command.status)
       );
-      pauseButton.disabled = !node || pending || ["paused", "revoked"].includes(node.status);
-      resumeButton.disabled = !node || pending || node.status !== "paused";
-      updateButton.disabled = !node || pending || node.status === "revoked";
-      restartButton.disabled = !node || pending || node.status === "revoked";
-      rollbackButton.disabled = !node || pending || node.status === "revoked";
-      disconnectButton.disabled = !node || pending || node.status === "revoked";
+      const unavailable = !node || node.status === "revoked";
+      ipButton.disabled = unavailable;
+      healthButton.disabled = unavailable;
+      pauseButton.disabled = unavailable || pending || node.status === "paused";
+      resumeButton.disabled = unavailable || pending || node.status !== "paused";
+      updateButton.disabled = unavailable || pending;
+      restartButton.disabled = unavailable || pending;
+      stopButton.disabled = unavailable || pending;
+      rollbackButton.disabled = unavailable || pending;
+      rebootButton.disabled = unavailable || pending;
+      shutdownButton.disabled = unavailable || pending;
+      disconnectButton.disabled = unavailable || pending;
     }
 
     function renderCommands(commands) {
       currentCommands = commands;
       const list = document.getElementById("commandsList");
       list.replaceChildren();
-      const labels = { pause: "Пауза", resume: "Возобновление", update: "Обновление", restart: "Перезапуск агента", rollback: "Откат", uninstall: "Отключение", system_reboot: "Перезагрузка ПК", system_shutdown: "Выключение ПК" };
+      const labels = { pause: "Пауза", resume: "Возобновление", update: "Обновление", restart: "Перезапуск агента", stop: "Остановка агента", rollback: "Откат", uninstall: "Отзыв узла", system_reboot: "Перезагрузка ПК", system_shutdown: "Выключение ПК" };
       for (const command of commands) {
         const item = document.createElement("div");
         item.className = `item ${command.status === "completed" ? "ok" : "warn"}`;
@@ -294,6 +382,7 @@
         const item = document.createElement("div");
         item.className = `item ${mission.status === "completed" ? "ok" : "warn"}`;
         addText(item, "strong", `${mission.title} — ${mission.status}`);
+        if (mission.task_text) addText(item, "div", `Что поручено: ${mission.task_text}`, "small");
         addText(item, "div", `Задание: ${mission.assignment_status || "не назначено"}`, "small");
         addText(item, "div", `Результат: ${mission.outcome || "ожидается"}`, "small");
         if (mission.summary) addText(item, "div", mission.summary, "small");
@@ -458,7 +547,9 @@
       for (const report of reports) {
         const item = document.createElement("div");
         item.className = `item ${report.outcome === "success" ? "ok" : "warn"}`;
-        addText(item, "strong", `${report.report_type} — ${report.outcome}`);
+        const typeLabel = report.report_type === "system_inventory" ? "Диагностика системы" : report.report_type;
+        const outcomeLabel = report.outcome === "success" ? "успешно" : report.outcome;
+        addText(item, "strong", `${typeLabel} — ${outcomeLabel}`);
         addText(item, "div", `Узел: ${report.node_id}`, "small");
         addText(item, "div", `Размер: ${report.report_size_bytes} байт · Доступ: ${report.sensitivity}`, "small");
         addText(item, "div", `SHA-256: ${report.report_sha256}`, "small");
@@ -523,12 +614,14 @@
 
     async function loadDashboard() {
       setStatus("Загружаю данные…");
-      const [data, reports, sessions, storage] = await Promise.all([
+      const [data, reports, sessions, storage, presence] = await Promise.all([
         api("/api/v1/architect/overview"),
         api("/api/v1/architect/reports?limit=50&offset=0"),
         api("/api/v1/architect/sessions?limit=30&offset=0"),
-        api("/api/v1/architect/storage")
+        api("/api/v1/architect/storage"),
+        api("/api/v1/architect/presence")
       ]);
+      currentPresence = presence.presence || [];
       document.getElementById("nodeCount").textContent = data.counts.nodes;
       document.getElementById("onlineCount").textContent = data.counts.online_nodes;
       document.getElementById("missionCount").textContent = data.counts.missions;
@@ -668,19 +761,22 @@
     });
 
     logoutButton.addEventListener("click", () => logout());
-    controlNodeSelect.addEventListener("change", updateControlButtons);
+    controlNodeSelect.addEventListener("change", () => { updateControlButtons(); renderNodeDiagnostics(); });
 
-    async function sendControl(commandType) {
+    async function sendControl(commandType, confirmation = null) {
       const nodeId = controlNodeSelect.value;
       if (!nodeId) return setStatus("Выберите узел.", "bad");
-      const labels = { pause: "паузу", resume: "возобновление", update: "обновление", restart: "перезапуск", rollback: "откат", uninstall: "отключение" };
-      for (const button of [pauseButton, resumeButton, updateButton, restartButton, rollbackButton, disconnectButton]) button.disabled = true;
+      const labels = { pause: "паузу", resume: "возобновление", update: "обновление", restart: "перезапуск", stop: "остановку агента", rollback: "откат", uninstall: "отзыв узла", system_reboot: "перезагрузку ПК", system_shutdown: "выключение ПК" };
+      const buttons = [pauseButton, resumeButton, updateButton, restartButton, stopButton, rollbackButton, rebootButton, shutdownButton, disconnectButton];
+      for (const button of buttons) button.disabled = true;
       setStatus(`Отправляю команду на ${labels[commandType]}…`);
       try {
+        const body = { command_type: commandType };
+        if (confirmation) body.confirmation = confirmation;
         const data = await api(`/api/v1/architect/nodes/${encodeURIComponent(nodeId)}/commands`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ command_type: commandType })
+          body: JSON.stringify(body)
         });
         setStatus(`Подписанная команда создана.\nCommand ID: ${data.command.command_id}`, "good");
         await loadDashboard();
@@ -690,58 +786,118 @@
       }
     }
 
+    ipButton.addEventListener("click", () => {
+      renderNodeDiagnostics();
+      const node = selectedNode();
+      const presence = currentPresence.find((item) => item.node_id === node?.node_id);
+      setStatus(presence?.public_ip ? `IP ${node.hostname}: ${presence.public_ip}` : "IP ещё не зафиксирован Controller.", presence?.public_ip ? "good" : "");
+    });
+    healthButton.addEventListener("click", async () => {
+      const node = selectedNode();
+      if (!node) return;
+      healthButton.disabled = true;
+      missionCreateResult.textContent = `Запускаю проверку здоровья ${node.hostname}…`;
+      try {
+        const created = await createInventoryMission(
+          node.node_id,
+          `Проверка здоровья — ${node.hostname}`,
+          "Проверить состояние компьютера: CPU, RAM, диск, системные параметры и вернуть диагностический отчёт.",
+          1
+        );
+        missionCreateResult.textContent = `Health-check отправлен. Mission ID: ${created.mission.mission_id}. Результат появится ниже в «Миссии и результаты» и в диагностических отчётах.`;
+        missionCreateResult.className = "status good";
+        await loadDashboard();
+      } catch (error) {
+        missionCreateResult.textContent = `Health-check не создан: ${error.message}`;
+        missionCreateResult.className = "status bad";
+      } finally {
+        healthButton.disabled = false;
+      }
+    });
     pauseButton.addEventListener("click", () => sendControl("pause"));
     resumeButton.addEventListener("click", () => sendControl("resume"));
     updateButton.addEventListener("click", () => sendControl("update"));
     restartButton.addEventListener("click", () => sendControl("restart"));
+    stopButton.addEventListener("click", () => {
+      const node = selectedNode();
+      if (node && confirm(`Остановить процесс агента на ${node.hostname}? Узел не будет отозван; агент вернётся при следующем входе Windows или локальном запуске.`)) sendControl("stop");
+    });
     rollbackButton.addEventListener("click", () => {
-      const node = currentNodes.find((item) => item.node_id === controlNodeSelect.value);
+      const node = selectedNode();
       if (node && confirm(`Откатить агент ${node.hostname} к последней сохранённой версии?`)) sendControl("rollback");
     });
+    rebootButton.addEventListener("click", () => {
+      const node = selectedNode();
+      if (node && confirm(`Перезагрузить компьютер ${node.hostname}?`)) sendControl("system_reboot", "REBOOT");
+    });
+    shutdownButton.addEventListener("click", () => {
+      const node = selectedNode();
+      if (node && confirm(`Выключить компьютер ${node.hostname}?`)) sendControl("system_shutdown", "SHUTDOWN");
+    });
     disconnectButton.addEventListener("click", () => {
-      const node = currentNodes.find((item) => item.node_id === controlNodeSelect.value);
+      const node = selectedNode();
       if (!node) return;
-      if (confirm(`Отключить узел ${node.hostname}? После применения команды его локальный ключ будет удалён.`)) {
+      if (confirm(`Отозвать узел ${node.hostname}? Controller пометит identity как revoked, а агент остановится. Для возврата потребуется явная повторная установка/регистрация.`)) {
         sendControl("uninstall");
       }
     });
 
     createMissionButton.addEventListener("click", async () => {
       const title = missionTitle.value.trim();
-      if (!title) return setStatus("Введите название миссии.", "bad");
+      const taskText = missionTask.value.trim();
+      if (!title) return setStatus("Введите название задачи.", "bad");
+      if (!taskText) return setStatus("Напишите, что нужно проверить.", "bad");
+      if (missionType.value !== "system_inventory") return setStatus("Этот тип задачи пока не поддерживается.", "bad");
       createMissionButton.disabled = true;
-      setStatus("Создаю миссию и назначаю её узлу…");
+      missionCreateResult.textContent = "Создаю и назначаю задачу…";
+      missionCreateResult.className = "status";
       let created;
       try {
-        created = await api("/api/v1/architect/missions", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            node_id: nodeSelect.value,
-            title,
-            mission_type: "system_inventory",
-            expires_in_hours: Number(expiresHours.value)
-          })
-        });
+        created = await createInventoryMission(
+          nodeSelect.value,
+          title,
+          taskText,
+          Number(expiresHours.value)
+        );
       } catch (error) {
-        setStatus(`Миссия не создана: ${error.message}`, "bad");
+        missionCreateResult.textContent = `Задача не создана: ${error.message}`;
+        missionCreateResult.className = "status bad";
         createMissionButton.disabled = false;
         return;
       }
 
-      missionTitle.value = "Проверка системы";
-      setStatus(`Миссия создана.\nMission ID: ${created.mission.mission_id}`, "good");
+      missionCreateResult.textContent = `Задача отправлена узлу. Mission ID: ${created.mission.mission_id}. Агент заберёт её в следующем цикле; результат появится в «Миссии и результаты» и в диагностических отчётах.`;
+      missionCreateResult.className = "status good";
+      setStatus(`Задача создана.\nMission ID: ${created.mission.mission_id}`, "good");
       try {
         await loadDashboard();
       } catch (error) {
         setStatus(
-          `Миссия создана (${created.mission.mission_id}), но панель не обновилась: ${error.message}`,
+          `Задача создана (${created.mission.mission_id}), но панель не обновилась: ${error.message}`,
           "bad"
         );
       } finally {
         createMissionButton.disabled = false;
       }
     });
+
+    sshHost.value = sessionStorage.getItem("citadelSshHost") || "";
+    sshUser.value = sessionStorage.getItem("citadelSshUser") || "";
+    sshHost.addEventListener("input", updateSshPanel);
+    sshUser.addEventListener("input", updateSshPanel);
+    copySshButton.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(sshCommand.textContent);
+        setStatus("SSH-команда скопирована.", "good");
+      } catch {
+        setStatus("Не удалось скопировать SSH-команду автоматически.", "bad");
+      }
+    });
+    openSshButton.addEventListener("click", () => {
+      const host = safeHost(sshHost.value);
+      if (host) window.open(`https://${host}`, "_blank", "noopener,noreferrer");
+    });
+    updateSshPanel();
 
     if (architectToken) {
       loadDashboard().catch(() => logout("Сохранённый сеанс недействителен. Войдите снова."));
