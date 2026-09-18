@@ -93,22 +93,8 @@
         <div id="liveNodesList" class="node-grid"></div>
       </section>
       <div class="hidden">
-        <b id="missionCount">0</b><b id="reportCount">0</b><b id="sessionCount">0</b>
+        <b id="missionCount">0</b><b id="reportCount">0</b>
       </div>
-
-      <section class="card hidden" aria-hidden="true">
-        <div class="section-head">
-          <h2>Контрольные точки</h2>
-          <button id="refreshSessionsButton" class="secondary" type="button">Обновить</button>
-        </div>
-        <p class="small">Сохраняет рабочее состояние на сервере без секрета входа и без содержимого отчётов.</p>
-        <label for="sessionName">Название</label>
-        <input id="sessionName" maxlength="120" value="Контрольная точка">
-        <button id="saveSessionButton" type="button">Сохранить сессию</button>
-        <div id="storageUsage" class="status">Использование хранилища загружается…</div>
-        <div id="sessionsList"></div>
-        <button id="loadMoreSessionsButton" class="secondary hidden" type="button">Показать ещё контрольные точки</button>
-      </section>
 
       <section class="card">
         <h2>Управление узлом</h2>
@@ -171,20 +157,22 @@
         <div id="projectsList"></div>
       </section>
 
-      <section class="card hidden" aria-hidden="true">
-        <h2>Служебная диагностика узла</h2>
-        <label for="nodeSelect">Узел</label>
+      <section class="card" id="missionPanel">
+        <h2>Создать диагностическую миссию</h2>
+        <p class="small">Выберите живую ноду, напишите что именно проверить и отправьте задание. После создания здесь останутся Node ID и Mission ID; результат появится в блоке «Миссии и результаты».</p>
+        <label for="nodeSelect">Нода</label>
         <select id="nodeSelect"></select>
+        <div id="missionNodeState" class="status">Выберите ноду.</div>
         <label for="missionType">Тип задачи</label>
         <select id="missionType"><option value="system_inventory">Проверка состояния компьютера</option></select>
         <label for="missionTitle">Название</label>
         <input id="missionTitle" maxlength="160" value="Проверка системы">
-        <label for="missionTask">Что нужно сделать</label>
-        <textarea id="missionTask" maxlength="2000">Проверить состояние компьютера: ресурсы, систему и базовые параметры. Вернуть понятный отчёт.</textarea>
+        <label for="missionTask">Что проверить</label>
+        <textarea id="missionTask" maxlength="2000">Проверить состояние компьютера: CPU, RAM, диск, систему, сеть и базовые параметры. Вернуть понятный диагностический отчёт.</textarea>
         <label for="expiresHours">Срок действия</label>
         <select id="expiresHours"><option value="1">1 час</option><option value="24" selected>24 часа</option><option value="72">3 дня</option></select>
-        <button id="createMissionButton" type="button">Отправить диагностику узлу</button>
-        <div id="missionCreateResult" class="status">Служебная диагностика.</div>
+        <button id="createMissionButton" type="button">Создать и назначить миссию</button>
+        <div id="missionCreateResult" class="status">Миссия ещё не создавалась.</div>
       </section>
 
       <section class="card">
@@ -244,12 +232,7 @@
     const reportDetailMeta = document.getElementById("reportDetailMeta");
     const reportDetailBody = document.getElementById("reportDetailBody");
     const closeReportButton = document.getElementById("closeReportButton");
-    const refreshSessionsButton = document.getElementById("refreshSessionsButton");
-    const loadMoreSessionsButton = document.getElementById("loadMoreSessionsButton");
     const loadMoreReportsButton = document.getElementById("loadMoreReportsButton");
-    const saveSessionButton = document.getElementById("saveSessionButton");
-    const sessionName = document.getElementById("sessionName");
-    const storageUsage = document.getElementById("storageUsage");
     const nodeSelect = document.getElementById("nodeSelect");
     const controlNodeSelect = document.getElementById("controlNodeSelect");
     const nodeDiagnostics = document.getElementById("nodeDiagnostics");
@@ -285,6 +268,7 @@
     const operationsAlert = document.getElementById("operationsAlert");
     const operationsAlertList = document.getElementById("operationsAlertList");
     const closeOperationsAlert = document.getElementById("closeOperationsAlert");
+    const missionNodeState = document.getElementById("missionNodeState");
     const missionType = document.getElementById("missionType");
     const missionTitle = document.getElementById("missionTitle");
     const missionTask = document.getElementById("missionTask");
@@ -309,7 +293,6 @@
     let openingBriefShown = false;
     let activeReportId = null;
     let reportNextOffset = null;
-    let sessionNextOffset = null;
     let authGeneration = 0;
 
     function setStatus(message, kind = "") {
@@ -604,6 +587,48 @@
       if (!currentProjects.length) addText(projectsList, "p", "Проектов пока нет.", "muted");
     }
 
+    function selectedMissionNode() {
+      return currentNodes.find((item) => item.node_id === nodeSelect.value) || null;
+    }
+
+    function renderMissionNodeState() {
+      const node = selectedMissionNode();
+      if (!node) {
+        missionNodeState.textContent = "Выберите ноду.";
+        missionNodeState.className = "status";
+        createMissionButton.disabled = true;
+        return;
+      }
+      const health = nodeHealth(node);
+      const runnable = health.live && node.status !== "paused" && node.status !== "revoked";
+      if (runnable) {
+        missionNodeState.textContent = `${nodeDisplayName(node)} · LIVE · готова принять диагностическую миссию. Последняя связь: ${node.last_seen_at || "—"}`;
+        missionNodeState.className = "status good";
+      } else if (node.status === "paused") {
+        missionNodeState.textContent = `${nodeDisplayName(node)} на паузе. Возобновите ноду перед созданием миссии.`;
+        missionNodeState.className = "status bad";
+      } else {
+        missionNodeState.textContent = `${nodeDisplayName(node)} OFFLINE. Heartbeat не поступает с ${node.last_seen_at || "неизвестного времени"}. Controller не может достоверно знать локальную причину, пока нода не восстановит связь.`;
+        missionNodeState.className = "status bad";
+      }
+      createMissionButton.disabled = !runnable;
+    }
+
+    function syncUpdateAllStatus() {
+      const eligible = currentNodes.filter((node) => node.status !== "revoked");
+      const outdated = currentReleaseVersion
+        ? eligible.filter((node) => node.agent_version !== currentReleaseVersion).length
+        : 0;
+      updateAllAgentsButton.disabled = !currentReleaseVersion || outdated === 0;
+      updateAllAgentsButton.textContent = outdated
+        ? `Обновить ${outdated} агентов → ${currentReleaseVersion}`
+        : "Все агенты актуальны";
+      if (!outdated && currentReleaseVersion) {
+        updateAllStatus.textContent = `Все зарегистрированные агенты уже на версии ${currentReleaseVersion}.`;
+        updateAllStatus.className = "status good";
+      }
+    }
+
     function renderNodes(nodes) {
       const previousControl = controlNodeSelect.value;
       const previousMission = nodeSelect.value;
@@ -689,10 +714,11 @@
       document.getElementById("nodeCount").textContent = currentNodes.length;
       document.getElementById("onlineCount").textContent = liveCount;
       document.getElementById("unhealthyCount").textContent = unhealthyCount;
-      createMissionButton.disabled = ![...nodeSelect.options].some((option) => !option.disabled);
       renderLiveCharts(currentNodes);
       updateControlButtons();
       renderNodeDiagnostics();
+      renderMissionNodeState();
+      syncUpdateAllStatus();
     }
 
     function updateControlButtons() {
@@ -701,20 +727,22 @@
         command.node_id === node?.node_id && ["pending", "accepted"].includes(command.status)
       );
       const unavailable = !node || node.status === "revoked";
+      const live = node ? isNodeLive(node) : false;
+      const liveUnavailable = unavailable || !live;
       ipButton.disabled = unavailable;
-      healthButton.disabled = unavailable;
-      pauseButton.disabled = unavailable || pending || node.status === "paused";
-      resumeButton.disabled = unavailable || pending || node.status !== "paused";
-      updateButton.disabled = unavailable || pending;
-      restartButton.disabled = unavailable || pending;
-      stopButton.disabled = unavailable || pending || node.agent_version !== currentReleaseVersion;
+      healthButton.disabled = liveUnavailable || node?.status === "paused";
+      pauseButton.disabled = liveUnavailable || pending || node.status === "paused";
+      resumeButton.disabled = liveUnavailable || pending || node.status !== "paused";
+      updateButton.disabled = liveUnavailable || pending;
+      restartButton.disabled = liveUnavailable || pending;
+      stopButton.disabled = liveUnavailable || pending || node.agent_version !== currentReleaseVersion;
       stopButton.title = node && node.agent_version !== currentReleaseVersion
         ? `Сначала обновите агент до ${currentReleaseVersion || "текущей версии"}`
         : "";
-      rollbackButton.disabled = unavailable || pending;
-      rebootButton.disabled = unavailable || pending;
-      shutdownButton.disabled = unavailable || pending;
-      disconnectButton.disabled = unavailable || pending;
+      rollbackButton.disabled = liveUnavailable || pending;
+      rebootButton.disabled = liveUnavailable || pending;
+      shutdownButton.disabled = liveUnavailable || pending;
+      disconnectButton.disabled = liveUnavailable || pending;
     }
 
     function renderCommands(commands) {
@@ -754,151 +782,6 @@
       if (!missions.length) addText(list, "p", "Миссий пока нет.", "muted");
     }
 
-    function formatBytes(value) {
-      const bytes = Number(value) || 0;
-      if (bytes < 1024) return `${bytes} Б`;
-      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КиБ`;
-      return `${(bytes / 1024 / 1024).toFixed(2)} МиБ`;
-    }
-
-    function renderStorageUsage(usage) {
-      const used = (Number(usage.report_bytes) || 0) + (Number(usage.session_bytes) || 0);
-      const percent = usage.safe_d1_target_bytes
-        ? Math.min(100, used / Number(usage.safe_d1_target_bytes) * 100)
-        : 0;
-      storageUsage.textContent = [
-        `Отчёты: ${usage.report_count} · ${formatBytes(usage.report_bytes)}`,
-        `Сессии: ${usage.session_count} · ${formatBytes(usage.session_bytes)}`,
-        `Учтённые данные занимают ${percent.toFixed(3)}% безопасного лимита 400 МиБ`,
-        "Системные таблицы и индексы в эту оценку не входят."
-      ].join("\n");
-      storageUsage.className = `status ${percent >= 90 ? "bad" : percent >= 75 ? "warn" : "good"}`;
-    }
-
-    function renderSessions(sessions, append = false) {
-      const list = document.getElementById("sessionsList");
-      if (!append) list.replaceChildren();
-      for (const session of sessions) {
-        const item = document.createElement("div");
-        item.className = `item ${session.status === "active" ? "ok" : "warn"}`;
-        addText(item, "strong", `${session.name} — ${session.status}`);
-        addText(item, "div", `Версия: ${session.schema_version} · ${formatBytes(session.snapshot_size_bytes)}`, "small");
-        addText(item, "div", `Обновлена: ${session.updated_at}`, "small");
-        const actions = document.createElement("div");
-        actions.className = "toolbar";
-        const restoreButton = addText(actions, "button", "Восстановить", "secondary");
-        restoreButton.type = "button";
-        restoreButton.addEventListener("click", () => restoreSession(session.session_id));
-        const exportButton = addText(actions, "button", "Экспорт", "secondary");
-        exportButton.type = "button";
-        exportButton.addEventListener("click", () => exportSession(session.session_id));
-        const archiveButton = addText(
-          actions,
-          "button",
-          session.status === "active" ? "В архив" : "Вернуть",
-          "secondary"
-        );
-        archiveButton.type = "button";
-        archiveButton.addEventListener("click", () => updateSession(
-          session.session_id,
-          { status: session.status === "active" ? "archived" : "active" }
-        ));
-        const deleteButton = addText(actions, "button", "Удалить", "danger");
-        deleteButton.type = "button";
-        deleteButton.addEventListener("click", () => deleteSession(session));
-        item.appendChild(actions);
-        list.appendChild(item);
-      }
-      if (!sessions.length && !append) addText(list, "p", "Контрольных точек пока нет.", "muted");
-    }
-
-    async function loadSessionsAndUsage(reset = true) {
-      if (!reset && sessionNextOffset === null) return [];
-      const offset = reset ? 0 : sessionNextOffset;
-      const [sessions, storage] = await Promise.all([
-        api(`/api/v1/architect/sessions?limit=30&offset=${offset}`),
-        api("/api/v1/architect/storage")
-      ]);
-      renderSessions(sessions.sessions || [], !reset);
-      sessionNextOffset = sessions.next_offset ?? null;
-      loadMoreSessionsButton.classList.toggle("hidden", sessionNextOffset === null);
-      renderStorageUsage(storage.usage || {});
-      document.getElementById("sessionCount").textContent = storage.usage?.session_count || 0;
-      return sessions.sessions || [];
-    }
-
-    function selectExistingOption(select, value) {
-      if (!value) return false;
-      const option = [...select.options].find((item) => item.value === value && !item.disabled);
-      if (!option) return false;
-      select.value = value;
-      return true;
-    }
-
-    async function restoreSession(sessionId) {
-      setStatus("Восстанавливаю контрольную точку…");
-      try {
-        const data = await api(`/api/v1/architect/sessions/${encodeURIComponent(sessionId)}`);
-        const ui = data.session.snapshot?.ui_state || {};
-        selectExistingOption(nodeSelect, ui.selected_node_id);
-        selectExistingOption(controlNodeSelect, ui.selected_control_node_id);
-        updateControlButtons();
-        if (ui.selected_report_id) {
-          await openReport(ui.selected_report_id);
-        } else {
-          closeReportDetail();
-        }
-        sessionName.value = data.session.name;
-        setStatus(`Контрольная точка «${data.session.name}» восстановлена.`, "good");
-      } catch (error) {
-        setStatus(`Сессия не восстановлена: ${error.message}`, "bad");
-      }
-    }
-
-    async function updateSession(sessionId, changes) {
-      try {
-        await api(`/api/v1/architect/sessions/${encodeURIComponent(sessionId)}`, {
-          method: "PATCH",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(changes)
-        });
-        await loadSessionsAndUsage();
-        setStatus("Контрольная точка обновлена.", "good");
-      } catch (error) {
-        setStatus(`Контрольная точка не обновлена: ${error.message}`, "bad");
-      }
-    }
-
-    async function exportSession(sessionId) {
-      try {
-        const data = await api(`/api/v1/architect/sessions/${encodeURIComponent(sessionId)}`);
-        const blob = new Blob([JSON.stringify(data.session, null, 2)], {
-          type: "application/json"
-        });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = `${data.session.session_id}.json`;
-        link.click();
-        URL.revokeObjectURL(link.href);
-        setStatus(`Контрольная точка «${data.session.name}» экспортирована.`, "good");
-      } catch (error) {
-        setStatus(`Экспорт не выполнен: ${error.message}`, "bad");
-      }
-    }
-
-    async function deleteSession(session) {
-      if (!confirm(`Удалить контрольную точку «${session.name}»?`)) return;
-      try {
-        await api(`/api/v1/architect/sessions/${encodeURIComponent(session.session_id)}`, {
-          method: "DELETE"
-        });
-        await loadSessionsAndUsage();
-        setStatus("Контрольная точка удалена. Действие записано в аудит.", "good");
-      } catch (error) {
-        setStatus(`Контрольная точка не удалена: ${error.message}`, "bad");
-      }
-    }
-
     function renderReports(reports, append = false) {
       currentReports = append ? [...currentReports, ...reports] : reports;
       const list = document.getElementById("reportsList");
@@ -931,6 +814,29 @@
       return data.reports || [];
     }
 
+    function readableReport(report) {
+      const c = report?.content;
+      if (!c || typeof c !== "object") return String(c ?? "Нет содержимого.");
+      if (report.report_type !== "system_inventory") return JSON.stringify(c, null, 2);
+      const gb = (value) => Number.isFinite(Number(value)) ? (Number(value) / 1073741824).toFixed(2) + " GB" : "—";
+      const network = c.network && typeof c.network === "object"
+        ? Object.entries(c.network).filter(([,v]) => v).map(([k,v]) => `${k}: ${v}`).join(" · ")
+        : "—";
+      return [
+        `Компьютер: ${c.hostname || "—"}`,
+        `Снято: ${c.captured_at || report.created_at || "—"}`,
+        `Задание: ${c.requested_task || "стандартная диагностика"}`,
+        "",
+        `Система: ${c.platform || "—"} ${c.platform_release || ""}`.trim(),
+        `Архитектура: ${c.architecture || "—"}`,
+        `Python: ${c.python_version || "—"}`,
+        `Логических CPU: ${c.cpu_logical_count ?? "—"}`,
+        `Оперативная память: ${gb(c.memory_total_bytes)}`,
+        `Диск: всего ${gb(c.disk_home_total_bytes)} · свободно ${gb(c.disk_home_free_bytes)}`,
+        `Сеть: ${network}`
+      ].join("\n");
+    }
+
     async function openReport(reportId) {
       const generation = authGeneration;
       setStatus("Загружаю полный отчёт…");
@@ -948,7 +854,7 @@
           `Размер: ${report.report_size_bytes} байт`,
           `SHA-256: ${report.report_sha256}`
         ].join(" · ");
-        reportDetailBody.textContent = JSON.stringify(report.content, null, 2);
+        reportDetailBody.textContent = readableReport(report);
         reportDetailCard.classList.remove("hidden");
         reportDetailCard.scrollIntoView({ behavior: "smooth", block: "start" });
         setStatus("Полный отчёт загружен.", "good");
@@ -959,11 +865,9 @@
 
     async function loadDashboard() {
       setStatus("Загружаю Live Operations…");
-      const [data, reports, sessions, storage, presence, release, projects, roles] = await Promise.all([
+      const [data, reports, presence, release, projects, roles] = await Promise.all([
         api("/api/v1/architect/overview"),
         api("/api/v1/architect/reports?limit=50&offset=0"),
-        api("/api/v1/architect/sessions?limit=30&offset=0"),
-        api("/api/v1/architect/storage"),
         api("/api/v1/architect/presence"),
         api("/api/v1/architect/release"),
         api("/api/v1/architect/projects"),
@@ -976,7 +880,6 @@
         : "Обновить агент дистанционно";
       document.getElementById("missionCount").textContent = data.counts.missions;
       document.getElementById("reportCount").textContent = data.counts.reports;
-      document.getElementById("sessionCount").textContent = data.counts.sessions;
       document.getElementById("projectCount").textContent = (projects.projects || []).length;
       document.getElementById("nodesUpdated").textContent = `обновлено ${new Date().toLocaleTimeString()}`;
       renderWorkRoles(roles.roles || []);
@@ -987,10 +890,6 @@
       renderProjects(projects.projects || []);
       reportNextOffset = reports.next_offset ?? null;
       loadMoreReportsButton.classList.toggle("hidden", reportNextOffset === null);
-      renderSessions(sessions.sessions || []);
-      sessionNextOffset = sessions.next_offset ?? null;
-      loadMoreSessionsButton.classList.toggle("hidden", sessionNextOffset === null);
-      renderStorageUsage(storage.usage || {});
       loginCard.classList.add("hidden");
       dashboard.classList.remove("hidden");
       if (!openingBriefShown) showOperationsBrief(data.nodes || []);
@@ -1012,7 +911,6 @@
       closeReportDetail();
       currentReports = [];
       reportNextOffset = null;
-      sessionNextOffset = null;
       openingBriefShown = false;
       operationsAlert.classList.add("hidden");
       dashboard.classList.add("hidden");
@@ -1047,12 +945,8 @@
     refreshReportsButton.addEventListener("click", async () => {
       refreshReportsButton.disabled = true;
       try {
-        const [reports, storage] = await Promise.all([
-          loadReports(true),
-          api("/api/v1/architect/storage")
-        ]);
-        renderStorageUsage(storage.usage || {});
-        document.getElementById("reportCount").textContent = storage.usage?.report_count || 0;
+        const reports = await loadReports(true);
+        document.getElementById("reportCount").textContent = currentReports.length;
         setStatus(`Список отчётов обновлён: ${reports.length}.`, "good");
       } catch (error) {
         setStatus(`Отчёты не обновлены: ${error.message}`, "bad");
@@ -1069,55 +963,10 @@
       finally { loadMoreReportsButton.disabled = false; }
     });
 
-    loadMoreSessionsButton.addEventListener("click", async () => {
-      loadMoreSessionsButton.disabled = true;
-      try { await loadSessionsAndUsage(false); }
-      catch (error) { setStatus(`Контрольные точки не загружены: ${error.message}`, "bad"); }
-      finally { loadMoreSessionsButton.disabled = false; }
-    });
-
-    refreshSessionsButton.addEventListener("click", async () => {
-      refreshSessionsButton.disabled = true;
-      try {
-        const sessions = await loadSessionsAndUsage(true);
-        setStatus(`Контрольные точки обновлены: ${sessions.length}.`, "good");
-      } catch (error) {
-        setStatus(`Контрольные точки не обновлены: ${error.message}`, "bad");
-      } finally {
-        refreshSessionsButton.disabled = false;
-      }
-    });
-
-    saveSessionButton.addEventListener("click", async () => {
-      const name = sessionName.value.trim();
-      if (!name) return setStatus("Введите название контрольной точки.", "bad");
-      saveSessionButton.disabled = true;
-      try {
-        const data = await api("/api/v1/architect/sessions", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            name,
-            ui_state: {
-              selected_node_id: nodeSelect.value || null,
-              selected_control_node_id: controlNodeSelect.value || null,
-              selected_report_id: activeReportId,
-              expanded_section: activeReportId ? "report_detail" : "dashboard"
-            }
-          })
-        });
-        await loadDashboard();
-        setStatus(`Контрольная точка «${data.session.name}» сохранена на сервере.`, "good");
-      } catch (error) {
-        setStatus(`Сессия не сохранена: ${error.message}`, "bad");
-      } finally {
-        saveSessionButton.disabled = false;
-      }
-    });
-
     logoutButton.addEventListener("click", () => logout());
     closeOperationsAlert.addEventListener("click", () => operationsAlert.classList.add("hidden"));
     controlNodeSelect.addEventListener("change", () => { updateControlButtons(); renderNodeDiagnostics(); });
+    nodeSelect.addEventListener("change", renderMissionNodeState);
 
     async function sendControl(commandType, confirmation = null) {
       const nodeId = controlNodeSelect.value;
@@ -1187,7 +1036,7 @@
         updateAllStatus.textContent = `Массовое обновление не запущено: ${error.message}`;
         updateAllStatus.className = "status bad";
       } finally {
-        updateAllAgentsButton.disabled = false;
+        syncUpdateAllStatus();
       }
     });
 
@@ -1278,41 +1127,46 @@
     });
 
     createMissionButton.addEventListener("click", async () => {
+      const node = selectedMissionNode();
       const title = missionTitle.value.trim();
       const taskText = missionTask.value.trim();
+      if (!node) return setStatus("Выберите ноду.", "bad");
+      if (!isNodeLive(node) || node.status === "paused" || node.status === "revoked") {
+        renderMissionNodeState();
+        return setStatus("Миссия не отправлена: выбранная нода сейчас не готова к выполнению.", "bad");
+      }
       if (!title) return setStatus("Введите название задачи.", "bad");
       if (!taskText) return setStatus("Напишите, что нужно проверить.", "bad");
       if (missionType.value !== "system_inventory") return setStatus("Этот тип задачи пока не поддерживается.", "bad");
+      const selectedNodeId = node.node_id;
       createMissionButton.disabled = true;
-      missionCreateResult.textContent = "Создаю и назначаю задачу…";
+      missionCreateResult.textContent = `Создаю миссию для ${nodeDisplayName(node)}…`;
       missionCreateResult.className = "status";
-      let created;
       try {
-        created = await createInventoryMission(
-          nodeSelect.value,
+        const created = await createInventoryMission(
+          selectedNodeId,
           title,
           taskText,
           Number(expiresHours.value)
         );
-      } catch (error) {
-        missionCreateResult.textContent = `Задача не создана: ${error.message}`;
-        missionCreateResult.className = "status bad";
-        createMissionButton.disabled = false;
-        return;
-      }
-
-      missionCreateResult.textContent = `Задача отправлена узлу. Mission ID: ${created.mission.mission_id}. Агент заберёт её в следующем цикле; результат появится в «Миссии и результаты» и в диагностических отчётах.`;
-      missionCreateResult.className = "status good";
-      setStatus(`Задача создана.\nMission ID: ${created.mission.mission_id}`, "good");
-      try {
+        const missionId = created.mission.mission_id;
+        missionCreateResult.textContent = [
+          "Миссия создана и назначена.",
+          `Нода: ${nodeDisplayName(node)} (${selectedNodeId})`,
+          `Mission ID: ${missionId}`,
+          `Задание: ${taskText}`,
+          "Агент заберёт её в ближайшем цикле. Результат появится ниже."
+        ].join("\n");
+        missionCreateResult.className = "status good";
+        setStatus(`Миссия ${missionId} создана для ${nodeDisplayName(node)}.`, "good");
         await loadDashboard();
+        if ([...nodeSelect.options].some((o) => o.value === selectedNodeId)) nodeSelect.value = selectedNodeId;
+        renderMissionNodeState();
       } catch (error) {
-        setStatus(
-          `Задача создана (${created.mission.mission_id}), но панель не обновилась: ${error.message}`,
-          "bad"
-        );
+        missionCreateResult.textContent = `Миссия не создана: ${error.message}`;
+        missionCreateResult.className = "status bad";
       } finally {
-        createMissionButton.disabled = false;
+        renderMissionNodeState();
       }
     });
 
