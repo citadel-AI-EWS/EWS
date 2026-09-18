@@ -42,6 +42,7 @@ const CONTROLLER_COMMAND_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0
 let reportSchemaPromise;
 let legacyReportBackfillPromise;
 let sessionSchemaPromise;
+let commandIndexPromise;
 
 class ApiError extends Error {
   constructor(status, code) {
@@ -285,6 +286,20 @@ async function ensureSessionStorage(env) {
     });
   }
   await sessionSchemaPromise;
+}
+
+async function ensureCommandStorage(env) {
+  if (!commandIndexPromise) {
+    commandIndexPromise = env.DB.prepare(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_one_active_per_node
+      ON commands(node_id)
+      WHERE status IN ('pending', 'accepted')
+    `).run().catch((error) => {
+      commandIndexPromise = undefined;
+      throw error;
+    });
+  }
+  await commandIndexPromise;
 }
 
 function bytesToHex(bytes) {
@@ -852,7 +867,7 @@ async function acceptAssignment(request, env, nodeId, assignmentId, url) {
     throw new ApiError(409, "node_paused");
   }
 
-  await env.DB.batch([
+  const acceptResults = await env.DB.batch([
     env.DB.prepare(`
       UPDATE assignments
       SET status = 'running',
@@ -867,6 +882,12 @@ async function acceptAssignment(request, env, nodeId, assignmentId, url) {
           WHERE missions.mission_id = assignments.mission_id
             AND missions.status != 'cancelled'
             AND (missions.expires_at IS NULL OR datetime(missions.expires_at) > CURRENT_TIMESTAMP)
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM nodes
+          WHERE nodes.node_id = assignments.node_id
+            AND nodes.status NOT IN ('paused', 'revoked')
         )
     `).bind(assignmentId, nodeId),
     env.DB.prepare(`
@@ -886,6 +907,17 @@ async function acceptAssignment(request, env, nodeId, assignmentId, url) {
 
   if (!assignment) {
     throw new ApiError(404, "assignment_not_found");
+  }
+  if ((acceptResults[0]?.meta?.changes || 0) === 0 && assignment.status === "assigned") {
+    const currentNode = await env.DB.prepare(
+      "SELECT status FROM nodes WHERE node_id = ?"
+    ).bind(nodeId).first();
+    if (currentNode?.status === "paused") {
+      throw new ApiError(409, "node_paused");
+    }
+    if (currentNode?.status === "revoked") {
+      throw new ApiError(403, "node_revoked");
+    }
   }
   if (assignment.status !== "running") {
     throw new ApiError(409, "assignment_not_active");
@@ -1047,25 +1079,42 @@ async function architectListReports(request, env, url) {
   await ensureReportStorage(env);
 
   const rawLimit = url.searchParams.get("limit") || "50";
-  if (!/^\d{1,3}$/.test(rawLimit)) {
-    throw new ApiError(400, "invalid_limit");
+  const rawOffset = url.searchParams.get("offset") || "0";
+  if (!/^\d{1,3}$/.test(rawLimit) || !/^\d{1,7}$/.test(rawOffset)) {
+    throw new ApiError(400, "invalid_pagination");
   }
   const limit = Number(rawLimit);
-  if (limit < 1 || limit > 100) {
-    throw new ApiError(400, "invalid_limit");
+  const offset = Number(rawOffset);
+  if (limit < 1 || limit > 100 || offset < 0 || offset > 1000000) {
+    throw new ApiError(400, "invalid_pagination");
   }
 
   const nodeId = optionalString(url.searchParams.get("node_id"), "node_id", 128);
   const missionId = optionalString(url.searchParams.get("mission_id"), "mission_id", 128);
   const reportType = optionalString(url.searchParams.get("report_type"), "report_type", 64);
+  const predicates = [];
+  const bindings = [];
+  if (nodeId) {
+    predicates.push("ar.node_id = ?");
+    bindings.push(nodeId);
+  }
+  if (missionId) {
+    predicates.push("ar.mission_id = ?");
+    bindings.push(missionId);
+  }
+  if (reportType) {
+    predicates.push("ar.report_type = ?");
+    bindings.push(reportType);
+  }
+  const where = predicates.length ? `WHERE ${predicates.join(" AND ")}` : "";
 
   const query = await env.DB.prepare(`
     SELECT
       ar.report_id,
-      r.result_id,
-      r.assignment_id,
-      a.mission_id,
-      r.node_id,
+      ar.result_id,
+      ar.assignment_id,
+      ar.mission_id,
+      ar.node_id,
       r.outcome,
       r.summary,
       r.artifact_key,
@@ -1076,25 +1125,16 @@ async function architectListReports(request, env, url) {
       ar.created_at
     FROM agent_reports AS ar
     JOIN results AS r ON r.result_id = ar.result_id
-    JOIN assignments AS a ON a.assignment_id = r.assignment_id
-    WHERE (? IS NULL OR r.node_id = ?)
-      AND (? IS NULL OR a.mission_id = ?)
-      AND (? IS NULL OR ar.report_type = ?)
-    ORDER BY ar.created_at DESC
-    LIMIT ?
-  `).bind(
-    nodeId,
-    nodeId,
-    missionId,
-    missionId,
-    reportType,
-    reportType,
-    limit
-  ).all();
+    ${where}
+    ORDER BY ar.created_at DESC, ar.report_id DESC
+    LIMIT ? OFFSET ?
+  `).bind(...bindings, limit, offset).all();
 
+  const reports = query.results || [];
   return json({
     ok: true,
-    reports: query.results || []
+    reports,
+    next_offset: reports.length === limit ? offset + limit : null
   });
 }
 
@@ -1106,9 +1146,9 @@ async function architectGetReport(request, env, reportId) {
     SELECT
       ar.report_id,
       r.result_id,
-      r.assignment_id,
-      a.mission_id,
-      r.node_id,
+      ar.assignment_id,
+      ar.mission_id,
+      ar.node_id,
       r.outcome,
       r.summary,
       r.artifact_key,
@@ -1121,8 +1161,7 @@ async function architectGetReport(request, env, reportId) {
       ar.created_at
     FROM agent_reports AS ar
     JOIN results AS r ON r.result_id = ar.result_id
-    JOIN assignments AS a ON a.assignment_id = r.assignment_id
-    WHERE ar.report_id = ? OR r.result_id = ?
+    WHERE ar.report_id = ? OR ar.result_id = ?
   `).bind(reportId, reportId).first();
 
   if (!report) {
@@ -1168,23 +1207,30 @@ async function architectListSessions(request, env, url) {
   await ensureSessionStorage(env);
 
   const rawLimit = url.searchParams.get("limit") || "30";
-  if (!/^\d{1,3}$/.test(rawLimit)) {
-    throw new ApiError(400, "invalid_limit");
+  const rawOffset = url.searchParams.get("offset") || "0";
+  if (!/^\d{1,3}$/.test(rawLimit) || !/^\d{1,7}$/.test(rawOffset)) {
+    throw new ApiError(400, "invalid_pagination");
   }
   const limit = Number(rawLimit);
-  if (limit < 1 || limit > 100) {
-    throw new ApiError(400, "invalid_limit");
+  const offset = Number(rawOffset);
+  if (limit < 1 || limit > 100 || offset < 0 || offset > 1000000) {
+    throw new ApiError(400, "invalid_pagination");
   }
 
   const query = await env.DB.prepare(`
     SELECT session_id, name, schema_version, snapshot_sha256,
       snapshot_size_bytes, status, created_at, updated_at
     FROM architect_sessions
-    ORDER BY updated_at DESC
-    LIMIT ?
-  `).bind(limit).all();
+    ORDER BY updated_at DESC, session_id DESC
+    LIMIT ? OFFSET ?
+  `).bind(limit, offset).all();
 
-  return json({ ok: true, sessions: query.results || [] });
+  const sessions = query.results || [];
+  return json({
+    ok: true,
+    sessions,
+    next_offset: sessions.length === limit ? offset + limit : null
+  });
 }
 
 async function architectCreateSession(request, env) {
@@ -1299,13 +1345,14 @@ async function architectUpdateSession(request, env, sessionId) {
     throw new ApiError(400, "session_update_required");
   }
 
+  const updatedAt = new Date().toISOString();
   const result = await env.DB.prepare(`
     UPDATE architect_sessions
     SET name = COALESCE(?, name),
         status = COALESCE(?, status),
-        updated_at = CURRENT_TIMESTAMP
+        updated_at = ?
     WHERE session_id = ?
-  `).bind(name, status, sessionId).run();
+  `).bind(name, status, updatedAt, sessionId).run();
   if ((result?.meta?.changes || 0) !== 1) {
     throw new ApiError(404, "session_not_found");
   }
@@ -1500,31 +1547,43 @@ async function architectOverview(request, env) {
     env.DB.prepare(
       "SELECT " +
       "(SELECT COUNT(*) FROM nodes) AS nodes, " +
-      "(SELECT COUNT(*) FROM nodes WHERE status = 'online') AS online_nodes, " +
+      "(SELECT COUNT(*) FROM nodes WHERE status = 'online' " +
+      "AND datetime(last_seen_at) >= datetime('now', '-5 minutes')) AS online_nodes, " +
       "(SELECT COUNT(*) FROM missions) AS missions, " +
       "(SELECT COUNT(*) FROM agent_reports) AS reports, " +
       "(SELECT COUNT(*) FROM architect_sessions) AS sessions"
     ).first(),
     env.DB.prepare(
       "SELECT n.node_id, nn.node_number, n.hostname, n.os_name, n.os_version, n.architecture, " +
-      "n.agent_version, n.status, n.cpu_percent, n.memory_percent, " +
+      "n.agent_version, CASE WHEN n.status = 'online' " +
+      "AND (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-5 minutes')) " +
+      "THEN 'offline' ELSE n.status END AS status, n.cpu_percent, n.memory_percent, " +
       "n.enrolled_at, n.last_seen_at FROM nodes AS n " +
       "LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id " +
       "ORDER BY n.last_seen_at DESC LIMIT 100"
     ).all(),
     env.DB.prepare(
-      "SELECT m.mission_id, m.title, m.mission_type, m.status, " +
+      "SELECT m.mission_id, m.title, m.mission_type, " +
+      "CASE WHEN m.expires_at IS NOT NULL AND datetime(m.expires_at) <= CURRENT_TIMESTAMP " +
+      "AND m.status NOT IN ('completed', 'cancelled') THEN 'expired' ELSE m.status END AS status, " +
       "m.priority, m.created_at, m.expires_at, a.assignment_id, " +
       "a.node_id, a.status AS assignment_status, r.result_id, " +
       "r.outcome, r.summary, r.metrics_json, " +
       "r.created_at AS result_created_at FROM missions AS m " +
-      "LEFT JOIN assignments AS a ON a.mission_id = m.mission_id " +
-      "LEFT JOIN results AS r ON r.assignment_id = a.assignment_id " +
+      "LEFT JOIN assignments AS a ON a.assignment_id = (" +
+      "SELECT a2.assignment_id FROM assignments AS a2 " +
+      "WHERE a2.mission_id = m.mission_id " +
+      "ORDER BY a2.assigned_at DESC, a2.assignment_id DESC LIMIT 1" +
+      ") LEFT JOIN results AS r ON r.assignment_id = a.assignment_id " +
       "ORDER BY m.created_at DESC LIMIT 100"
     ).all(),
     env.DB.prepare(
       "SELECT command_id, node_id, command_type, status, created_at, completed_at " +
-      "FROM commands ORDER BY created_at DESC LIMIT 50"
+      "FROM commands WHERE status IN ('pending', 'accepted') " +
+      "OR command_id IN (" +
+      "SELECT command_id FROM commands WHERE status NOT IN ('pending', 'accepted') " +
+      "ORDER BY created_at DESC LIMIT 50" +
+      ") ORDER BY created_at DESC"
     ).all(),
     env.DB.prepare(
       "SELECT event_id, actor_type, actor_id, action, target_type, " +
@@ -1583,6 +1642,7 @@ async function architectRelease(request, env) {
 
 async function architectCreateCommand(request, env, nodeId) {
   await authenticateArchitect(request, env);
+  await ensureCommandStorage(env);
   const bodyText = await readBodyText(request, 8 * 1024);
   const body = parseJsonObject(bodyText);
   const commandType = requireString(body.command_type, "command_type", 32);
@@ -1628,18 +1688,26 @@ async function architectCreateCommand(request, env, nodeId) {
   );
   const detailsJson = JSON.stringify({ node_id: nodeId, command_type: commandType });
 
-  await env.DB.batch([
-    env.DB.prepare(
-      "INSERT INTO commands (" +
-      "command_id, node_id, command_type, payload_json, signature, status, created_at" +
-      ") VALUES (?, ?, ?, ?, ?, 'pending', ?)"
-    ).bind(commandId, nodeId, commandType, payloadJson, signature, createdAt),
-    env.DB.prepare(
-      "INSERT INTO audit_events (" +
-      "actor_type, actor_id, action, target_type, target_id, details_json" +
-      ") VALUES ('architect', 'test-console', 'command.created', 'command', ?, ?)"
-    ).bind(commandId, detailsJson)
-  ]);
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO commands (" +
+        "command_id, node_id, command_type, payload_json, signature, status, created_at" +
+        ") VALUES (?, ?, ?, ?, ?, 'pending', ?)"
+      ).bind(commandId, nodeId, commandType, payloadJson, signature, createdAt),
+      env.DB.prepare(
+        "INSERT INTO audit_events (" +
+        "actor_type, actor_id, action, target_type, target_id, details_json" +
+        ") SELECT 'architect', 'test-console', 'command.created', 'command', ?, ? " +
+        "WHERE EXISTS (SELECT 1 FROM commands WHERE command_id = ?)"
+      ).bind(commandId, detailsJson, commandId)
+    ]);
+  } catch (error) {
+    if (String(error).includes("idx_commands_one_active_per_node") || String(error).includes("UNIQUE")) {
+      throw new ApiError(409, "command_already_pending");
+    }
+    throw error;
+  }
 
   return json({
     ok: true,
