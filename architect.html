@@ -11,10 +11,10 @@
     main{max-width:760px;margin:auto}.brand{color:#8fb5ff;font-size:13px;font-weight:900;letter-spacing:.13em}
     h1{font-size:29px;line-height:1.15;margin:11px 0}h2{font-size:20px;margin:0 0 15px}p{color:#aeb9d2;line-height:1.45}
     .card{margin-top:17px;padding:19px;border:1px solid #2b3757;border-radius:18px;background:#11182a;box-shadow:0 18px 55px #0007}
-    label{display:block;margin:12px 0 7px;font-weight:750}input,select{width:100%;padding:13px;border:1px solid #3a496f;border-radius:11px;background:#090e1b;color:#fff;font-size:16px}
+    label{display:block;margin:12px 0 7px;font-weight:750}input,select,textarea{width:100%;padding:13px;border:1px solid #3a496f;border-radius:11px;background:#090e1b;color:#fff;font-size:16px}
     button{width:100%;margin-top:13px;padding:14px;border:0;border-radius:11px;background:#3478f6;color:#fff;font-size:16px;font-weight:850}
     button.secondary{background:#273451}button.danger{background:#703542}button:disabled{opacity:.55}.hidden{display:none!important}
-    .toolbar{display:flex;gap:10px;flex-wrap:wrap}.toolbar button{width:auto;flex:1}.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:17px}
+    .toolbar{display:flex;gap:10px;flex-wrap:wrap}.toolbar button{width:auto;flex:1}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:17px}
     .stat{padding:14px;border:1px solid #2b3757;border-radius:15px;background:#11182a}.stat b{display:block;font-size:25px}.stat span,.small{font-size:13px;color:#93a0ba}
     .item{margin-top:10px;padding:13px;border-radius:13px;background:#0b1222;border-left:4px solid #5b8fff;overflow-wrap:anywhere}.item.ok{border-left-color:#35d07f}.item.warn{border-left-color:#ffb44f}
     .item strong{display:block;margin-bottom:5px}.status{margin-top:15px;padding:13px;border-radius:11px;background:#0b1222;white-space:pre-wrap;overflow-wrap:anywhere}
@@ -49,7 +49,7 @@
         <div class="stat"><b id="onlineCount">0</b><span>узлов online</span></div>
         <div class="stat"><b id="missionCount">0</b><span>миссий</span></div>
         <div class="stat"><b id="reportCount">0</b><span>полных отчётов</span></div>
-        <div class="stat"><b id="sessionCount">0</b><span>контрольных точек</span></div>
+        <div class="stat hidden"><b id="sessionCount">0</b><span>контрольных точек</span></div>
       </div>
 
       <section class="card">
@@ -70,31 +70,59 @@
         <h2>Управление узлом</h2>
         <label for="controlNodeSelect">Узел</label>
         <select id="controlNodeSelect"></select>
+        <div id="nodeDiagnostics" class="status">Выберите узел — здесь появятся IP, состояние, CPU/RAM, версия и последняя связь.</div>
         <div class="control-buttons">
+          <button id="ipButton" class="secondary" type="button">Показать IP</button>
+          <button id="healthButton" class="secondary" type="button">Проверить здоровье</button>
           <button id="pauseButton" class="secondary" type="button">Поставить на паузу</button>
           <button id="resumeButton" class="secondary" type="button">Возобновить</button>
           <button id="updateButton" class="secondary full" type="button">Обновить агент дистанционно</button>
           <button id="restartButton" class="secondary" type="button">Перезапустить агент</button>
-          <button id="rollbackButton" class="danger" type="button">Откатить последнее обновление</button>
-          <button id="disconnectButton" class="danger full" type="button">Отключить узел</button>
+          <button id="stopButton" class="danger" type="button">Остановить агент</button>
+          <button id="rollbackButton" class="danger full" type="button">Откатить последнее обновление</button>
+          <button id="rebootButton" class="danger" type="button">Перезагрузить ПК</button>
+          <button id="shutdownButton" class="danger" type="button">Выключить ПК</button>
+          <button id="disconnectButton" class="danger full" type="button">Отозвать и удалить узел</button>
         </div>
-        <p class="small">Каждая команда подписывается Controller. Обновление проверяется по подписи, SHA‑256, self-test и fresh-process startup-check; при ошибке файлы автоматически откатываются. Доступен и ручной откат последней сохранённой версии.</p>
+        <p class="small">«Остановить агент» завершает только процесс агента и не отзывает его identity. Он снова запустится при следующем входе Windows или при локальном запуске. «Отозвать и удалить узел» — отдельная необратимая операция на Controller.</p>
       </section>
 
       <section class="card">
-        <h2>Создать безопасную миссию</h2>
+        <h2>SSH / Zero Trust</h2>
+        <p class="small">SSH не открывает порт 22 в интернет. Здесь настраивается локальная команда для Cloudflare Access/Tunnel. Наличие Tunnel проверяется отдельно.</p>
+        <label for="sshHost">Cloudflare Access hostname</label>
+        <input id="sshHost" type="text" inputmode="url" placeholder="ssh.example.com">
+        <label for="sshUser">SSH user</label>
+        <input id="sshUser" type="text" autocomplete="username" placeholder="username">
+        <div id="sshState" class="status">SSH цель ещё не настроена.</div>
+        <pre id="sshCommand" class="report-body">Укажите hostname и пользователя.</pre>
+        <div class="toolbar">
+          <button id="copySshButton" class="secondary" type="button" disabled>Копировать SSH-команду</button>
+          <button id="openSshButton" class="secondary" type="button" disabled>Открыть Browser SSH</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Создать задачу для узла</h2>
         <label for="nodeSelect">Узел</label>
         <select id="nodeSelect"></select>
+        <label for="missionType">Тип задачи</label>
+        <select id="missionType">
+          <option value="system_inventory">Проверка состояния компьютера</option>
+        </select>
         <label for="missionTitle">Название</label>
         <input id="missionTitle" maxlength="160" value="Проверка системы">
+        <label for="missionTask">Что нужно сделать</label>
+        <textarea id="missionTask" maxlength="2000">Проверить состояние компьютера: ресурсы, систему и базовые параметры. Вернуть понятный отчёт.</textarea>
         <label for="expiresHours">Срок действия</label>
         <select id="expiresHours">
           <option value="1">1 час</option>
           <option value="24" selected>24 часа</option>
           <option value="72">3 дня</option>
         </select>
-        <button id="createMissionButton" type="button">Создать и назначить</button>
-        <p class="small">На этом этапе разрешён только безопасный тип <code>system_inventory</code>.</p>
+        <button id="createMissionButton" type="button">Отправить задачу узлу</button>
+        <div id="missionCreateResult" class="status">После отправки здесь появятся Mission ID и объяснение, где смотреть результат.</div>
+        <p class="small">Сейчас агент исполняет только фиксированный безопасный тип <code>system_inventory</code>. Текст выше сохраняется как цель задачи, но не превращается в shell-команду или произвольный код.</p>
       </section>
 
       <section class="card">
@@ -114,17 +142,17 @@
 
       <section class="card">
         <div class="section-head">
-          <h2>Полные отчёты агентов</h2>
+          <h2>Диагностика и системные отчёты узлов</h2>
           <button id="refreshReportsButton" class="secondary" type="button">Обновить</button>
         </div>
-        <p class="small">В списке показываются только метаданные. Содержимое загружается отдельно после выбора отчёта.</p>
+        <p class="small">System Inventory — это техническая диагностика узла, а не выполненная пользовательская работа. Содержимое загружается только после выбора отчёта.</p>
         <div id="reportsList"></div>
         <button id="loadMoreReportsButton" class="secondary hidden" type="button">Показать ещё отчёты</button>
       </section>
 
       <section id="reportDetailCard" class="card hidden">
         <div class="section-head">
-          <h2>Содержимое отчёта</h2>
+          <h2>Содержимое диагностического отчёта</h2>
           <button id="closeReportButton" class="secondary" type="button">Закрыть</button>
         </div>
         <div id="reportDetailMeta" class="small"></div>
