@@ -63,6 +63,7 @@
         <button id="saveSessionButton" type="button">Сохранить сессию</button>
         <div id="storageUsage" class="status">Использование хранилища загружается…</div>
         <div id="sessionsList"></div>
+        <button id="loadMoreSessionsButton" class="secondary hidden" type="button">Показать ещё контрольные точки</button>
       </section>
 
       <section class="card">
@@ -118,6 +119,7 @@
         </div>
         <p class="small">В списке показываются только метаданные. Содержимое загружается отдельно после выбора отчёта.</p>
         <div id="reportsList"></div>
+        <button id="loadMoreReportsButton" class="secondary hidden" type="button">Показать ещё отчёты</button>
       </section>
 
       <section id="reportDetailCard" class="card hidden">
@@ -152,6 +154,8 @@
     const reportDetailBody = document.getElementById("reportDetailBody");
     const closeReportButton = document.getElementById("closeReportButton");
     const refreshSessionsButton = document.getElementById("refreshSessionsButton");
+    const loadMoreSessionsButton = document.getElementById("loadMoreSessionsButton");
+    const loadMoreReportsButton = document.getElementById("loadMoreReportsButton");
     const saveSessionButton = document.getElementById("saveSessionButton");
     const sessionName = document.getElementById("sessionName");
     const storageUsage = document.getElementById("storageUsage");
@@ -171,6 +175,9 @@
     let currentCommands = [];
     let currentReports = [];
     let activeReportId = null;
+    let reportNextOffset = null;
+    let sessionNextOffset = null;
+    let authGeneration = 0;
 
     function setStatus(message, kind = "") {
       statusElement.textContent = message;
@@ -262,6 +269,9 @@
         addText(item, "div", `Задание: ${mission.assignment_status || "не назначено"}`, "small");
         addText(item, "div", `Результат: ${mission.outcome || "ожидается"}`, "small");
         if (mission.summary) addText(item, "div", mission.summary, "small");
+        if (mission.metrics && Object.keys(mission.metrics).length) {
+          addText(item, "div", `Метрики: ${JSON.stringify(mission.metrics)}`, "small");
+        }
         addText(item, "div", `Mission ID: ${mission.mission_id}`, "small");
         list.appendChild(item);
       }
@@ -289,9 +299,9 @@
       storageUsage.className = `status ${percent >= 90 ? "bad" : percent >= 75 ? "warn" : "good"}`;
     }
 
-    function renderSessions(sessions) {
+    function renderSessions(sessions, append = false) {
       const list = document.getElementById("sessionsList");
-      list.replaceChildren();
+      if (!append) list.replaceChildren();
       for (const session of sessions) {
         const item = document.createElement("div");
         item.className = `item ${session.status === "active" ? "ok" : "warn"}`;
@@ -323,15 +333,19 @@
         item.appendChild(actions);
         list.appendChild(item);
       }
-      if (!sessions.length) addText(list, "p", "Контрольных точек пока нет.", "muted");
+      if (!sessions.length && !append) addText(list, "p", "Контрольных точек пока нет.", "muted");
     }
 
-    async function loadSessionsAndUsage() {
+    async function loadSessionsAndUsage(reset = true) {
+      if (!reset && sessionNextOffset === null) return [];
+      const offset = reset ? 0 : sessionNextOffset;
       const [sessions, storage] = await Promise.all([
-        api("/api/v1/architect/sessions?limit=30"),
+        api(`/api/v1/architect/sessions?limit=30&offset=${offset}`),
         api("/api/v1/architect/storage")
       ]);
-      renderSessions(sessions.sessions || []);
+      renderSessions(sessions.sessions || [], !reset);
+      sessionNextOffset = sessions.next_offset ?? null;
+      loadMoreSessionsButton.classList.toggle("hidden", sessionNextOffset === null);
       renderStorageUsage(storage.usage || {});
       document.getElementById("sessionCount").textContent = storage.usage?.session_count || 0;
       return sessions.sessions || [];
@@ -353,8 +367,10 @@
         selectExistingOption(nodeSelect, ui.selected_node_id);
         selectExistingOption(controlNodeSelect, ui.selected_control_node_id);
         updateControlButtons();
-        if (ui.selected_report_id && currentReports.some((report) => report.report_id === ui.selected_report_id)) {
+        if (ui.selected_report_id) {
           await openReport(ui.selected_report_id);
+        } else {
+          closeReportDetail();
         }
         sessionName.value = data.session.name;
         setStatus(`Контрольная точка «${data.session.name}» восстановлена.`, "good");
@@ -407,10 +423,10 @@
       }
     }
 
-    function renderReports(reports) {
-      currentReports = reports;
+    function renderReports(reports, append = false) {
+      currentReports = append ? [...currentReports, ...reports] : reports;
       const list = document.getElementById("reportsList");
-      list.replaceChildren();
+      if (!append) list.replaceChildren();
       for (const report of reports) {
         const item = document.createElement("div");
         item.className = `item ${report.outcome === "success" ? "ok" : "warn"}`;
@@ -424,19 +440,25 @@
         openButton.addEventListener("click", () => openReport(report.report_id));
         list.appendChild(item);
       }
-      if (!reports.length) addText(list, "p", "Новых полных отчётов пока нет.", "muted");
+      if (!reports.length && !append) addText(list, "p", "Новых полных отчётов пока нет.", "muted");
     }
 
-    async function loadReports() {
-      const data = await api("/api/v1/architect/reports?limit=50");
-      renderReports(data.reports || []);
+    async function loadReports(reset = true) {
+      if (!reset && reportNextOffset === null) return [];
+      const offset = reset ? 0 : reportNextOffset;
+      const data = await api(`/api/v1/architect/reports?limit=50&offset=${offset}`);
+      renderReports(data.reports || [], !reset);
+      reportNextOffset = data.next_offset ?? null;
+      loadMoreReportsButton.classList.toggle("hidden", reportNextOffset === null);
       return data.reports || [];
     }
 
     async function openReport(reportId) {
+      const generation = authGeneration;
       setStatus("Загружаю полный отчёт…");
       try {
         const data = await api(`/api/v1/architect/reports/${encodeURIComponent(reportId)}`);
+        if (generation !== authGeneration || !architectToken) return;
         const report = data.report;
         activeReportId = report.report_id;
         reportDetailMeta.textContent = [
@@ -475,8 +497,8 @@
       setStatus("Загружаю данные…");
       const [data, reports, sessions, storage] = await Promise.all([
         api("/api/v1/architect/overview"),
-        api("/api/v1/architect/reports?limit=50"),
-        api("/api/v1/architect/sessions?limit=30"),
+        api("/api/v1/architect/reports?limit=50&offset=0"),
+        api("/api/v1/architect/sessions?limit=30&offset=0"),
         api("/api/v1/architect/storage")
       ]);
       document.getElementById("nodeCount").textContent = data.counts.nodes;
@@ -490,17 +512,33 @@
       renderCommands(data.commands || []);
       renderAudit(data.audit_events);
       renderReports(reports.reports || []);
+      reportNextOffset = reports.next_offset ?? null;
+      loadMoreReportsButton.classList.toggle("hidden", reportNextOffset === null);
       renderSessions(sessions.sessions || []);
+      sessionNextOffset = sessions.next_offset ?? null;
+      loadMoreSessionsButton.classList.toggle("hidden", sessionNextOffset === null);
       renderStorageUsage(storage.usage || {});
       loginCard.classList.add("hidden");
       dashboard.classList.remove("hidden");
       setStatus("Панель подключена к Controller.", "good");
     }
 
+    function closeReportDetail() {
+      reportDetailCard.classList.add("hidden");
+      reportDetailMeta.textContent = "";
+      reportDetailBody.textContent = "";
+      activeReportId = null;
+    }
+
     function logout(message = "Сеанс завершён.") {
+      authGeneration += 1;
       architectToken = "";
       sessionStorage.removeItem("citadel-architect-token");
       tokenInput.value = "";
+      closeReportDetail();
+      currentReports = [];
+      reportNextOffset = null;
+      sessionNextOffset = null;
       dashboard.classList.add("hidden");
       loginCard.classList.remove("hidden");
       setStatus(message);
@@ -533,7 +571,12 @@
     refreshReportsButton.addEventListener("click", async () => {
       refreshReportsButton.disabled = true;
       try {
-        const reports = await loadReports();
+        const [reports, storage] = await Promise.all([
+          loadReports(true),
+          api("/api/v1/architect/storage")
+        ]);
+        renderStorageUsage(storage.usage || {});
+        document.getElementById("reportCount").textContent = storage.usage?.report_count || 0;
         setStatus(`Список отчётов обновлён: ${reports.length}.`, "good");
       } catch (error) {
         setStatus(`Отчёты не обновлены: ${error.message}`, "bad");
@@ -541,17 +584,26 @@
         refreshReportsButton.disabled = false;
       }
     });
-    closeReportButton.addEventListener("click", () => {
-      reportDetailCard.classList.add("hidden");
-      reportDetailMeta.textContent = "";
-      reportDetailBody.textContent = "";
-      activeReportId = null;
+    closeReportButton.addEventListener("click", closeReportDetail);
+
+    loadMoreReportsButton.addEventListener("click", async () => {
+      loadMoreReportsButton.disabled = true;
+      try { await loadReports(false); }
+      catch (error) { setStatus(`Отчёты не загружены: ${error.message}`, "bad"); }
+      finally { loadMoreReportsButton.disabled = false; }
+    });
+
+    loadMoreSessionsButton.addEventListener("click", async () => {
+      loadMoreSessionsButton.disabled = true;
+      try { await loadSessionsAndUsage(false); }
+      catch (error) { setStatus(`Контрольные точки не загружены: ${error.message}`, "bad"); }
+      finally { loadMoreSessionsButton.disabled = false; }
     });
 
     refreshSessionsButton.addEventListener("click", async () => {
       refreshSessionsButton.disabled = true;
       try {
-        const sessions = await loadSessionsAndUsage();
+        const sessions = await loadSessionsAndUsage(true);
         setStatus(`Контрольные точки обновлены: ${sessions.length}.`, "good");
       } catch (error) {
         setStatus(`Контрольные точки не обновлены: ${error.message}`, "bad");
@@ -631,8 +683,9 @@
       if (!title) return setStatus("Введите название миссии.", "bad");
       createMissionButton.disabled = true;
       setStatus("Создаю миссию и назначаю её узлу…");
+      let created;
       try {
-        const data = await api("/api/v1/architect/missions", {
+        created = await api("/api/v1/architect/missions", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -642,11 +695,21 @@
             expires_in_hours: Number(expiresHours.value)
           })
         });
-        setStatus(`Миссия создана.\nMission ID: ${data.mission.mission_id}`, "good");
-        missionTitle.value = "Проверка системы";
-        await loadDashboard();
       } catch (error) {
         setStatus(`Миссия не создана: ${error.message}`, "bad");
+        createMissionButton.disabled = false;
+        return;
+      }
+
+      missionTitle.value = "Проверка системы";
+      setStatus(`Миссия создана.\nMission ID: ${created.mission.mission_id}`, "good");
+      try {
+        await loadDashboard();
+      } catch (error) {
+        setStatus(
+          `Миссия создана (${created.mission.mission_id}), но панель не обновилась: ${error.message}`,
+          "bad"
+        );
       } finally {
         createMissionButton.disabled = false;
       }
