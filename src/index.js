@@ -2812,8 +2812,7 @@ async function architectOverview(request, env) {
       "ai.progress_bytes AS lmstudio_progress_bytes, ai.progress_total_bytes AS lmstudio_progress_total_bytes, " +
       "ai.progress_detail AS lmstudio_progress_detail, ai.download_job_id AS lmstudio_download_job_id, " +
       "ai.query_id AS lmstudio_query_id, ai.query_mode AS lmstudio_query_mode, " +
-      "ai.query_status AS lmstudio_query_status, ai.query_prompt AS lmstudio_query_prompt, " +
-      "ai.query_answer AS lmstudio_query_answer, ai.load_config_json AS lmstudio_load_config_json, " +
+      "ai.query_status AS lmstudio_query_status, ai.load_config_json AS lmstudio_load_config_json, " +
       "ai.live_checked_at AS lmstudio_live_checked_at, ai.updated_at AS lmstudio_updated_at, " +
       "(SELECT nl.event_type FROM node_logs AS nl WHERE nl.node_id = n.node_id " +
       "ORDER BY datetime(nl.created_at) DESC, nl.event_id DESC LIMIT 1) AS last_event_type, " +
@@ -3128,8 +3127,9 @@ async function architectSearchModels(request, env, url) {
     throw new ApiError(502, "huggingface_invalid_response");
   }
   if (!Array.isArray(rows)) throw new ApiError(502, "huggingface_invalid_response");
+  const needle = query.toLowerCase();
   const models = rows
-    .filter((item) => item && typeof item.id === "string")
+    .filter((item) => item && typeof item.id === "string" && item.id.toLowerCase().includes(needle))
     .map((item) => ({
       id: item.id,
       downloads: Number(item.downloads || 0),
