@@ -87,6 +87,7 @@ node --check /tmp/ews-node-test.js
 node --check /tmp/ews-hub.js
 node --check src/index.js
 node --check src/worker.js
+node --check src/experience/policy.js
 node --check src/presence.js
 node --check src/telemetry/common.js
 node --check src/telemetry/schema.js
@@ -102,6 +103,7 @@ node tests/telemetry-storage.mjs
 node tests/presence-storage.mjs
 node tests/update-integrity.mjs
 node tests/review-backlog-guards.mjs
+node tests/legacy-experience.mjs
 
 python - <<'PY'
 from pathlib import Path
@@ -135,6 +137,50 @@ for column in ("report_type", "report_json", "report_sha256", "report_size_bytes
         raise SystemExit(f"fresh migration chain missing results.{column}")
 
 print("Fresh D1 migration chain: OK")
+
+experience = sqlite3.connect(":memory:")
+experience.executescript(
+    Path("knowledge/legacy_cre_experience.sql").read_text(encoding="utf-8")
+)
+experience_tables = {
+    row[0]
+    for row in experience.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    )
+}
+required_experience_tables = {
+    "legacy_findings", "legacy_run_summary", "legacy_reusable_features",
+}
+missing_experience = sorted(required_experience_tables - experience_tables)
+if missing_experience:
+    raise SystemExit(f"legacy experience DB missing tables: {missing_experience}")
+
+finding_count = experience.execute(
+    "SELECT COUNT(*) FROM legacy_findings"
+).fetchone()[0]
+feature_count = experience.execute(
+    "SELECT COUNT(*) FROM legacy_reusable_features"
+).fetchone()[0]
+run_count = experience.execute(
+    "SELECT SUM(runs) FROM legacy_run_summary"
+).fetchone()[0]
+if finding_count < 10 or feature_count < 15 or run_count != 650:
+    raise SystemExit(
+        "legacy experience DB seed is incomplete: "
+        f"findings={finding_count}, features={feature_count}, runs={run_count}"
+    )
+
+for source in (
+    "src/experience/policy.js",
+    "knowledge/legacy_cre_experience.sql",
+    "docs/LEGACY_CRE_REVIEW_2026-09-18.md",
+):
+    text = Path(source).read_text(encoding="utf-8")
+    for forbidden in ("-----BEGIN PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----"):
+        if forbidden in text:
+            raise SystemExit(f"credential material detected in distilled legacy file: {source}")
+
+print("Legacy engineering experience DB/policy: OK")
 PY
 
 bash -n controller_deploy.sh scripts/build_site.sh scripts/package_controller.sh scripts/validate.sh
