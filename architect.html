@@ -795,7 +795,7 @@
       }).join("\n");
       currentRecommendedProjectRoles = new Set(data?.recommended_roles || Object.keys(data?.recommended_role_plan || data?.role_plan || {}));
       renderWorkRoles(currentWorkRoles);
-      renderRolePlanSummary(data?.role_plan || {});
+      renderRolePlanSummary(data?.recommended_role_plan || data?.role_plan || {});
       projectRolePlan.className = "status";
       const ready = Boolean(data?.ready_for_architect_approval);
       projectChecks.className = `status ${ready ? "good" : "bad"}`;
@@ -812,7 +812,7 @@
         const total = Number(project.work_item_count || 0);
         item.className = `item ${total > 0 && completed === total ? "ok" : "warn"}`;
         addText(item, "strong", `${project.title} — ${project.status}`);
-        addText(item, "div", `Hub workers: ${project.worker_count} · блоки: ${completed}/${total} завершено`, "small");
+        addText(item, "div", `Нод Hub: ${project.worker_count} · рабочие блоки: ${completed}/${total} завершено`, "small");
         addText(item, "div", `Project ID: ${project.project_id}`, "small");
         const open = addText(item, "button", "Перейти к отчёту", "secondary");
         open.type = "button";
@@ -880,8 +880,20 @@
       }
     }
 
+    function showProjectCreating(title) {
+      pendingCreatedProjectId = null;
+      document.getElementById("projectCreatedTitle").textContent = "Hub создаёт проект…";
+      projectCreatedSummary.replaceChildren();
+      addText(projectCreatedSummary, "div", `Проект: ${title}`, "project-created-line");
+      addText(projectCreatedSummary, "div", "Четыре проверки пройдены. Hub строит рабочие блоки, выбирает специализации и доступные ноды…", "project-created-line");
+      projectGoReportButton.disabled = true;
+      projectCreatedOverlay.classList.remove("hidden");
+    }
+
     function showProjectCreated(project) {
       pendingCreatedProjectId = project.project_id;
+      document.getElementById("projectCreatedTitle").textContent = "Проект создан";
+      projectGoReportButton.disabled = false;
       projectCreatedSummary.replaceChildren();
       addText(projectCreatedSummary, "div", `Проект: ${project.title}`, "project-created-line");
       const nodes = [...new Map((project.work_items || []).map((item) => [item.node_id, projectNodeDisplay(item)])).values()];
@@ -1484,7 +1496,7 @@
           if (event.results[index].isFinal) finalText += transcript + " ";
           else interim += transcript;
         }
-        textarea.value = [base, finalText.trim(), interim.trim()].filter(Boolean).join(base ? " " : "");
+        textarea.value = [base, finalText.trim(), interim.trim()].filter(Boolean).join(" ");
         textarea.dispatchEvent(new Event("input", { bubbles: true }));
       };
       recognition.onerror = (event) => {
@@ -1558,6 +1570,7 @@
       const taskText = projectTaskText.value.trim();
       if (!currentProjectCheck) return setStatus("Сначала пройдите четыре проверки.", "bad");
       createProjectButton.disabled = true;
+      showProjectCreating(title);
       projectResult.textContent = "Architect подтвердил проект. Hub строит рабочие блоки и выбирает узлы…";
       projectResult.className = "status";
       try {
@@ -1590,6 +1603,10 @@
       } catch (error) {
         projectResult.textContent = `Проект не создан: ${error.message}`;
         projectResult.className = "status bad";
+        document.getElementById("projectCreatedTitle").textContent = "Проект не создан";
+        projectCreatedSummary.replaceChildren();
+        addText(projectCreatedSummary, "div", `Ошибка: ${error.message}`, "project-created-line");
+        projectGoReportButton.disabled = true;
       }
     });
 
@@ -1641,7 +1658,7 @@
           }
           missionCreateResult.textContent = [
             "Миссия создана и выполняется.",
-            `Node ID: ${selectedNodeId}`,
+            `Нода: ${nodeDisplayName(currentNodes.find((item) => item.node_id === selectedNodeId) || { node_id: selectedNodeId })}`,
             `Mission ID: ${missionId}`,
             `Статус: ${mission.assignment_status || mission.status || "assigned"}`
           ].join("\n");
