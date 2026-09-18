@@ -77,7 +77,7 @@ async function inspectPage(route, interact) {
   } catch (error) {
     addFinding("scenario_failure", route, String(error).slice(0, 1600));
     try {
-      await page.screenshot({ path: path.join(outDir, "failure" + route.replaceAll("/", "_") + ".png", fullPage: true });
+      await page.screenshot({ path: path.join(outDir, "failure" + route.replaceAll("/", "_") + ".png"), fullPage: true });
     } catch {}
   } finally {
     await page.close();
