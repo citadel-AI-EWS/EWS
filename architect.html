@@ -635,7 +635,7 @@
         top.className = "node-top";
         const identity = document.createElement("div");
         addText(identity, "div", nodeDisplayName(node), "node-name");
-        addText(identity, "div", `Агент ${agentDisplayName(node)} · v${node.agent_version || "—"}`, "node-agent");
+        addText(identity, "div", `Агент ${agentDisplayName(node)} · v${node.agent_version || "—"} · Роль: ${node.planned_role || "не назначена"}`, "node-agent");
         top.appendChild(identity);
         const livePill = addText(top, "span", health.live ? "LIVE" : "OFFLINE", health.live ? "state-live" : "state-dead");
         livePill.style.fontWeight = "900";
@@ -671,7 +671,7 @@
           `Public IP: ${presence?.public_ip || "—"}`,
           `Network: ${[presence?.country, presence?.colo].filter(Boolean).join(" / ") || "—"}${presence?.asn ? ` · ASN ${presence.asn}` : ""}`,
           `Enrolled: ${node.enrolled_at || "—"}`,
-          `Agent version: ${node.agent_version || "—"}`,
+          `Agent version: ${node.agent_version || "—"} · Planned role: ${node.planned_role || "не назначена"}`,
           warningParts.length ? `Внимание: ${warningParts.join(" · ")}` : "Предупреждения: нет"
         ].forEach((line) => addText(details, "div", line));
         toggle.addEventListener("click", () => {
