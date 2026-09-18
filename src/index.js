@@ -22,20 +22,20 @@ const ALLOWED_REPORT_SENSITIVITIES = new Set([
 ]);
 const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
-const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "rollback", "uninstall", "system_reboot", "system_shutdown"]);
+const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown"]);
 const POWER_COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.4",
+  version: "0.3.5",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "83c6e6d9ccd99317c067534361f6c4317155efd0da0531687cca9e899dce6dac"
+      sha256: "e02639c2997e9a95e6338b6fe5c209d37bba03adde1135532c1b251d4292b961"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "30dddd8588143d7e2ff5552b44ab551e5829c24a6204fa2dbadd48633b0d512d"
+      sha256: "7a115adff84f794c434daa759be8978b06c83b6f73e5ef7a5b6bb1b50922e573"
     }
   ]
 });
@@ -44,6 +44,8 @@ let reportSchemaPromise;
 let legacyReportBackfillPromise;
 let sessionSchemaPromise;
 let commandIndexPromise;
+let rolloutSchemaPromise;
+let projectSchemaPromise;
 
 class ApiError extends Error {
   constructor(status, code) {
@@ -306,6 +308,419 @@ async function ensureCommandStorage(env) {
   await commandIndexPromise;
 }
 
+async function ensureRolloutStorage(env) {
+  if (!rolloutSchemaPromise) {
+    rolloutSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS agent_rollouts (
+          rollout_id TEXT PRIMARY KEY,
+          target_version TEXT NOT NULL,
+          release_json TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active'
+            CHECK (status IN ('active', 'completed', 'cancelled')),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `),
+      env.DB.prepare(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_rollouts_one_active
+        ON agent_rollouts(status)
+        WHERE status = 'active'
+      `)
+    ]).catch((error) => {
+      rolloutSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await rolloutSchemaPromise;
+}
+
+async function startUpdateAllRollout(request, env) {
+  await authenticateArchitect(request, env);
+  await ensureRolloutStorage(env);
+  const releaseJson = JSON.stringify(LATEST_NODE_RELEASE);
+  const rolloutId = "rollout_" + crypto.randomUUID();
+  await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE agent_rollouts SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE status = 'active'"
+    ),
+    env.DB.prepare(
+      "INSERT INTO agent_rollouts (rollout_id, target_version, release_json, status) VALUES (?, ?, ?, 'active')"
+    ).bind(rolloutId, LATEST_NODE_RELEASE.version, releaseJson),
+    env.DB.prepare(
+      "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+      "VALUES ('architect', 'test-console', 'agent.rollout.started', 'rollout', ?, ?)"
+    ).bind(rolloutId, JSON.stringify({ target_version: LATEST_NODE_RELEASE.version }))
+  ]);
+  const counts = await env.DB.prepare(
+    "SELECT COUNT(*) AS total, " +
+    "SUM(CASE WHEN status != 'revoked' AND agent_version != ? THEN 1 ELSE 0 END) AS outdated " +
+    "FROM nodes"
+  ).bind(LATEST_NODE_RELEASE.version).first();
+  return json({
+    ok: true,
+    rollout: {
+      rollout_id: rolloutId,
+      target_version: LATEST_NODE_RELEASE.version,
+      status: "active",
+      registered_nodes: Number(counts?.total || 0),
+      nodes_waiting_for_update: Number(counts?.outdated || 0)
+    }
+  }, 201);
+}
+
+async function ensureRolloutCommandForNode(env, nodeId) {
+  await Promise.all([ensureRolloutStorage(env), ensureCommandStorage(env)]);
+  const [rollout, node, pending, recentCompletedUpdate] = await Promise.all([
+    env.DB.prepare(
+      "SELECT rollout_id, target_version, release_json FROM agent_rollouts WHERE status = 'active' ORDER BY created_at DESC LIMIT 1"
+    ).first(),
+    env.DB.prepare(
+      "SELECT node_id, status, agent_version FROM nodes WHERE node_id = ?"
+    ).bind(nodeId).first(),
+    env.DB.prepare(
+      "SELECT command_id FROM commands WHERE node_id = ? AND status IN ('pending', 'accepted') LIMIT 1"
+    ).bind(nodeId).first(),
+    env.DB.prepare(
+      "SELECT payload_json, completed_at FROM commands " +
+      "WHERE node_id = ? AND command_type = 'update' AND status = 'completed' " +
+      "AND datetime(completed_at) >= datetime('now', '-10 minutes') " +
+      "ORDER BY completed_at DESC LIMIT 1"
+    ).bind(nodeId).first()
+  ]);
+  if (!rollout || !node || pending || node.status === "revoked" || node.agent_version === rollout.target_version) {
+    return;
+  }
+  const recentlyInstalled = recentCompletedUpdate
+    ? safeJson(recentCompletedUpdate.payload_json, {})?.version === rollout.target_version
+    : false;
+  if (recentlyInstalled) return;
+  if (rollout.target_version !== LATEST_NODE_RELEASE.version) return;
+  const commandId = "command_" + crypto.randomUUID();
+  const payloadJson = rollout.release_json;
+  const createdAt = new Date().toISOString();
+  const signature = await signControllerCommand(
+    env, commandId, nodeId, "update", payloadJson, createdAt
+  );
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO commands (command_id, node_id, command_type, payload_json, signature, status, created_at) " +
+        "VALUES (?, ?, 'update', ?, ?, 'pending', ?)"
+      ).bind(commandId, nodeId, payloadJson, signature, createdAt),
+      env.DB.prepare(
+        "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+        "VALUES ('controller', ?, 'agent.rollout.command_created', 'command', ?, ?)"
+      ).bind(rollout.rollout_id, commandId, JSON.stringify({ node_id: nodeId, target_version: rollout.target_version }))
+    ]);
+  } catch (error) {
+    if (!String(error).includes("UNIQUE")) throw error;
+  }
+}
+
+const WORK_ROLE_REGISTRY = Object.freeze([
+  { id: "architect", label: "Architect", kind: "human_gate", origin: "project_control" },
+  { id: "planner", label: "Planner", kind: "worker", origin: "legacy_simulation" },
+  { id: "verifier", label: "Verifier", kind: "worker", origin: "legacy_simulation" },
+  { id: "researcher", label: "Research", kind: "worker", origin: "legacy_simulation" },
+  { id: "reporter", label: "Report", kind: "worker", origin: "legacy_simulation" },
+  { id: "metrics", label: "Metrics", kind: "worker", origin: "legacy_simulation" },
+  { id: "recovery", label: "Recovery", kind: "worker", origin: "legacy_simulation" },
+  { id: "programmer", label: "Programmer", kind: "worker", origin: "architect_extension_2026_09_18" },
+  { id: "mathematician", label: "Mathematician", kind: "worker", origin: "architect_extension_2026_09_18" },
+  { id: "security_analyst", label: "Security Analyst", kind: "worker", origin: "architect_extension_2026_09_18" }
+]);
+
+function classifyWorkRole(text) {
+  const value = String(text || "").toLowerCase();
+  const tests = [
+    ["security_analyst", /(security|secure|vulnerab|threat|malware|audit|шифр|безопас|уязв|угроз|вредонос)/],
+    ["programmer", /(python|javascript|typescript|java|code|coding|program|function|api|sql|html|css|код|программ|функц|скрипт|база данных)/],
+    ["mathematician", /(math|equation|formula|algebra|geometry|calculus|probab|combin|математ|формул|уравнен|алгебр|геометр|вероятност)/],
+    ["metrics", /(metric|statistics|chart|graph|median|average|variance|метрик|статист|график|медиан|средн)/],
+    ["recovery", /(recover|rollback|restore|repair|backup|восстанов|откат|резервн|почин)/],
+    ["verifier", /(verify|validation|test|check|qa|proof|провер|тест|валид|доказ)/],
+    ["reporter", /(report|summary|summar|document|write-up|отч[её]т|сводк|резюме|документ)/],
+    ["researcher", /(research|source|evidence|investig|compare|search|исслед|источник|доказательств|сравн|поиск)/]
+  ];
+  for (const [role, pattern] of tests) {
+    if (pattern.test(value)) return role;
+  }
+  return "planner";
+}
+
+function rolePlanSummary(items) {
+  const counts = {};
+  for (const item of items) counts[item.role_name] = (counts[item.role_name] || 0) + 1;
+  return counts;
+}
+
+async function architectWorkRoles(request, env) {
+  await authenticateArchitect(request, env);
+  return json({ ok: true, roles: WORK_ROLE_REGISTRY });
+}
+
+async function ensureProjectStorage(env) {
+  if (!projectSchemaPromise) {
+    projectSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS architect_projects (
+          project_id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          source_type TEXT NOT NULL,
+          task_text TEXT NOT NULL,
+          task_sha256 TEXT NOT NULL,
+          checks_json TEXT NOT NULL,
+          architect_approved INTEGER NOT NULL DEFAULT 0 CHECK (architect_approved IN (0,1)),
+          status TEXT NOT NULL DEFAULT 'planned'
+            CHECK (status IN ('planned','running','completed','blocked','cancelled')),
+          worker_count INTEGER NOT NULL DEFAULT 0 CHECK (worker_count >= 0),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_architect_projects_hash_status
+        ON architect_projects(task_sha256, status, created_at DESC)
+      `),
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS project_work_items (
+          work_item_id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          sequence_no INTEGER NOT NULL CHECK (sequence_no >= 1),
+          node_id TEXT,
+          role_name TEXT NOT NULL DEFAULT 'planner',
+          task_text TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'planned'
+            CHECK (status IN ('planned','assigned','running','completed','failed','cancelled')),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (project_id) REFERENCES architect_projects(project_id) ON DELETE CASCADE,
+          FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE SET NULL
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_project_work_items_project_sequence
+        ON project_work_items(project_id, sequence_no)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_project_work_items_node_status
+        ON project_work_items(node_id, status, created_at)
+      `)
+    ]).catch((error) => {
+      projectSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await projectSchemaPromise;
+}
+
+function projectSafetyClassification(text) {
+  const normalized = text.toLowerCase();
+  const prohibitedSignals = [
+    /steal\s+(password|credential|token)/,
+    /credential\s+theft/,
+    /скраст[ьи].{0,20}(парол|токен|уч[её]тн)/,
+    /украст[ьи].{0,20}(парол|токен|уч[её]тн)/,
+    /self[- ]?propagat/,
+    /самораспростран/,
+    /stealth\s+persistence/,
+    /скрыт.{0,12}(закреп|автозапуск|персист)/,
+    /exploit.{0,30}(third[- ]party|чуж)/,
+    /взлом.{0,30}(чуж|сторонн)/,
+    /autonomous.{0,20}(payment|transaction|trade)/,
+    /автономн.{0,20}(плат[её]ж|транзакц|торгов)/
+  ];
+  const blocked = prohibitedSignals.some((pattern) => pattern.test(normalized));
+  return blocked
+    ? { classification: "blocked", allowed: false, reason: "project_policy_blocked" }
+    : { classification: "bounded_review", allowed: true, reason: "architect_review_required" };
+}
+
+function splitProjectText(text, maxChars = 2000) {
+  const paragraphs = text.split(/\n{2,}/).map((item) => item.trim()).filter(Boolean);
+  const blocks = [];
+  let current = "";
+  const pushCurrent = () => {
+    if (current.trim()) blocks.push(current.trim());
+    current = "";
+  };
+  for (const paragraph of paragraphs.length ? paragraphs : [text]) {
+    let rest = paragraph;
+    while (rest.length > maxChars) {
+      const slice = rest.slice(0, maxChars);
+      const splitAt = Math.max(slice.lastIndexOf(". "), slice.lastIndexOf("! "), slice.lastIndexOf("? "), slice.lastIndexOf(" "));
+      const cut = splitAt > maxChars * 0.6 ? splitAt + 1 : maxChars;
+      const part = rest.slice(0, cut).trim();
+      if (current) pushCurrent();
+      if (part) blocks.push(part);
+      rest = rest.slice(cut).trim();
+    }
+    if (!rest) continue;
+    const candidate = current ? current + "\n\n" + rest : rest;
+    if (candidate.length > maxChars) {
+      pushCurrent();
+      current = rest;
+    } else {
+      current = candidate;
+    }
+  }
+  pushCurrent();
+  return blocks.length ? blocks : [text];
+}
+
+function planProjectWork(text) {
+  return splitProjectText(text).map((taskText, index) => ({
+    sequence_no: index + 1,
+    role_name: classifyWorkRole(taskText),
+    task_text: taskText
+  }));
+}
+
+async function evaluateProjectChecks(env, sourceType, title, taskText) {
+  await ensureProjectStorage(env);
+  const sourceAllowed = sourceType === "architect_manual";
+  const validationPass = title.length >= 1 && title.length <= 160 &&
+    taskText.length >= 1 && taskText.length <= 20000;
+  const taskSha256 = await sha256Hex(taskText);
+  const duplicate = await env.DB.prepare(
+    "SELECT project_id, status FROM architect_projects " +
+    "WHERE task_sha256 = ? AND status IN ('planned','running') ORDER BY created_at DESC LIMIT 1"
+  ).bind(taskSha256).first();
+  const safety = projectSafetyClassification(taskText);
+  return {
+    task_sha256: taskSha256,
+    checks: {
+      source_allowlisting: {
+        passed: sourceAllowed,
+        detail: sourceAllowed ? "architect_manual_allowed" : "source_not_allowed"
+      },
+      validation: {
+        passed: validationPass,
+        detail: validationPass ? "input_valid" : "invalid_project_input"
+      },
+      deduplication: {
+        passed: !duplicate,
+        detail: duplicate ? "active_duplicate_found" : "no_active_duplicate",
+        duplicate_project_id: duplicate?.project_id || null
+      },
+      safety_classification: {
+        passed: safety.allowed,
+        detail: safety.reason,
+        classification: safety.classification
+      }
+    }
+  };
+}
+
+function projectChecksPassed(checks) {
+  return Object.values(checks).every((item) => item.passed === true);
+}
+
+async function architectCheckProject(request, env) {
+  await authenticateArchitect(request, env);
+  const body = parseJsonObject(await readBodyText(request, 64 * 1024));
+  const sourceType = optionalString(body.source_type, "source_type", 40) || "architect_manual";
+  const title = requireString(body.title, "title", 160);
+  const taskText = requireString(body.task_text, "task_text", 20000);
+  const result = await evaluateProjectChecks(env, sourceType, title, taskText);
+  const plannedWork = planProjectWork(taskText);
+  return json({
+    ok: true,
+    ready_for_architect_approval: projectChecksPassed(result.checks),
+    role_plan: rolePlanSummary(plannedWork),
+    work_preview: plannedWork.map(({ sequence_no, role_name }) => ({ sequence_no, role_name })),
+    ...result
+  });
+}
+
+async function architectCreateProject(request, env) {
+  await authenticateArchitect(request, env);
+  const body = parseJsonObject(await readBodyText(request, 64 * 1024));
+  const sourceType = optionalString(body.source_type, "source_type", 40) || "architect_manual";
+  const title = requireString(body.title, "title", 160);
+  const taskText = requireString(body.task_text, "task_text", 20000);
+  const evaluated = await evaluateProjectChecks(env, sourceType, title, taskText);
+  if (!projectChecksPassed(evaluated.checks)) {
+    throw new ApiError(409, "project_checks_failed");
+  }
+
+  const nodesQuery = await env.DB.prepare(
+    "SELECT node_id, hostname, agent_version FROM nodes " +
+    "WHERE status = 'online' AND datetime(last_seen_at) >= datetime('now', '-5 minutes') " +
+    "ORDER BY last_seen_at DESC, node_id ASC"
+  ).all();
+  const nodes = nodesQuery.results || [];
+  if (!nodes.length) throw new ApiError(409, "no_available_nodes");
+
+  const plannedWork = planProjectWork(taskText);
+  const workerCount = Math.min(nodes.length, plannedWork.length);
+  const projectId = "project_" + crypto.randomUUID();
+  const checksJson = JSON.stringify(evaluated.checks);
+  const statements = [
+    env.DB.prepare(
+      "INSERT INTO architect_projects (" +
+      "project_id, title, source_type, task_text, task_sha256, checks_json, architect_approved, status, worker_count" +
+      ") VALUES (?, ?, ?, ?, ?, ?, 1, 'planned', ?)"
+    ).bind(projectId, title, sourceType, taskText, evaluated.task_sha256, checksJson, workerCount),
+    env.DB.prepare(
+      "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+      "VALUES ('architect', 'test-console', 'project.created', 'project', ?, ?)"
+    ).bind(projectId, JSON.stringify({ worker_count: workerCount, work_items: plannedWork.length, roles: rolePlanSummary(plannedWork) }))
+  ];
+
+  const workItems = [];
+  for (let index = 0; index < plannedWork.length; index += 1) {
+    const node = nodes[index % workerCount];
+    const planned = plannedWork[index];
+    const workItemId = "work_" + crypto.randomUUID();
+    workItems.push({
+      work_item_id: workItemId,
+      sequence_no: planned.sequence_no,
+      role_name: planned.role_name,
+      node_id: node.node_id,
+      hostname: node.hostname,
+      task_text: planned.task_text,
+      status: "planned"
+    });
+    statements.push(
+      env.DB.prepare(
+        "INSERT INTO project_work_items (work_item_id, project_id, sequence_no, node_id, role_name, task_text, status) " +
+        "VALUES (?, ?, ?, ?, ?, ?, 'planned')"
+      ).bind(workItemId, projectId, planned.sequence_no, node.node_id, planned.role_name, planned.task_text)
+    );
+  }
+  await env.DB.batch(statements);
+  return json({
+    ok: true,
+    project: {
+      project_id: projectId,
+      title,
+      status: "planned",
+      architect_approved: true,
+      worker_count: workerCount,
+      work_item_count: plannedWork.length,
+      role_plan: rolePlanSummary(plannedWork),
+      checks: evaluated.checks,
+      work_items: workItems
+    },
+    execution: {
+      state: "planned",
+      detail: "hub_plan_created_waiting_for_project_worker_execution"
+    }
+  }, 201);
+}
+
+async function architectListProjects(request, env) {
+  await authenticateArchitect(request, env);
+  await ensureProjectStorage(env);
+  const rows = await env.DB.prepare(
+    "SELECT project_id, title, status, worker_count, created_at, updated_at " +
+    "FROM architect_projects ORDER BY created_at DESC LIMIT 50"
+  ).all();
+  return json({ ok: true, projects: rows.results || [] });
+}
+
 function bytesToHex(bytes) {
   return [...new Uint8Array(bytes)]
     .map((byte) => byte.toString(16).padStart(2, "0"))
@@ -535,7 +950,7 @@ async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   }
 
   const node = await env.DB.prepare(
-    "SELECT node_id, public_key, status FROM nodes WHERE node_id = ?"
+    "SELECT node_id, public_key, status, agent_version FROM nodes WHERE node_id = ?"
   ).bind(nodeId).first();
 
   if (!node) {
@@ -1416,6 +1831,7 @@ async function architectStorageUsage(request, env) {
 
 async function listCommands(request, env, nodeId, url) {
   const node = await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
+  await ensureRolloutCommandForNode(env, nodeId);
 
   const query = await env.DB.prepare(`
     SELECT command_id, command_type, payload_json, signature, status, created_at
@@ -1481,7 +1897,7 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
   ];
 
   const nodeStatus = status === "completed"
-    ? { pause: "paused", resume: "online", uninstall: "revoked" }[current.command_type]
+    ? { pause: "paused", resume: "online", stop: "offline", uninstall: "revoked" }[current.command_type]
     : null;
   if (nodeStatus) {
     statements.push(env.DB.prepare(`
@@ -1545,9 +1961,14 @@ async function authenticateArchitect(request, env) {
 
 async function architectOverview(request, env) {
   await authenticateArchitect(request, env);
-  await Promise.all([backfillLegacyReports(env), ensureSessionStorage(env), ensureAutoEnrollmentStorage(env)]);
+  await Promise.all([
+    backfillLegacyReports(env),
+    ensureSessionStorage(env),
+    ensureAutoEnrollmentStorage(env),
+    ensureProjectStorage(env)
+  ]);
 
-  const [counts, nodesQuery, missionsQuery, commandsQuery, auditQuery] = await Promise.all([
+  const [counts, nodesQuery, missionsQuery, commandsQuery] = await Promise.all([
     env.DB.prepare(
       "SELECT " +
       "(SELECT COUNT(*) FROM nodes) AS nodes, " +
@@ -1562,12 +1983,19 @@ async function architectOverview(request, env) {
       "n.agent_version, CASE WHEN n.status = 'online' " +
       "AND (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-5 minutes')) " +
       "THEN 'offline' ELSE n.status END AS status, n.cpu_percent, n.memory_percent, " +
-      "n.enrolled_at, n.last_seen_at FROM nodes AS n " +
+      "n.enrolled_at, n.last_seen_at, " +
+      "(SELECT pwi.role_name FROM project_work_items AS pwi " +
+      "JOIN architect_projects AS ap ON ap.project_id = pwi.project_id " +
+      "WHERE pwi.node_id = n.node_id " +
+      "AND pwi.status IN ('planned','assigned','running') " +
+      "AND ap.status IN ('planned','running') " +
+      "ORDER BY pwi.created_at DESC, pwi.sequence_no DESC LIMIT 1) AS planned_role " +
+      "FROM nodes AS n " +
       "LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id " +
       "ORDER BY n.last_seen_at DESC LIMIT 100"
     ).all(),
     env.DB.prepare(
-      "SELECT m.mission_id, m.title, m.mission_type, " +
+      "SELECT m.mission_id, m.title, m.mission_type, m.payload_json, " +
       "CASE WHEN m.expires_at IS NOT NULL AND datetime(m.expires_at) <= CURRENT_TIMESTAMP " +
       "AND m.status NOT IN ('completed', 'cancelled') THEN 'expired' ELSE m.status END AS status, " +
       "m.priority, m.created_at, m.expires_at, a.assignment_id, " +
@@ -1588,19 +2016,19 @@ async function architectOverview(request, env) {
       "SELECT command_id FROM commands WHERE status NOT IN ('pending', 'accepted') " +
       "ORDER BY created_at DESC LIMIT 50" +
       ") ORDER BY created_at DESC"
-    ).all(),
-    env.DB.prepare(
-      "SELECT event_id, actor_type, actor_id, action, target_type, " +
-      "target_id, created_at FROM audit_events " +
-      "ORDER BY event_id DESC LIMIT 30"
     ).all()
   ]);
 
-  const missions = (missionsQuery.results || []).map((row) => ({
-    ...row,
-    metrics: safeJson(row.metrics_json, {}),
-    metrics_json: undefined
-  }));
+  const missions = (missionsQuery.results || []).map((row) => {
+    const payload = safeJson(row.payload_json, {});
+    return {
+      ...row,
+      task_text: typeof payload.task_text === "string" ? payload.task_text : null,
+      payload_json: undefined,
+      metrics: safeJson(row.metrics_json, {}),
+      metrics_json: undefined
+    };
+  });
 
   return json({
     ok: true,
@@ -1613,8 +2041,7 @@ async function architectOverview(request, env) {
     },
     nodes: nodesQuery.results || [],
     missions,
-    commands: commandsQuery.results || [],
-    audit_events: auditQuery.results || []
+    commands: commandsQuery.results || []
   });
 }
 
@@ -1662,13 +2089,22 @@ async function architectCreateCommand(request, env, nodeId) {
   }
 
   const node = await env.DB.prepare(
-    "SELECT node_id, status FROM nodes WHERE node_id = ?"
+    "SELECT node_id, status, agent_version, last_seen_at, " +
+    "CASE WHEN last_seen_at IS NOT NULL " +
+    "AND datetime(last_seen_at) >= datetime('now', '-5 minutes') THEN 1 ELSE 0 END AS recently_seen " +
+    "FROM nodes WHERE node_id = ?"
   ).bind(nodeId).first();
   if (!node) {
     throw new ApiError(404, "node_not_found");
   }
   if (node.status === "revoked") {
     throw new ApiError(409, "node_revoked");
+  }
+  if (Number(node.recently_seen || 0) !== 1) {
+    throw new ApiError(409, "node_offline");
+  }
+  if (commandType === "stop" && node.agent_version !== LATEST_NODE_RELEASE.version) {
+    throw new ApiError(409, "agent_update_required");
   }
   if (commandType === "pause" && node.status === "paused") {
     throw new ApiError(409, "node_already_paused");
@@ -1739,6 +2175,8 @@ async function architectCreateMission(request, env) {
 
   const nodeId = requireString(body.node_id, "node_id", 128);
   const title = requireString(body.title, "title", 160);
+  const taskText = optionalString(body.task_text, "task_text", 2000) ||
+    "Проверить состояние выбранного компьютера.";
   const missionType = body.mission_type === undefined
     ? "system_inventory"
     : requireString(body.mission_type, "mission_type", 64);
@@ -1759,7 +2197,10 @@ async function architectCreateMission(request, env) {
   }
 
   const node = await env.DB.prepare(
-    "SELECT node_id, status FROM nodes WHERE node_id = ?"
+    "SELECT node_id, status, last_seen_at, " +
+    "CASE WHEN last_seen_at IS NOT NULL " +
+    "AND datetime(last_seen_at) >= datetime('now', '-5 minutes') THEN 1 ELSE 0 END AS recently_seen " +
+    "FROM nodes WHERE node_id = ?"
   ).bind(nodeId).first();
   if (!node) {
     throw new ApiError(404, "node_not_found");
@@ -1767,10 +2208,17 @@ async function architectCreateMission(request, env) {
   if (node.status === "revoked") {
     throw new ApiError(409, "node_revoked");
   }
+  if (node.status === "paused") {
+    throw new ApiError(409, "node_paused");
+  }
+  if (node.status !== "online" || Number(node.recently_seen || 0) !== 1) {
+    throw new ApiError(409, "node_offline");
+  }
 
   const missionId = "mission_" + crypto.randomUUID();
   const assignmentId = "assignment_" + crypto.randomUUID();
   const payloadJson = JSON.stringify({
+    task_text: taskText,
     collect: ["language", "timezone", "screen_size"],
     network_access: false
   });
@@ -1817,6 +2265,7 @@ async function architectCreateMission(request, env) {
       assignment_id: assignmentId,
       node_id: nodeId,
       mission_type: missionType,
+      task_text: taskText,
       status: "assigned",
       expires_at: expiresAt
     }
@@ -1829,15 +2278,8 @@ function apiDescription() {
     service: "citadel-ai",
     api_version: "v1",
     authentication: "CITADEL-Ed25519",
-    mission_types: [
-      "system_inventory",
-      "log_analysis",
-      "config_audit",
-      "dependency_audit",
-      "advisory_analysis",
-      "file_hashing"
-    ],
-    command_types: ["pause", "resume", "update", "restart", "rollback", "uninstall", "system_reboot", "system_shutdown"],
+    mission_types: ["system_inventory"],
+    command_types: ["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown"],
     arbitrary_remote_execution: false
   });
 }
@@ -1891,6 +2333,30 @@ async function handleApi(request, env, url) {
     return request.method === "GET"
       ? architectRelease(request, env)
       : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/update-all") {
+    return request.method === "POST"
+      ? startUpdateAllRollout(request, env)
+      : methodNotAllowed(["POST"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/work-roles") {
+    return request.method === "GET"
+      ? architectWorkRoles(request, env)
+      : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/projects/check") {
+    return request.method === "POST"
+      ? architectCheckProject(request, env)
+      : methodNotAllowed(["POST"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/projects") {
+    if (request.method === "POST") return architectCreateProject(request, env);
+    if (request.method === "GET") return architectListProjects(request, env);
+    return methodNotAllowed(["GET", "POST"]);
   }
 
   if (url.pathname === "/api/v1/hub/nodes") {

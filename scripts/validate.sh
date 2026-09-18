@@ -63,6 +63,37 @@ for forbidden in (
 if "SSH target configured locally; tunnel reachability is not yet verified" not in hub:
     raise SystemExit("Hub must not claim SSH reachability before Tunnel verification")
 
+architect = Path("architect.html").read_text(encoding="utf-8")
+worker = Path("src/index.js").read_text(encoding="utf-8")
+for required in (
+    "/api/v1/architect/work-roles",
+    "LIVE OPERATIONS CENTER",
+    "operationsAlert",
+    "workRoles",
+):
+    if required not in architect:
+        raise SystemExit(f"required Architect Live Operations capability missing: {required}")
+if '/api/v1/architect/work-roles' not in worker or "architectWorkRoles" not in worker:
+    raise SystemExit("Architect work-role API route/handler missing from Worker")
+
+for forbidden in ("Контрольные точки", "Последние события аудита"):
+    if forbidden in architect:
+        raise SystemExit(f"obsolete Architect UI surfaced again: {forbidden}")
+for required in ('data-lang="ru"', 'data-lang="en"', 'data-lang="he"', "missionNodeState", "readableReport"):
+    if required not in architect:
+        raise SystemExit(f"Architect production UI capability missing: {required}")
+
+logs = Path("architect-logs.html").read_text(encoding="utf-8")
+home = Path("live-index.html").read_text(encoding="utf-8")
+for page_name, page in (("home", home), ("hub", hub), ("architect", architect), ("logs", logs)):
+    for language in ('data-lang="ru"', 'data-lang="en"', 'data-lang="he"'):
+        if language not in page:
+            raise SystemExit(f"{page_name} missing language selector: {language}")
+
+for forbidden in ("Command feed", "Audit feed", "commandTimeline", "auditTimeline"):
+    if forbidden in hub:
+        raise SystemExit(f"obsolete Hub feed surfaced again: {forbidden}")
+
 setup = Path("agent/setup_windows.ps1").read_text(encoding="utf-8").lower()
 installer = Path("agent/Install Windows Node.cmd").read_text(encoding="utf-8").lower()
 for forbidden in (
@@ -102,6 +133,7 @@ node tests/telemetry-storage.mjs
 node tests/presence-storage.mjs
 node tests/update-integrity.mjs
 node tests/review-backlog-guards.mjs
+node tests/architect-ux-guards.mjs
 
 python - <<'PY'
 from pathlib import Path
@@ -115,6 +147,7 @@ for migration in sorted(Path("migrations").glob("*.sql")):
 required = {
     "nodes", "missions", "assignments", "results", "commands", "audit_events",
     "agent_reports", "architect_sessions", "node_logs", "node_log_rate_limits",
+    "agent_rollouts", "architect_projects", "project_work_items",
 }
 tables = {
     row[0]
@@ -169,10 +202,12 @@ rmdir "$relative_pkg_root"
 site_dir="$(mktemp -d)"
 scripts/build_site.sh "$site_dir"
 test -s "$site_dir/index.html"
-test -s "$site_dir/prototype/index.html"
 test -s "$site_dir/hub/index.html"
-test -s "$site_dir/_headers"
+test -s "$site_dir/architect/index.html"
 test -s "$site_dir/architect/logs/index.html"
+test -s "$site_dir/_headers"
+test ! -e "$site_dir/prototype"
+test ! -e "$site_dir/node-test"
 find "$site_dir" -mindepth 1 -delete
 rmdir "$site_dir"
 

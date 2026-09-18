@@ -40,7 +40,7 @@ class Statement {
     return this;
   }
   async first() {
-    if (this.sql.includes("SELECT node_id, public_key, status FROM nodes")) {
+    if (this.sql.includes("SELECT node_id, public_key, status")) {
       return this.args[0] === state.node.node_id ? { ...state.node } : null;
     }
     if (this.sql.includes("SELECT result_id, outcome, created_at FROM results")) {

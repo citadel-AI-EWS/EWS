@@ -42,11 +42,11 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.4"
+VERSION = "0.3.5"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "rollback", "uninstall", "system_reboot", "system_shutdown"}
+SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown"}
 UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
 
@@ -362,11 +362,13 @@ def local_network_addresses() -> dict[str, Any]:
     }
 
 
-def system_inventory(_: dict[str, Any]) -> dict[str, Any]:
+def system_inventory(payload: dict[str, Any]) -> dict[str, Any]:
     disk = shutil.disk_usage(Path.home())
     memory = psutil.virtual_memory()
+    requested_task = str(payload.get("task_text") or "").strip()[:2000]
     return {
         "captured_at": now_iso(),
+        "requested_task": requested_task or None,
         "hostname": socket.gethostname(),
         "platform": platform.system(),
         "platform_release": platform.release(),
@@ -811,6 +813,7 @@ class Agent:
                 continue
             try:
                 restart_after = False
+                stop_after = False
                 if command.get("status") == "pending":
                     self.ack_command(command_id, "accepted")
                 if command_type == "pause":
@@ -824,6 +827,9 @@ class Agent:
                 elif command_type == "restart":
                     self.log.write("agent_restart_requested")
                     restart_after = True
+                elif command_type == "stop":
+                    self.log.write("agent_stop_requested")
+                    stop_after = True
                 elif command_type == "rollback":
                     self.rollback_last_update()
                     restart_after = True
@@ -837,6 +843,8 @@ class Agent:
                     command_id=command_id,
                     command_type=command_type,
                 )
+                if stop_after:
+                    raise SystemExit(0)
                 if restart_after:
                     entrypoint = Path(__file__).resolve().parent / "citadel_node_v2.py"
                     # The argv is fixed and the shell remains disabled.

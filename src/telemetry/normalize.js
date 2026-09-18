@@ -26,6 +26,7 @@ export const ALLOWED_EVENT_TYPES = new Set([
   "agent_update_healthcheck_passed",
   "agent_update_manual_rollback",
   "agent_restart_requested",
+  "agent_stop_requested",
   "system_reboot_scheduled",
   "system_shutdown_scheduled",
   "command_failure_ack_failed",

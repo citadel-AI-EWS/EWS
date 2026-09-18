@@ -8,139 +8,240 @@
   <style>
     :root{font-family:system-ui,-apple-system,sans-serif;color:#f2f5ff;background:#080c17}
     *{box-sizing:border-box}body{margin:0;min-height:100vh;padding:20px;background:radial-gradient(circle at top,#172441,#080c17 55%)}
-    main{max-width:760px;margin:auto}.brand{color:#8fb5ff;font-size:13px;font-weight:900;letter-spacing:.13em}
+    main{max-width:1480px;margin:auto}.brand{color:#8fb5ff;font-size:13px;font-weight:900;letter-spacing:.13em}
+    .topline{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.langbar{display:flex;gap:5px}.langbar button{width:auto;margin:0;padding:7px 10px;border:1px solid #2b3757;border-radius:999px;background:#11182a;color:#93a0ba;font-size:12px}.langbar button.active{border-color:#4e82c8;color:#b9d3ff}
     h1{font-size:29px;line-height:1.15;margin:11px 0}h2{font-size:20px;margin:0 0 15px}p{color:#aeb9d2;line-height:1.45}
     .card{margin-top:17px;padding:19px;border:1px solid #2b3757;border-radius:18px;background:#11182a;box-shadow:0 18px 55px #0007}
-    label{display:block;margin:12px 0 7px;font-weight:750}input,select{width:100%;padding:13px;border:1px solid #3a496f;border-radius:11px;background:#090e1b;color:#fff;font-size:16px}
+    label{display:block;margin:12px 0 7px;font-weight:750}input,select,textarea{width:100%;padding:13px;border:1px solid #3a496f;border-radius:11px;background:#090e1b;color:#fff;font-size:16px}textarea{min-height:110px;resize:vertical;font-family:inherit}
     button{width:100%;margin-top:13px;padding:14px;border:0;border-radius:11px;background:#3478f6;color:#fff;font-size:16px;font-weight:850}
     button.secondary{background:#273451}button.danger{background:#703542}button:disabled{opacity:.55}.hidden{display:none!important}
-    .toolbar{display:flex;gap:10px;flex-wrap:wrap}.toolbar button{width:auto;flex:1}.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:17px}
+    .toolbar{display:flex;gap:10px;flex-wrap:wrap}.toolbar button{width:auto;flex:1}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:17px}
     .stat{padding:14px;border:1px solid #2b3757;border-radius:15px;background:#11182a}.stat b{display:block;font-size:25px}.stat span,.small{font-size:13px;color:#93a0ba}
     .item{margin-top:10px;padding:13px;border-radius:13px;background:#0b1222;border-left:4px solid #5b8fff;overflow-wrap:anywhere}.item.ok{border-left-color:#35d07f}.item.warn{border-left-color:#ffb44f}
     .item strong{display:block;margin-bottom:5px}.status{margin-top:15px;padding:13px;border-radius:11px;background:#0b1222;white-space:pre-wrap;overflow-wrap:anywhere}
     .good{border-left:4px solid #35d07f}.bad{border-left:4px solid #ff6874}.muted{color:#93a0ba}.section-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
     .section-head button,.item button{width:auto;margin:0;padding:10px 12px}.report-body{margin:12px 0 0;padding:13px;border-radius:11px;background:#080e1d;color:#dfe7fb;white-space:pre-wrap;overflow-wrap:anywhere;max-height:55vh;overflow:auto}
     .control-buttons{display:grid;grid-template-columns:1fr 1fr;gap:9px}.control-buttons button{margin-top:10px}.control-buttons .full{grid-column:1/-1}
-    @media(max-width:520px){body{padding:17px}.stats{grid-template-columns:1fr}.card{padding:17px}h1{font-size:27px}}
+    .ops-shell{position:relative;overflow:hidden;margin-top:17px;padding:22px;border:1px solid #2c4368;border-radius:22px;background:linear-gradient(145deg,rgba(12,24,43,.98),rgba(8,14,28,.98));box-shadow:0 24px 80px #0008}
+    .ops-shell:before{content:"";position:absolute;inset:0;pointer-events:none;background-image:linear-gradient(rgba(93,143,220,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(93,143,220,.055) 1px,transparent 1px);background-size:28px 28px;mask-image:linear-gradient(to bottom,black,transparent 88%)}
+    .ops-head{position:relative;display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex-wrap:wrap}.ops-title{font-size:13px;font-weight:950;letter-spacing:.18em;color:#83b5ff}.ops-head h2{font-size:27px;margin:5px 0}.ops-sub{color:#8ca4c8;font-size:13px}
+    .live-badge{display:inline-flex;align-items:center;gap:9px;padding:8px 12px;border:1px solid #285941;border-radius:999px;background:#0d281f;color:#bff5d8;font-size:12px;font-weight:850}.live-dot{width:9px;height:9px;border-radius:50%;background:#38dc84;box-shadow:0 0 0 0 rgba(56,220,132,.5);animation:livePulse 1.9s infinite}
+    @keyframes livePulse{0%{box-shadow:0 0 0 0 rgba(56,220,132,.45)}70%{box-shadow:0 0 0 9px rgba(56,220,132,0)}100%{box-shadow:0 0 0 0 rgba(56,220,132,0)}}
+    .ops-grid{position:relative;display:grid;grid-template-columns:repeat(12,1fr);gap:14px;margin-top:18px}.ops-kpi{grid-column:span 3;padding:15px;border:1px solid #273857;border-radius:15px;background:rgba(8,16,31,.78)}.ops-kpi b{display:block;font-size:27px}.ops-kpi span{font-size:12px;color:#8fa4c4}
+    .charts-grid{position:relative;display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.chart-card{padding:16px;border:1px solid #273857;border-radius:16px;background:rgba(8,16,31,.8);min-height:180px}.chart-card h3{margin:0 0 12px;font-size:14px;letter-spacing:.04em}.chart-rows{display:flex;flex-direction:column;gap:9px}.chart-row{display:grid;grid-template-columns:minmax(92px,150px) 1fr 48px;gap:9px;align-items:center;font-size:12px}.chart-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#c8d8f0}.bar-track{height:9px;border-radius:999px;background:#121d30;overflow:hidden}.bar-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#4c91ff,#70e6c1);transform-origin:left;animation:barGrow .55s ease-out}.bar-fill.warn{background:linear-gradient(90deg,#ffb44f,#ff6d72)}@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+    .fleet-ring-wrap{display:flex;gap:18px;align-items:center}.fleet-ring{--pct:0;flex:0 0 auto;width:112px;height:112px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#38d889 calc(var(--pct)*1%),#1a2941 0);position:relative;box-shadow:0 0 34px rgba(56,216,137,.12)}.fleet-ring:after{content:"";position:absolute;width:78px;height:78px;border-radius:50%;background:#0a1221;border:1px solid #263a5c}.fleet-ring b{position:relative;z-index:1;font-size:22px}.fleet-legend{font-size:12px;color:#9eb1cc;line-height:1.8}
+    .node-grid{position:relative;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:14px}.node-card{border:1px solid #2a3c5d;border-radius:16px;background:linear-gradient(155deg,#0d1729,#0a1221);padding:15px;transition:.18s transform,.18s border-color,.18s box-shadow}.node-card:hover{transform:translateY(-1px);border-color:#4774b1;box-shadow:0 14px 35px #0005}.node-card.dead{border-color:#613743}.node-card.unhealthy{box-shadow:inset 3px 0 0 #ff6874}.node-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.node-name{font-weight:900;font-size:16px}.node-agent{margin-top:3px;color:#8ea6c9;font-size:12px}.node-status-lines{margin-top:11px;display:grid;gap:6px;font-size:13px}.state-live{color:#62e5a0}.state-dead{color:#ff7b86}.health-line{display:flex;align-items:center;justify-content:space-between;gap:10px}.detail-toggle{width:30px!important;height:30px;margin:0!important;padding:0!important;border-radius:9px!important;background:#223451!important;font-size:19px!important;line-height:1}.node-details{display:none;margin-top:12px;padding-top:12px;border-top:1px solid #243553;font-size:12px;color:#a8b9d3;line-height:1.7}.node-details.open{display:block;animation:detailIn .18s ease-out}@keyframes detailIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+    .topology-wrap{height:210px;position:relative;overflow:hidden;border-radius:12px;background:radial-gradient(circle at 50% 50%,rgba(62,121,211,.13),transparent 45%)}.topology-wrap svg{width:100%;height:100%}.topology-line{stroke:#355e91;stroke-width:1.5;stroke-dasharray:5 6;animation:dashFlow 5s linear infinite}.topology-node{fill:#122743;stroke:#5498ef;stroke-width:1.4}.topology-node.dead{fill:#341923;stroke:#ff6d7a}@keyframes dashFlow{to{stroke-dashoffset:-44}}
+    .ops-overlay{position:fixed;inset:0;z-index:999;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(2,7,15,.78);backdrop-filter:blur(10px)}.ops-modal{width:min(620px,100%);border:1px solid #36527e;border-radius:20px;background:linear-gradient(155deg,#111d32,#0a1221);box-shadow:0 35px 100px #000b;padding:22px}.ops-modal h2{margin:4px 0 8px}.brief-list{display:flex;flex-direction:column;gap:8px;margin:14px 0}.brief-item{padding:11px 12px;border-radius:11px;background:#111a2c;border-left:4px solid #ff6874;font-size:13px}.brief-clear{border-left-color:#35d07f}.ops-modal button{margin-top:10px}
+    .role-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}.role-chip{padding:10px;border:1px solid #293b5c;border-radius:11px;background:#0b1425;font-size:12px}.role-chip b{display:block;color:#dce8fb}.role-chip span{color:#8199bb;font-size:11px}
+    @media(max-width:900px){.ops-kpi{grid-column:span 6}.charts-grid,.node-grid{grid-template-columns:1fr}.role-grid{grid-template-columns:1fr 1fr}}
+    @media(max-width:520px){body{padding:12px}.stats{grid-template-columns:1fr}.card,.ops-shell{padding:15px}h1{font-size:27px}.ops-kpi{grid-column:span 6}.chart-row{grid-template-columns:82px 1fr 42px}.role-grid{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
   <main>
-    <div class="brand">CITADEL / ARCHITECT</div>
-    <h1>Панель архитектора</h1>
-    <p>Контролируемое управление узлами и разрешёнными миссиями. Произвольные команды отключены.</p>
+    <div class="topline"><div class="brand">CITADEL / OPERATIONS</div><div class="langbar"><button type="button" data-lang="ru">RU</button><button type="button" data-lang="en">EN</button><button type="button" data-lang="he">HE</button></div></div>
+    <h1 data-i18n="pageTitle">LIVE OPERATIONS</h1>
+    <p data-i18n="pageLead">Живой центр управления · показываются только реальные данные Controller.</p>
 
     <section id="loginCard" class="card">
-      <h2>Защищённый вход</h2>
-      <label for="token">Секрет архитектора</label>
+      <h2 data-i18n="loginTitle">Защищённый вход</h2>
+      <label for="token" data-i18n="tokenLabel">Секрет архитектора</label>
       <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="citadel_arch_…">
-      <button id="loginButton" type="button">Войти</button>
-      <p class="small">Секрет хранится только до закрытия этой вкладки.</p>
+      <button id="loginButton" type="button" data-i18n="loginButton">Войти</button>
+      <p class="small" data-i18n="loginHint">Секрет хранится только до закрытия этой вкладки.</p>
     </section>
 
     <section id="dashboard" class="hidden">
       <div class="toolbar">
-        <button id="refreshButton" class="secondary" type="button">Обновить</button>
-        <button id="logoutButton" class="danger" type="button">Выйти</button>
+        <button id="refreshButton" class="secondary" type="button" data-i18n="refresh">Обновить</button>
+        <button id="logoutButton" class="danger" type="button" data-i18n="logout">Выйти</button>
       </div>
 
-      <div class="stats">
-        <div class="stat"><b id="nodeCount">0</b><span>всего узлов</span></div>
-        <div class="stat"><b id="onlineCount">0</b><span>узлов online</span></div>
-        <div class="stat"><b id="missionCount">0</b><span>миссий</span></div>
-        <div class="stat"><b id="reportCount">0</b><span>полных отчётов</span></div>
-        <div class="stat"><b id="sessionCount">0</b><span>контрольных точек</span></div>
-      </div>
-
-      <section class="card">
-        <div class="section-head">
-          <h2>Контрольные точки</h2>
-          <button id="refreshSessionsButton" class="secondary" type="button">Обновить</button>
+      <section id="liveOperations" class="ops-shell">
+        <div class="ops-head">
+          <div>
+            <div class="ops-title">LIVE OPERATIONS CENTER</div>
+            <h2>Operational picture</h2>
+            <div class="ops-sub" data-i18n="opsSub">Реальные heartbeat, CPU/RAM, presence и состояние Controller. Демонстрационные значения запрещены.</div>
+          </div>
+          <div class="live-badge"><span class="live-dot"></span> CONTROLLER LIVE</div>
         </div>
-        <p class="small">Сохраняет рабочее состояние на сервере без секрета входа и без содержимого отчётов.</p>
-        <label for="sessionName">Название</label>
-        <input id="sessionName" maxlength="120" value="Контрольная точка">
-        <button id="saveSessionButton" type="button">Сохранить сессию</button>
-        <div id="storageUsage" class="status">Использование хранилища загружается…</div>
-        <div id="sessionsList"></div>
-        <button id="loadMoreSessionsButton" class="secondary hidden" type="button">Показать ещё контрольные точки</button>
+        <div class="ops-grid">
+          <div class="ops-kpi"><b id="nodeCount">0</b><span data-i18n="registeredNodes">зарегистрировано нод</span></div>
+          <div class="ops-kpi"><b id="onlineCount">0</b><span data-i18n="liveNow">живых сейчас</span></div>
+          <div class="ops-kpi"><b id="unhealthyCount">0</b><span data-i18n="unhealthy">нездоровых / недоступных</span></div>
+          <div class="ops-kpi"><b id="projectCount">0</b><span data-i18n="projects">проектов</span></div>
+        </div>
+        <div class="charts-grid">
+          <div class="chart-card">
+            <h3>Fleet health</h3>
+            <div class="fleet-ring-wrap">
+              <div id="fleetRing" class="fleet-ring"><b id="fleetPct">0%</b></div>
+              <div id="fleetLegend" class="fleet-legend">Нет данных.</div>
+            </div>
+          </div>
+          <div class="chart-card">
+            <h3>Live topology</h3>
+            <div class="topology-wrap"><svg id="topologySvg" viewBox="0 0 560 210" role="img" aria-label="Live node topology"></svg></div>
+          </div>
+          <div class="chart-card"><h3>CPU · текущая телеметрия</h3><div id="cpuChart" class="chart-rows"></div></div>
+          <div class="chart-card"><h3>RAM · текущая телеметрия</h3><div id="memoryChart" class="chart-rows"></div></div>
+        </div>
+        <div class="section-head" style="margin-top:18px">
+          <h2 style="margin:0" data-i18n="nodes">Ноды</h2><span id="nodesUpdated" class="small"></span>
+        </div>
+        <div id="liveNodesList" class="node-grid"></div>
       </section>
+      <div class="hidden">
+        <b id="missionCount">0</b><b id="reportCount">0</b>
+      </div>
 
       <section class="card">
-        <h2>Управление узлом</h2>
-        <label for="controlNodeSelect">Узел</label>
+        <h2 data-i18n="nodeControl">Управление узлом</h2>
+        <label for="controlNodeSelect" data-i18n="node">Узел</label>
         <select id="controlNodeSelect"></select>
+        <div id="nodeDiagnostics" class="status">Выберите узел — здесь появятся IP, состояние, CPU/RAM, версия и последняя связь.</div>
         <div class="control-buttons">
-          <button id="pauseButton" class="secondary" type="button">Поставить на паузу</button>
-          <button id="resumeButton" class="secondary" type="button">Возобновить</button>
+          <button id="ipButton" class="secondary" type="button" data-i18n="showIp">Показать IP</button>
+          <button id="healthButton" class="secondary" type="button" data-i18n="healthCheck">Проверить здоровье</button>
+          <button id="pauseButton" class="secondary" type="button" data-i18n="pause">Поставить на паузу</button>
+          <button id="resumeButton" class="secondary" type="button" data-i18n="resume">Возобновить</button>
           <button id="updateButton" class="secondary full" type="button">Обновить агент дистанционно</button>
-          <button id="restartButton" class="secondary" type="button">Перезапустить агент</button>
-          <button id="rollbackButton" class="danger" type="button">Откатить последнее обновление</button>
-          <button id="disconnectButton" class="danger full" type="button">Отключить узел</button>
+          <button id="updateAllAgentsButton" class="secondary full" type="button">Обновить все агенты</button>
+          <div id="updateAllStatus" class="status full">Массовое обновление ещё не запускалось.</div>
+          <button id="restartButton" class="secondary" type="button" data-i18n="restartAgent">Перезапустить агент</button>
+          <button id="stopButton" class="danger" type="button" data-i18n="stopAgent">Остановить агент</button>
+          <button id="rollbackButton" class="danger full" type="button" data-i18n="rollback">Откатить последнее обновление</button>
+          <button id="rebootButton" class="danger" type="button" data-i18n="reboot">Перезагрузить ПК</button>
+          <button id="shutdownButton" class="danger" type="button" data-i18n="shutdown">Выключить ПК</button>
+          <button id="disconnectButton" class="danger full" type="button" data-i18n="disconnect">Отозвать и удалить узел</button>
         </div>
-        <p class="small">Каждая команда подписывается Controller. Обновление проверяется по подписи, SHA‑256, self-test и fresh-process startup-check; при ошибке файлы автоматически откатываются. Доступен и ручной откат последней сохранённой версии.</p>
+        <p class="small">«Остановить агент» завершает только процесс агента и не отзывает его identity. Он снова запустится при следующем входе Windows или при локальном запуске. «Отозвать и удалить узел» — отдельная необратимая операция на Controller.</p>
       </section>
 
       <section class="card">
-        <h2>Создать безопасную миссию</h2>
-        <label for="nodeSelect">Узел</label>
+        <h2 data-i18n="sshTitle">SSH / Zero Trust</h2>
+        <p class="small">SSH не открывает порт 22 в интернет. Здесь настраивается локальная команда для Cloudflare Access/Tunnel. Наличие Tunnel проверяется отдельно.</p>
+        <label for="sshHost">Cloudflare Access hostname</label>
+        <input id="sshHost" type="text" inputmode="url" placeholder="ssh.example.com">
+        <label for="sshUser">SSH user</label>
+        <input id="sshUser" type="text" autocomplete="username" placeholder="username">
+        <div id="sshState" class="status">SSH цель ещё не настроена.</div>
+        <pre id="sshCommand" class="report-body">Укажите hostname и пользователя.</pre>
+        <div class="toolbar">
+          <button id="copySshButton" class="secondary" type="button" disabled>Копировать SSH-команду</button>
+          <button id="openSshButton" class="secondary" type="button" disabled>Открыть Browser SSH</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 data-i18n="projectTitleHead">Python / Создать проект</h2>
+        <p class="small">Вставьте сюда настоящее задание. Hub сначала прогонит текст через четыре обязательные проверки, после чего ваше нажатие «Создать проект» является подтверждением Architect. Затем Hub строит рабочие блоки и сам выбирает доступные Python-узлы.</p>
+        <label for="projectTitle" data-i18n="projectName">Название проекта</label>
+        <input id="projectTitle" maxlength="160" value="Новый проект">
+        <label for="projectTaskText" data-i18n="task">Задание</label>
+        <textarea id="projectTaskText" maxlength="20000" placeholder="Опишите, что должен сделать проект..."></textarea>
+        <div class="control-buttons">
+          <button id="checkProjectButton" class="secondary" type="button" data-i18n="checkText">1. Проверить текст</button>
+          <button id="createProjectButton" type="button" disabled data-i18n="createProject">2. Создать проект</button>
+        </div>
+        <div id="projectChecks" class="status">Ожидаю текст проекта.
+1. Source allowlisting
+2. Validation
+3. Deduplication
+4. Safety classification</div>
+        <div id="projectRolePlan" class="status">Hub ещё не определял требуемые специализации.</div>
+        <div class="small" style="margin-top:12px">Реестр специализаций Hub</div>
+        <div id="workRoles" class="role-grid"></div>
+        <div id="projectResult" class="status">После создания здесь будет видно, какие специалисты нужны, сколько рабочих блоков создал Hub и на какие узлы они назначены.</div>
+        <div id="projectsList"></div>
+      </section>
+
+      <section class="card" id="missionPanel">
+        <h2 data-i18n="missionTitleHead">Создать диагностическую миссию</h2>
+        <p class="small">Выберите живую ноду, напишите что именно проверить и отправьте задание. После создания здесь останутся Node ID и Mission ID; результат появится в блоке «Миссии и результаты».</p>
+        <label for="nodeSelect" data-i18n="node">Нода</label>
         <select id="nodeSelect"></select>
-        <label for="missionTitle">Название</label>
+        <div id="missionNodeState" class="status">Выберите ноду.</div>
+        <label for="missionType" data-i18n="missionType">Тип задачи</label>
+        <select id="missionType"><option value="system_inventory" data-i18n="systemInventory">Проверка состояния компьютера</option></select>
+        <label for="missionTitle" data-i18n="name">Название</label>
         <input id="missionTitle" maxlength="160" value="Проверка системы">
-        <label for="expiresHours">Срок действия</label>
-        <select id="expiresHours">
-          <option value="1">1 час</option>
-          <option value="24" selected>24 часа</option>
-          <option value="72">3 дня</option>
-        </select>
-        <button id="createMissionButton" type="button">Создать и назначить</button>
-        <p class="small">На этом этапе разрешён только безопасный тип <code>system_inventory</code>.</p>
+        <label for="missionTask" data-i18n="whatCheck">Что проверить</label>
+        <textarea id="missionTask" maxlength="2000">Проверить состояние компьютера: CPU, RAM, диск, систему, сеть и базовые параметры. Вернуть понятный диагностический отчёт.</textarea>
+        <label for="expiresHours" data-i18n="expires">Срок действия</label>
+        <select id="expiresHours"><option value="1">1 час</option><option value="24" selected>24 часа</option><option value="72">3 дня</option></select>
+        <button id="createMissionButton" type="button" data-i18n="createMission">Создать и назначить миссию</button>
+        <div id="missionCreateResult" class="status">Миссия ещё не создавалась.</div>
       </section>
 
       <section class="card">
-        <div class="section-head"><h2>Узлы</h2><span id="nodesUpdated" class="small"></span></div>
-        <div id="nodesList"></div>
-      </section>
-
-      <section class="card">
-        <h2>Команды управления</h2>
+        <h2 data-i18n="commands">Команды управления</h2>
         <div id="commandsList"></div>
       </section>
 
       <section class="card">
-        <h2>Миссии и результаты</h2>
+        <h2 data-i18n="missionsResults">Миссии и результаты</h2>
         <div id="missionsList"></div>
       </section>
 
       <section class="card">
         <div class="section-head">
-          <h2>Полные отчёты агентов</h2>
-          <button id="refreshReportsButton" class="secondary" type="button">Обновить</button>
+          <h2 data-i18n="reports">Диагностика и системные отчёты узлов</h2>
+          <button id="refreshReportsButton" class="secondary" type="button" data-i18n="refresh">Обновить</button>
         </div>
-        <p class="small">В списке показываются только метаданные. Содержимое загружается отдельно после выбора отчёта.</p>
+        <p class="small">System Inventory — это техническая диагностика узла, а не выполненная пользовательская работа. Содержимое загружается только после выбора отчёта.</p>
         <div id="reportsList"></div>
         <button id="loadMoreReportsButton" class="secondary hidden" type="button">Показать ещё отчёты</button>
       </section>
 
       <section id="reportDetailCard" class="card hidden">
         <div class="section-head">
-          <h2>Содержимое отчёта</h2>
-          <button id="closeReportButton" class="secondary" type="button">Закрыть</button>
+          <h2 data-i18n="reportContent">Содержимое диагностического отчёта</h2>
+          <button id="closeReportButton" class="secondary" type="button" data-i18n="close">Закрыть</button>
         </div>
         <div id="reportDetailMeta" class="small"></div>
         <pre id="reportDetailBody" class="report-body"></pre>
       </section>
 
-      <section class="card">
-        <h2>Последние события аудита</h2>
-        <div id="auditList"></div>
-      </section>
     </section>
 
     <div id="status" class="status">Панель ожидает входа.</div>
   </main>
 
+  <div id="operationsAlert" class="ops-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="operationsAlertTitle">
+    <div class="ops-modal">
+      <div class="ops-title">OPERATIONS BRIEF</div>
+      <h2 id="operationsAlertTitle" data-i18n="briefTitle">Краткая оперативная сводка</h2>
+      <p class="small" data-i18n="briefSub">Только проблемы, требующие внимания прямо сейчас.</p>
+      <div id="operationsAlertList" class="brief-list"></div>
+      <button id="closeOperationsAlert" type="button" data-i18n="briefClose">Закрыть и перейти в Live Operations</button>
+    </div>
+  </div>
+
   <script>
+    const I18N = {
+      ru:{pageTitle:"LIVE OPERATIONS",pageLead:"Живой центр управления · показываются только реальные данные Controller.",loginTitle:"Защищённый вход",tokenLabel:"Секрет архитектора",loginButton:"Войти",loginHint:"Секрет хранится только до закрытия этой вкладки.",refresh:"Обновить",logout:"Выйти",opsSub:"Реальные heartbeat, CPU/RAM, presence и состояние Controller. Демонстрационные значения запрещены.",registeredNodes:"зарегистрировано нод",liveNow:"живых сейчас",unhealthy:"нездоровых / недоступных",projects:"проектов",nodes:"Ноды",nodeControl:"Управление узлом",node:"Нода",showIp:"Показать IP",healthCheck:"Проверить здоровье",pause:"Поставить на паузу",resume:"Возобновить",restartAgent:"Перезапустить агент",stopAgent:"Остановить агент",rollback:"Откатить последнее обновление",reboot:"Перезагрузить ПК",shutdown:"Выключить ПК",disconnect:"Отозвать и удалить узел",sshTitle:"SSH / Zero Trust",projectTitleHead:"Python / Создать проект",projectName:"Название проекта",task:"Задание",checkText:"1. Проверить текст",createProject:"2. Создать проект",missionTitleHead:"Создать диагностическую миссию",missionType:"Тип задачи",systemInventory:"Проверка состояния компьютера",name:"Название",whatCheck:"Что проверить",expires:"Срок действия",createMission:"Создать и назначить миссию",commands:"Команды управления",missionsResults:"Миссии и результаты",reports:"Диагностика и системные отчёты узлов",reportContent:"Содержимое диагностического отчёта",close:"Закрыть",briefTitle:"Краткая оперативная сводка",briefSub:"Только проблемы, требующие внимания прямо сейчас.",briefClose:"Закрыть и перейти в Live Operations"},
+      en:{pageTitle:"LIVE OPERATIONS",pageLead:"Live control center · only real Controller data is shown.",loginTitle:"Secure sign-in",tokenLabel:"Architect token",loginButton:"Sign in",loginHint:"The token is kept only until this tab is closed.",refresh:"Refresh",logout:"Sign out",opsSub:"Real heartbeats, CPU/RAM, presence, and Controller state. Demo values are prohibited.",registeredNodes:"registered nodes",liveNow:"live now",unhealthy:"unhealthy / unavailable",projects:"projects",nodes:"Nodes",nodeControl:"Node control",node:"Node",showIp:"Show IP",healthCheck:"Health check",pause:"Pause",resume:"Resume",restartAgent:"Restart agent",stopAgent:"Stop agent",rollback:"Rollback last update",reboot:"Reboot host",shutdown:"Shut down host",disconnect:"Revoke and remove node",sshTitle:"SSH / Zero Trust",projectTitleHead:"Python / Create project",projectName:"Project name",task:"Task",checkText:"1. Check text",createProject:"2. Create project",missionTitleHead:"Create diagnostic mission",missionType:"Task type",systemInventory:"Computer system inventory",name:"Name",whatCheck:"What to check",expires:"Expires",createMission:"Create and assign mission",commands:"Control commands",missionsResults:"Missions and results",reports:"Diagnostics and node reports",reportContent:"Diagnostic report",close:"Close",briefTitle:"Operations brief",briefSub:"Only problems that need attention right now.",briefClose:"Close and open Live Operations"},
+      he:{pageTitle:"LIVE OPERATIONS",pageLead:"מרכז שליטה חי · מוצגים רק נתונים אמיתיים מה-Controller.",loginTitle:"כניסה מאובטחת",tokenLabel:"Architect token",loginButton:"כניסה",loginHint:"ה-token נשמר רק עד סגירת הלשונית.",refresh:"רענון",logout:"יציאה",opsSub:"heartbeat, CPU/RAM, presence ומצב Controller אמיתיים בלבד. אין ערכי דמו.",registeredNodes:"nodes רשומים",liveNow:"חיים עכשיו",unhealthy:"לא תקינים / לא זמינים",projects:"פרויקטים",nodes:"Nodes",nodeControl:"שליטה ב-node",node:"Node",showIp:"הצג IP",healthCheck:"בדיקת בריאות",pause:"השהה",resume:"המשך",restartAgent:"הפעל agent מחדש",stopAgent:"עצור agent",rollback:"חזרה לעדכון הקודם",reboot:"אתחל מחשב",shutdown:"כבה מחשב",disconnect:"בטל והסר node",sshTitle:"SSH / Zero Trust",projectTitleHead:"Python / יצירת פרויקט",projectName:"שם הפרויקט",task:"משימה",checkText:"1. בדוק טקסט",createProject:"2. צור פרויקט",missionTitleHead:"יצירת משימת אבחון",missionType:"סוג משימה",systemInventory:"בדיקת מצב המחשב",name:"שם",whatCheck:"מה לבדוק",expires:"תוקף",createMission:"צור והקצה משימה",commands:"פקודות שליטה",missionsResults:"משימות ותוצאות",reports:"אבחון ודוחות nodes",reportContent:"תוכן דוח אבחון",close:"סגור",briefTitle:"סיכום תפעולי",briefSub:"רק בעיות הדורשות תשומת לב עכשיו.",briefClose:"סגור ועבור ל-Live Operations"}
+    };
+    let lang = localStorage.getItem("citadelArchitectLang") || "ru";
+    function tr(key){ return I18N[lang]?.[key] || I18N.ru[key] || key; }
+    function lt(ru,en,he){ return lang === "he" ? he : lang === "en" ? en : ru; }
+    function applyLanguage(next){
+      lang = I18N[next] ? next : "ru";
+      localStorage.setItem("citadelArchitectLang", lang);
+      document.documentElement.lang = lang;
+      document.documentElement.dir = lang === "he" ? "rtl" : "ltr";
+      document.querySelectorAll("[data-lang]").forEach((button) => button.classList.toggle("active", button.dataset.lang === lang));
+      document.querySelectorAll("[data-i18n]").forEach((element) => {
+        const value = tr(element.dataset.i18n);
+        if (value) element.textContent = value;
+      });
+      if (typeof currentNodes !== "undefined" && Array.isArray(currentNodes)) renderNodes(currentNodes);
+    }
+    document.querySelectorAll("[data-lang]").forEach((button) => button.addEventListener("click", () => applyLanguage(button.dataset.lang)));
     const loginCard = document.getElementById("loginCard");
     const dashboard = document.getElementById("dashboard");
     const tokenInput = document.getElementById("token");
@@ -153,30 +254,67 @@
     const reportDetailMeta = document.getElementById("reportDetailMeta");
     const reportDetailBody = document.getElementById("reportDetailBody");
     const closeReportButton = document.getElementById("closeReportButton");
-    const refreshSessionsButton = document.getElementById("refreshSessionsButton");
-    const loadMoreSessionsButton = document.getElementById("loadMoreSessionsButton");
     const loadMoreReportsButton = document.getElementById("loadMoreReportsButton");
-    const saveSessionButton = document.getElementById("saveSessionButton");
-    const sessionName = document.getElementById("sessionName");
-    const storageUsage = document.getElementById("storageUsage");
     const nodeSelect = document.getElementById("nodeSelect");
     const controlNodeSelect = document.getElementById("controlNodeSelect");
+    const nodeDiagnostics = document.getElementById("nodeDiagnostics");
+    const ipButton = document.getElementById("ipButton");
+    const healthButton = document.getElementById("healthButton");
     const pauseButton = document.getElementById("pauseButton");
     const resumeButton = document.getElementById("resumeButton");
     const updateButton = document.getElementById("updateButton");
+    const updateAllAgentsButton = document.getElementById("updateAllAgentsButton");
+    const updateAllStatus = document.getElementById("updateAllStatus");
     const restartButton = document.getElementById("restartButton");
+    const stopButton = document.getElementById("stopButton");
     const rollbackButton = document.getElementById("rollbackButton");
+    const rebootButton = document.getElementById("rebootButton");
+    const shutdownButton = document.getElementById("shutdownButton");
     const disconnectButton = document.getElementById("disconnectButton");
+    const projectTitle = document.getElementById("projectTitle");
+    const projectTaskText = document.getElementById("projectTaskText");
+    const checkProjectButton = document.getElementById("checkProjectButton");
+    const createProjectButton = document.getElementById("createProjectButton");
+    const projectChecks = document.getElementById("projectChecks");
+    const projectRolePlan = document.getElementById("projectRolePlan");
+    const workRoles = document.getElementById("workRoles");
+    const projectResult = document.getElementById("projectResult");
+    const projectsList = document.getElementById("projectsList");
+    const liveNodesList = document.getElementById("liveNodesList");
+    const fleetRing = document.getElementById("fleetRing");
+    const fleetPct = document.getElementById("fleetPct");
+    const fleetLegend = document.getElementById("fleetLegend");
+    const cpuChart = document.getElementById("cpuChart");
+    const memoryChart = document.getElementById("memoryChart");
+    const topologySvg = document.getElementById("topologySvg");
+    const operationsAlert = document.getElementById("operationsAlert");
+    const operationsAlertList = document.getElementById("operationsAlertList");
+    const closeOperationsAlert = document.getElementById("closeOperationsAlert");
+    const missionNodeState = document.getElementById("missionNodeState");
+    const missionType = document.getElementById("missionType");
     const missionTitle = document.getElementById("missionTitle");
+    const missionTask = document.getElementById("missionTask");
+    const missionCreateResult = document.getElementById("missionCreateResult");
     const expiresHours = document.getElementById("expiresHours");
+    const sshHost = document.getElementById("sshHost");
+    const sshUser = document.getElementById("sshUser");
+    const sshState = document.getElementById("sshState");
+    const sshCommand = document.getElementById("sshCommand");
+    const copySshButton = document.getElementById("copySshButton");
+    const openSshButton = document.getElementById("openSshButton");
     const statusElement = document.getElementById("status");
     let architectToken = sessionStorage.getItem("citadel-architect-token") || "";
     let currentNodes = [];
     let currentCommands = [];
+    let currentPresence = [];
+    let currentReleaseVersion = "";
     let currentReports = [];
+    let currentProjectCheck = null;
+    let currentProjects = [];
+    let currentWorkRoles = [];
+    let openingBriefShown = false;
     let activeReportId = null;
     let reportNextOffset = null;
-    let sessionNextOffset = null;
     let authGeneration = 0;
 
     function setStatus(message, kind = "") {
@@ -200,53 +338,440 @@
       return data;
     }
 
+    function safeHost(value) {
+      const host = String(value || "").trim().toLowerCase();
+      return /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(host) && host.includes(".") ? host : "";
+    }
+
+    function safeUser(value) {
+      const user = String(value || "").trim();
+      return /^[a-zA-Z0-9._-]{1,64}$/.test(user) ? user : "";
+    }
+
+    function selectedNode() {
+      return currentNodes.find((item) => item.node_id === controlNodeSelect.value) || null;
+    }
+
+    function parseControllerTime(value) {
+      if (!value) return null;
+      const raw = String(value);
+      const normalized = /[zZ]|[+-]\d\d:?\d\d$/.test(raw)
+        ? raw
+        : raw.replace(" ", "T") + "Z";
+      const timestamp = Date.parse(normalized);
+      return Number.isFinite(timestamp) ? timestamp : null;
+    }
+
+    function nodeAgeMinutes(node) {
+      const timestamp = parseControllerTime(node.last_seen_at);
+      return timestamp === null ? Infinity : Math.max(0, (Date.now() - timestamp) / 60000);
+    }
+
+    function isNodeLive(node) {
+      return Boolean(node) &&
+        node.status !== "revoked" &&
+        node.status !== "offline" &&
+        nodeAgeMinutes(node) <= 5;
+    }
+
+    function nodeHealth(node) {
+      const live = isNodeLive(node);
+      const cpu = node.cpu_percent == null ? null : Number(node.cpu_percent);
+      const memory = node.memory_percent == null ? null : Number(node.memory_percent);
+      const criticalLoad = (Number.isFinite(cpu) && cpu >= 95) ||
+        (Number.isFinite(memory) && memory >= 95);
+      return {
+        live,
+        healthy: live && !criticalLoad,
+        criticalLoad,
+        cpu,
+        memory
+      };
+    }
+
+    function nodeDisplayName(node) {
+      return node.node_number
+        ? `CITADEL Node ${node.node_number}`
+        : (node.hostname || node.node_id);
+    }
+
+    function agentDisplayName(node) {
+      return node.node_number
+        ? `AG-${String(node.node_number).padStart(2, "0")}`
+        : "Node Agent";
+    }
+
+    function renderBarChart(container, nodes, field) {
+      container.replaceChildren();
+      const visible = nodes.filter((node) => node.status !== "revoked").slice(0, 24);
+      for (const node of visible) {
+        const value = node[field] == null ? null : Math.max(0, Math.min(100, Number(node[field])));
+        const row = document.createElement("div");
+        row.className = "chart-row";
+        addText(row, "span", nodeDisplayName(node), "chart-label");
+        const track = document.createElement("div");
+        track.className = "bar-track";
+        const fill = document.createElement("div");
+        fill.className = `bar-fill ${value !== null && value >= 90 ? "warn" : ""}`.trim();
+        fill.style.width = value === null ? "0%" : `${value}%`;
+        track.appendChild(fill);
+        row.appendChild(track);
+        addText(row, "span", value === null ? "—" : `${value.toFixed(0)}%`, "");
+        container.appendChild(row);
+      }
+      if (!visible.length) addText(container, "div", "Нет активных нод.", "muted");
+    }
+
+    function renderTopology(nodes) {
+      const ns = "http://www.w3.org/2000/svg";
+      topologySvg.replaceChildren();
+      const operational = nodes.filter((node) => node.status !== "revoked").slice(0, 24);
+      const centerX = 280, centerY = 105;
+      const core = document.createElementNS(ns, "circle");
+      core.setAttribute("cx", centerX); core.setAttribute("cy", centerY); core.setAttribute("r", 24);
+      core.setAttribute("class", "topology-node");
+      topologySvg.appendChild(core);
+      const coreText = document.createElementNS(ns, "text");
+      coreText.setAttribute("x", centerX); coreText.setAttribute("y", centerY + 4);
+      coreText.setAttribute("text-anchor", "middle"); coreText.setAttribute("fill", "#dceaff");
+      coreText.setAttribute("font-size", "11"); coreText.textContent = "HUB";
+      topologySvg.appendChild(coreText);
+
+      operational.forEach((node, index) => {
+        const angle = (Math.PI * 2 * index / Math.max(operational.length, 1)) - Math.PI / 2;
+        const radiusX = 215, radiusY = 77;
+        const x = centerX + Math.cos(angle) * radiusX;
+        const y = centerY + Math.sin(angle) * radiusY;
+        const line = document.createElementNS(ns, "line");
+        line.setAttribute("x1", centerX); line.setAttribute("y1", centerY);
+        line.setAttribute("x2", x); line.setAttribute("y2", y);
+        line.setAttribute("class", "topology-line");
+        topologySvg.appendChild(line);
+        const circle = document.createElementNS(ns, "circle");
+        circle.setAttribute("cx", x); circle.setAttribute("cy", y); circle.setAttribute("r", 11);
+        circle.setAttribute("class", `topology-node ${isNodeLive(node) ? "" : "dead"}`.trim());
+        topologySvg.appendChild(circle);
+        const label = document.createElementNS(ns, "text");
+        label.setAttribute("x", x); label.setAttribute("y", y + 25);
+        label.setAttribute("text-anchor", "middle"); label.setAttribute("fill", "#9fb5d5");
+        label.setAttribute("font-size", "9");
+        label.textContent = node.node_number ? `N${node.node_number}` : String(index + 1);
+        topologySvg.appendChild(label);
+      });
+    }
+
+    function renderLiveCharts(nodes) {
+      const operational = nodes.filter((node) => node.status !== "revoked");
+      const health = operational.map(nodeHealth);
+      const healthy = health.filter((item) => item.healthy).length;
+      const total = operational.length;
+      const pct = total ? Math.round(healthy / total * 100) : 0;
+      fleetRing.style.setProperty("--pct", String(pct));
+      fleetPct.textContent = `${pct}%`;
+      fleetLegend.textContent = `Здоровы: ${healthy} · Нездоровы/недоступны: ${Math.max(0, total - healthy)} · Всего: ${total}`;
+      renderBarChart(cpuChart, nodes, "cpu_percent");
+      renderBarChart(memoryChart, nodes, "memory_percent");
+      renderTopology(nodes);
+    }
+
+    function renderWorkRoles(roles) {
+      currentWorkRoles = roles || [];
+      workRoles.replaceChildren();
+      for (const role of currentWorkRoles) {
+        const chip = document.createElement("div");
+        chip.className = "role-chip";
+        addText(chip, "b", role.label);
+        addText(chip, "span", role.kind === "human_gate"
+          ? "Human approval gate"
+          : role.origin === "legacy_simulation" ? "legacy worker role" : "Hub specialization");
+        workRoles.appendChild(chip);
+      }
+    }
+
+    function showOperationsBrief(nodes) {
+      operationsAlertList.replaceChildren();
+      const problems = [];
+      for (const node of nodes) {
+        if (node.status === "revoked") continue;
+        const health = nodeHealth(node);
+        if (!health.live) {
+          problems.push(`${nodeDisplayName(node)} · ${lt("не отвечает","not responding","לא מגיב")} · ${lt("последняя связь","last seen","קשר אחרון")}: ${node.last_seen_at || lt("нет данных","no data","אין נתונים")}`);
+        } else if (!health.healthy) {
+          const parts = [];
+          if (health.cpu !== null && health.cpu >= 95) parts.push(`CPU ${health.cpu.toFixed(0)}%`);
+          if (health.memory !== null && health.memory >= 95) parts.push(`RAM ${health.memory.toFixed(0)}%`);
+          problems.push(`${nodeDisplayName(node)} · ${lt("нездоров","unhealthy","לא תקין")} · ${parts.join(" · ") || lt("критическая телеметрия","critical telemetry","טלמטריה קריטית")}`);
+        }
+      }
+      if (!problems.length) {
+        const clear = addText(operationsAlertList, "div", lt("Критических проблем с нодами сейчас нет.","There are no critical node problems right now.","אין כרגע בעיות קריטיות ב-nodes."), "brief-item brief-clear");
+        clear.setAttribute("role", "status");
+      } else {
+        problems.forEach((problem) => addText(operationsAlertList, "div", problem, "brief-item"));
+      }
+      operationsAlert.classList.remove("hidden");
+      openingBriefShown = true;
+    }
+
+    function renderNodeDiagnostics() {
+      const node = selectedNode();
+      if (!node) {
+        nodeDiagnostics.textContent = "Выберите узел — здесь появятся IP, состояние, CPU/RAM, версия и последняя связь.";
+        nodeDiagnostics.className = "status";
+        return;
+      }
+      const presence = currentPresence.find((item) => item.node_id === node.node_id);
+      const health = nodeHealth(node);
+      const lines = [
+        `Узел: ${nodeDisplayName(node)} · ${node.status}`,
+        `${lt("Живой","Live","חי")}: ${health.live ? lt("ДА","YES","כן") : lt("НЕТ","NO","לא")} · ${lt("Здоровье","Health","בריאות")}: ${health.healthy ? lt("ЗДОРОВ","HEALTHY","תקין") : lt("НЕЗДОРОВ","UNHEALTHY","לא תקין")}`,
+        `IP: ${presence?.public_ip || "ещё не зафиксирован"}`,
+        `География сети: ${[presence?.country, presence?.colo].filter(Boolean).join(" / ") || "нет данных"}${presence?.asn ? ` · ASN ${presence.asn}` : ""}`,
+        `CPU: ${node.cpu_percent == null ? "—" : Number(node.cpu_percent).toFixed(1) + "%"} · RAM: ${node.memory_percent == null ? "—" : Number(node.memory_percent).toFixed(1) + "%"}`,
+        `Агент: ${node.agent_version || "—"} · Последняя связь: ${node.last_seen_at || "—"}`
+      ];
+      nodeDiagnostics.textContent = lines.join("\n");
+      nodeDiagnostics.className = `status ${node.status === "online" ? "good" : "warn"}`;
+    }
+
+    function updateSshPanel() {
+      const host = safeHost(sshHost.value);
+      const user = safeUser(sshUser.value);
+      sessionStorage.setItem("citadelSshHost", host);
+      sessionStorage.setItem("citadelSshUser", user);
+      const ready = Boolean(host && user);
+      const command = ready
+        ? `ssh -o ProxyCommand="cloudflared access ssh --hostname %h" ${user}@${host}`
+        : "Укажите корректные hostname и пользователя.";
+      sshCommand.textContent = command;
+      sshState.textContent = ready
+        ? "SSH цель настроена локально; доступность Cloudflare Tunnel ещё не проверена."
+        : "SSH цель ещё не настроена.";
+      sshState.className = `status ${ready ? "good" : ""}`.trim();
+      copySshButton.disabled = !ready;
+      openSshButton.disabled = !ready;
+    }
+
+    async function createInventoryMission(nodeId, title, taskText, expiresInHours) {
+      return api("/api/v1/architect/missions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          node_id: nodeId,
+          title,
+          task_text: taskText,
+          mission_type: "system_inventory",
+          expires_in_hours: expiresInHours
+        })
+      });
+    }
+
+    function renderProjectCheckResult(data) {
+      const checks = data?.checks || {};
+      const order = [
+        ["source_allowlisting", "1. Source allowlisting"],
+        ["validation", "2. Validation"],
+        ["deduplication", "3. Deduplication"],
+        ["safety_classification", "4. Safety classification"]
+      ];
+      projectChecks.textContent = order.map(([key, label]) => {
+        const item = checks[key] || {};
+        const mark = item.passed ? "PASS" : "STOP";
+        const extra = item.classification ? ` · ${item.classification}` : "";
+        return `${label}: ${mark} · ${item.detail || "нет результата"}${extra}`;
+      }).join("\n");
+      const rolePlan = data?.role_plan || {};
+      const roleLines = Object.entries(rolePlan).map(([role, count]) => {
+        const meta = currentWorkRoles.find((item) => item.id === role);
+        return `${meta?.label || role}: ${count}`;
+      });
+      projectRolePlan.textContent = roleLines.length
+        ? "Hub предлагает специализации:\n" + roleLines.join("\n")
+        : "Hub не определил специализированных рабочих блоков.";
+      projectRolePlan.className = "status";
+      const ready = Boolean(data?.ready_for_architect_approval);
+      projectChecks.className = `status ${ready ? "good" : "bad"}`;
+      createProjectButton.disabled = !ready;
+      currentProjectCheck = ready ? data : null;
+    }
+
+    function renderProjects(projects) {
+      currentProjects = projects || [];
+      projectsList.replaceChildren();
+      for (const project of currentProjects) {
+        const item = document.createElement("div");
+        item.className = `item ${project.status === "completed" ? "ok" : "warn"}`;
+        addText(item, "strong", `${project.title} — ${project.status}`);
+        addText(item, "div", `Hub workers: ${project.worker_count} · Project ID: ${project.project_id}`, "small");
+        addText(item, "div", project.created_at, "small");
+        projectsList.appendChild(item);
+      }
+      if (!currentProjects.length) addText(projectsList, "p", "Проектов пока нет.", "muted");
+    }
+
+    function selectedMissionNode() {
+      return currentNodes.find((item) => item.node_id === nodeSelect.value) || null;
+    }
+
+    function renderMissionNodeState() {
+      const node = selectedMissionNode();
+      if (!node) {
+        missionNodeState.textContent = "Выберите ноду.";
+        missionNodeState.className = "status";
+        createMissionButton.disabled = true;
+        return;
+      }
+      const health = nodeHealth(node);
+      const runnable = health.live && node.status !== "paused" && node.status !== "revoked";
+      if (runnable) {
+        missionNodeState.textContent = `${nodeDisplayName(node)} · LIVE · ${lt("готова принять диагностическую миссию","ready for a diagnostic mission","מוכן לקבל משימת אבחון")}. ${lt("Последняя связь","Last seen","קשר אחרון")}: ${node.last_seen_at || "—"}`;
+        missionNodeState.className = "status good";
+      } else if (node.status === "paused") {
+        missionNodeState.textContent = `${nodeDisplayName(node)} · ${lt("на паузе. Возобновите ноду перед созданием миссии.","paused. Resume the node before creating a mission.","מושהה. יש להמשיך את ה-node לפני יצירת משימה.")}`;
+        missionNodeState.className = "status bad";
+      } else {
+        missionNodeState.textContent = `${nodeDisplayName(node)} OFFLINE. ${lt("Heartbeat не поступает с","No heartbeat since","אין heartbeat מאז")} ${node.last_seen_at || lt("неизвестного времени","unknown time","זמן לא ידוע")}. ${lt("Controller не может достоверно знать локальную причину, пока нода не восстановит связь.","The Controller cannot know the exact local cause until the node reconnects.","ה-Controller אינו יכול לדעת את הסיבה המקומית המדויקת עד שה-node יחזור לקשר.")}`;
+        missionNodeState.className = "status bad";
+      }
+      createMissionButton.disabled = !runnable;
+    }
+
+    function syncUpdateAllStatus() {
+      const eligible = currentNodes.filter((node) => node.status !== "revoked");
+      const outdated = currentReleaseVersion
+        ? eligible.filter((node) => node.agent_version !== currentReleaseVersion).length
+        : 0;
+      updateAllAgentsButton.disabled = !currentReleaseVersion || outdated === 0;
+      updateAllAgentsButton.textContent = outdated
+        ? `Обновить ${outdated} агентов → ${currentReleaseVersion}`
+        : "Все агенты актуальны";
+      if (!outdated && currentReleaseVersion) {
+        updateAllStatus.textContent = `Все зарегистрированные агенты уже на версии ${currentReleaseVersion}.`;
+        updateAllStatus.className = "status good";
+      }
+    }
+
     function renderNodes(nodes) {
-      currentNodes = nodes;
-      const list = document.getElementById("nodesList");
-      list.replaceChildren();
+      const previousControl = controlNodeSelect.value;
+      const previousMission = nodeSelect.value;
+      currentNodes = nodes || [];
+      liveNodesList.replaceChildren();
       nodeSelect.replaceChildren();
       controlNodeSelect.replaceChildren();
-      for (const node of nodes) {
+
+      let liveCount = 0;
+      let unhealthyCount = 0;
+
+      for (const node of currentNodes) {
+        const health = nodeHealth(node);
+        if (health.live) liveCount += 1;
+        if (!health.healthy && node.status !== "revoked") unhealthyCount += 1;
+
         const option = document.createElement("option");
         option.value = node.node_id;
-        option.textContent = `${node.hostname} — ${node.status}`;
+        option.textContent = `${nodeDisplayName(node)} — ${node.status}`;
         option.disabled = node.status === "revoked";
         nodeSelect.appendChild(option);
+        controlNodeSelect.appendChild(option.cloneNode(true));
 
-        const controlOption = option.cloneNode(true);
-        controlNodeSelect.appendChild(controlOption);
+        const presence = currentPresence.find((item) => item.node_id === node.node_id);
+        const card = document.createElement("div");
+        card.className = `node-card ${health.live ? "" : "dead"} ${health.healthy ? "" : "unhealthy"}`.trim();
 
-        const item = document.createElement("div");
-        item.className = `item ${node.status === "online" ? "ok" : "warn"}`;
-        addText(item, "strong", `${node.hostname} — ${node.status}`);
-        addText(item, "div", `Версия: ${node.agent_version}`, "small");
-        addText(item, "div", `Последняя связь: ${node.last_seen_at}`, "small");
-        addText(item, "div", `Node ID: ${node.node_id}`, "small");
-        list.appendChild(item);
+        const top = document.createElement("div");
+        top.className = "node-top";
+        const identity = document.createElement("div");
+        addText(identity, "div", nodeDisplayName(node), "node-name");
+        addText(identity, "div", `${lt("Агент","Agent","Agent")} ${agentDisplayName(node)} · v${node.agent_version || "—"} · ${lt("Роль","Role","תפקיד")}: ${node.planned_role || lt("не назначена","not assigned","לא הוקצה")}`, "node-agent");
+        top.appendChild(identity);
+        const livePill = addText(top, "span", health.live ? "LIVE" : "OFFLINE", health.live ? "state-live" : "state-dead");
+        livePill.style.fontWeight = "900";
+        card.appendChild(top);
+
+        const lines = document.createElement("div");
+        lines.className = "node-status-lines";
+        addText(lines, "div", `${lt("Последняя связь","Last seen","קשר אחרון")}: ${node.last_seen_at || lt("нет данных","no data","אין נתונים")}`);
+        addText(lines, "div", `${lt("Живой","Live","חי")}: ${health.live ? lt("ДА","YES","כן") : lt("НЕТ","NO","לא")}`, health.live ? "state-live" : "state-dead");
+        const healthLine = document.createElement("div");
+        healthLine.className = "health-line";
+        addText(healthLine, "span", `${lt("Здоровье","Health","בריאות")}: ${health.healthy ? lt("ЗДОРОВ","HEALTHY","תקין") : lt("НЕЗДОРОВ","UNHEALTHY","לא תקין")}`, health.healthy ? "state-live" : "state-dead");
+        const toggle = addText(healthLine, "button", "+", "detail-toggle");
+        toggle.type = "button";
+        toggle.setAttribute("aria-label", `Показать полную информацию о ${nodeDisplayName(node)}`);
+        lines.appendChild(healthLine);
+        card.appendChild(lines);
+
+        const details = document.createElement("div");
+        details.className = "node-details";
+        const warningParts = [];
+        if (node.agent_version && currentReleaseVersion && node.agent_version !== currentReleaseVersion) {
+          warningParts.push(`Доступно обновление: ${currentReleaseVersion}`);
+        }
+        if (health.cpu !== null && health.cpu >= 85) warningParts.push(`CPU повышен: ${health.cpu.toFixed(1)}%`);
+        if (health.memory !== null && health.memory >= 85) warningParts.push(`RAM повышена: ${health.memory.toFixed(1)}%`);
+        [
+          `Hostname: ${node.hostname || "—"}`,
+          `Node ID: ${node.node_id}`,
+          `${lt("Статус Controller","Controller status","מצב Controller")}: ${node.status}`,
+          `OS: ${[node.os_name, node.os_version].filter(Boolean).join(" ") || "—"} · ${node.architecture || "—"}`,
+          `CPU: ${health.cpu === null ? "—" : health.cpu.toFixed(1) + "%"} · RAM: ${health.memory === null ? "—" : health.memory.toFixed(1) + "%"}`,
+          `Public IP: ${presence?.public_ip || "—"}`,
+          `Network: ${[presence?.country, presence?.colo].filter(Boolean).join(" / ") || "—"}${presence?.asn ? ` · ASN ${presence.asn}` : ""}`,
+          `${lt("Зарегистрирован","Enrolled","נרשם")}: ${node.enrolled_at || "—"}`,
+          `${lt("Версия агента","Agent version","גרסת agent")}: ${node.agent_version || "—"} · ${lt("Плановая роль","Planned role","תפקיד מתוכנן")}: ${node.planned_role || lt("не назначена","not assigned","לא הוקצה")}`,
+          warningParts.length ? `Внимание: ${warningParts.join(" · ")}` : lt("Предупреждения: нет","Warnings: none","אזהרות: אין")
+        ].forEach((line) => addText(details, "div", line));
+        toggle.addEventListener("click", () => {
+          const open = details.classList.toggle("open");
+          toggle.textContent = open ? "−" : "+";
+          toggle.setAttribute("aria-expanded", String(open));
+        });
+        card.appendChild(details);
+        liveNodesList.appendChild(card);
       }
-      if (!nodes.length) addText(list, "p", "Узлы пока не зарегистрированы.", "muted");
-      createMissionButton.disabled = ![...nodeSelect.options].some((option) => !option.disabled);
+
+      if (!currentNodes.length) addText(liveNodesList, "p", "Узлы пока не зарегистрированы.", "muted");
+      if (previousMission && [...nodeSelect.options].some((o) => o.value === previousMission && !o.disabled)) nodeSelect.value = previousMission;
+      if (previousControl && [...controlNodeSelect.options].some((o) => o.value === previousControl && !o.disabled)) controlNodeSelect.value = previousControl;
+      document.getElementById("nodeCount").textContent = currentNodes.length;
+      document.getElementById("onlineCount").textContent = liveCount;
+      document.getElementById("unhealthyCount").textContent = unhealthyCount;
+      renderLiveCharts(currentNodes);
       updateControlButtons();
+      renderNodeDiagnostics();
+      renderMissionNodeState();
+      syncUpdateAllStatus();
     }
 
     function updateControlButtons() {
-      const node = currentNodes.find((item) => item.node_id === controlNodeSelect.value);
+      const node = selectedNode();
       const pending = currentCommands.some((command) =>
         command.node_id === node?.node_id && ["pending", "accepted"].includes(command.status)
       );
-      pauseButton.disabled = !node || pending || ["paused", "revoked"].includes(node.status);
-      resumeButton.disabled = !node || pending || node.status !== "paused";
-      updateButton.disabled = !node || pending || node.status === "revoked";
-      restartButton.disabled = !node || pending || node.status === "revoked";
-      rollbackButton.disabled = !node || pending || node.status === "revoked";
-      disconnectButton.disabled = !node || pending || node.status === "revoked";
+      const unavailable = !node || node.status === "revoked";
+      const live = node ? isNodeLive(node) : false;
+      const liveUnavailable = unavailable || !live;
+      ipButton.disabled = unavailable;
+      healthButton.disabled = liveUnavailable || node?.status === "paused";
+      pauseButton.disabled = liveUnavailable || pending || node.status === "paused";
+      resumeButton.disabled = liveUnavailable || pending || node.status !== "paused";
+      updateButton.disabled = liveUnavailable || pending;
+      restartButton.disabled = liveUnavailable || pending;
+      stopButton.disabled = liveUnavailable || pending || node.agent_version !== currentReleaseVersion;
+      stopButton.title = node && node.agent_version !== currentReleaseVersion
+        ? `Сначала обновите агент до ${currentReleaseVersion || "текущей версии"}`
+        : "";
+      rollbackButton.disabled = liveUnavailable || pending;
+      rebootButton.disabled = liveUnavailable || pending;
+      shutdownButton.disabled = liveUnavailable || pending;
+      disconnectButton.disabled = liveUnavailable || pending;
     }
 
     function renderCommands(commands) {
       currentCommands = commands;
       const list = document.getElementById("commandsList");
       list.replaceChildren();
-      const labels = { pause: "Пауза", resume: "Возобновление", update: "Обновление", restart: "Перезапуск агента", rollback: "Откат", uninstall: "Отключение", system_reboot: "Перезагрузка ПК", system_shutdown: "Выключение ПК" };
+      const labels = { pause: "Пауза", resume: "Возобновление", update: "Обновление", restart: "Перезапуск агента", stop: "Остановка агента", rollback: "Откат", uninstall: "Отзыв узла", system_reboot: "Перезагрузка ПК", system_shutdown: "Выключение ПК" };
       for (const command of commands) {
         const item = document.createElement("div");
         item.className = `item ${command.status === "completed" ? "ok" : "warn"}`;
@@ -266,6 +791,7 @@
         const item = document.createElement("div");
         item.className = `item ${mission.status === "completed" ? "ok" : "warn"}`;
         addText(item, "strong", `${mission.title} — ${mission.status}`);
+        if (mission.task_text) addText(item, "div", `Что поручено: ${mission.task_text}`, "small");
         addText(item, "div", `Задание: ${mission.assignment_status || "не назначено"}`, "small");
         addText(item, "div", `Результат: ${mission.outcome || "ожидается"}`, "small");
         if (mission.summary) addText(item, "div", mission.summary, "small");
@@ -278,151 +804,6 @@
       if (!missions.length) addText(list, "p", "Миссий пока нет.", "muted");
     }
 
-    function formatBytes(value) {
-      const bytes = Number(value) || 0;
-      if (bytes < 1024) return `${bytes} Б`;
-      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КиБ`;
-      return `${(bytes / 1024 / 1024).toFixed(2)} МиБ`;
-    }
-
-    function renderStorageUsage(usage) {
-      const used = (Number(usage.report_bytes) || 0) + (Number(usage.session_bytes) || 0);
-      const percent = usage.safe_d1_target_bytes
-        ? Math.min(100, used / Number(usage.safe_d1_target_bytes) * 100)
-        : 0;
-      storageUsage.textContent = [
-        `Отчёты: ${usage.report_count} · ${formatBytes(usage.report_bytes)}`,
-        `Сессии: ${usage.session_count} · ${formatBytes(usage.session_bytes)}`,
-        `Учтённые данные занимают ${percent.toFixed(3)}% безопасного лимита 400 МиБ`,
-        "Системные таблицы и индексы в эту оценку не входят."
-      ].join("\n");
-      storageUsage.className = `status ${percent >= 90 ? "bad" : percent >= 75 ? "warn" : "good"}`;
-    }
-
-    function renderSessions(sessions, append = false) {
-      const list = document.getElementById("sessionsList");
-      if (!append) list.replaceChildren();
-      for (const session of sessions) {
-        const item = document.createElement("div");
-        item.className = `item ${session.status === "active" ? "ok" : "warn"}`;
-        addText(item, "strong", `${session.name} — ${session.status}`);
-        addText(item, "div", `Версия: ${session.schema_version} · ${formatBytes(session.snapshot_size_bytes)}`, "small");
-        addText(item, "div", `Обновлена: ${session.updated_at}`, "small");
-        const actions = document.createElement("div");
-        actions.className = "toolbar";
-        const restoreButton = addText(actions, "button", "Восстановить", "secondary");
-        restoreButton.type = "button";
-        restoreButton.addEventListener("click", () => restoreSession(session.session_id));
-        const exportButton = addText(actions, "button", "Экспорт", "secondary");
-        exportButton.type = "button";
-        exportButton.addEventListener("click", () => exportSession(session.session_id));
-        const archiveButton = addText(
-          actions,
-          "button",
-          session.status === "active" ? "В архив" : "Вернуть",
-          "secondary"
-        );
-        archiveButton.type = "button";
-        archiveButton.addEventListener("click", () => updateSession(
-          session.session_id,
-          { status: session.status === "active" ? "archived" : "active" }
-        ));
-        const deleteButton = addText(actions, "button", "Удалить", "danger");
-        deleteButton.type = "button";
-        deleteButton.addEventListener("click", () => deleteSession(session));
-        item.appendChild(actions);
-        list.appendChild(item);
-      }
-      if (!sessions.length && !append) addText(list, "p", "Контрольных точек пока нет.", "muted");
-    }
-
-    async function loadSessionsAndUsage(reset = true) {
-      if (!reset && sessionNextOffset === null) return [];
-      const offset = reset ? 0 : sessionNextOffset;
-      const [sessions, storage] = await Promise.all([
-        api(`/api/v1/architect/sessions?limit=30&offset=${offset}`),
-        api("/api/v1/architect/storage")
-      ]);
-      renderSessions(sessions.sessions || [], !reset);
-      sessionNextOffset = sessions.next_offset ?? null;
-      loadMoreSessionsButton.classList.toggle("hidden", sessionNextOffset === null);
-      renderStorageUsage(storage.usage || {});
-      document.getElementById("sessionCount").textContent = storage.usage?.session_count || 0;
-      return sessions.sessions || [];
-    }
-
-    function selectExistingOption(select, value) {
-      if (!value) return false;
-      const option = [...select.options].find((item) => item.value === value && !item.disabled);
-      if (!option) return false;
-      select.value = value;
-      return true;
-    }
-
-    async function restoreSession(sessionId) {
-      setStatus("Восстанавливаю контрольную точку…");
-      try {
-        const data = await api(`/api/v1/architect/sessions/${encodeURIComponent(sessionId)}`);
-        const ui = data.session.snapshot?.ui_state || {};
-        selectExistingOption(nodeSelect, ui.selected_node_id);
-        selectExistingOption(controlNodeSelect, ui.selected_control_node_id);
-        updateControlButtons();
-        if (ui.selected_report_id) {
-          await openReport(ui.selected_report_id);
-        } else {
-          closeReportDetail();
-        }
-        sessionName.value = data.session.name;
-        setStatus(`Контрольная точка «${data.session.name}» восстановлена.`, "good");
-      } catch (error) {
-        setStatus(`Сессия не восстановлена: ${error.message}`, "bad");
-      }
-    }
-
-    async function updateSession(sessionId, changes) {
-      try {
-        await api(`/api/v1/architect/sessions/${encodeURIComponent(sessionId)}`, {
-          method: "PATCH",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(changes)
-        });
-        await loadSessionsAndUsage();
-        setStatus("Контрольная точка обновлена.", "good");
-      } catch (error) {
-        setStatus(`Контрольная точка не обновлена: ${error.message}`, "bad");
-      }
-    }
-
-    async function exportSession(sessionId) {
-      try {
-        const data = await api(`/api/v1/architect/sessions/${encodeURIComponent(sessionId)}`);
-        const blob = new Blob([JSON.stringify(data.session, null, 2)], {
-          type: "application/json"
-        });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = `${data.session.session_id}.json`;
-        link.click();
-        URL.revokeObjectURL(link.href);
-        setStatus(`Контрольная точка «${data.session.name}» экспортирована.`, "good");
-      } catch (error) {
-        setStatus(`Экспорт не выполнен: ${error.message}`, "bad");
-      }
-    }
-
-    async function deleteSession(session) {
-      if (!confirm(`Удалить контрольную точку «${session.name}»?`)) return;
-      try {
-        await api(`/api/v1/architect/sessions/${encodeURIComponent(session.session_id)}`, {
-          method: "DELETE"
-        });
-        await loadSessionsAndUsage();
-        setStatus("Контрольная точка удалена. Действие записано в аудит.", "good");
-      } catch (error) {
-        setStatus(`Контрольная точка не удалена: ${error.message}`, "bad");
-      }
-    }
-
     function renderReports(reports, append = false) {
       currentReports = append ? [...currentReports, ...reports] : reports;
       const list = document.getElementById("reportsList");
@@ -430,7 +811,9 @@
       for (const report of reports) {
         const item = document.createElement("div");
         item.className = `item ${report.outcome === "success" ? "ok" : "warn"}`;
-        addText(item, "strong", `${report.report_type} — ${report.outcome}`);
+        const typeLabel = report.report_type === "system_inventory" ? "Диагностика системы" : report.report_type;
+        const outcomeLabel = report.outcome === "success" ? "успешно" : report.outcome;
+        addText(item, "strong", `${typeLabel} — ${outcomeLabel}`);
         addText(item, "div", `Узел: ${report.node_id}`, "small");
         addText(item, "div", `Размер: ${report.report_size_bytes} байт · Доступ: ${report.sensitivity}`, "small");
         addText(item, "div", `SHA-256: ${report.report_sha256}`, "small");
@@ -453,6 +836,29 @@
       return data.reports || [];
     }
 
+    function readableReport(report) {
+      const c = report?.content;
+      if (!c || typeof c !== "object") return String(c ?? "Нет содержимого.");
+      if (report.report_type !== "system_inventory") return JSON.stringify(c, null, 2);
+      const gb = (value) => Number.isFinite(Number(value)) ? (Number(value) / 1073741824).toFixed(2) + " GB" : "—";
+      const network = c.network && typeof c.network === "object"
+        ? Object.entries(c.network).filter(([,v]) => v).map(([k,v]) => `${k}: ${v}`).join(" · ")
+        : "—";
+      return [
+        `Компьютер: ${c.hostname || "—"}`,
+        `Снято: ${c.captured_at || report.created_at || "—"}`,
+        `Задание: ${c.requested_task || "стандартная диагностика"}`,
+        "",
+        `Система: ${c.platform || "—"} ${c.platform_release || ""}`.trim(),
+        `Архитектура: ${c.architecture || "—"}`,
+        `Python: ${c.python_version || "—"}`,
+        `Логических CPU: ${c.cpu_logical_count ?? "—"}`,
+        `Оперативная память: ${gb(c.memory_total_bytes)}`,
+        `Диск: всего ${gb(c.disk_home_total_bytes)} · свободно ${gb(c.disk_home_free_bytes)}`,
+        `Сеть: ${network}`
+      ].join("\n");
+    }
+
     async function openReport(reportId) {
       const generation = authGeneration;
       setStatus("Загружаю полный отчёт…");
@@ -470,7 +876,7 @@
           `Размер: ${report.report_size_bytes} байт`,
           `SHA-256: ${report.report_sha256}`
         ].join(" · ");
-        reportDetailBody.textContent = JSON.stringify(report.content, null, 2);
+        reportDetailBody.textContent = readableReport(report);
         reportDetailCard.classList.remove("hidden");
         reportDetailCard.scrollIntoView({ behavior: "smooth", block: "start" });
         setStatus("Полный отчёт загружен.", "good");
@@ -479,48 +885,37 @@
       }
     }
 
-    function renderAudit(events) {
-      const list = document.getElementById("auditList");
-      list.replaceChildren();
-      for (const event of events) {
-        const item = document.createElement("div");
-        item.className = "item";
-        addText(item, "strong", event.action);
-        addText(item, "div", `${event.actor_type}: ${event.actor_id}`, "small");
-        addText(item, "div", event.created_at, "small");
-        list.appendChild(item);
-      }
-      if (!events.length) addText(list, "p", "Событий пока нет.", "muted");
-    }
-
     async function loadDashboard() {
-      setStatus("Загружаю данные…");
-      const [data, reports, sessions, storage] = await Promise.all([
+      setStatus("Загружаю Live Operations…");
+      const [data, reports, presence, release, projects, roles] = await Promise.all([
         api("/api/v1/architect/overview"),
         api("/api/v1/architect/reports?limit=50&offset=0"),
-        api("/api/v1/architect/sessions?limit=30&offset=0"),
-        api("/api/v1/architect/storage")
+        api("/api/v1/architect/presence"),
+        api("/api/v1/architect/release"),
+        api("/api/v1/architect/projects"),
+        api("/api/v1/architect/work-roles")
       ]);
-      document.getElementById("nodeCount").textContent = data.counts.nodes;
-      document.getElementById("onlineCount").textContent = data.counts.online_nodes;
+      currentPresence = presence.presence || [];
+      currentReleaseVersion = release.release?.version || "";
+      updateButton.textContent = currentReleaseVersion
+        ? `Обновить агент → ${currentReleaseVersion}`
+        : "Обновить агент дистанционно";
       document.getElementById("missionCount").textContent = data.counts.missions;
       document.getElementById("reportCount").textContent = data.counts.reports;
-      document.getElementById("sessionCount").textContent = data.counts.sessions;
-      document.getElementById("nodesUpdated").textContent = new Date().toLocaleTimeString();
-      renderNodes(data.nodes);
-      renderMissions(data.missions);
+      document.getElementById("projectCount").textContent = (projects.projects || []).length;
+      document.getElementById("nodesUpdated").textContent = `обновлено ${new Date().toLocaleTimeString()}`;
+      renderWorkRoles(roles.roles || []);
+      renderNodes(data.nodes || []);
+      renderMissions(data.missions || []);
       renderCommands(data.commands || []);
-      renderAudit(data.audit_events);
       renderReports(reports.reports || []);
+      renderProjects(projects.projects || []);
       reportNextOffset = reports.next_offset ?? null;
       loadMoreReportsButton.classList.toggle("hidden", reportNextOffset === null);
-      renderSessions(sessions.sessions || []);
-      sessionNextOffset = sessions.next_offset ?? null;
-      loadMoreSessionsButton.classList.toggle("hidden", sessionNextOffset === null);
-      renderStorageUsage(storage.usage || {});
       loginCard.classList.add("hidden");
       dashboard.classList.remove("hidden");
-      setStatus("Панель подключена к Controller.", "good");
+      if (!openingBriefShown) showOperationsBrief(data.nodes || []);
+      setStatus("Live Operations подключён к Controller.", "good");
     }
 
     function closeReportDetail() {
@@ -538,7 +933,8 @@
       closeReportDetail();
       currentReports = [];
       reportNextOffset = null;
-      sessionNextOffset = null;
+      openingBriefShown = false;
+      operationsAlert.classList.add("hidden");
       dashboard.classList.add("hidden");
       loginCard.classList.remove("hidden");
       setStatus(message);
@@ -571,12 +967,8 @@
     refreshReportsButton.addEventListener("click", async () => {
       refreshReportsButton.disabled = true;
       try {
-        const [reports, storage] = await Promise.all([
-          loadReports(true),
-          api("/api/v1/architect/storage")
-        ]);
-        renderStorageUsage(storage.usage || {});
-        document.getElementById("reportCount").textContent = storage.usage?.report_count || 0;
+        const reports = await loadReports(true);
+        document.getElementById("reportCount").textContent = currentReports.length;
         setStatus(`Список отчётов обновлён: ${reports.length}.`, "good");
       } catch (error) {
         setStatus(`Отчёты не обновлены: ${error.message}`, "bad");
@@ -593,66 +985,25 @@
       finally { loadMoreReportsButton.disabled = false; }
     });
 
-    loadMoreSessionsButton.addEventListener("click", async () => {
-      loadMoreSessionsButton.disabled = true;
-      try { await loadSessionsAndUsage(false); }
-      catch (error) { setStatus(`Контрольные точки не загружены: ${error.message}`, "bad"); }
-      finally { loadMoreSessionsButton.disabled = false; }
-    });
-
-    refreshSessionsButton.addEventListener("click", async () => {
-      refreshSessionsButton.disabled = true;
-      try {
-        const sessions = await loadSessionsAndUsage(true);
-        setStatus(`Контрольные точки обновлены: ${sessions.length}.`, "good");
-      } catch (error) {
-        setStatus(`Контрольные точки не обновлены: ${error.message}`, "bad");
-      } finally {
-        refreshSessionsButton.disabled = false;
-      }
-    });
-
-    saveSessionButton.addEventListener("click", async () => {
-      const name = sessionName.value.trim();
-      if (!name) return setStatus("Введите название контрольной точки.", "bad");
-      saveSessionButton.disabled = true;
-      try {
-        const data = await api("/api/v1/architect/sessions", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            name,
-            ui_state: {
-              selected_node_id: nodeSelect.value || null,
-              selected_control_node_id: controlNodeSelect.value || null,
-              selected_report_id: activeReportId,
-              expanded_section: activeReportId ? "report_detail" : "dashboard"
-            }
-          })
-        });
-        await loadDashboard();
-        setStatus(`Контрольная точка «${data.session.name}» сохранена на сервере.`, "good");
-      } catch (error) {
-        setStatus(`Сессия не сохранена: ${error.message}`, "bad");
-      } finally {
-        saveSessionButton.disabled = false;
-      }
-    });
-
     logoutButton.addEventListener("click", () => logout());
-    controlNodeSelect.addEventListener("change", updateControlButtons);
+    closeOperationsAlert.addEventListener("click", () => operationsAlert.classList.add("hidden"));
+    controlNodeSelect.addEventListener("change", () => { updateControlButtons(); renderNodeDiagnostics(); });
+    nodeSelect.addEventListener("change", renderMissionNodeState);
 
-    async function sendControl(commandType) {
+    async function sendControl(commandType, confirmation = null) {
       const nodeId = controlNodeSelect.value;
       if (!nodeId) return setStatus("Выберите узел.", "bad");
-      const labels = { pause: "паузу", resume: "возобновление", update: "обновление", restart: "перезапуск", rollback: "откат", uninstall: "отключение" };
-      for (const button of [pauseButton, resumeButton, updateButton, restartButton, rollbackButton, disconnectButton]) button.disabled = true;
+      const labels = { pause: "паузу", resume: "возобновление", update: "обновление", restart: "перезапуск", stop: "остановку агента", rollback: "откат", uninstall: "отзыв узла", system_reboot: "перезагрузку ПК", system_shutdown: "выключение ПК" };
+      const buttons = [pauseButton, resumeButton, updateButton, restartButton, stopButton, rollbackButton, rebootButton, shutdownButton, disconnectButton];
+      for (const button of buttons) button.disabled = true;
       setStatus(`Отправляю команду на ${labels[commandType]}…`);
       try {
+        const body = { command_type: commandType };
+        if (confirmation) body.confirmation = confirmation;
         const data = await api(`/api/v1/architect/nodes/${encodeURIComponent(nodeId)}/commands`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ command_type: commandType })
+          body: JSON.stringify(body)
         });
         setStatus(`Подписанная команда создана.\nCommand ID: ${data.command.command_id}`, "good");
         await loadDashboard();
@@ -662,58 +1013,203 @@
       }
     }
 
+    ipButton.addEventListener("click", () => {
+      renderNodeDiagnostics();
+      const node = selectedNode();
+      const presence = currentPresence.find((item) => item.node_id === node?.node_id);
+      setStatus(presence?.public_ip ? `IP ${node.hostname}: ${presence.public_ip}` : "IP ещё не зафиксирован Controller.", presence?.public_ip ? "good" : "");
+    });
+    healthButton.addEventListener("click", async () => {
+      const node = selectedNode();
+      if (!node) return;
+      healthButton.disabled = true;
+      missionCreateResult.textContent = `Запускаю проверку здоровья ${node.hostname}…`;
+      try {
+        const created = await createInventoryMission(
+          node.node_id,
+          `Проверка здоровья — ${node.hostname}`,
+          "Проверить состояние компьютера: CPU, RAM, диск, системные параметры и вернуть диагностический отчёт.",
+          1
+        );
+        missionCreateResult.textContent = `Health-check отправлен. Mission ID: ${created.mission.mission_id}. Результат появится ниже в «Миссии и результаты» и в диагностических отчётах.`;
+        missionCreateResult.className = "status good";
+        await loadDashboard();
+      } catch (error) {
+        missionCreateResult.textContent = `Health-check не создан: ${error.message}`;
+        missionCreateResult.className = "status bad";
+      } finally {
+        healthButton.disabled = false;
+      }
+    });
     pauseButton.addEventListener("click", () => sendControl("pause"));
     resumeButton.addEventListener("click", () => sendControl("resume"));
+    updateAllAgentsButton.addEventListener("click", async () => {
+      const target = currentReleaseVersion || "текущую версию";
+      if (!confirm(`Обновить ВСЕ зарегистрированные агенты до ${target}? Каждый узел получит подписанное обновление при следующем опросе Controller.`)) return;
+      updateAllAgentsButton.disabled = true;
+      updateAllStatus.textContent = "Запускаю массовый rollout…";
+      updateAllStatus.className = "status";
+      try {
+        const data = await api("/api/v1/architect/update-all", { method: "POST" });
+        const rollout = data.rollout;
+        updateAllStatus.textContent = `Rollout запущен → ${rollout.target_version}. Зарегистрировано: ${rollout.registered_nodes}; ожидают обновление: ${rollout.nodes_waiting_for_update}. Агенты получат команду автоматически при следующем poll.`;
+        updateAllStatus.className = "status good";
+      } catch (error) {
+        updateAllStatus.textContent = `Массовое обновление не запущено: ${error.message}`;
+        updateAllStatus.className = "status bad";
+      } finally {
+        syncUpdateAllStatus();
+      }
+    });
+
+    checkProjectButton.addEventListener("click", async () => {
+      const title = projectTitle.value.trim();
+      const taskText = projectTaskText.value.trim();
+      if (!title || !taskText) return setStatus("Введите название проекта и текст задания.", "bad");
+      checkProjectButton.disabled = true;
+      createProjectButton.disabled = true;
+      currentProjectCheck = null;
+      projectChecks.textContent = "Выполняю четыре проверки…";
+      projectChecks.className = "status";
+      try {
+        const data = await api("/api/v1/architect/projects/check", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title, task_text: taskText, source_type: "architect_manual" })
+        });
+        renderProjectCheckResult(data);
+        setStatus(data.ready_for_architect_approval
+          ? "Четыре проверки пройдены. Теперь Architect может создать проект."
+          : "Проект остановлен одной из четырёх проверок.",
+          data.ready_for_architect_approval ? "good" : "bad");
+      } catch (error) {
+        projectChecks.textContent = `Проверка не выполнена: ${error.message}`;
+        projectChecks.className = "status bad";
+      } finally {
+        checkProjectButton.disabled = false;
+      }
+    });
+
+    createProjectButton.addEventListener("click", async () => {
+      const title = projectTitle.value.trim();
+      const taskText = projectTaskText.value.trim();
+      if (!currentProjectCheck) return setStatus("Сначала пройдите четыре проверки.", "bad");
+      createProjectButton.disabled = true;
+      projectResult.textContent = "Architect подтвердил проект. Hub строит рабочие блоки и выбирает узлы…";
+      projectResult.className = "status";
+      try {
+        const data = await api("/api/v1/architect/projects", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title, task_text: taskText, source_type: "architect_manual" })
+        });
+        const p = data.project;
+        const assignments = p.work_items.map((item) => `#${item.sequence_no} · ${item.role_name} → ${item.hostname} (${item.node_id})`).join("\n");
+        projectResult.textContent = [
+          `Project ID: ${p.project_id}`,
+          `Hub выбрал узлов: ${p.worker_count}`,
+          `Рабочих блоков: ${p.work_item_count}`,
+          assignments,
+          "План распределения записан в Controller."
+        ].join("\n");
+        projectResult.className = "status good";
+        currentProjectCheck = null;
+        createProjectButton.disabled = true;
+        await loadDashboard();
+      } catch (error) {
+        projectResult.textContent = `Проект не создан: ${error.message}`;
+        projectResult.className = "status bad";
+      }
+    });
+
     updateButton.addEventListener("click", () => sendControl("update"));
     restartButton.addEventListener("click", () => sendControl("restart"));
+    stopButton.addEventListener("click", () => {
+      const node = selectedNode();
+      if (node && confirm(`Остановить процесс агента на ${node.hostname}? Узел не будет отозван; агент вернётся при следующем входе Windows или локальном запуске.`)) sendControl("stop");
+    });
     rollbackButton.addEventListener("click", () => {
-      const node = currentNodes.find((item) => item.node_id === controlNodeSelect.value);
+      const node = selectedNode();
       if (node && confirm(`Откатить агент ${node.hostname} к последней сохранённой версии?`)) sendControl("rollback");
     });
+    rebootButton.addEventListener("click", () => {
+      const node = selectedNode();
+      if (node && confirm(`Перезагрузить компьютер ${node.hostname}?`)) sendControl("system_reboot", "REBOOT");
+    });
+    shutdownButton.addEventListener("click", () => {
+      const node = selectedNode();
+      if (node && confirm(`Выключить компьютер ${node.hostname}?`)) sendControl("system_shutdown", "SHUTDOWN");
+    });
     disconnectButton.addEventListener("click", () => {
-      const node = currentNodes.find((item) => item.node_id === controlNodeSelect.value);
+      const node = selectedNode();
       if (!node) return;
-      if (confirm(`Отключить узел ${node.hostname}? После применения команды его локальный ключ будет удалён.`)) {
+      if (confirm(`Отозвать узел ${node.hostname}? Controller пометит identity как revoked, а агент остановится. Для возврата потребуется явная повторная установка/регистрация.`)) {
         sendControl("uninstall");
       }
     });
 
     createMissionButton.addEventListener("click", async () => {
+      const node = selectedMissionNode();
       const title = missionTitle.value.trim();
-      if (!title) return setStatus("Введите название миссии.", "bad");
-      createMissionButton.disabled = true;
-      setStatus("Создаю миссию и назначаю её узлу…");
-      let created;
-      try {
-        created = await api("/api/v1/architect/missions", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            node_id: nodeSelect.value,
-            title,
-            mission_type: "system_inventory",
-            expires_in_hours: Number(expiresHours.value)
-          })
-        });
-      } catch (error) {
-        setStatus(`Миссия не создана: ${error.message}`, "bad");
-        createMissionButton.disabled = false;
-        return;
+      const taskText = missionTask.value.trim();
+      if (!node) return setStatus("Выберите ноду.", "bad");
+      if (!isNodeLive(node) || node.status === "paused" || node.status === "revoked") {
+        renderMissionNodeState();
+        return setStatus("Миссия не отправлена: выбранная нода сейчас не готова к выполнению.", "bad");
       }
-
-      missionTitle.value = "Проверка системы";
-      setStatus(`Миссия создана.\nMission ID: ${created.mission.mission_id}`, "good");
+      if (!title) return setStatus("Введите название задачи.", "bad");
+      if (!taskText) return setStatus("Напишите, что нужно проверить.", "bad");
+      if (missionType.value !== "system_inventory") return setStatus("Этот тип задачи пока не поддерживается.", "bad");
+      const selectedNodeId = node.node_id;
+      createMissionButton.disabled = true;
+      missionCreateResult.textContent = `Создаю миссию для ${nodeDisplayName(node)}…`;
+      missionCreateResult.className = "status";
       try {
-        await loadDashboard();
-      } catch (error) {
-        setStatus(
-          `Миссия создана (${created.mission.mission_id}), но панель не обновилась: ${error.message}`,
-          "bad"
+        const created = await createInventoryMission(
+          selectedNodeId,
+          title,
+          taskText,
+          Number(expiresHours.value)
         );
+        const missionId = created.mission.mission_id;
+        missionCreateResult.textContent = [
+          "Миссия создана и назначена.",
+          `Нода: ${nodeDisplayName(node)} (${selectedNodeId})`,
+          `Mission ID: ${missionId}`,
+          `Задание: ${taskText}`,
+          "Агент заберёт её в ближайшем цикле. Результат появится ниже."
+        ].join("\n");
+        missionCreateResult.className = "status good";
+        setStatus(`Миссия ${missionId} создана для ${nodeDisplayName(node)}.`, "good");
+        await loadDashboard();
+        if ([...nodeSelect.options].some((o) => o.value === selectedNodeId)) nodeSelect.value = selectedNodeId;
+        renderMissionNodeState();
+      } catch (error) {
+        missionCreateResult.textContent = `Миссия не создана: ${error.message}`;
+        missionCreateResult.className = "status bad";
       } finally {
-        createMissionButton.disabled = false;
+        renderMissionNodeState();
       }
     });
+
+    sshHost.value = sessionStorage.getItem("citadelSshHost") || "";
+    sshUser.value = sessionStorage.getItem("citadelSshUser") || "";
+    sshHost.addEventListener("input", updateSshPanel);
+    sshUser.addEventListener("input", updateSshPanel);
+    copySshButton.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(sshCommand.textContent);
+        setStatus("SSH-команда скопирована.", "good");
+      } catch {
+        setStatus("Не удалось скопировать SSH-команду автоматически.", "bad");
+      }
+    });
+    openSshButton.addEventListener("click", () => {
+      const host = safeHost(sshHost.value);
+      if (host) window.open(`https://${host}`, "_blank", "noopener,noreferrer");
+    });
+    updateSshPanel();
+    applyLanguage(lang);
 
     if (architectToken) {
       loadDashboard().catch(() => logout("Сохранённый сеанс недействителен. Войдите снова."));

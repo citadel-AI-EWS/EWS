@@ -290,3 +290,90 @@ Next step:
 - After replacing files, the agent launches the newly installed v2 in a fresh `startup-check` process using the real local config. Failure triggers automatic file rollback before daemon handoff.
 - Manual rollback validates the complete local backup with self-test before restoring it.
 - No arbitrary shell/command execution was introduced.
+
+
+## 2026-09-18 — Architect UX review from live operator use
+
+Operator feedback from the live Architect page:
+
+- checkpoint/session controls were confusing and not useful in the main workflow;
+- node control lacked visible IP, health diagnostics and a non-revoking stop action;
+- mission creation did not expose any place to describe the requested task;
+- system-inventory reports looked like completed user work even when they were diagnostics;
+- SSH existed in Hub but was missing from Architect.
+
+Test-branch changes:
+
+- hide checkpoint/session UI from the Architect dashboard while preserving the backend data/schema;
+- add selected-node diagnostics with public IP/presence, CPU, RAM, agent version and last contact;
+- add one-click health-check using the existing bounded `system_inventory` mission;
+- add non-revoking signed `stop` command in agent release 0.3.5; Controller marks a completed stop as offline rather than revoked;
+- keep `uninstall` as the separate revoke/remove operation;
+- add explicit PC reboot/shutdown controls with existing confirmation guards;
+- add mission `task_text` (max 2000 chars) as operator intent; it is stored/reported but never executed as shell/code;
+- rename system-inventory reports in the UI as diagnostics and explain their origin;
+- add Cloudflare Zero-Trust SSH configuration/command block directly to Architect;
+- gate the new stop command to nodes already running the current 0.3.5 release;
+- add `tests/architect-ux-guards.mjs` to prevent regressions.
+
+Release note:
+
+- existing 0.3.4 nodes must first take the normal signed remote update to 0.3.5 before the new stop command becomes available.
+
+
+## 2026-09-18 — Correction: Architect text is a real project input
+
+Operator correction:
+
+- The large Architect text field is not a note attached to diagnostics.
+- It is the real project request that must travel through the project intake pipeline.
+- The four automatic gates are, in order:
+  1. source allowlisting;
+  2. validation;
+  3. deduplication;
+  4. safety classification.
+- Architect approval is a separate gate after those four checks.
+- After approval, Hub/Controller creates a project, builds work items and automatically selects available Python nodes.
+- The Hub decides worker allocation from one node up to the currently available eligible pool; large-scale operation must be implemented through queue/shard architecture rather than a browser loop.
+- Architect now has a visible **Python / Создать проект** workflow showing the four checks and the resulting Hub allocation.
+- **Обновить все агенты** is a server-side rollout: one Architect action records the target signed release; each outdated node materializes its own signed update command on the next command poll.
+- A 10-minute completed-update guard prevents an updated node from receiving the same rollout twice before its next heartbeat refreshes agent_version.
+
+Current execution boundary:
+
+- Project intake, four-gate approval, storage, work-item creation and node allocation are real.
+- Generic arbitrary-text project execution is not falsely reported as complete: work items are currently planned in `project_work_items`; execution requires an explicit reviewed project-worker capability rather than turning Architect text into arbitrary shell/code.
+
+
+## 2026-09-18 — Live Operations command-center redesign and work specializations
+
+Operator requirements:
+
+- First Architect page is **LIVE OPERATIONS** and must display real Controller data only.
+- Remove the visible **Latest audit events** block from the operations page. Audit storage remains intact for security and forensic accountability.
+- Every node card must show, without opening details:
+  - CITADEL node identity;
+  - derived local agent label tied to the real node number;
+  - last contact;
+  - alive/dead state;
+  - healthy/unhealthy state.
+- Health detail expands with a **+** control and shows hostname, Node ID, Controller status, OS/architecture, CPU/RAM, public IP/presence, enrollment, agent version and warnings.
+- Alive means non-revoked/non-offline with a heartbeat no older than five minutes.
+- Healthy means alive with no critical CPU/RAM signal (critical threshold 95%).
+- On entry, show a closable **OPERATIONS BRIEF** containing only currently important node problems; if there are none, state that no critical node problem is present.
+- Add professional animated visualizations, but never synthetic operational values. Current UI charts use only real node snapshots:
+  - fleet health;
+  - CPU;
+  - RAM;
+  - Controller→node topology.
+- Old simulations are the evidence for these legacy worker concepts:
+  - Planner;
+  - Verifier;
+  - Research;
+  - Report;
+  - Metrics;
+  - Recovery.
+- The Architect explicitly requested additional work specializations Programmer and Mathematician. Security Analyst is included as a new Hub specialization for security/audit blocks.
+- Architect is represented separately as a human approval gate, not as a machine worker.
+- Every project work item now persists `role_name`; deterministic classification assigns a primary specialization before node allocation.
+- Current agent capability reporting only exposes real executable mission handlers (currently `system_inventory`). Therefore role assignment is project metadata/planning and must not be misrepresented as capability-aware execution until worker capabilities are actually implemented.
