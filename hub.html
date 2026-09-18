@@ -140,7 +140,7 @@
     const $ = (id) => document.getElementById(id);
     const nodesEl = $("nodes"), tokenInput = $("architectToken"), loginButton = $("loginButton"), logoutButton = $("logoutButton");
     const searchInput = $("nodeSearch"), nodePicker = $("nodePicker"), updateAllButton = $("updateAllButton"), pauseAllButton = $("pauseAllButton"), exportButton = $("exportButton");
-    let architectToken = "", releaseVersion = "", lmstudioConfig = null, lmstudioNodeId = "", lastOverview = null, lastPresence = [], lastPublic = [], refreshBusy = false, lang = localStorage.getItem("citadelHubLang") || "ru";
+    let architectToken = sessionStorage.getItem("citadel-architect-token") || "", releaseVersion = "", lmstudioConfig = null, lmstudioNodeId = "", requestedLmNodeId = new URLSearchParams(location.search).get("lmnode") || "", lastOverview = null, lastPresence = [], lastPublic = [], refreshBusy = false, lang = localStorage.getItem("citadelHubLang") || "ru";
 
     const I18N = {
       ru:{eyebrow:"REAL-TIME NODE CONTROL",title:"Живой центр управления.",subtitle:"Только реальные зарегистрированные компьютеры. Никаких демонстрационных счётчиков: состояние, IP, команды и обновления берутся из Controller.",secureAccess:"Architect secure access",tokenLabel:"Architect token",secureMode:"Защищённый режим",logout:"Выйти",authHint:"IP, управление узлами и обновление агента доступны только после авторизации.",online:"Online",onlineSub:"active nodes now",registered:"Registered",registeredSub:"real enrolled nodes",attention:"Требуют внимания",attentionSub:"offline / degraded nodes",release:"Release",releaseSub:"signed agent release",mode:"Mode",modeSub:"privileged data locked",refresh:"Обновить сейчас",export:"Экспорт snapshot",updateAll:"Обновить все",pauseAll:"Пауза всем",nodesTitle:"Nodes / компьютеры",sshNotReady:"Secure tunnel not configured",sshHost:"Cloudflare Access hostname",sshUser:"SSH user",copyCommand:"Копировать команду",browserSsh:"Browser SSH",sshNotice:"SSH не открывает порт 22 в интернет. Нужны Cloudflare Tunnel + Access и работающий SSH server на node.",architectPanel:"Architect panel",logs:"Logs"},
@@ -242,7 +242,9 @@
       const loaded=node.lmstudio_loaded_model||"";
       if(selected&&!$("lmstudioModel").value)$("lmstudioModel").value=selected;
       $("lmstudioStatus").textContent=installed
-        ?"LM Studio установлен"+(loaded?" · активная модель: "+loaded:" · модель ещё не загружена")+(pending?" · команда выполняется":"")
+        ?(loaded
+          ?"LM Studio установлен · активная модель: "+loaded+" · PROJECT WORKER READY"+(pending?" · команда выполняется":"")
+          :"LM Studio установлен · модель ещё не загружена"+(pending?" · команда выполняется":""))
         :(currentAgent?"Runtime ещё не установлен.":"Сначала обновите агент этой ноды до "+(releaseVersion||"текущей версии")+".")+(pending?" · установка выполняется":"");
       $("lmstudioInstall").disabled=!currentAgent||installed||pending||freshness(node)!=="online";
       $("lmstudioGet").disabled=!installed||pending||freshness(node)!=="online";
@@ -391,7 +393,18 @@
       $("presenceStatus").textContent="PRESENCE — READY";$("presenceStatus").className="statusPill ok";
       $("releaseStatus").textContent=releaseVersion?`RELEASE — ${releaseVersion}`:"RELEASE — UNKNOWN";$("releaseStatus").className=releaseVersion?"statusPill ok":"statusPill warn";
       loginButton.hidden=true;logoutButton.hidden=false;tokenInput.disabled=true;pauseAllButton.disabled=false;exportButton.disabled=false;
-      syncUpdateAllState();syncLmstudioPanel();
+      syncUpdateAllState();
+      if(requestedLmNodeId){
+        const target=(overview.nodes||[]).find((node)=>node.node_id===requestedLmNodeId);
+        if(target){
+          openLmstudio(target);
+          const url=new URL(location.href);
+          url.searchParams.delete("lmnode");
+          history.replaceState({}, "", url.pathname + (url.search ? url.search : ""));
+          requestedLmNodeId="";
+        }
+      }
+      syncLmstudioPanel();
       setState(`Secure controller data · ${new Date().toLocaleTimeString()}`)
     }
     async function refresh(){if(refreshBusy)return;refreshBusy=true;$("networkChip").innerHTML='NETWORK <strong>SYNC</strong>';try{if(architectToken)await refreshSecure();else await refreshPublic();$("networkChip").innerHTML='NETWORK <strong>ONLINE</strong>'}catch(error){$("networkChip").innerHTML='NETWORK <strong>ERROR</strong>';$("controllerStatus").textContent=`CONTROLLER — ${error.message}`;$("controllerStatus").className="statusPill bad";if(architectToken&&["architect_authentication_required","invalid_architect_token"].includes(error.message)){architectToken="";tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;toast("Authentication failed",error.message,"bad");await refreshPublic()}else setState(`Controller error: ${error.message}`)}finally{refreshBusy=false}}
@@ -430,8 +443,8 @@
     $("lmstudioLoad").addEventListener("click",()=>sendLmstudio("lmstudio_model_load"));
     $("lmstudioModel").addEventListener("input",syncLmstudioPanel);
 
-    loginButton.addEventListener("click",async()=>{const value=tokenInput.value.trim();if(!value)return toast("Token required","Enter Architect token","bad");architectToken=value;tokenInput.value="";await refresh()});
-    logoutButton.addEventListener("click",async()=>{architectToken="";releaseVersion="";lastOverview=null;lastPresence=[];tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;await refreshPublic()});
+    loginButton.addEventListener("click",async()=>{const value=tokenInput.value.trim();if(!value)return toast("Token required","Enter Architect token","bad");architectToken=value;sessionStorage.setItem("citadel-architect-token",architectToken);tokenInput.value="";await refresh()});
+    logoutButton.addEventListener("click",async()=>{architectToken="";sessionStorage.removeItem("citadel-architect-token");releaseVersion="";lastOverview=null;lastPresence=[];tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;await refreshPublic()});
     $("refreshButton").addEventListener("click",refresh);
     searchInput.addEventListener("input",()=>{nodePicker.value="";renderCurrent()});
     nodePicker.addEventListener("change",()=>{searchInput.value=nodePicker.value;renderCurrent()});

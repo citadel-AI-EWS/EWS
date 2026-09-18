@@ -115,6 +115,9 @@ assert.match(index, /materializeProjectWorkForNode\(env, worker\.node_id, projec
 assert.match(architect, /projectStageTrack/);
 assert.match(architect, /projectWorkerReadiness/);
 assert.match(architect, /PLAN/);
+assert.match(architect, /WAITING MODEL/);
+assert.match(architect, /Подготовить ноду в Hub/);
+assert.match(architect, /\/hub\/\?lmnode=/);
 assert.match(architect, /ASSIGNED/);
 assert.match(architect, /RUNNING/);
 assert.match(architect, /COMPLETED/);
@@ -122,6 +125,8 @@ assert.match(architect, /REPORT/);
 assert.match(architect, /agent_outdated/);
 assert.match(architect, /lmstudio_model_not_loaded/);
 assert.match(index, /materializeProjectWorkForNode/);
+assert.match(index, /current\.command_type === "lmstudio_model_load"/);
+assert.match(index, /project_assignments_created/);
 assert.match(index, /mission_type, payload_json/);
 assert.match(index, /'project_text'/);
 assert.match(index, /waiting_for_lmstudio_project_worker/);
