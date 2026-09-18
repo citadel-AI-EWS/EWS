@@ -9,6 +9,7 @@
     :root{font-family:system-ui,-apple-system,sans-serif;color:#f2f5ff;background:#080c17}
     *{box-sizing:border-box}body{margin:0;min-height:100vh;padding:20px;background:radial-gradient(circle at top,#172441,#080c17 55%)}
     main{max-width:1480px;margin:auto}.brand{color:#8fb5ff;font-size:13px;font-weight:900;letter-spacing:.13em}
+    .topline{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.langbar{display:flex;gap:5px}.langbar button{width:auto;margin:0;padding:7px 10px;border:1px solid #2b3757;border-radius:999px;background:#11182a;color:#93a0ba;font-size:12px}.langbar button.active{border-color:#4e82c8;color:#b9d3ff}
     h1{font-size:29px;line-height:1.15;margin:11px 0}h2{font-size:20px;margin:0 0 15px}p{color:#aeb9d2;line-height:1.45}
     .card{margin-top:17px;padding:19px;border:1px solid #2b3757;border-radius:18px;background:#11182a;box-shadow:0 18px 55px #0007}
     label{display:block;margin:12px 0 7px;font-weight:750}input,select,textarea{width:100%;padding:13px;border:1px solid #3a496f;border-radius:11px;background:#090e1b;color:#fff;font-size:16px}textarea{min-height:110px;resize:vertical;font-family:inherit}
@@ -39,22 +40,22 @@
 </head>
 <body>
   <main>
-    <div class="brand">CITADEL / OPERATIONS</div>
-    <h1>LIVE OPERATIONS</h1>
-    <p>Живой центр управления · показываются только реальные данные Controller.</p>
+    <div class="topline"><div class="brand">CITADEL / OPERATIONS</div><div class="langbar"><button type="button" data-lang="ru">RU</button><button type="button" data-lang="en">EN</button><button type="button" data-lang="he">HE</button></div></div>
+    <h1 data-i18n="pageTitle">LIVE OPERATIONS</h1>
+    <p data-i18n="pageLead">Живой центр управления · показываются только реальные данные Controller.</p>
 
     <section id="loginCard" class="card">
-      <h2>Защищённый вход</h2>
-      <label for="token">Секрет архитектора</label>
+      <h2 data-i18n="loginTitle">Защищённый вход</h2>
+      <label for="token" data-i18n="tokenLabel">Секрет архитектора</label>
       <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="citadel_arch_…">
-      <button id="loginButton" type="button">Войти</button>
-      <p class="small">Секрет хранится только до закрытия этой вкладки.</p>
+      <button id="loginButton" type="button" data-i18n="loginButton">Войти</button>
+      <p class="small" data-i18n="loginHint">Секрет хранится только до закрытия этой вкладки.</p>
     </section>
 
     <section id="dashboard" class="hidden">
       <div class="toolbar">
-        <button id="refreshButton" class="secondary" type="button">Обновить</button>
-        <button id="logoutButton" class="danger" type="button">Выйти</button>
+        <button id="refreshButton" class="secondary" type="button" data-i18n="refresh">Обновить</button>
+        <button id="logoutButton" class="danger" type="button" data-i18n="logout">Выйти</button>
       </div>
 
       <section id="liveOperations" class="ops-shell">
@@ -62,15 +63,15 @@
           <div>
             <div class="ops-title">LIVE OPERATIONS CENTER</div>
             <h2>Operational picture</h2>
-            <div class="ops-sub">Реальные heartbeat, CPU/RAM, presence и состояние Controller. Демонстрационные значения запрещены.</div>
+            <div class="ops-sub" data-i18n="opsSub">Реальные heartbeat, CPU/RAM, presence и состояние Controller. Демонстрационные значения запрещены.</div>
           </div>
           <div class="live-badge"><span class="live-dot"></span> CONTROLLER LIVE</div>
         </div>
         <div class="ops-grid">
-          <div class="ops-kpi"><b id="nodeCount">0</b><span>зарегистрировано нод</span></div>
-          <div class="ops-kpi"><b id="onlineCount">0</b><span>живых сейчас</span></div>
-          <div class="ops-kpi"><b id="unhealthyCount">0</b><span>нездоровых / недоступных</span></div>
-          <div class="ops-kpi"><b id="projectCount">0</b><span>проектов</span></div>
+          <div class="ops-kpi"><b id="nodeCount">0</b><span data-i18n="registeredNodes">зарегистрировано нод</span></div>
+          <div class="ops-kpi"><b id="onlineCount">0</b><span data-i18n="liveNow">живых сейчас</span></div>
+          <div class="ops-kpi"><b id="unhealthyCount">0</b><span data-i18n="unhealthy">нездоровых / недоступных</span></div>
+          <div class="ops-kpi"><b id="projectCount">0</b><span data-i18n="projects">проектов</span></div>
         </div>
         <div class="charts-grid">
           <div class="chart-card">
@@ -88,7 +89,7 @@
           <div class="chart-card"><h3>RAM · текущая телеметрия</h3><div id="memoryChart" class="chart-rows"></div></div>
         </div>
         <div class="section-head" style="margin-top:18px">
-          <h2 style="margin:0">Ноды</h2><span id="nodesUpdated" class="small"></span>
+          <h2 style="margin:0" data-i18n="nodes">Ноды</h2><span id="nodesUpdated" class="small"></span>
         </div>
         <div id="liveNodesList" class="node-grid"></div>
       </section>
@@ -97,30 +98,30 @@
       </div>
 
       <section class="card">
-        <h2>Управление узлом</h2>
-        <label for="controlNodeSelect">Узел</label>
+        <h2 data-i18n="nodeControl">Управление узлом</h2>
+        <label for="controlNodeSelect" data-i18n="node">Узел</label>
         <select id="controlNodeSelect"></select>
         <div id="nodeDiagnostics" class="status">Выберите узел — здесь появятся IP, состояние, CPU/RAM, версия и последняя связь.</div>
         <div class="control-buttons">
-          <button id="ipButton" class="secondary" type="button">Показать IP</button>
-          <button id="healthButton" class="secondary" type="button">Проверить здоровье</button>
-          <button id="pauseButton" class="secondary" type="button">Поставить на паузу</button>
-          <button id="resumeButton" class="secondary" type="button">Возобновить</button>
+          <button id="ipButton" class="secondary" type="button" data-i18n="showIp">Показать IP</button>
+          <button id="healthButton" class="secondary" type="button" data-i18n="healthCheck">Проверить здоровье</button>
+          <button id="pauseButton" class="secondary" type="button" data-i18n="pause">Поставить на паузу</button>
+          <button id="resumeButton" class="secondary" type="button" data-i18n="resume">Возобновить</button>
           <button id="updateButton" class="secondary full" type="button">Обновить агент дистанционно</button>
           <button id="updateAllAgentsButton" class="secondary full" type="button">Обновить все агенты</button>
           <div id="updateAllStatus" class="status full">Массовое обновление ещё не запускалось.</div>
-          <button id="restartButton" class="secondary" type="button">Перезапустить агент</button>
-          <button id="stopButton" class="danger" type="button">Остановить агент</button>
-          <button id="rollbackButton" class="danger full" type="button">Откатить последнее обновление</button>
-          <button id="rebootButton" class="danger" type="button">Перезагрузить ПК</button>
-          <button id="shutdownButton" class="danger" type="button">Выключить ПК</button>
-          <button id="disconnectButton" class="danger full" type="button">Отозвать и удалить узел</button>
+          <button id="restartButton" class="secondary" type="button" data-i18n="restartAgent">Перезапустить агент</button>
+          <button id="stopButton" class="danger" type="button" data-i18n="stopAgent">Остановить агент</button>
+          <button id="rollbackButton" class="danger full" type="button" data-i18n="rollback">Откатить последнее обновление</button>
+          <button id="rebootButton" class="danger" type="button" data-i18n="reboot">Перезагрузить ПК</button>
+          <button id="shutdownButton" class="danger" type="button" data-i18n="shutdown">Выключить ПК</button>
+          <button id="disconnectButton" class="danger full" type="button" data-i18n="disconnect">Отозвать и удалить узел</button>
         </div>
         <p class="small">«Остановить агент» завершает только процесс агента и не отзывает его identity. Он снова запустится при следующем входе Windows или при локальном запуске. «Отозвать и удалить узел» — отдельная необратимая операция на Controller.</p>
       </section>
 
       <section class="card">
-        <h2>SSH / Zero Trust</h2>
+        <h2 data-i18n="sshTitle">SSH / Zero Trust</h2>
         <p class="small">SSH не открывает порт 22 в интернет. Здесь настраивается локальная команда для Cloudflare Access/Tunnel. Наличие Tunnel проверяется отдельно.</p>
         <label for="sshHost">Cloudflare Access hostname</label>
         <input id="sshHost" type="text" inputmode="url" placeholder="ssh.example.com">
@@ -135,15 +136,15 @@
       </section>
 
       <section class="card">
-        <h2>Python / Создать проект</h2>
+        <h2 data-i18n="projectTitleHead">Python / Создать проект</h2>
         <p class="small">Вставьте сюда настоящее задание. Hub сначала прогонит текст через четыре обязательные проверки, после чего ваше нажатие «Создать проект» является подтверждением Architect. Затем Hub строит рабочие блоки и сам выбирает доступные Python-узлы.</p>
-        <label for="projectTitle">Название проекта</label>
+        <label for="projectTitle" data-i18n="projectName">Название проекта</label>
         <input id="projectTitle" maxlength="160" value="Новый проект">
-        <label for="projectTaskText">Задание</label>
+        <label for="projectTaskText" data-i18n="task">Задание</label>
         <textarea id="projectTaskText" maxlength="20000" placeholder="Опишите, что должен сделать проект..."></textarea>
         <div class="control-buttons">
-          <button id="checkProjectButton" class="secondary" type="button">1. Проверить текст</button>
-          <button id="createProjectButton" type="button" disabled>2. Создать проект</button>
+          <button id="checkProjectButton" class="secondary" type="button" data-i18n="checkText">1. Проверить текст</button>
+          <button id="createProjectButton" type="button" disabled data-i18n="createProject">2. Создать проект</button>
         </div>
         <div id="projectChecks" class="status">Ожидаю текст проекта.
 1. Source allowlisting
@@ -158,37 +159,37 @@
       </section>
 
       <section class="card" id="missionPanel">
-        <h2>Создать диагностическую миссию</h2>
+        <h2 data-i18n="missionTitleHead">Создать диагностическую миссию</h2>
         <p class="small">Выберите живую ноду, напишите что именно проверить и отправьте задание. После создания здесь останутся Node ID и Mission ID; результат появится в блоке «Миссии и результаты».</p>
-        <label for="nodeSelect">Нода</label>
+        <label for="nodeSelect" data-i18n="node">Нода</label>
         <select id="nodeSelect"></select>
         <div id="missionNodeState" class="status">Выберите ноду.</div>
-        <label for="missionType">Тип задачи</label>
-        <select id="missionType"><option value="system_inventory">Проверка состояния компьютера</option></select>
-        <label for="missionTitle">Название</label>
+        <label for="missionType" data-i18n="missionType">Тип задачи</label>
+        <select id="missionType"><option value="system_inventory" data-i18n="systemInventory">Проверка состояния компьютера</option></select>
+        <label for="missionTitle" data-i18n="name">Название</label>
         <input id="missionTitle" maxlength="160" value="Проверка системы">
-        <label for="missionTask">Что проверить</label>
+        <label for="missionTask" data-i18n="whatCheck">Что проверить</label>
         <textarea id="missionTask" maxlength="2000">Проверить состояние компьютера: CPU, RAM, диск, систему, сеть и базовые параметры. Вернуть понятный диагностический отчёт.</textarea>
-        <label for="expiresHours">Срок действия</label>
+        <label for="expiresHours" data-i18n="expires">Срок действия</label>
         <select id="expiresHours"><option value="1">1 час</option><option value="24" selected>24 часа</option><option value="72">3 дня</option></select>
-        <button id="createMissionButton" type="button">Создать и назначить миссию</button>
+        <button id="createMissionButton" type="button" data-i18n="createMission">Создать и назначить миссию</button>
         <div id="missionCreateResult" class="status">Миссия ещё не создавалась.</div>
       </section>
 
       <section class="card">
-        <h2>Команды управления</h2>
+        <h2 data-i18n="commands">Команды управления</h2>
         <div id="commandsList"></div>
       </section>
 
       <section class="card">
-        <h2>Миссии и результаты</h2>
+        <h2 data-i18n="missionsResults">Миссии и результаты</h2>
         <div id="missionsList"></div>
       </section>
 
       <section class="card">
         <div class="section-head">
-          <h2>Диагностика и системные отчёты узлов</h2>
-          <button id="refreshReportsButton" class="secondary" type="button">Обновить</button>
+          <h2 data-i18n="reports">Диагностика и системные отчёты узлов</h2>
+          <button id="refreshReportsButton" class="secondary" type="button" data-i18n="refresh">Обновить</button>
         </div>
         <p class="small">System Inventory — это техническая диагностика узла, а не выполненная пользовательская работа. Содержимое загружается только после выбора отчёта.</p>
         <div id="reportsList"></div>
@@ -197,8 +198,8 @@
 
       <section id="reportDetailCard" class="card hidden">
         <div class="section-head">
-          <h2>Содержимое диагностического отчёта</h2>
-          <button id="closeReportButton" class="secondary" type="button">Закрыть</button>
+          <h2 data-i18n="reportContent">Содержимое диагностического отчёта</h2>
+          <button id="closeReportButton" class="secondary" type="button" data-i18n="close">Закрыть</button>
         </div>
         <div id="reportDetailMeta" class="small"></div>
         <pre id="reportDetailBody" class="report-body"></pre>
@@ -212,14 +213,33 @@
   <div id="operationsAlert" class="ops-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="operationsAlertTitle">
     <div class="ops-modal">
       <div class="ops-title">OPERATIONS BRIEF</div>
-      <h2 id="operationsAlertTitle">Краткая оперативная сводка</h2>
-      <p class="small">Только проблемы, требующие внимания прямо сейчас.</p>
+      <h2 id="operationsAlertTitle" data-i18n="briefTitle">Краткая оперативная сводка</h2>
+      <p class="small" data-i18n="briefSub">Только проблемы, требующие внимания прямо сейчас.</p>
       <div id="operationsAlertList" class="brief-list"></div>
-      <button id="closeOperationsAlert" type="button">Закрыть и перейти в Live Operations</button>
+      <button id="closeOperationsAlert" type="button" data-i18n="briefClose">Закрыть и перейти в Live Operations</button>
     </div>
   </div>
 
   <script>
+    const I18N = {
+      ru:{pageTitle:"LIVE OPERATIONS",pageLead:"Живой центр управления · показываются только реальные данные Controller.",loginTitle:"Защищённый вход",tokenLabel:"Секрет архитектора",loginButton:"Войти",loginHint:"Секрет хранится только до закрытия этой вкладки.",refresh:"Обновить",logout:"Выйти",opsSub:"Реальные heartbeat, CPU/RAM, presence и состояние Controller. Демонстрационные значения запрещены.",registeredNodes:"зарегистрировано нод",liveNow:"живых сейчас",unhealthy:"нездоровых / недоступных",projects:"проектов",nodes:"Ноды",nodeControl:"Управление узлом",node:"Нода",showIp:"Показать IP",healthCheck:"Проверить здоровье",pause:"Поставить на паузу",resume:"Возобновить",restartAgent:"Перезапустить агент",stopAgent:"Остановить агент",rollback:"Откатить последнее обновление",reboot:"Перезагрузить ПК",shutdown:"Выключить ПК",disconnect:"Отозвать и удалить узел",sshTitle:"SSH / Zero Trust",projectTitleHead:"Python / Создать проект",projectName:"Название проекта",task:"Задание",checkText:"1. Проверить текст",createProject:"2. Создать проект",missionTitleHead:"Создать диагностическую миссию",missionType:"Тип задачи",systemInventory:"Проверка состояния компьютера",name:"Название",whatCheck:"Что проверить",expires:"Срок действия",createMission:"Создать и назначить миссию",commands:"Команды управления",missionsResults:"Миссии и результаты",reports:"Диагностика и системные отчёты узлов",reportContent:"Содержимое диагностического отчёта",close:"Закрыть",briefTitle:"Краткая оперативная сводка",briefSub:"Только проблемы, требующие внимания прямо сейчас.",briefClose:"Закрыть и перейти в Live Operations"},
+      en:{pageTitle:"LIVE OPERATIONS",pageLead:"Live control center · only real Controller data is shown.",loginTitle:"Secure sign-in",tokenLabel:"Architect token",loginButton:"Sign in",loginHint:"The token is kept only until this tab is closed.",refresh:"Refresh",logout:"Sign out",opsSub:"Real heartbeats, CPU/RAM, presence, and Controller state. Demo values are prohibited.",registeredNodes:"registered nodes",liveNow:"live now",unhealthy:"unhealthy / unavailable",projects:"projects",nodes:"Nodes",nodeControl:"Node control",node:"Node",showIp:"Show IP",healthCheck:"Health check",pause:"Pause",resume:"Resume",restartAgent:"Restart agent",stopAgent:"Stop agent",rollback:"Rollback last update",reboot:"Reboot host",shutdown:"Shut down host",disconnect:"Revoke and remove node",sshTitle:"SSH / Zero Trust",projectTitleHead:"Python / Create project",projectName:"Project name",task:"Task",checkText:"1. Check text",createProject:"2. Create project",missionTitleHead:"Create diagnostic mission",missionType:"Task type",systemInventory:"Computer system inventory",name:"Name",whatCheck:"What to check",expires:"Expires",createMission:"Create and assign mission",commands:"Control commands",missionsResults:"Missions and results",reports:"Diagnostics and node reports",reportContent:"Diagnostic report",close:"Close",briefTitle:"Operations brief",briefSub:"Only problems that need attention right now.",briefClose:"Close and open Live Operations"},
+      he:{pageTitle:"LIVE OPERATIONS",pageLead:"מרכז שליטה חי · מוצגים רק נתונים אמיתיים מה-Controller.",loginTitle:"כניסה מאובטחת",tokenLabel:"Architect token",loginButton:"כניסה",loginHint:"ה-token נשמר רק עד סגירת הלשונית.",refresh:"רענון",logout:"יציאה",opsSub:"heartbeat, CPU/RAM, presence ומצב Controller אמיתיים בלבד. אין ערכי דמו.",registeredNodes:"nodes רשומים",liveNow:"חיים עכשיו",unhealthy:"לא תקינים / לא זמינים",projects:"פרויקטים",nodes:"Nodes",nodeControl:"שליטה ב-node",node:"Node",showIp:"הצג IP",healthCheck:"בדיקת בריאות",pause:"השהה",resume:"המשך",restartAgent:"הפעל agent מחדש",stopAgent:"עצור agent",rollback:"חזרה לעדכון הקודם",reboot:"אתחל מחשב",shutdown:"כבה מחשב",disconnect:"בטל והסר node",sshTitle:"SSH / Zero Trust",projectTitleHead:"Python / יצירת פרויקט",projectName:"שם הפרויקט",task:"משימה",checkText:"1. בדוק טקסט",createProject:"2. צור פרויקט",missionTitleHead:"יצירת משימת אבחון",missionType:"סוג משימה",systemInventory:"בדיקת מצב המחשב",name:"שם",whatCheck:"מה לבדוק",expires:"תוקף",createMission:"צור והקצה משימה",commands:"פקודות שליטה",missionsResults:"משימות ותוצאות",reports:"אבחון ודוחות nodes",reportContent:"תוכן דוח אבחון",close:"סגור",briefTitle:"סיכום תפעולי",briefSub:"רק בעיות הדורשות תשומת לב עכשיו.",briefClose:"סגור ועבור ל-Live Operations"}
+    };
+    let lang = localStorage.getItem("citadelArchitectLang") || "ru";
+    function tr(key){ return I18N[lang]?.[key] || I18N.ru[key] || key; }
+    function applyLanguage(next){
+      lang = I18N[next] ? next : "ru";
+      localStorage.setItem("citadelArchitectLang", lang);
+      document.documentElement.lang = lang;
+      document.documentElement.dir = lang === "he" ? "rtl" : "ltr";
+      document.querySelectorAll("[data-lang]").forEach((button) => button.classList.toggle("active", button.dataset.lang === lang));
+      document.querySelectorAll("[data-i18n]").forEach((element) => {
+        const value = tr(element.dataset.i18n);
+        if (value) element.textContent = value;
+      });
+    }
+    document.querySelectorAll("[data-lang]").forEach((button) => button.addEventListener("click", () => applyLanguage(button.dataset.lang)));
     const loginCard = document.getElementById("loginCard");
     const dashboard = document.getElementById("dashboard");
     const tokenInput = document.getElementById("token");
@@ -1187,6 +1207,7 @@
       if (host) window.open(`https://${host}`, "_blank", "noopener,noreferrer");
     });
     updateSshPanel();
+    applyLanguage(lang);
 
     if (architectToken) {
       loadDashboard().catch(() => logout("Сохранённый сеанс недействителен. Войдите снова."));
