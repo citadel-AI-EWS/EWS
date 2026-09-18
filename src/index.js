@@ -1599,7 +1599,11 @@ function normalizeAiState(value) {
     query_mode: stringField("query_mode", 16),
     query_status: stringField("query_status", 32),
     query_prompt: stringField("query_prompt", 8000),
-    query_answer: stringField("query_answer", 70000),
+    query_answer: value.query_answer === undefined || value.query_answer === null
+      ? null
+      : (typeof value.query_answer === "string" && value.query_answer.length <= 70000
+        ? value.query_answer
+        : (() => { throw new ApiError(400, "invalid_ai_state"); })()),
     load_config_json: serializedConfig,
     live_checked_at: stringField("live_checked_at", 64)
   };
