@@ -52,7 +52,7 @@ INSERT OR REPLACE INTO legacy_run_summary VALUES
 ('2026-09-13',104,0,104,104,0,0.0),
 ('2026-09-14',105,0,105,105,0,0.0),
 ('2026-09-15',53,0,53,53,0,0.0),
-('2026-09-17',9,0,9,8,1,0.0);
+('2026-09-17',9,0,9,8,1,735.712);
 
 INSERT OR REPLACE INTO legacy_reusable_features VALUES
 ('atomic state writes','PORT','agent/local state','Avoid torn state after crash.'),
