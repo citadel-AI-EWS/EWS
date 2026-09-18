@@ -77,6 +77,8 @@
           <button id="pauseButton" class="secondary" type="button">Поставить на паузу</button>
           <button id="resumeButton" class="secondary" type="button">Возобновить</button>
           <button id="updateButton" class="secondary full" type="button">Обновить агент дистанционно</button>
+          <button id="updateAllAgentsButton" class="secondary full" type="button">Обновить все агенты</button>
+          <div id="updateAllStatus" class="status full">Массовое обновление ещё не запускалось.</div>
           <button id="restartButton" class="secondary" type="button">Перезапустить агент</button>
           <button id="stopButton" class="danger" type="button">Остановить агент</button>
           <button id="rollbackButton" class="danger full" type="button">Откатить последнее обновление</button>
@@ -103,26 +105,39 @@
       </section>
 
       <section class="card">
-        <h2>Создать задачу для узла</h2>
+        <h2>Python / Создать проект</h2>
+        <p class="small">Вставьте сюда настоящее задание. Hub сначала прогонит текст через четыре обязательные проверки, после чего ваше нажатие «Создать проект» является подтверждением Architect. Затем Hub строит рабочие блоки и сам выбирает доступные Python-узлы.</p>
+        <label for="projectTitle">Название проекта</label>
+        <input id="projectTitle" maxlength="160" value="Новый проект">
+        <label for="projectTaskText">Задание</label>
+        <textarea id="projectTaskText" maxlength="20000" placeholder="Опишите, что должен сделать проект..."></textarea>
+        <div class="control-buttons">
+          <button id="checkProjectButton" class="secondary" type="button">1. Проверить текст</button>
+          <button id="createProjectButton" type="button" disabled>2. Создать проект</button>
+        </div>
+        <div id="projectChecks" class="status">Ожидаю текст проекта.
+1. Source allowlisting
+2. Validation
+3. Deduplication
+4. Safety classification</div>
+        <div id="projectResult" class="status">После создания здесь будет видно, сколько рабочих блоков создал Hub и на какие узлы они назначены.</div>
+        <div id="projectsList"></div>
+      </section>
+
+      <section class="card hidden" aria-hidden="true">
+        <h2>Служебная диагностика узла</h2>
         <label for="nodeSelect">Узел</label>
         <select id="nodeSelect"></select>
         <label for="missionType">Тип задачи</label>
-        <select id="missionType">
-          <option value="system_inventory">Проверка состояния компьютера</option>
-        </select>
+        <select id="missionType"><option value="system_inventory">Проверка состояния компьютера</option></select>
         <label for="missionTitle">Название</label>
         <input id="missionTitle" maxlength="160" value="Проверка системы">
         <label for="missionTask">Что нужно сделать</label>
         <textarea id="missionTask" maxlength="2000">Проверить состояние компьютера: ресурсы, систему и базовые параметры. Вернуть понятный отчёт.</textarea>
         <label for="expiresHours">Срок действия</label>
-        <select id="expiresHours">
-          <option value="1">1 час</option>
-          <option value="24" selected>24 часа</option>
-          <option value="72">3 дня</option>
-        </select>
-        <button id="createMissionButton" type="button">Отправить задачу узлу</button>
-        <div id="missionCreateResult" class="status">После отправки здесь появятся Mission ID и объяснение, где смотреть результат.</div>
-        <p class="small">Сейчас агент исполняет только фиксированный безопасный тип <code>system_inventory</code>. Текст выше сохраняется как цель задачи, но не превращается в shell-команду или произвольный код.</p>
+        <select id="expiresHours"><option value="1">1 час</option><option value="24" selected>24 часа</option><option value="72">3 дня</option></select>
+        <button id="createMissionButton" type="button">Отправить диагностику узлу</button>
+        <div id="missionCreateResult" class="status">Служебная диагностика.</div>
       </section>
 
       <section class="card">
