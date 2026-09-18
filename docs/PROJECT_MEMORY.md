@@ -400,7 +400,7 @@ Architect requirement:
 
 Release decision:
 
-- Agent release 0.3.7 introduces bounded signed commands `lmstudio_install`, `lmstudio_model_get`, and `lmstudio_model_load`.
+- Agent release 0.3.8 extends bounded signed AI controls with live LM Studio probing, real installation/download progress, Hugging Face model discovery through Hub, and the Hybrid node mode. The signed allowlist includes `lmstudio_install`, `lmstudio_probe`, `lmstudio_model_get`, `lmstudio_model_load`, and `hybrid_query`.
 - Arbitrary remote command execution remains prohibited.
 
 ## 2026-09-18 — Project Plan must execute, report progress, and produce a final result
@@ -430,3 +430,12 @@ Required behavior:
 
 Implementation is being delivered in the same reviewed LM Studio release branch so project execution and per-node model control stay consistent.
 
+
+
+### Network resilience rule for 0.3.8
+
+- Windows sleep/hibernate inhibition stays active while the agent service runs.
+- The agent already retries Controller failures with bounded exponential backoff; on real network errors it also attempts bounded OS network recovery.
+- Windows recovery uses DHCP renew and only reconnects to previously saved Windows Wi-Fi profiles.
+- Linux recovery uses NetworkManager and only raises previously active saved connections.
+- The agent never reads, exports, or stores Wi-Fi passwords and never joins an unknown network automatically.
