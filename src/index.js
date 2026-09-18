@@ -2697,13 +2697,23 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
     throw new ApiError(409, "invalid_command_transition");
   }
 
+  let projectAssignmentsCreated = 0;
+  if (status === "completed" && current.command_type === "lmstudio_model_load") {
+    projectAssignmentsCreated = await materializeProjectWorkForNode(env, nodeId);
+  }
+
   const command = await env.DB.prepare(`
     SELECT command_id, command_type, status, completed_at
     FROM commands
     WHERE command_id = ? AND node_id = ?
   `).bind(commandId, nodeId).first();
 
-  return json({ ok: true, command, node_status: nodeStatus || node.status });
+  return json({
+    ok: true,
+    command,
+    node_status: nodeStatus || node.status,
+    project_assignments_created: projectAssignmentsCreated
+  });
 }
 
 function constantTimeHexEqual(left, right) {
