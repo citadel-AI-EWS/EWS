@@ -42,11 +42,11 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.5"
+VERSION = "0.3.6"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown"}
+SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer"}
 UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
 
@@ -309,10 +309,20 @@ VIRTUAL_INTERFACE_TOKENS = (
 )
 
 
+def _normalize_mac(value: str) -> str | None:
+    compact = "".join(ch for ch in str(value) if ch.isalnum()).upper()
+    if len(compact) != 12 or any(ch not in "0123456789ABCDEF" for ch in compact):
+        return None
+    if compact == "000000000000":
+        return None
+    return ":".join(compact[index:index + 2] for index in range(0, 12, 2))
+
+
 def local_network_addresses() -> dict[str, Any]:
-    """Discover current host LAN/Tailscale IPv4 addresses without hard-coding DHCP data."""
+    """Discover current physical LAN/Tailscale IPv4 and MAC addresses."""
     lan: list[str] = []
     tailscale: list[str] = []
+    mac_addresses: list[str] = []
     interfaces: list[dict[str, str]] = []
     try:
         stats = psutil.net_if_stats()
@@ -322,42 +332,59 @@ def local_network_addresses() -> dict[str, Any]:
             "lan_ipv4": None,
             "tailscale_ipv4": None,
             "private_ipv4": [],
+            "mac_addresses": [],
             "interfaces": [],
         }
 
+    link_family = getattr(psutil, "AF_LINK", None)
     for interface_name, items in addresses.items():
         state = stats.get(interface_name)
         if state is not None and not state.isup:
             continue
         lowered = interface_name.lower()
         is_virtual = any(token in lowered for token in VIRTUAL_INTERFACE_TOKENS)
+        interface_ipv4: str | None = None
+        interface_mac: str | None = None
         for item in items:
-            if item.family != socket.AF_INET:
-                continue
-            try:
-                address = ipaddress.ip_address(item.address)
-            except ValueError:
-                continue
-            if (
-                address.is_loopback
-                or address.is_link_local
-                or address.is_multicast
-                or address.is_unspecified
-            ):
-                continue
-            value = str(address)
-            interfaces.append({"name": interface_name[:120], "ipv4": value})
-            if TAILSCALE_INTERFACE_MARKER in lowered:
-                tailscale.append(value)
-            elif address.is_private and not is_virtual:
-                lan.append(value)
+            if item.family == socket.AF_INET:
+                try:
+                    address = ipaddress.ip_address(item.address)
+                except ValueError:
+                    continue
+                if (
+                    address.is_loopback
+                    or address.is_link_local
+                    or address.is_multicast
+                    or address.is_unspecified
+                ):
+                    continue
+                value = str(address)
+                interface_ipv4 = interface_ipv4 or value
+                if TAILSCALE_INTERFACE_MARKER in lowered:
+                    tailscale.append(value)
+                elif address.is_private and not is_virtual:
+                    lan.append(value)
+            elif link_family is not None and item.family == link_family and not is_virtual:
+                normalized = _normalize_mac(item.address)
+                if normalized:
+                    interface_mac = normalized
+                    mac_addresses.append(normalized)
+        if interface_ipv4 or interface_mac:
+            entry = {"name": interface_name[:120]}
+            if interface_ipv4:
+                entry["ipv4"] = interface_ipv4
+            if interface_mac:
+                entry["mac"] = interface_mac
+            interfaces.append(entry)
 
     lan = list(dict.fromkeys(lan))
     tailscale = list(dict.fromkeys(tailscale))
+    mac_addresses = list(dict.fromkeys(mac_addresses))
     return {
         "lan_ipv4": lan[0] if lan else None,
         "tailscale_ipv4": tailscale[0] if tailscale else None,
         "private_ipv4": lan,
+        "mac_addresses": mac_addresses[:16],
         "interfaces": interfaces[:32],
     }
 
@@ -458,6 +485,7 @@ class Agent:
                 "network": {
                     "lan_ipv4": network.get("lan_ipv4"),
                     "tailscale_ipv4": network.get("tailscale_ipv4"),
+                    "mac_addresses": network.get("mac_addresses") or [],
                 },
             },
         )
@@ -552,9 +580,13 @@ class Agent:
         payload = command.get("payload") or {}
         if not isinstance(payload, dict):
             return False
-        if command_type != "update" and payload != {}:
-            return False
-        if command_type == "update" and not self.validate_update_payload(payload):
+        if command_type == "update":
+            if not self.validate_update_payload(payload):
+                return False
+        elif command_type == "wake_peer":
+            if not self.validate_wake_payload(payload):
+                return False
+        elif payload != {}:
             return False
         payload_json = json_text(payload)
         canonical = "\n".join(
@@ -607,6 +639,47 @@ class Agent:
                 return False
             seen.add(name)
         return True
+
+    @staticmethod
+    def validate_wake_payload(payload: dict[str, Any]) -> bool:
+        target_node_id = payload.get("target_node_id")
+        target_mac = payload.get("target_mac")
+        target_lan_ipv4 = payload.get("target_lan_ipv4")
+        if not isinstance(target_node_id, str) or not target_node_id.startswith("node_") or len(target_node_id) > 128:
+            return False
+        if not isinstance(target_mac, str) or _normalize_mac(target_mac) != target_mac.upper():
+            return False
+        try:
+            address = ipaddress.ip_address(target_lan_ipv4)
+        except (ValueError, TypeError):
+            return False
+        return address.version == 4 and address.is_private
+
+    def send_wake_packet(self, payload: dict[str, Any]) -> None:
+        if not self.validate_wake_payload(payload):
+            raise RuntimeError("invalid wake payload")
+        target_mac = str(payload["target_mac"]).replace(":", "")
+        packet = bytes.fromhex("FF" * 6 + target_mac * 16)
+        target_ip = ipaddress.ip_address(payload["target_lan_ipv4"])
+        subnet = ipaddress.ip_network(f"{target_ip}/24", strict=False)
+        destinations = ["255.255.255.255", str(subnet.broadcast_address)]
+        sent = 0
+        for destination in dict.fromkeys(destinations):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                sock.settimeout(2.0)
+                for _ in range(3):
+                    sock.sendto(packet, (destination, 9))
+                    sent += 1
+            finally:
+                sock.close()
+        self.log.write(
+            "wake_packet_sent",
+            target_node_id=payload["target_node_id"],
+            target_lan_ipv4=str(target_ip),
+            packets=sent,
+        )
 
     def download_update_file(self, url: str) -> bytes:
         parsed = urllib.parse.urlsplit(url)
@@ -837,6 +910,8 @@ class Agent:
                     atomic_write(self.stop_path, "controller stop " + now_iso() + "\n")
                 elif command_type in {"system_reboot", "system_shutdown"}:
                     self.schedule_system_power_action(command_type)
+                elif command_type == "wake_peer":
+                    self.send_wake_packet(command.get("payload") or {})
                 self.ack_command(command_id, "completed")
                 self.log.write(
                     "command_completed",
@@ -1008,8 +1083,8 @@ def self_test() -> int:
             "unapproved command accepted",
         )
         require_test(
-            {"system_reboot", "system_shutdown"}.issubset(SUPPORTED_COMMANDS),
-            "restricted power commands missing",
+            {"system_reboot", "system_shutdown", "wake_peer"}.issubset(SUPPORTED_COMMANDS),
+            "restricted power/wake commands missing",
         )
         require_test(
             "shell" not in SUPPORTED_COMMANDS,
@@ -1025,7 +1100,7 @@ def self_test() -> int:
         require_test(load_json(bom_json, {}).get("ok") is True, "UTF-8 BOM JSON rejected")
         network = local_network_addresses()
         require_test(
-            set(network) == {"lan_ipv4", "tailscale_ipv4", "private_ipv4", "interfaces"},
+            set(network) == {"lan_ipv4", "tailscale_ipv4", "private_ipv4", "mac_addresses", "interfaces"},
             "network discovery returned an unexpected shape",
         )
 
