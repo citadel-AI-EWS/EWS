@@ -791,7 +791,7 @@ class Agent:
         model = payload["model"]
         self.run_lms(["daemon", "up"], timeout=120)
         self.run_lms(["server", "start", "--port", "1234"], timeout=120)
-        self.run_lms(["load", model, "--gpu", "max", "-y"], timeout=1800)
+        self.run_lms(["load", model, "-y"], timeout=1800)
         self.save_lmstudio_state(
             installed=True,
             selected_model=model,
