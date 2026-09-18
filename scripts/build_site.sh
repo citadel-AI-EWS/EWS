@@ -6,6 +6,12 @@ OUTPUT="${1:-$ROOT/public}"
 if [[ "$OUTPUT" != /* ]]; then
   OUTPUT="$PWD/$OUTPUT"
 fi
+# Reject the caller-supplied path before canonicalization so a symlink cannot be
+# hidden by realpath and then cleaned through its target.
+if [[ -L "$OUTPUT" ]]; then
+  printf 'Refusing symlinked output directory: %s\n' "$OUTPUT" >&2
+  exit 2
+fi
 OUTPUT="$(python - "$OUTPUT" <<'PY'
 import os
 import sys
@@ -40,10 +46,6 @@ if (( unsafe )); then
   exit 2
 fi
 
-if [[ -L "$OUTPUT" ]]; then
-  printf 'Refusing symlinked output directory: %s\n' "$OUTPUT" >&2
-  exit 2
-fi
 if [[ -e "$OUTPUT" && ! -d "$OUTPUT" ]]; then
   printf 'Refusing non-directory output path: %s\n' "$OUTPUT" >&2
   exit 2
