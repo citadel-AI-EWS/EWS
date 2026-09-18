@@ -91,6 +91,8 @@
     let activeAssignment = null;
     let activeCommand = null;
     let nodePaused = false;
+    let memoryIdentity = null;
+    const acceptedAssignmentIds = new Set();
 
     function setStatus(message, kind = "") {
       statusElement.textContent = message;
@@ -109,14 +111,19 @@
     }
 
     async function storageGet() {
-      const database = await openStorage();
-      return new Promise((resolve, reject) => {
-        const transaction = database.transaction(STORAGE_STORE, "readonly");
-        const request = transaction.objectStore(STORAGE_STORE).get(STORAGE_KEY);
-        request.onsuccess = () => resolve(request.result || null);
-        request.onerror = () => reject(request.error);
-        transaction.oncomplete = () => database.close();
-      });
+      try {
+        const database = await openStorage();
+        return await new Promise((resolve, reject) => {
+          const transaction = database.transaction(STORAGE_STORE, "readonly");
+          const request = transaction.objectStore(STORAGE_STORE).get(STORAGE_KEY);
+          request.onsuccess = () => resolve(request.result || memoryIdentity || null);
+          request.onerror = () => memoryIdentity ? resolve(memoryIdentity) : reject(request.error);
+          transaction.oncomplete = () => database.close();
+        });
+      } catch (error) {
+        if (memoryIdentity) return memoryIdentity;
+        throw error;
+      }
     }
 
     async function storagePut(value) {
@@ -130,6 +137,7 @@
     }
 
     async function storageDelete() {
+      memoryIdentity = null;
       const database = await openStorage();
       return new Promise((resolve, reject) => {
         const transaction = database.transaction(STORAGE_STORE, "readwrite");
@@ -210,16 +218,29 @@
     }
 
     function hideNode() {
+      activeAssignment = null;
+      activeCommand = null;
+      nodePaused = false;
       nodeCard.classList.add("hidden");
       missionCard.classList.add("hidden");
       controlCard.classList.add("hidden");
       enrollCard.classList.remove("hidden");
+      enrollButton.disabled = false;
+      runMissionButton.classList.add("hidden");
+      applyCommandButton.classList.add("hidden");
+    }
+
+    async function resetRejectedIdentity(reason) {
+      try { await storageDelete(); } catch { memoryIdentity = null; }
+      hideNode();
+      setStatus(`${reason} Локальная идентичность удалена; можно зарегистрировать новый узел.`, "bad");
     }
 
     function applyNodeStatus(status) {
       nodePaused = status === "paused";
       assignmentButton.disabled = nodePaused;
       if (nodePaused) {
+        acceptedAssignmentIds.delete(assignmentId);
         activeAssignment = null;
         runMissionButton.classList.add("hidden");
         missionText.textContent = "Узел на паузе. Новые миссии временно не выполняются.";
@@ -267,6 +288,10 @@
         applyNodeStatus(data.status);
         setStatus(`Готово. Подписанный heartbeat принят.\nСтатус: ${data.status}\nВремя: ${data.last_seen_at}`, "ok");
       } catch (error) {
+        if (["invalid_node", "node_revoked"].includes(error.message)) {
+          await resetRejectedIdentity(`Heartbeat отклонён: ${error.message}.`);
+          return;
+        }
         setStatus(`Heartbeat не прошёл: ${error.message}`, "bad");
       } finally {
         heartbeatButton.disabled = false;
@@ -307,9 +332,20 @@
         }));
 
         const identity = { nodeId: data.node.node_id, privateKey };
-        await storagePut(identity);
+        memoryIdentity = identity;
+        let persisted = true;
+        try {
+          await storagePut(identity);
+        } catch {
+          persisted = false;
+        }
         showNode(identity);
-        setStatus("Регистрация выполнена. Проверяю подписанную связь…", "ok");
+        setStatus(
+          persisted
+            ? "Регистрация выполнена. Проверяю подписанную связь…"
+            : "Регистрация выполнена, но браузер не сохранил ключ. Не закрывайте вкладку; связь всё равно проверяется.",
+          persisted ? "ok" : "bad"
+        );
         await sendHeartbeat(identity);
       } catch (error) {
         setStatus(`Регистрация не выполнена: ${error.message}`, "bad");
@@ -342,7 +378,14 @@
           return;
         }
 
-        const assignment = data.assignments[0];
+        const assignment = data.assignments.find(
+          (item) => item.mission_type === "system_inventory"
+        );
+        if (!assignment) {
+          missionText.textContent =
+            "Есть задания, но этот браузерный узел не поддерживает ни одно из них.";
+          return;
+        }
         activeAssignment = assignment;
         missionText.textContent = [
           `Название: ${assignment.title}`,
@@ -350,11 +393,7 @@
           `Статус: ${assignment.status}`,
           `Параметры: ${JSON.stringify(assignment.payload)}`
         ].join("\n");
-        if (assignment.mission_type === "system_inventory") {
-          runMissionButton.classList.remove("hidden");
-        } else {
-          missionText.textContent += "\nЭтот браузерный узел не выполняет такой тип задания.";
-        }
+        runMissionButton.classList.remove("hidden");
       } catch (error) {
         missionText.textContent = `Задания не получены: ${error.message}`;
       } finally {
@@ -370,12 +409,16 @@
         const identity = await storageGet();
         if (!identity) throw new Error("Локальный ключ не найден.");
         const assignmentId = activeAssignment.assignment_id;
-        await signedRequest(
-          identity,
-          "POST",
-          `/api/v1/nodes/${identity.nodeId}/assignments/${assignmentId}/accept`,
-          {}
-        );
+        if (!acceptedAssignmentIds.has(assignmentId) && activeAssignment.status !== "running") {
+          await signedRequest(
+            identity,
+            "POST",
+            `/api/v1/nodes/${identity.nodeId}/assignments/${assignmentId}/accept`,
+            {}
+          );
+          acceptedAssignmentIds.add(assignmentId);
+          activeAssignment.status = "running";
+        }
         const result = await signedRequest(
           identity,
           "POST",
@@ -445,6 +488,7 @@
 
     applyCommandButton.addEventListener("click", async () => {
       if (!activeCommand) return;
+      const uninstallRequested = activeCommand.command_type === "uninstall";
       applyCommandButton.disabled = true;
       commandButton.disabled = true;
       try {
@@ -475,6 +519,14 @@
         controlText.textContent = `${message}\nСтатус: ${completed.node_status}`;
         setStatus("Подписанная команда выполнена и подтверждена Controller.", "ok");
       } catch (error) {
+        if (uninstallRequested) {
+          try { await storageDelete(); } catch { memoryIdentity = null; }
+          hideNode();
+          controlText.textContent =
+            `Команда отключения применена локально; подтверждение Controller не получено: ${error.message}`;
+          setStatus("Локальный ключ удалён после подписанной команды отключения.", "bad");
+          return;
+        }
         controlText.textContent = `Команда не применена: ${error.message}`;
         setStatus("Ошибка выполнения команды управления.", "bad");
       } finally {
