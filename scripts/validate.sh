@@ -103,6 +103,40 @@ node tests/presence-storage.mjs
 node tests/update-integrity.mjs
 node tests/review-backlog-guards.mjs
 
+python - <<'PY'
+from pathlib import Path
+import sqlite3
+
+db = sqlite3.connect(":memory:")
+db.execute("PRAGMA foreign_keys = ON")
+for migration in sorted(Path("migrations").glob("*.sql")):
+    db.executescript(migration.read_text(encoding="utf-8"))
+
+required = {
+    "nodes", "missions", "assignments", "results", "commands", "audit_events",
+    "agent_reports", "architect_sessions", "node_logs", "node_log_rate_limits",
+}
+tables = {
+    row[0]
+    for row in db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    )
+}
+missing = sorted(required - tables)
+if missing:
+    raise SystemExit(f"fresh migration chain missing tables: {missing}")
+
+columns = {
+    row[1]
+    for row in db.execute("PRAGMA table_info(results)")
+}
+for column in ("report_type", "report_json", "report_sha256", "report_size_bytes", "sensitivity"):
+    if column not in columns:
+        raise SystemExit(f"fresh migration chain missing results.{column}")
+
+print("Fresh D1 migration chain: OK")
+PY
+
 bash -n controller_deploy.sh scripts/build_site.sh scripts/package_controller.sh scripts/validate.sh
 cfn-lint controller_template.yaml project_stack.yaml
 
