@@ -10,7 +10,7 @@
 .top{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}.brand,.muted,.small{color:#9aa8c5}.brand{font-size:12px;font-weight:900;letter-spacing:.13em}.lang{display:flex;gap:5px}.lang button{width:auto;margin:0;padding:7px 10px;border:1px solid #2b3757;background:#11182a;color:#93a0ba;border-radius:999px}.lang button.active{border-color:#4e82c8;color:#b9d3ff}
 h1{font-size:28px;margin:8px 0}h2{font-size:19px}.card{margin-top:16px;padding:17px;border:1px solid #2b3757;border-radius:16px;background:#11182a}.grid{display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px}
 label{display:block;margin:8px 0 6px;font-weight:700}input,select,button{width:100%;padding:12px;border-radius:10px;font-size:15px}input,select{border:1px solid #3a496f;background:#090e1b;color:#fff}button{border:0;background:#3478f6;color:#fff;font-weight:800;cursor:pointer}button.secondary{background:#273451}button:disabled{opacity:.55}.toolbar{display:flex;gap:9px;margin-top:12px}.toolbar button{width:auto;flex:1}
-.status{margin-top:15px;padding:12px;border-radius:10px;background:#0b1222;white-space:pre-wrap}.good{border-left:4px solid #35d07f}.bad{border-left:4px solid #ff6874}.event{margin-top:10px;padding:13px;border-radius:12px;background:#0b1222;border-left:4px solid #5b8fff;overflow-wrap:anywhere}.event.warn{border-left-color:#ffb44f}.event.error{border-left-color:#ff6874}.event.debug{border-left-color:#8d97aa}.event strong{display:block}.details{margin-top:8px;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px;color:#cfd9ee;max-height:220px;overflow:auto}.hidden{display:none!important}@media(max-width:650px){.grid{grid-template-columns:1fr}.toolbar{flex-direction:column}.toolbar button{width:100%}}
+.status{margin-top:15px;padding:12px;border-radius:10px;background:#0b1222;white-space:pre-wrap}.good{border-left:4px solid #35d07f}.bad{border-left:4px solid #ff6874}.event{margin-top:10px;padding:13px;border-radius:12px;background:#0b1222;border-left:4px solid #5b8fff;overflow-wrap:anywhere}.event.warn{border-left-color:#ffb44f}.event.error{border-left-color:#ff6874}.event.debug{border-left-color:#8d97aa}.event strong{display:block}.source{display:inline-block;margin-inline-start:7px;padding:2px 6px;border:1px solid #31436a;border-radius:999px;color:#9db4df;font-size:10px}.details{margin-top:8px;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px;color:#cfd9ee;max-height:220px;overflow:auto}.site-clock{position:fixed;right:12px;bottom:10px;z-index:20;padding:7px 10px;border:1px solid #2b3757;border-radius:10px;background:#080c17e8;color:#aebbd5;font:12px/1.2 ui-monospace,SFMono-Regular,monospace}.hidden{display:none!important}[dir="rtl"] .site-clock{right:auto;left:12px}@media(max-width:650px){.grid{grid-template-columns:1fr}.toolbar{flex-direction:column}.toolbar button{width:100%}}
 </style>
 </head>
 <body>
@@ -30,7 +30,7 @@ label{display:block;margin:8px 0 6px;font-weight:700}input,select,button{width:1
 <section class="card">
 <div id="stats" class="small" data-i18n="loadingStats">Статистика загружается…</div>
 <div class="grid">
-<div><label for="nodeFilter">Node ID</label><input id="nodeFilter" maxlength="128" data-ph="allNodes" placeholder="все узлы"></div>
+<div><label for="nodeFilter">Node ID</label><select id="nodeFilter"><option value="" data-i18n="allNodes">все узлы</option></select></div>
 <div><label for="levelFilter" data-i18n="level">Уровень</label><select id="levelFilter"><option value="" data-i18n="all">все</option><option>debug</option><option>info</option><option>warn</option><option>error</option></select></div>
 <div><label for="typeFilter" data-i18n="type">Тип</label><select id="typeFilter"><option value="" data-i18n="all">все</option><option>agent_start</option><option>agent_stop</option><option>node_enrolled</option><option>cycle_error</option><option>resource_guard</option><option>assignment_rejected_local</option><option>result_submitted</option><option>result_queued</option><option>queued_results_flushed</option><option>command_signature_rejected</option><option>command_completed</option><option>command_failure_ack_failed</option><option>command_failed</option><option>system_reboot_scheduled</option><option>system_shutdown_scheduled</option></select></div>
 </div>
@@ -39,33 +39,80 @@ label{display:block;margin:8px 0 6px;font-weight:700}input,select,button{width:1
 <section class="card"><div id="events"></div></section>
 </section>
 <div id="status" class="status" data-i18n="waiting">Ожидаю входа.</div>
+<div id="siteClock" class="site-clock" aria-label="Current date and time">—</div>
 </main>
 <script>
 const I18N={
-ru:{title:"Журнал узлов",lead:"Только реальные операционные события от зарегистрированных агентов. Журнал не является каналом команд.",loginTitle:"Защищённый вход",token:"Секрет архитектора",login:"Войти",loadingStats:"Статистика загружается…",level:"Уровень",type:"Тип",all:"все",refresh:"Обновить",more:"Ещё",logout:"Выйти",waiting:"Ожидаю входа.",allNodes:"все узлы",events:"Событий",nodes:"узлов",retention:"хранение",days:"дней",limit:"максимум",perNode:"событий на узел",loading:"Загружаю журнал…",loadingMore:"Загружаю следующую страницу…",none:"Событий по выбранному фильтру нет.",shown:"Показано событий",tokenRequired:"Введите секрет архитектора.",loginFailed:"Вход не выполнен",loadFailed:"Журнал не обновлён",moreFailed:"Следующая страница не загружена",ended:"Сеанс завершён.",expired:"Сохранённый сеанс недействителен. Войдите снова."},
-en:{title:"Node logs",lead:"Only real operational events from registered agents. The log is not a command channel.",loginTitle:"Secure sign-in",token:"Architect token",login:"Sign in",loadingStats:"Loading statistics…",level:"Level",type:"Type",all:"all",refresh:"Refresh",more:"More",logout:"Sign out",waiting:"Waiting for sign-in.",allNodes:"all nodes",events:"Events",nodes:"nodes",retention:"retention",days:"days",limit:"maximum",perNode:"events per node",loading:"Loading logs…",loadingMore:"Loading next page…",none:"No events match the selected filters.",shown:"Events shown",tokenRequired:"Enter the Architect token.",loginFailed:"Sign-in failed",loadFailed:"Logs were not refreshed",moreFailed:"Next page was not loaded",ended:"Session ended.",expired:"Saved session is invalid. Sign in again."},
-he:{title:"יומן nodes",lead:"רק אירועים תפעוליים אמיתיים מ-agents רשומים. היומן אינו ערוץ פקודות.",loginTitle:"כניסה מאובטחת",token:"Architect token",login:"כניסה",loadingStats:"טוען סטטיסטיקה…",level:"רמה",type:"סוג",all:"הכול",refresh:"רענון",more:"עוד",logout:"יציאה",waiting:"ממתין לכניסה.",allNodes:"כל ה-nodes",events:"אירועים",nodes:"nodes",retention:"שמירה",days:"ימים",limit:"מקסימום",perNode:"אירועים לכל node",loading:"טוען יומן…",loadingMore:"טוען עמוד נוסף…",none:"אין אירועים לפי הסינון שנבחר.",shown:"אירועים מוצגים",tokenRequired:"יש להזין Architect token.",loginFailed:"הכניסה נכשלה",loadFailed:"היומן לא עודכן",moreFailed:"העמוד הבא לא נטען",ended:"הסשן הסתיים.",expired:"הסשן השמור אינו תקף. יש להיכנס שוב."}
+ru:{title:"Журнал узлов",lead:"Только реальные операционные события от зарегистрированных агентов. Журнал не является каналом команд.",loginTitle:"Защищённый вход",token:"Секрет архитектора",login:"Войти",loadingStats:"Статистика загружается…",level:"Уровень",type:"Тип",all:"все",refresh:"Обновить",more:"Ещё",logout:"Выйти",waiting:"Ожидаю входа.",allNodes:"все узлы",events:"Событий",nodes:"узлов",retention:"хранение",days:"дней",limit:"максимум",perNode:"событий на узел",loading:"Загружаю журнал…",loadingMore:"Загружаю следующую страницу…",none:"Событий по выбранному фильтру нет.",shown:"Показано событий",tokenRequired:"Введите секрет архитектора.",loginFailed:"Вход не выполнен",loadFailed:"Журнал не обновлён",moreFailed:"Следующая страница не загружена",ended:"Сеанс завершён.",expired:"Сохранённый сеанс недействителен. Войдите снова.",agentSource:"Агент",controllerSource:"Controller"},
+en:{title:"Node logs",lead:"Only real operational events from registered agents. The log is not a command channel.",loginTitle:"Secure sign-in",token:"Architect token",login:"Sign in",loadingStats:"Loading statistics…",level:"Level",type:"Type",all:"all",refresh:"Refresh",more:"More",logout:"Sign out",waiting:"Waiting for sign-in.",allNodes:"all nodes",events:"Events",nodes:"nodes",retention:"retention",days:"days",limit:"maximum",perNode:"events per node",loading:"Loading logs…",loadingMore:"Loading next page…",none:"No events match the selected filters.",shown:"Events shown",tokenRequired:"Enter the Architect token.",loginFailed:"Sign-in failed",loadFailed:"Logs were not refreshed",moreFailed:"Next page was not loaded",ended:"Session ended.",expired:"Saved session is invalid. Sign in again.",agentSource:"Agent",controllerSource:"Controller"},
+he:{title:"יומן nodes",lead:"רק אירועים תפעוליים אמיתיים מ-agents רשומים. היומן אינו ערוץ פקודות.",loginTitle:"כניסה מאובטחת",token:"Architect token",login:"כניסה",loadingStats:"טוען סטטיסטיקה…",level:"רמה",type:"סוג",all:"הכול",refresh:"רענון",more:"עוד",logout:"יציאה",waiting:"ממתין לכניסה.",allNodes:"כל ה-nodes",events:"אירועים",nodes:"nodes",retention:"שמירה",days:"ימים",limit:"מקסימום",perNode:"אירועים לכל node",loading:"טוען יומן…",loadingMore:"טוען עמוד נוסף…",none:"אין אירועים לפי הסינון שנבחר.",shown:"אירועים מוצגים",tokenRequired:"יש להזין Architect token.",loginFailed:"הכניסה נכשלה",loadFailed:"היומן לא עודכן",moreFailed:"העמוד הבא לא נטען",ended:"הסשן הסתיים.",expired:"הסשן השמור אינו תקף. יש להיכנס שוב.",agentSource:"Agent",controllerSource:"Controller"}
 };
 let lang=localStorage.getItem("citadelLogsLang")||"ru";
 const tr=(k)=>I18N[lang]?.[k]||I18N.ru[k]||k;
 function applyLanguage(next){lang=I18N[next]?next:"ru";localStorage.setItem("citadelLogsLang",lang);document.documentElement.lang=lang;document.documentElement.dir=lang==="he"?"rtl":"ltr";document.querySelectorAll("[data-lang]").forEach(b=>b.classList.toggle("active",b.dataset.lang===lang));document.querySelectorAll("[data-i18n]").forEach(el=>{const v=tr(el.dataset.i18n);if(v)el.textContent=v});document.querySelectorAll("[data-ph]").forEach(el=>el.placeholder=tr(el.dataset.ph));}
 document.querySelectorAll("[data-lang]").forEach(b=>b.addEventListener("click",()=>applyLanguage(b.dataset.lang)));
-const loginCard=document.getElementById("loginCard"),browser=document.getElementById("browser"),tokenInput=document.getElementById("token"),loginButton=document.getElementById("loginButton"),refreshButton=document.getElementById("refreshButton"),moreButton=document.getElementById("moreButton"),logoutButton=document.getElementById("logoutButton"),nodeFilter=document.getElementById("nodeFilter"),levelFilter=document.getElementById("levelFilter"),typeFilter=document.getElementById("typeFilter"),eventsElement=document.getElementById("events"),statsElement=document.getElementById("stats"),statusElement=document.getElementById("status");
+const loginCard=document.getElementById("loginCard"),browser=document.getElementById("browser"),tokenInput=document.getElementById("token"),loginButton=document.getElementById("loginButton"),refreshButton=document.getElementById("refreshButton"),moreButton=document.getElementById("moreButton"),logoutButton=document.getElementById("logoutButton"),nodeFilter=document.getElementById("nodeFilter"),levelFilter=document.getElementById("levelFilter"),typeFilter=document.getElementById("typeFilter"),eventsElement=document.getElementById("events"),statsElement=document.getElementById("stats"),statusElement=document.getElementById("status"),siteClock=document.getElementById("siteClock");
 let architectToken=sessionStorage.getItem("citadel-architect-token")||"",nextCursor=null;
 function setStatus(message,kind=""){statusElement.textContent=message;statusElement.className=`status ${kind}`.trim()}
 function addText(parent,tag,text,className=""){const item=document.createElement(tag);item.textContent=text;if(className)item.className=className;parent.appendChild(item);return item}
 async function api(path){const response=await fetch(path,{headers:{authorization:`Bearer ${architectToken}`},cache:"no-store"});const data=await response.json().catch(()=>({error:"invalid_server_response"}));if(!response.ok)throw new Error(data.error||`HTTP ${response.status}`);return data}
-function queryPath(cursor=null){const params=new URLSearchParams({limit:"50"});if(nodeFilter.value.trim())params.set("node_id",nodeFilter.value.trim());if(levelFilter.value)params.set("level",levelFilter.value);if(typeFilter.value)params.set("event_type",typeFilter.value);if(cursor)params.set("cursor",cursor);return `/api/v1/architect/logs?${params}`}
-function renderEvent(event){const item=document.createElement("div");item.className=`event ${event.level}`;addText(item,"strong",`${event.event_type} · ${event.level}`);addText(item,"div",event.message,"small");addText(item,"div",`${event.node_id} · ${event.created_at}`,"small");if(event.details&&Object.keys(event.details).length)addText(item,"pre",JSON.stringify(event.details,null,2),"details");eventsElement.appendChild(item)}
+function queryPath(cursor=null){const params=new URLSearchParams({limit:"50"});if(nodeFilter.value)params.set("node_id",nodeFilter.value);if(levelFilter.value)params.set("level",levelFilter.value);if(typeFilter.value)params.set("event_type",typeFilter.value);if(cursor)params.set("cursor",cursor);return `/api/v1/architect/logs?${params}`}
+function eventLabel(type){
+  const labels={
+    agent_start:"Agent запущен",agent_stop:"Agent остановлен",node_enrolled:"Нода зарегистрирована",
+    windows_sleep_inhibit:"Сон Windows заблокирован",cycle_error:"Ошибка рабочего цикла",
+    resource_guard:"Защита ресурсов",assignment_rejected_local:"Задание отклонено локально",
+    result_submitted:"Результат миссии отправлен",result_queued:"Результат сохранён в очередь",
+    queued_results_flushed:"Очередь результатов отправлена",command_signature_rejected:"Команда отклонена: неверная подпись",
+    command_completed:"Команда выполнена",command_failed:"Команда завершилась ошибкой",
+    command_failure_ack_failed:"Не удалось подтвердить ошибку команды",agent_updated:"Agent обновлён",
+    agent_update_rolled_back:"Обновление автоматически откатилось",agent_update_healthcheck_passed:"Проверка после обновления пройдена",
+    agent_update_manual_rollback:"Выполнен ручной откат",agent_restart_requested:"Запрошен перезапуск agent",
+    agent_stop_requested:"Запрошена остановка agent",system_reboot_scheduled:"Запланирована перезагрузка ПК",
+    system_shutdown_scheduled:"Запланировано выключение ПК",wake_packet_sent:"Wake-on-LAN packet отправлен"
+  };
+  return labels[type] || String(type||"event").replaceAll("."," → ").replaceAll("_"," ");
+}
+function renderEvent(event){
+  const item=document.createElement("div");item.className=`event ${event.level}`;
+  const head=document.createElement("strong");head.textContent=eventLabel(event.event_type);item.appendChild(head);
+  const source=document.createElement("span");source.className="source";source.textContent=event.source==="controller"?tr("controllerSource"):tr("agentSource");head.appendChild(source);
+  if(event.message&&event.message!==event.event_type)addText(item,"div",event.message,"small");
+  addText(item,"div",`${event.node_id} · ${event.created_at}`,"small");
+  if(event.details&&Object.keys(event.details).length)addText(item,"pre",JSON.stringify(event.details,null,2),"details");
+  eventsElement.appendChild(item)
+}
+
 async function loadStats(){const data=await api("/api/v1/architect/logs/stats");const s=data.stats||{};statsElement.textContent=`${tr("events")}: ${s.event_count||0} · ${tr("nodes")}: ${s.node_count||0} · ${tr("retention")}: ${s.retention_days||7} ${tr("days")} · ${tr("limit")}: ${s.per_node_event_cap||5000} ${tr("perNode")}`}
 async function loadLogs(append=false){setStatus(append?tr("loadingMore"):tr("loading"));const data=await api(queryPath(append?nextCursor:null));if(!append)eventsElement.replaceChildren();for(const event of data.logs||[])renderEvent(event);if(!eventsElement.children.length)addText(eventsElement,"p",tr("none"),"muted");nextCursor=data.next_cursor||null;moreButton.disabled=!nextCursor;setStatus(`${tr("shown")}: ${eventsElement.querySelectorAll(".event").length}.`,"good")}
-async function openBrowser(){await Promise.all([loadStats(),loadLogs(false)]);loginCard.classList.add("hidden");browser.classList.remove("hidden");sessionStorage.setItem("citadel-architect-token",architectToken)}
+function nodeDisplayName(node){return node.node_number?`CITADEL Node ${node.node_number}`:(node.hostname||node.node_id)}
+async function loadNodeOptions(){
+  const selected=nodeFilter.value;
+  const data=await api("/api/v1/architect/overview");
+  nodeFilter.replaceChildren();
+  const all=document.createElement("option");all.value="";all.textContent=tr("allNodes");nodeFilter.appendChild(all);
+  for(const node of data.nodes||[]){
+    const option=document.createElement("option");
+    option.value=node.node_id;
+    option.textContent=`${nodeDisplayName(node)} · ${node.hostname||"—"} · ${node.node_id} · ${node.status}`;
+    nodeFilter.appendChild(option);
+  }
+  if([...nodeFilter.options].some((option)=>option.value===selected))nodeFilter.value=selected;
+}
+function updateSiteClock(){
+  const locale=lang==="he"?"he-IL":lang==="en"?"en-GB":"ru-RU";
+  siteClock.textContent=new Intl.DateTimeFormat(locale,{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}).format(new Date());
+}
+async function openBrowser(){await Promise.all([loadNodeOptions(),loadStats(),loadLogs(false)]);loginCard.classList.add("hidden");browser.classList.remove("hidden");sessionStorage.setItem("citadel-architect-token",architectToken)}
 function logout(message=tr("ended")){architectToken="";nextCursor=null;sessionStorage.removeItem("citadel-architect-token");browser.classList.add("hidden");loginCard.classList.remove("hidden");tokenInput.value="";eventsElement.replaceChildren();setStatus(message)}
 loginButton.addEventListener("click",async()=>{const token=tokenInput.value.trim();if(!token)return setStatus(tr("tokenRequired"),"bad");architectToken=token;loginButton.disabled=true;try{await openBrowser();tokenInput.value=""}catch(error){logout(`${tr("loginFailed")}: ${error.message}`);statusElement.classList.add("bad")}finally{loginButton.disabled=false}});
 refreshButton.addEventListener("click",async()=>{refreshButton.disabled=true;try{await Promise.all([loadStats(),loadLogs(false)])}catch(error){setStatus(`${tr("loadFailed")}: ${error.message}`,"bad")}finally{refreshButton.disabled=false}});
 moreButton.addEventListener("click",async()=>{if(!nextCursor)return;moreButton.disabled=true;try{await loadLogs(true)}catch(error){setStatus(`${tr("moreFailed")}: ${error.message}`,"bad")}finally{moreButton.disabled=!nextCursor}});
+nodeFilter.addEventListener("change",()=>loadLogs(false).catch(error=>setStatus(`${tr("loadFailed")}: ${error.message}`,"bad")));
+levelFilter.addEventListener("change",()=>loadLogs(false).catch(error=>setStatus(`${tr("loadFailed")}: ${error.message}`,"bad")));
+typeFilter.addEventListener("change",()=>loadLogs(false).catch(error=>setStatus(`${tr("loadFailed")}: ${error.message}`,"bad")));
 logoutButton.addEventListener("click",()=>logout());
-applyLanguage(lang);
+applyLanguage(lang);updateSiteClock();setInterval(updateSiteClock,15000);
 if(architectToken)openBrowser().catch(()=>logout(tr("expired")));
 </script>
 </body>
