@@ -1,3 +1,5 @@
+import { getProjectExperienceRegistry } from "./experience/registry.js";
+
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store",
@@ -1542,6 +1544,11 @@ async function authenticateArchitect(request, env) {
   }
 }
 
+async function architectExperience(request, env) {
+  await authenticateArchitect(request, env);
+  return json({ ok: true, ...getProjectExperienceRegistry() });
+}
+
 async function architectOverview(request, env) {
   await authenticateArchitect(request, env);
   await Promise.all([backfillLegacyReports(env), ensureSessionStorage(env), ensureAutoEnrollmentStorage(env)]);
@@ -1871,6 +1878,12 @@ async function handleApi(request, env, url) {
         database: "unavailable"
       }, 503);
     }
+  }
+
+  if (url.pathname === "/api/v1/architect/experience") {
+    return request.method === "GET"
+      ? architectExperience(request, env)
+      : methodNotAllowed(["GET"]);
   }
 
   if (url.pathname === "/api/v1/architect/overview") {

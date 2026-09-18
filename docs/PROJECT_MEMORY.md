@@ -340,5 +340,33 @@ Verification:
 
 - code/diff review completed;
 - sanitized database seed records all 650 structured runs and observed average/median timing summaries;
-- PR #51 CI run 137 passed all gates: Linux validation, Cloudflare build/check, Bandit, Windows agent validation and agent-package integrity;
+- PR #51 CI run 138 passed all gates: Linux validation, Cloudflare build/check, Bandit, Windows agent validation and agent-package integrity;
 - PR #51 remains draft for deliberate review; `main` is unchanged.
+
+
+## 2026-09-18 — Project Experience Registry in Architect
+
+Architect requested:
+
+- turn the reviewed historical reports into durable project experience instead of leaving them as a dead archive;
+- keep raw logs outside the live product;
+- make the lessons visible inside Architect.
+
+Implemented decision:
+
+- Add a sanitized, read-only Project Experience Registry at `src/experience/registry.js`.
+- Keep the detailed historical SQL seed separate from operational D1.
+- Expose the registry only through authenticated `GET /api/v1/architect/experience`.
+- Add an “Опыт проекта” section to the Architect console showing the observed problem, engineering decision, current replacement/guardrail, evidence summary and repository references.
+- Preserve raw logs, archived binaries, old configs and credential material outside the runtime registry.
+- Add CI checks for registry structure, unique IDs, credential-material exclusion, API wiring and Architect UI wiring.
+
+Initial registry:
+
+- 12 reviewed records from the CRE v19.2.2 stage;
+- includes security, orchestration, resource control, provenance, end-to-end testing, safe defaults, integrity, storage decoupling, modular architecture, evidence discipline, recommend-only model management and reuse of current EWS resilience mechanisms.
+
+Release policy:
+
+- Remain on draft PR #51 until the updated branch passes CI.
+- Do not merge or deploy this increment to `main` without explicit Architect approval.

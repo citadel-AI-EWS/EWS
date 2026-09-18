@@ -132,6 +132,16 @@
       </section>
 
       <section class="card">
+        <div class="section-head">
+          <h2>Опыт проекта</h2>
+          <button id="refreshExperienceButton" class="secondary" type="button">Обновить</button>
+        </div>
+        <p class="small">Проверенные уроки старых версий: что произошло, что мы решили и каким механизмом EWS это заменено. Сырые логи и секреты сюда не попадают.</p>
+        <div id="experienceMeta" class="status">История решений загружается…</div>
+        <div id="experienceList"></div>
+      </section>
+
+      <section class="card">
         <h2>Последние события аудита</h2>
         <div id="auditList"></div>
       </section>
@@ -159,6 +169,8 @@
     const saveSessionButton = document.getElementById("saveSessionButton");
     const sessionName = document.getElementById("sessionName");
     const storageUsage = document.getElementById("storageUsage");
+    const refreshExperienceButton = document.getElementById("refreshExperienceButton");
+    const experienceMeta = document.getElementById("experienceMeta");
     const nodeSelect = document.getElementById("nodeSelect");
     const controlNodeSelect = document.getElementById("controlNodeSelect");
     const pauseButton = document.getElementById("pauseButton");
@@ -347,6 +359,7 @@
       sessionNextOffset = sessions.next_offset ?? null;
       loadMoreSessionsButton.classList.toggle("hidden", sessionNextOffset === null);
       renderStorageUsage(storage.usage || {});
+      renderExperience(experience);
       document.getElementById("sessionCount").textContent = storage.usage?.session_count || 0;
       return sessions.sessions || [];
     }
@@ -479,6 +492,35 @@
       }
     }
 
+    function renderExperience(registry) {
+      const list = document.getElementById("experienceList");
+      list.replaceChildren();
+      const summary = registry.summary || {};
+      const statusCounts = summary.by_status || {};
+      experienceMeta.textContent = [
+        `Версия: ${registry.registry_version || "unknown"}`,
+        `Записей: ${summary.entries || 0}`,
+        `Принято: ${statusCounts.accepted || 0} · подтверждено: ${statusCounts.confirmed || 0} · ограничения: ${statusCounts.guardrail || 0}`,
+        `Уроки: ${statusCounts.lesson || 0} · отклонено: ${statusCounts.rejected || 0}`,
+        `Исторические циклы: ${registry.legacy_summary?.structured_runs || 0} · неуспешные: ${registry.legacy_summary?.structured_failures || 0}`,
+        "Хранилище: отдельный статический реестр; operational D1 не используется."
+      ].join("\n");
+      experienceMeta.className = "status good";
+
+      for (const entry of registry.entries || []) {
+        const item = document.createElement("div");
+        item.className = `item ${["accepted", "confirmed"].includes(entry.status) ? "ok" : "warn"}`;
+        addText(item, "strong", `${entry.id} · ${entry.area} · ${entry.status}`);
+        addText(item, "div", entry.problem);
+        addText(item, "div", `Решение: ${entry.decision}`, "small");
+        addText(item, "div", `Сейчас: ${entry.replacement}`, "small");
+        addText(item, "div", `Основание: ${entry.evidence}`, "small");
+        addText(item, "div", `Файлы: ${(entry.artifact_refs || []).join(", ")}`, "small");
+        list.appendChild(item);
+      }
+      if (!(registry.entries || []).length) addText(list, "p", "Проверенных записей опыта пока нет.", "muted");
+    }
+
     function renderAudit(events) {
       const list = document.getElementById("auditList");
       list.replaceChildren();
@@ -495,11 +537,12 @@
 
     async function loadDashboard() {
       setStatus("Загружаю данные…");
-      const [data, reports, sessions, storage] = await Promise.all([
+      const [data, reports, sessions, storage, experience] = await Promise.all([
         api("/api/v1/architect/overview"),
         api("/api/v1/architect/reports?limit=50&offset=0"),
         api("/api/v1/architect/sessions?limit=30&offset=0"),
-        api("/api/v1/architect/storage")
+        api("/api/v1/architect/storage"),
+        api("/api/v1/architect/experience")
       ]);
       document.getElementById("nodeCount").textContent = data.counts.nodes;
       document.getElementById("onlineCount").textContent = data.counts.online_nodes;
@@ -566,6 +609,19 @@
       try { await loadDashboard(); }
       catch (error) { setStatus(`Обновление не выполнено: ${error.message}`, "bad"); }
       finally { refreshButton.disabled = false; }
+    });
+
+    refreshExperienceButton.addEventListener("click", async () => {
+      refreshExperienceButton.disabled = true;
+      try {
+        const experience = await api("/api/v1/architect/experience");
+        renderExperience(experience);
+        setStatus("История решений обновлена.", "good");
+      } catch (error) {
+        setStatus(`История решений не обновлена: ${error.message}`, "bad");
+      } finally {
+        refreshExperienceButton.disabled = false;
+      }
     });
 
     refreshReportsButton.addEventListener("click", async () => {

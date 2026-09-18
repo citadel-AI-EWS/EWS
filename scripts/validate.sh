@@ -63,6 +63,21 @@ for forbidden in (
 if "SSH target configured locally; tunnel reachability is not yet verified" not in hub:
     raise SystemExit("Hub must not claim SSH reachability before Tunnel verification")
 
+architect = Path("architect.html").read_text(encoding="utf-8")
+for required in (
+    "/api/v1/architect/experience",
+    'id="experienceMeta"',
+    'id="experienceList"',
+    'id="refreshExperienceButton"',
+    "Опыт проекта",
+):
+    if required not in architect:
+        raise SystemExit(f"Project Experience Registry missing from Architect UI: {required}")
+
+index_source = Path("src/index.js").read_text(encoding="utf-8")
+if "/api/v1/architect/experience" not in index_source:
+    raise SystemExit("Project Experience Registry API route missing")
+
 setup = Path("agent/setup_windows.ps1").read_text(encoding="utf-8").lower()
 installer = Path("agent/Install Windows Node.cmd").read_text(encoding="utf-8").lower()
 for forbidden in (
@@ -88,6 +103,7 @@ node --check /tmp/ews-hub.js
 node --check src/index.js
 node --check src/worker.js
 node --check src/experience/policy.js
+node --check src/experience/registry.js
 node --check src/presence.js
 node --check src/telemetry/common.js
 node --check src/telemetry/schema.js
@@ -104,6 +120,7 @@ node tests/presence-storage.mjs
 node tests/update-integrity.mjs
 node tests/review-backlog-guards.mjs
 node tests/legacy-experience.mjs
+node tests/experience-registry.mjs
 
 python - <<'PY'
 from pathlib import Path
@@ -172,8 +189,10 @@ if finding_count < 10 or feature_count < 15 or run_count != 650:
 
 for source in (
     "src/experience/policy.js",
+    "src/experience/registry.js",
     "knowledge/legacy_cre_experience.sql",
     "docs/LEGACY_CRE_REVIEW_2026-09-18.md",
+    "docs/PROJECT_EXPERIENCE_REGISTRY.md",
 ):
     text = Path(source).read_text(encoding="utf-8")
     for forbidden in ("-----BEGIN PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----"):
