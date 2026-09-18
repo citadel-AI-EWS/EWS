@@ -95,8 +95,13 @@ assert.match(index, /AS planned_role/);
 assert.match(architect, /Роль: \$\{node\.planned_role \|\| "не назначена"\}/);
 assert.doesNotMatch(index, /audit_events: auditQuery/);
 assert.match(agent, /"restart", "stop", "rollback"/);
-assert.match(agent, /elif command_type == "stop":/);
+for (const command of ["pause", "resume", "update", "restart", "stop", "rollback"]) {
+  assert.match(agent, new RegExp(`command_type == "${command}"`), `agent handler missing: ${command}`);
+}
+assert.match(agent, /command_type in \{"system_reboot", "system_shutdown"\}/);
+assert.match(agent, /schedule_system_power_action/);
 assert.match(agent, /agent_stop_requested/);
 assert.doesNotMatch(agent, /command_type == "shell"/);
+assert.doesNotMatch(architect, /power[_ -]?on|wake[_ -]?on[_ -]?lan/i);
 
 console.log("Architect UX regression guards: PASS");
