@@ -118,6 +118,20 @@ trap cleanup_validation_files EXIT
 scripts/package_controller.sh "$artifact"
 unzip -t "$artifact"
 
+relative_pkg_root="$(mktemp -d)"
+mkdir -p "$relative_pkg_root/build"
+(
+  cd "$relative_pkg_root"
+  "$ROOT/scripts/package_controller.sh" build/controller.zip
+  test -s build/controller.zip
+)
+ln -s "$relative_pkg_root/missing.zip" "$relative_pkg_root/dangling.zip"
+"$ROOT/scripts/package_controller.sh" "$relative_pkg_root/dangling.zip"
+test ! -L "$relative_pkg_root/dangling.zip"
+test -s "$relative_pkg_root/dangling.zip"
+find "$relative_pkg_root" -mindepth 1 -delete
+rmdir "$relative_pkg_root"
+
 site_dir="$(mktemp -d)"
 scripts/build_site.sh "$site_dir"
 test -s "$site_dir/index.html"
@@ -127,5 +141,25 @@ test -s "$site_dir/_headers"
 test -s "$site_dir/architect/logs/index.html"
 find "$site_dir" -mindepth 1 -delete
 rmdir "$site_dir"
+
+site_parent="$(mktemp -d)"
+site_target="$site_parent/target"
+site_link="$site_parent/link"
+mkdir -p "$site_target"
+printf 'keep\n' > "$site_target/sentinel"
+ln -s "$site_target" "$site_link"
+if scripts/build_site.sh "$site_link"; then
+  echo "build_site.sh accepted a symlinked output directory" >&2
+  exit 1
+fi
+test -s "$site_target/sentinel"
+(
+  cd "$site_parent"
+  scripts_path="$ROOT/scripts/build_site.sh"
+  "$scripts_path" ./relative-site
+  test -s ./relative-site/index.html
+)
+find "$site_parent" -mindepth 1 -delete
+rmdir "$site_parent"
 
 git diff --check
