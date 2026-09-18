@@ -7,6 +7,7 @@ const nodeTest = fs.readFileSync("node-test.html", "utf8");
 const agentV1 = fs.readFileSync("agent/citadel_node_v1.py", "utf8");
 const agentV2 = fs.readFileSync("agent/citadel_node_v2.py", "utf8");
 const telemetry = fs.readFileSync("src/telemetry/normalize.js", "utf8");
+const buildSite = fs.readFileSync("scripts/build_site.sh", "utf8");
 need(index.includes("auto_enrollment_windows"), "global auto-enrollment window missing");
 need(index.includes("AUTO_ENROLL_MAX_NEW_PER_HOUR"), "enrollment hourly setting missing");
 need(index.includes("AUTO_ENROLL_MAX_NODES"), "enrollment node cap setting missing");
@@ -40,5 +41,7 @@ need(agentV1.includes('"restart", "stop", "rollback"'), "non-revoking stop comma
 need(index.includes('"system_reboot", "system_shutdown"'), "restricted power commands missing from Controller allow-list");
 need(agentV1.includes('"system_reboot", "system_shutdown"'), "restricted power commands missing from node allow-list");
 need(!agentV1.includes('"shell" in SUPPORTED_COMMANDS'), "arbitrary shell command registered");
+need(!buildSite.includes("execute-api.*.amazonaws.com"), "invalid CSP API Gateway wildcard returned");
+need(buildSite.includes("connect-src 'self';"), "published CSP must keep same-origin connect-src");
 need(index.includes('version: "0.3.5"'), "Controller release not bumped");
 console.log("Review backlog guards: PASS");
