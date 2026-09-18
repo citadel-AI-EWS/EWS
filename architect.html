@@ -210,12 +210,21 @@
     const pauseButton = document.getElementById("pauseButton");
     const resumeButton = document.getElementById("resumeButton");
     const updateButton = document.getElementById("updateButton");
+    const updateAllAgentsButton = document.getElementById("updateAllAgentsButton");
+    const updateAllStatus = document.getElementById("updateAllStatus");
     const restartButton = document.getElementById("restartButton");
     const stopButton = document.getElementById("stopButton");
     const rollbackButton = document.getElementById("rollbackButton");
     const rebootButton = document.getElementById("rebootButton");
     const shutdownButton = document.getElementById("shutdownButton");
     const disconnectButton = document.getElementById("disconnectButton");
+    const projectTitle = document.getElementById("projectTitle");
+    const projectTaskText = document.getElementById("projectTaskText");
+    const checkProjectButton = document.getElementById("checkProjectButton");
+    const createProjectButton = document.getElementById("createProjectButton");
+    const projectChecks = document.getElementById("projectChecks");
+    const projectResult = document.getElementById("projectResult");
+    const projectsList = document.getElementById("projectsList");
     const missionType = document.getElementById("missionType");
     const missionTitle = document.getElementById("missionTitle");
     const missionTask = document.getElementById("missionTask");
@@ -234,6 +243,8 @@
     let currentPresence = [];
     let currentReleaseVersion = "";
     let currentReports = [];
+    let currentProjectCheck = null;
+    let currentProjects = [];
     let activeReportId = null;
     let reportNextOffset = null;
     let sessionNextOffset = null;
@@ -323,6 +334,40 @@
           expires_in_hours: expiresInHours
         })
       });
+    }
+
+    function renderProjectCheckResult(data) {
+      const checks = data?.checks || {};
+      const order = [
+        ["source_allowlisting", "1. Source allowlisting"],
+        ["validation", "2. Validation"],
+        ["deduplication", "3. Deduplication"],
+        ["safety_classification", "4. Safety classification"]
+      ];
+      projectChecks.textContent = order.map(([key, label]) => {
+        const item = checks[key] || {};
+        const mark = item.passed ? "PASS" : "STOP";
+        const extra = item.classification ? ` · ${item.classification}` : "";
+        return `${label}: ${mark} · ${item.detail || "нет результата"}${extra}`;
+      }).join("\n");
+      const ready = Boolean(data?.ready_for_architect_approval);
+      projectChecks.className = `status ${ready ? "good" : "bad"}`;
+      createProjectButton.disabled = !ready;
+      currentProjectCheck = ready ? data : null;
+    }
+
+    function renderProjects(projects) {
+      currentProjects = projects || [];
+      projectsList.replaceChildren();
+      for (const project of currentProjects) {
+        const item = document.createElement("div");
+        item.className = `item ${project.status === "completed" ? "ok" : "warn"}`;
+        addText(item, "strong", `${project.title} — ${project.status}`);
+        addText(item, "div", `Hub workers: ${project.worker_count} · Project ID: ${project.project_id}`, "small");
+        addText(item, "div", project.created_at, "small");
+        projectsList.appendChild(item);
+      }
+      if (!currentProjects.length) addText(projectsList, "p", "Проектов пока нет.", "muted");
     }
 
     function renderNodes(nodes) {
@@ -633,13 +678,14 @@
 
     async function loadDashboard() {
       setStatus("Загружаю данные…");
-      const [data, reports, sessions, storage, presence, release] = await Promise.all([
+      const [data, reports, sessions, storage, presence, release, projects] = await Promise.all([
         api("/api/v1/architect/overview"),
         api("/api/v1/architect/reports?limit=50&offset=0"),
         api("/api/v1/architect/sessions?limit=30&offset=0"),
         api("/api/v1/architect/storage"),
         api("/api/v1/architect/presence"),
-        api("/api/v1/architect/release")
+        api("/api/v1/architect/release"),
+        api("/api/v1/architect/projects")
       ]);
       currentPresence = presence.presence || [];
       currentReleaseVersion = release.release?.version || "";
@@ -657,6 +703,7 @@
       renderCommands(data.commands || []);
       renderAudit(data.audit_events);
       renderReports(reports.reports || []);
+      renderProjects(projects.projects || []);
       reportNextOffset = reports.next_offset ?? null;
       loadMoreReportsButton.classList.toggle("hidden", reportNextOffset === null);
       renderSessions(sessions.sessions || []);
@@ -840,6 +887,85 @@
     });
     pauseButton.addEventListener("click", () => sendControl("pause"));
     resumeButton.addEventListener("click", () => sendControl("resume"));
+    updateAllAgentsButton.addEventListener("click", async () => {
+      const target = currentReleaseVersion || "текущую версию";
+      if (!confirm(`Обновить ВСЕ зарегистрированные агенты до ${target}? Каждый узел получит подписанное обновление при следующем опросе Controller.`)) return;
+      updateAllAgentsButton.disabled = true;
+      updateAllStatus.textContent = "Запускаю массовый rollout…";
+      updateAllStatus.className = "status";
+      try {
+        const data = await api("/api/v1/architect/update-all", { method: "POST" });
+        const rollout = data.rollout;
+        updateAllStatus.textContent = `Rollout запущен → ${rollout.target_version}. Зарегистрировано: ${rollout.registered_nodes}; ожидают обновление: ${rollout.nodes_waiting_for_update}. Агенты получат команду автоматически при следующем poll.`;
+        updateAllStatus.className = "status good";
+      } catch (error) {
+        updateAllStatus.textContent = `Массовое обновление не запущено: ${error.message}`;
+        updateAllStatus.className = "status bad";
+      } finally {
+        updateAllAgentsButton.disabled = false;
+      }
+    });
+
+    checkProjectButton.addEventListener("click", async () => {
+      const title = projectTitle.value.trim();
+      const taskText = projectTaskText.value.trim();
+      if (!title || !taskText) return setStatus("Введите название проекта и текст задания.", "bad");
+      checkProjectButton.disabled = true;
+      createProjectButton.disabled = true;
+      currentProjectCheck = null;
+      projectChecks.textContent = "Выполняю четыре проверки…";
+      projectChecks.className = "status";
+      try {
+        const data = await api("/api/v1/architect/projects/check", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title, task_text: taskText, source_type: "architect_manual" })
+        });
+        renderProjectCheckResult(data);
+        setStatus(data.ready_for_architect_approval
+          ? "Четыре проверки пройдены. Теперь Architect может создать проект."
+          : "Проект остановлен одной из четырёх проверок.",
+          data.ready_for_architect_approval ? "good" : "bad");
+      } catch (error) {
+        projectChecks.textContent = `Проверка не выполнена: ${error.message}`;
+        projectChecks.className = "status bad";
+      } finally {
+        checkProjectButton.disabled = false;
+      }
+    });
+
+    createProjectButton.addEventListener("click", async () => {
+      const title = projectTitle.value.trim();
+      const taskText = projectTaskText.value.trim();
+      if (!currentProjectCheck) return setStatus("Сначала пройдите четыре проверки.", "bad");
+      createProjectButton.disabled = true;
+      projectResult.textContent = "Architect подтвердил проект. Hub строит рабочие блоки и выбирает узлы…";
+      projectResult.className = "status";
+      try {
+        const data = await api("/api/v1/architect/projects", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title, task_text: taskText, source_type: "architect_manual" })
+        });
+        const p = data.project;
+        const assignments = p.work_items.map((item) => `#${item.sequence_no} → ${item.hostname} (${item.node_id})`).join("\n");
+        projectResult.textContent = [
+          `Project ID: ${p.project_id}`,
+          `Hub выбрал узлов: ${p.worker_count}`,
+          `Рабочих блоков: ${p.work_item_count}`,
+          assignments,
+          "План распределения записан в Controller."
+        ].join("\n");
+        projectResult.className = "status good";
+        currentProjectCheck = null;
+        createProjectButton.disabled = true;
+        await loadDashboard();
+      } catch (error) {
+        projectResult.textContent = `Проект не создан: ${error.message}`;
+        projectResult.className = "status bad";
+      }
+    });
+
     updateButton.addEventListener("click", () => sendControl("update"));
     restartButton.addEventListener("click", () => sendControl("restart"));
     stopButton.addEventListener("click", () => {
