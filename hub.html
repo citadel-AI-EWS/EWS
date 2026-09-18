@@ -322,8 +322,10 @@
       const body={command_type:type};
       if(type==="lmstudio_model_get"||type==="lmstudio_model_load"){
         const model=$("lmstudioModel").value.trim(); if(!model)return toast("LM Studio","Введите или выберите модель","bad");
-        body.model=model; body.source=lmstudioModelSource;
-        const quant=$("lmstudioQuant").value.trim(); if(quant)body.quantization=quant;
+        body.model=model;
+        const quant=$("lmstudioQuant").value.trim();
+        body.source=quant?"huggingface":lmstudioModelSource;
+        if(quant)body.quantization=quant;
         if(type==="lmstudio_model_load")body.settings=lmLoadSettings();
       }
       const labels={lmstudio_install:"install",lmstudio_probe:"probe",lmstudio_model_get:"download model",lmstudio_model_load:"load model"};
