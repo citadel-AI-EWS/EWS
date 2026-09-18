@@ -22,9 +22,10 @@ const ALLOWED_REPORT_SENSITIVITIES = new Set([
 ]);
 const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
-const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "rollback", "uninstall"]);
+const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "rollback", "uninstall", "system_reboot", "system_shutdown"]);
+const POWER_COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.3",
+  version: "0.3.4",
   files: [
     {
       path: "citadel_node_v1.py",
@@ -1652,6 +1653,13 @@ async function architectCreateCommand(request, env, nodeId) {
   if (!ALLOWED_ARCHITECT_COMMAND_TYPES.has(commandType)) {
     throw new ApiError(400, "command_type_not_allowed");
   }
+  const requiredPowerConfirmation = POWER_COMMAND_CONFIRMATIONS[commandType];
+  if (requiredPowerConfirmation) {
+    const confirmation = typeof body.confirmation === "string" ? body.confirmation.trim() : "";
+    if (confirmation !== requiredPowerConfirmation) {
+      throw new ApiError(400, "power_confirmation_required");
+    }
+  }
 
   const node = await env.DB.prepare(
     "SELECT node_id, status FROM nodes WHERE node_id = ?"
@@ -1829,7 +1837,7 @@ function apiDescription() {
       "advisory_analysis",
       "file_hashing"
     ],
-    command_types: ["pause", "resume", "update", "uninstall"],
+    command_types: ["pause", "resume", "update", "restart", "rollback", "uninstall", "system_reboot", "system_shutdown"],
     arbitrary_remote_execution: false
   });
 }
