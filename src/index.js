@@ -1238,7 +1238,7 @@ async function architectListSessions(request, env, url) {
 
 async function architectCreateSession(request, env) {
   await authenticateArchitect(request, env);
-  await Promise.all([backfillLegacyReports(env), ensureSessionStorage(env)]);
+  await Promise.all([ensureReportStorage(env), ensureSessionStorage(env)]);
   const bodyText = await readBodyText(request, MAX_SESSION_BODY_BYTES);
   const body = parseJsonObject(bodyText);
   const name = requireString(body.name, "session_name", 120);
@@ -1391,7 +1391,7 @@ async function architectDeleteSession(request, env, sessionId) {
 
 async function architectStorageUsage(request, env) {
   await authenticateArchitect(request, env);
-  await Promise.all([ensureReportStorage(env), ensureSessionStorage(env)]);
+  await Promise.all([backfillLegacyReports(env), ensureSessionStorage(env)]);
   const usage = await env.DB.prepare(
     "SELECT " +
     "(SELECT COUNT(*) FROM agent_reports) AS report_count, " +
