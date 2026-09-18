@@ -3,6 +3,10 @@ import { json } from "./telemetry/common.js";
 import { isTelemetryPath, handleTelemetryRequest } from "./telemetry/router.js";
 import { ensureTelemetryStorage } from "./telemetry/schema.js";
 import {
+  ENGINEERING_EXPERIENCE_VERSION,
+  validateEngineeringExperience
+} from "./experience/policy.js";
+import {
   ensurePresenceStorage,
   handlePresenceRequest,
   isPresencePath,
@@ -21,6 +25,7 @@ export default {
     }
 
     if (url.pathname === "/api/health") {
+      const engineeringExperience = validateEngineeringExperience();
       const [telemetryStorage, presenceStorage] = await Promise.all([
         ensureTelemetryStorage(env)
           .then(() => "ready")
@@ -38,9 +43,12 @@ export default {
       }
       body.telemetry_storage = telemetryStorage;
       body.presence_storage = presenceStorage;
+      body.engineering_experience = engineeringExperience.ok ? "ready" : "invalid";
+      body.engineering_experience_version = ENGINEERING_EXPERIENCE_VERSION;
       body.ok = Boolean(body.ok) &&
         telemetryStorage === "ready" &&
-        presenceStorage === "ready";
+        presenceStorage === "ready" &&
+        engineeringExperience.ok;
       return json(body, response.status);
     }
 
