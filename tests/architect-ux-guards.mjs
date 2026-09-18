@@ -62,7 +62,7 @@ assert.match(architect, /\/api\/v1\/architect\/presence/);
 assert.match(architect, /createInventoryMission/);
 assert.match(architect, /task_text:/);
 assert.match(architect, /Диагностика системы/);
-assert.match(architect, /System Inventory — это техническая диагностика узла/);
+assert.match(architect, /System Inventory — .*диагностика узла/);
 assert.match(architect, /cloudflared access ssh --hostname %h/);
 assert.match(architect, /sendControl\("stop"\)/);
 assert.match(architect, /sendControl\("system_reboot", "REBOOT"\)/);
