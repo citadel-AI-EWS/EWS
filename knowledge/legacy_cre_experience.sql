@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS legacy_run_summary (
   failures INTEGER NOT NULL,
   empty_model_output INTEGER NOT NULL,
   auth_401 INTEGER NOT NULL,
+  avg_seconds REAL NOT NULL,
   median_seconds REAL NOT NULL
 );
 
@@ -45,14 +46,14 @@ INSERT OR REPLACE INTO legacy_findings VALUES
 ('F010','prompting','high','Evidence discipline was good but prompts remained heavy','Evidence IDs and classifications existed, yet LM Studio logs show multi-thousand-token prompt processing on constrained hardware.','Keep provenance validation but tighten dynamic budgets.','PORT_WITH_TIGHTER_LIMITS');
 
 INSERT OR REPLACE INTO legacy_run_summary VALUES
-('2026-09-09',62,0,62,62,0,0.0),
-('2026-09-10',107,0,107,107,0,0.0),
-('2026-09-11',105,0,105,105,0,0.0),
-('2026-09-12',105,0,105,105,0,0.0),
-('2026-09-13',104,0,104,104,0,0.0),
-('2026-09-14',105,0,105,105,0,0.0),
-('2026-09-15',53,0,53,53,0,0.0),
-('2026-09-17',9,0,9,8,1,735.712);
+('2026-09-09',62,0,62,62,0,634.390,630.444),
+('2026-09-10',107,0,107,107,0,629.298,637.417),
+('2026-09-11',105,0,105,105,0,635.686,642.297),
+('2026-09-12',105,0,105,105,0,642.865,643.600),
+('2026-09-13',104,0,104,104,0,640.779,643.786),
+('2026-09-14',105,0,105,105,0,638.925,637.436),
+('2026-09-15',53,0,53,53,0,631.532,631.692),
+('2026-09-17',9,0,9,8,1,635.042,735.712);
 
 INSERT OR REPLACE INTO legacy_reusable_features VALUES
 ('atomic state writes','PORT','agent/local state','Avoid torn state after crash.'),
