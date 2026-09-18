@@ -89,6 +89,8 @@ assert.match(index, /"programmer"/);
 assert.match(index, /"mathematician"/);
 assert.match(index, /role_name TEXT NOT NULL DEFAULT 'planner'/);
 assert.match(index, /architectWorkRoles/);
+assert.match(index, /AS planned_role/);
+assert.match(architect, /Роль: \$\{node\.planned_role \|\| "не назначена"\}/);
 assert.doesNotMatch(index, /audit_events: auditQuery/);
 assert.match(agent, /"restart", "stop", "rollback"/);
 assert.match(agent, /elif command_type == "stop":/);
