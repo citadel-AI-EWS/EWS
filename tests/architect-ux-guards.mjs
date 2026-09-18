@@ -42,7 +42,11 @@ for (const id of [
   "projectRolePlan",
   "workRoles",
   "missionPanel",
-  "missionNodeState"
+  "missionNodeState",
+  "wakeButton",
+  "wakeState",
+  "updateAgentState",
+  "siteClock"
 ]) {
   assert.match(architect, new RegExp(`id="${id}"`), `Architect control missing: ${id}`);
 }
@@ -100,9 +104,17 @@ for (const command of ["pause", "resume", "update", "restart", "stop", "rollback
   assert.match(agent, new RegExp(`command_type == "${command}"`), `agent handler missing: ${command}`);
 }
 assert.match(agent, /command_type in \{"system_reboot", "system_shutdown"\}/);
+assert.match(agent, /wake_peer/);
 assert.match(agent, /schedule_system_power_action/);
 assert.match(agent, /agent_stop_requested/);
 assert.doesNotMatch(agent, /command_type == "shell"/);
-assert.doesNotMatch(architect, /power[_ -]?on|wake[_ -]?on[_ -]?lan/i);
+assert.match(architect, /\/api\/v1\/architect\/nodes\/\$\{encodeURIComponent\(node\.node_id\)\}\/wake/);
+assert.match(index, /architectWakeNode/);
+assert.match(index, /wake_peer/);
+assert.match(index, /node_network_state/);
+assert.match(agent, /command_type == "wake_peer"/);
+assert.match(agent, /send_wake_packet/);
+assert.match(agent, /mac_addresses/);
+assert.doesNotMatch(agent, /command_type == "shell"/);
 
 console.log("Architect UX regression guards: PASS");
