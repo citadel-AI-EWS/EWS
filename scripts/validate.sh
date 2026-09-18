@@ -53,6 +53,11 @@ for required in (
     '"lmstudio_model_get"',
     '"lmstudio_model_load"',
     "agent/lmstudio",
+    "\"lmstudio_probe\"",
+    "\"hybrid_query\"",
+    'id="hybridPanel"',
+    'id="lmstudioProgress"',
+    "/api/v1/architect/models/search",
 ):
     if required not in hub:
         raise SystemExit(f"required real Hub capability missing: {required}")
