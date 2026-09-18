@@ -377,3 +377,29 @@ Operator requirements:
 - Architect is represented separately as a human approval gate, not as a machine worker.
 - Every project work item now persists `role_name`; deterministic classification assigns a primary specialization before node allocation.
 - Current agent capability reporting only exposes real executable mission handlers (currently `system_inventory`). Therefore role assignment is project metadata/planning and must not be misrepresented as capability-aware execution until worker capabilities are actually implemented.
+
+## 2026-09-18 — LM Studio / llmster per-node control
+
+Architect requirement:
+
+- A managed remote node must be able to install LM Studio from Hub without opening a general remote shell.
+- The reviewed CITADEL helper installers live in the project GitHub repository under `agent/lmstudio/`.
+- On remote/server nodes the runtime is LM Studio headless (`llmster`) with the `lms` CLI.
+- Installation, model download, and model load are separate signed allowlist commands.
+- The node accepts only a reviewed GitHub helper with an exact path and SHA-256; the helper fetches the official upstream installer only from `lmstudio.ai`.
+- Model identifiers are validated as data and are passed only as fixed argv to `lms`; model text is never executed as shell input.
+- When LM Studio is selected for a node, Hub must immediately show a persistent floating per-node control panel with:
+  - LM Studio installation state;
+  - a link to the reviewed installer directory in GitHub;
+  - a language-model selector;
+  - download-model control;
+  - load-model control;
+  - the active/loaded model status.
+- The floating panel remains associated with the selected node while live Controller data refreshes.
+- Initial curated model presets are only convenience choices; Architect may enter another valid LM Studio model identifier.
+
+Release decision:
+
+- Agent release 0.3.7 introduces bounded signed commands `lmstudio_install`, `lmstudio_model_get`, and `lmstudio_model_load`.
+- Arbitrary remote command execution remains prohibited.
+
