@@ -1000,6 +1000,14 @@ def self_test() -> int:
             "unapproved command accepted",
         )
         require_test(
+            {"system_reboot", "system_shutdown"}.issubset(SUPPORTED_COMMANDS),
+            "restricted power commands missing",
+        )
+        require_test(
+            "shell" not in SUPPORTED_COMMANDS,
+            "arbitrary shell command registered",
+        )
+        require_test(
             set(HANDLERS) == {"system_inventory"},
             "unexpected handler registered",
         )
