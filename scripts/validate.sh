@@ -26,7 +26,7 @@ for source, target in (
     ids = re.findall(r'\bid="([^"]+)"', html)
     if len(ids) != len(set(ids)):
         raise SystemExit(f"duplicate HTML id in {source}")
-    references = set(re.findall(r'getElementById\("([^"]+)"\)', match.group(1)))
+    references = set(re.findall(r'''getElementById\(\s*["']([^"']+)["']\s*\)''', match.group(1)))
     missing = sorted(references - set(ids))
     if missing:
         raise SystemExit(f"missing HTML ids in {source}: {missing}")
