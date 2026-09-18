@@ -502,6 +502,33 @@ const WORK_ROLE_REGISTRY = Object.freeze([
   { id: "security_analyst", label: "Security Analyst", kind: "worker", origin: "architect_extension_2026_09_18" }
 ]);
 
+const WORKER_ROLE_IDS = new Set(
+  WORK_ROLE_REGISTRY.filter((role) => role.kind === "worker").map((role) => role.id)
+);
+
+function normalizeRequestedProjectRoles(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > WORKER_ROLE_IDS.size) {
+    throw new ApiError(400, "invalid_requested_roles");
+  }
+  const roles = [];
+  for (const raw of value) {
+    const role = requireString(raw, "requested_role", 64);
+    if (!WORKER_ROLE_IDS.has(role)) throw new ApiError(400, "project_role_not_allowed");
+    if (!roles.includes(role)) roles.push(role);
+  }
+  return roles;
+}
+
+function roleMetadata(roleId) {
+  return WORK_ROLE_REGISTRY.find((role) => role.id === roleId) || {
+    id: roleId,
+    label: roleId,
+    kind: "worker",
+    origin: "unknown"
+  };
+}
+
 function classifyWorkRole(text) {
   const value = String(text || "").toLowerCase();
   const tests = [
@@ -577,6 +604,21 @@ async function ensureProjectStorage(env) {
       env.DB.prepare(`
         CREATE INDEX IF NOT EXISTS idx_project_work_items_node_status
         ON project_work_items(node_id, status, created_at)
+      `),
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS project_specializations (
+          project_id TEXT NOT NULL,
+          role_name TEXT NOT NULL,
+          source TEXT NOT NULL
+            CHECK (source IN ('hub_recommended','architect_added')),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (project_id, role_name),
+          FOREIGN KEY (project_id) REFERENCES architect_projects(project_id) ON DELETE CASCADE
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_project_specializations_project
+        ON project_specializations(project_id, created_at)
       `)
     ]).catch((error) => {
       projectSchemaPromise = undefined;
@@ -640,12 +682,26 @@ function splitProjectText(text, maxChars = 2000) {
   return blocks.length ? blocks : [text];
 }
 
-function planProjectWork(text) {
-  return splitProjectText(text).map((taskText, index) => ({
+function planProjectWork(text, requestedRoles = []) {
+  const items = splitProjectText(text).map((taskText, index) => ({
     sequence_no: index + 1,
     role_name: classifyWorkRole(taskText),
-    task_text: taskText
+    task_text: taskText,
+    role_source: "hub_recommended"
   }));
+  const existing = new Set(items.map((item) => item.role_name));
+  for (const roleName of requestedRoles) {
+    if (existing.has(roleName)) continue;
+    const focusText = text.length > 1850 ? text.slice(0, 1850) + "…" : text;
+    items.push({
+      sequence_no: items.length + 1,
+      role_name: roleName,
+      task_text: `Role focus: ${roleName}\n\n${focusText}`,
+      role_source: "architect_added"
+    });
+    existing.add(roleName);
+  }
+  return items;
 }
 
 async function evaluateProjectChecks(env, sourceType, title, taskText) {
@@ -694,13 +750,25 @@ async function architectCheckProject(request, env) {
   const sourceType = optionalString(body.source_type, "source_type", 40) || "architect_manual";
   const title = requireString(body.title, "title", 160);
   const taskText = requireString(body.task_text, "task_text", 20000);
+  const requestedRoles = normalizeRequestedProjectRoles(body.requested_roles);
   const result = await evaluateProjectChecks(env, sourceType, title, taskText);
-  const plannedWork = planProjectWork(taskText);
+  const recommendedWork = planProjectWork(taskText);
+  const plannedWork = planProjectWork(taskText, requestedRoles);
+  const recommendedRolePlan = rolePlanSummary(recommendedWork);
+  const selectedRolePlan = rolePlanSummary(plannedWork);
   return json({
     ok: true,
     ready_for_architect_approval: projectChecksPassed(result.checks),
-    role_plan: rolePlanSummary(plannedWork),
-    work_preview: plannedWork.map(({ sequence_no, role_name }) => ({ sequence_no, role_name })),
+    recommended_role_plan: recommendedRolePlan,
+    recommended_roles: Object.keys(recommendedRolePlan),
+    requested_roles: requestedRoles,
+    selected_roles: Object.keys(selectedRolePlan),
+    role_plan: selectedRolePlan,
+    work_preview: plannedWork.map(({ sequence_no, role_name, role_source }) => ({
+      sequence_no,
+      role_name,
+      role_source
+    })),
     ...result
   });
 }
@@ -711,23 +779,32 @@ async function architectCreateProject(request, env) {
   const sourceType = optionalString(body.source_type, "source_type", 40) || "architect_manual";
   const title = requireString(body.title, "title", 160);
   const taskText = requireString(body.task_text, "task_text", 20000);
+  const requestedRoles = normalizeRequestedProjectRoles(body.requested_roles);
   const evaluated = await evaluateProjectChecks(env, sourceType, title, taskText);
   if (!projectChecksPassed(evaluated.checks)) {
     throw new ApiError(409, "project_checks_failed");
   }
 
   const nodesQuery = await env.DB.prepare(
-    "SELECT node_id, hostname, agent_version FROM nodes " +
-    "WHERE status = 'online' AND datetime(last_seen_at) >= datetime('now', '-5 minutes') " +
-    "ORDER BY last_seen_at DESC, node_id ASC"
+    "SELECT n.node_id, n.hostname, n.agent_version, nn.node_number FROM nodes AS n " +
+    "LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id " +
+    "WHERE n.status = 'online' AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes') " +
+    "ORDER BY n.last_seen_at DESC, n.node_id ASC"
   ).all();
   const nodes = nodesQuery.results || [];
   if (!nodes.length) throw new ApiError(409, "no_available_nodes");
 
-  const plannedWork = planProjectWork(taskText);
+  const recommendedWork = planProjectWork(taskText);
+  const recommendedRoles = new Set(recommendedWork.map((item) => item.role_name));
+  const plannedWork = planProjectWork(taskText, requestedRoles);
   const workerCount = Math.min(nodes.length, plannedWork.length);
   const projectId = "project_" + crypto.randomUUID();
   const checksJson = JSON.stringify(evaluated.checks);
+  const selectedRoleNames = [...new Set(plannedWork.map((item) => item.role_name))];
+  const specializationSummary = selectedRoleNames.map((roleName) => ({
+    ...roleMetadata(roleName),
+    source: recommendedRoles.has(roleName) ? "hub_recommended" : "architect_added"
+  }));
   const statements = [
     env.DB.prepare(
       "INSERT INTO architect_projects (" +
@@ -737,8 +814,18 @@ async function architectCreateProject(request, env) {
     env.DB.prepare(
       "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
       "VALUES ('architect', 'test-console', 'project.created', 'project', ?, ?)"
-    ).bind(projectId, JSON.stringify({ worker_count: workerCount, work_items: plannedWork.length, roles: rolePlanSummary(plannedWork) }))
+    ).bind(projectId, JSON.stringify({
+      worker_count: workerCount,
+      work_items: plannedWork.length,
+      roles: rolePlanSummary(plannedWork),
+      requested_roles: requestedRoles
+    }))
   ];
+  for (const specialization of specializationSummary) {
+    statements.push(env.DB.prepare(
+      "INSERT INTO project_specializations (project_id, role_name, source) VALUES (?, ?, ?)"
+    ).bind(projectId, specialization.id, specialization.source));
+  }
 
   const workItems = [];
   for (let index = 0; index < plannedWork.length; index += 1) {
@@ -751,7 +838,9 @@ async function architectCreateProject(request, env) {
       role_name: planned.role_name,
       node_id: node.node_id,
       hostname: node.hostname,
+      node_number: node.node_number || null,
       task_text: planned.task_text,
+      role_source: planned.role_source,
       status: "planned"
     });
     statements.push(
@@ -772,11 +861,17 @@ async function architectCreateProject(request, env) {
       worker_count: workerCount,
       work_item_count: plannedWork.length,
       role_plan: rolePlanSummary(plannedWork),
+      recommended_roles: [...recommendedRoles],
+      requested_roles: requestedRoles,
+      specializations: specializationSummary,
       checks: evaluated.checks,
       work_items: workItems
     },
     execution: {
       state: "planned",
+      completed_work_items: 0,
+      total_work_items: plannedWork.length,
+      final_report_ready: false,
       detail: "hub_plan_created_waiting_for_project_worker_execution"
     }
   }, 201);
@@ -786,10 +881,104 @@ async function architectListProjects(request, env) {
   await authenticateArchitect(request, env);
   await ensureProjectStorage(env);
   const rows = await env.DB.prepare(
-    "SELECT project_id, title, status, worker_count, created_at, updated_at " +
-    "FROM architect_projects ORDER BY created_at DESC LIMIT 50"
+    "SELECT p.project_id, p.title, p.status, p.worker_count, p.created_at, p.updated_at, " +
+    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id) AS work_item_count, " +
+    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'completed') AS completed_work_items, " +
+    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'running') AS running_work_items " +
+    "FROM architect_projects AS p ORDER BY p.created_at DESC LIMIT 50"
   ).all();
   return json({ ok: true, projects: rows.results || [] });
+}
+
+async function architectGetProject(request, env, projectId) {
+  await authenticateArchitect(request, env);
+  await ensureProjectStorage(env);
+  const project = await env.DB.prepare(`
+    SELECT project_id, title, source_type, task_text, checks_json,
+      architect_approved, status, worker_count, created_at, updated_at
+    FROM architect_projects
+    WHERE project_id = ?
+  `).bind(projectId).first();
+  if (!project) throw new ApiError(404, "project_not_found");
+
+  const [workQuery, specializationQuery] = await Promise.all([
+    env.DB.prepare(`
+      SELECT
+        w.work_item_id, w.sequence_no, w.role_name, w.task_text, w.status,
+        w.created_at, w.updated_at, w.node_id,
+        n.hostname, n.agent_version, nn.node_number
+      FROM project_work_items AS w
+      LEFT JOIN nodes AS n ON n.node_id = w.node_id
+      LEFT JOIN node_numbers AS nn ON nn.node_id = w.node_id
+      WHERE w.project_id = ?
+      ORDER BY w.sequence_no ASC, w.work_item_id ASC
+    `).bind(projectId).all(),
+    env.DB.prepare(`
+      SELECT role_name, source, created_at
+      FROM project_specializations
+      WHERE project_id = ?
+      ORDER BY created_at ASC, role_name ASC
+    `).bind(projectId).all()
+  ]);
+
+  const workItems = workQuery.results || [];
+  let specializationRows = specializationQuery.results || [];
+  if (!specializationRows.length) {
+    specializationRows = [...new Set(workItems.map((item) => item.role_name))].map((roleName) => ({
+      role_name: roleName,
+      source: "hub_recommended",
+      created_at: project.created_at
+    }));
+  }
+  const specializations = specializationRows.map((item) => ({
+    ...roleMetadata(item.role_name),
+    source: item.source,
+    created_at: item.created_at
+  }));
+
+  const counts = {
+    planned: 0,
+    assigned: 0,
+    running: 0,
+    completed: 0,
+    failed: 0,
+    cancelled: 0
+  };
+  for (const item of workItems) {
+    if (Object.hasOwn(counts, item.status)) counts[item.status] += 1;
+  }
+  const total = workItems.length;
+  const finished = counts.completed + counts.failed + counts.cancelled;
+  const executionState = total > 0 && finished === total
+    ? counts.failed > 0 ? "completed_with_failures" : "completed"
+    : counts.running > 0
+      ? "running"
+      : counts.assigned > 0
+        ? "assigned"
+        : "planned";
+  return json({
+    ok: true,
+    project: {
+      ...project,
+      checks: safeJson(project.checks_json, {}),
+      checks_json: undefined,
+      role_plan: rolePlanSummary(workItems),
+      specializations,
+      work_items: workItems,
+      execution: {
+        state: executionState,
+        counts,
+        completed_work_items: counts.completed,
+        total_work_items: total,
+        final_report_ready: total > 0 && finished === total,
+        detail: executionState === "planned"
+          ? "hub_plan_created_waiting_for_project_worker_execution"
+          : executionState === "completed"
+            ? "all_project_work_items_completed"
+            : executionState
+      }
+    }
+  });
 }
 
 function bytesToHex(bytes) {
@@ -2577,6 +2766,15 @@ async function handleApi(request, env, url) {
     if (request.method === "POST") return architectCreateProject(request, env);
     if (request.method === "GET") return architectListProjects(request, env);
     return methodNotAllowed(["GET", "POST"]);
+  }
+
+  const architectProjectMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/projects\/([^/]+)$/
+  );
+  if (architectProjectMatch) {
+    return request.method === "GET"
+      ? architectGetProject(request, env, decodeURIComponent(architectProjectMatch[1]))
+      : methodNotAllowed(["GET"]);
   }
 
   if (url.pathname === "/api/v1/hub/nodes") {
