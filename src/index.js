@@ -30,12 +30,12 @@ const LATEST_NODE_RELEASE = Object.freeze({
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "232edd44fc620971530e351e95a52ffa02f0bbcb46061f8e0804fe07d65dad7d"
+      sha256: "2ff70ab78ba7b78c0bffc037121c17a3a5a6f875fe9473d553ecc6be2ed2e092"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "9061a0b567e0c1fcc9c6f99d1916326322d6de8e47826df30ddde925c8d9ac5c"
+      sha256: "4da2c7a2ee5707312e74f3d93110a9cdaf2dffa5c93073eff6b83e9c1b957efa"
     }
   ]
 });
@@ -46,12 +46,12 @@ const LMSTUDIO_INTEGRATION = Object.freeze({
   windows_asset: Object.freeze({
     path: "install_llmstudio_headless.ps1",
     url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/install_llmstudio_headless.ps1",
-    sha256: "d9a96026bea2e7729f0b086d8d668c3f4f93b7725b5e0af3f2936b68f89475cf"
+    sha256: "13f5d2f696b1814ab7f636a32cfc1ee51974335e1fd4eceec79dc5ce8f00e74c"
   }),
   linux_asset: Object.freeze({
     path: "install_llmstudio_headless.sh",
     url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/install_llmstudio_headless.sh",
-    sha256: "15dcfd76d3c929ec2ca459a19879d565a9ec6483c33fcf9b3d8ba5a8ef145d39"
+    sha256: "d99c65042e8153a44436493c97c0a906a7af01c4f055f9126045b3cd060b48d3"
   }),
   model_presets: Object.freeze([
     { id: "ibm/granite-4-micro", label: "IBM Granite 4 Micro" },
