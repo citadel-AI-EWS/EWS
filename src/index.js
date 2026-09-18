@@ -1757,8 +1757,11 @@ async function architectCreateSession(request, env) {
 
   const counts = await env.DB.prepare(
     "SELECT " +
-    "(SELECT COUNT(*) FROM nodes) AS nodes, " +
-    "(SELECT COUNT(*) FROM missions) AS missions, " +
+    "(SELECT COUNT(*) FROM nodes WHERE status != 'revoked') AS nodes, " +
+    "(SELECT COUNT(*) FROM missions AS m WHERE m.status NOT IN ('completed','cancelled') " +
+    "AND (m.expires_at IS NULL OR datetime(m.expires_at) > CURRENT_TIMESTAMP) " +
+    "AND EXISTS (SELECT 1 FROM assignments AS a WHERE a.mission_id = m.mission_id " +
+    "AND a.status IN ('assigned','running'))) AS active_missions, " +
     "(SELECT COUNT(*) FROM results) AS results, " +
     "(SELECT COUNT(*) FROM agent_reports) AS reports"
   ).first();
