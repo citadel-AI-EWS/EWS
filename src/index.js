@@ -371,7 +371,7 @@ async function startUpdateAllRollout(request, env) {
 
 async function ensureRolloutCommandForNode(env, nodeId) {
   await Promise.all([ensureRolloutStorage(env), ensureCommandStorage(env)]);
-  const [rollout, node, pending] = await Promise.all([
+  const [rollout, node, pending, recentCompletedUpdate] = await Promise.all([
     env.DB.prepare(
       "SELECT rollout_id, target_version, release_json FROM agent_rollouts WHERE status = 'active' ORDER BY created_at DESC LIMIT 1"
     ).first(),
@@ -380,11 +380,21 @@ async function ensureRolloutCommandForNode(env, nodeId) {
     ).bind(nodeId).first(),
     env.DB.prepare(
       "SELECT command_id FROM commands WHERE node_id = ? AND status IN ('pending', 'accepted') LIMIT 1"
+    ).bind(nodeId).first(),
+    env.DB.prepare(
+      "SELECT payload_json, completed_at FROM commands " +
+      "WHERE node_id = ? AND command_type = 'update' AND status = 'completed' " +
+      "AND datetime(completed_at) >= datetime('now', '-10 minutes') " +
+      "ORDER BY completed_at DESC LIMIT 1"
     ).bind(nodeId).first()
   ]);
   if (!rollout || !node || pending || node.status === "revoked" || node.agent_version === rollout.target_version) {
     return;
   }
+  const recentlyInstalled = recentCompletedUpdate
+    ? safeJson(recentCompletedUpdate.payload_json, {})?.version === rollout.target_version
+    : false;
+  if (recentlyInstalled) return;
   if (rollout.target_version !== LATEST_NODE_RELEASE.version) return;
   const commandId = "command_" + crypto.randomUUID();
   const payloadJson = rollout.release_json;
