@@ -418,6 +418,48 @@ async function ensureRolloutCommandForNode(env, nodeId) {
   }
 }
 
+const WORK_ROLE_REGISTRY = Object.freeze([
+  { id: "architect", label: "Architect", kind: "human_gate", origin: "project_control" },
+  { id: "planner", label: "Planner", kind: "worker", origin: "legacy_simulation" },
+  { id: "verifier", label: "Verifier", kind: "worker", origin: "legacy_simulation" },
+  { id: "researcher", label: "Research", kind: "worker", origin: "legacy_simulation" },
+  { id: "reporter", label: "Report", kind: "worker", origin: "legacy_simulation" },
+  { id: "metrics", label: "Metrics", kind: "worker", origin: "legacy_simulation" },
+  { id: "recovery", label: "Recovery", kind: "worker", origin: "legacy_simulation" },
+  { id: "programmer", label: "Programmer", kind: "worker", origin: "architect_extension_2026_09_18" },
+  { id: "mathematician", label: "Mathematician", kind: "worker", origin: "architect_extension_2026_09_18" },
+  { id: "security_analyst", label: "Security Analyst", kind: "worker", origin: "architect_extension_2026_09_18" }
+]);
+
+function classifyWorkRole(text) {
+  const value = String(text || "").toLowerCase();
+  const tests = [
+    ["security_analyst", /(security|secure|vulnerab|threat|malware|audit|шифр|безопас|уязв|угроз|вредонос)/],
+    ["programmer", /(python|javascript|typescript|java|code|coding|program|function|api|sql|html|css|код|программ|функц|скрипт|база данных)/],
+    ["mathematician", /(math|equation|formula|algebra|geometry|calculus|probab|combin|математ|формул|уравнен|алгебр|геометр|вероятност)/],
+    ["metrics", /(metric|statistics|chart|graph|median|average|variance|метрик|статист|график|медиан|средн)/],
+    ["recovery", /(recover|rollback|restore|repair|backup|восстанов|откат|резервн|почин)/],
+    ["verifier", /(verify|validation|test|check|qa|proof|провер|тест|валид|доказ)/],
+    ["reporter", /(report|summary|summar|document|write-up|отч[её]т|сводк|резюме|документ)/],
+    ["researcher", /(research|source|evidence|investig|compare|search|исслед|источник|доказательств|сравн|поиск)/]
+  ];
+  for (const [role, pattern] of tests) {
+    if (pattern.test(value)) return role;
+  }
+  return "planner";
+}
+
+function rolePlanSummary(items) {
+  const counts = {};
+  for (const item of items) counts[item.role_name] = (counts[item.role_name] || 0) + 1;
+  return counts;
+}
+
+async function architectWorkRoles(request, env) {
+  await authenticateArchitect(request, env);
+  return json({ ok: true, roles: WORK_ROLE_REGISTRY });
+}
+
 async function ensureProjectStorage(env) {
   if (!projectSchemaPromise) {
     projectSchemaPromise = env.DB.batch([
@@ -447,6 +489,7 @@ async function ensureProjectStorage(env) {
           project_id TEXT NOT NULL,
           sequence_no INTEGER NOT NULL CHECK (sequence_no >= 1),
           node_id TEXT,
+          role_name TEXT NOT NULL DEFAULT 'planner',
           task_text TEXT NOT NULL,
           status TEXT NOT NULL DEFAULT 'planned'
             CHECK (status IN ('planned','assigned','running','completed','failed','cancelled')),
@@ -526,6 +569,14 @@ function splitProjectText(text, maxChars = 2000) {
   return blocks.length ? blocks : [text];
 }
 
+function planProjectWork(text) {
+  return splitProjectText(text).map((taskText, index) => ({
+    sequence_no: index + 1,
+    role_name: classifyWorkRole(taskText),
+    task_text: taskText
+  }));
+}
+
 async function evaluateProjectChecks(env, sourceType, title, taskText) {
   await ensureProjectStorage(env);
   const sourceAllowed = sourceType === "architect_manual";
@@ -573,9 +624,12 @@ async function architectCheckProject(request, env) {
   const title = requireString(body.title, "title", 160);
   const taskText = requireString(body.task_text, "task_text", 20000);
   const result = await evaluateProjectChecks(env, sourceType, title, taskText);
+  const plannedWork = planProjectWork(taskText);
   return json({
     ok: true,
     ready_for_architect_approval: projectChecksPassed(result.checks),
+    role_plan: rolePlanSummary(plannedWork),
+    work_preview: plannedWork.map(({ sequence_no, role_name }) => ({ sequence_no, role_name })),
     ...result
   });
 }
@@ -599,8 +653,8 @@ async function architectCreateProject(request, env) {
   const nodes = nodesQuery.results || [];
   if (!nodes.length) throw new ApiError(409, "no_available_nodes");
 
-  const blocks = splitProjectText(taskText);
-  const workerCount = Math.min(nodes.length, blocks.length);
+  const plannedWork = planProjectWork(taskText);
+  const workerCount = Math.min(nodes.length, plannedWork.length);
   const projectId = "project_" + crypto.randomUUID();
   const checksJson = JSON.stringify(evaluated.checks);
   const statements = [
@@ -612,26 +666,28 @@ async function architectCreateProject(request, env) {
     env.DB.prepare(
       "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
       "VALUES ('architect', 'test-console', 'project.created', 'project', ?, ?)"
-    ).bind(projectId, JSON.stringify({ worker_count: workerCount, work_items: blocks.length }))
+    ).bind(projectId, JSON.stringify({ worker_count: workerCount, work_items: plannedWork.length, roles: rolePlanSummary(plannedWork) }))
   ];
 
   const workItems = [];
-  for (let index = 0; index < blocks.length; index += 1) {
+  for (let index = 0; index < plannedWork.length; index += 1) {
     const node = nodes[index % workerCount];
+    const planned = plannedWork[index];
     const workItemId = "work_" + crypto.randomUUID();
     workItems.push({
       work_item_id: workItemId,
-      sequence_no: index + 1,
+      sequence_no: planned.sequence_no,
+      role_name: planned.role_name,
       node_id: node.node_id,
       hostname: node.hostname,
-      task_text: blocks[index],
+      task_text: planned.task_text,
       status: "planned"
     });
     statements.push(
       env.DB.prepare(
-        "INSERT INTO project_work_items (work_item_id, project_id, sequence_no, node_id, task_text, status) " +
-        "VALUES (?, ?, ?, ?, ?, 'planned')"
-      ).bind(workItemId, projectId, index + 1, node.node_id, blocks[index])
+        "INSERT INTO project_work_items (work_item_id, project_id, sequence_no, node_id, role_name, task_text, status) " +
+        "VALUES (?, ?, ?, ?, ?, ?, 'planned')"
+      ).bind(workItemId, projectId, planned.sequence_no, node.node_id, planned.role_name, planned.task_text)
     );
   }
   await env.DB.batch(statements);
@@ -643,7 +699,8 @@ async function architectCreateProject(request, env) {
       status: "planned",
       architect_approved: true,
       worker_count: workerCount,
-      work_item_count: blocks.length,
+      work_item_count: plannedWork.length,
+      role_plan: rolePlanSummary(plannedWork),
       checks: evaluated.checks,
       work_items: workItems
     },
@@ -1906,7 +1963,7 @@ async function architectOverview(request, env) {
   await authenticateArchitect(request, env);
   await Promise.all([backfillLegacyReports(env), ensureSessionStorage(env), ensureAutoEnrollmentStorage(env)]);
 
-  const [counts, nodesQuery, missionsQuery, commandsQuery, auditQuery] = await Promise.all([
+  const [counts, nodesQuery, missionsQuery, commandsQuery] = await Promise.all([
     env.DB.prepare(
       "SELECT " +
       "(SELECT COUNT(*) FROM nodes) AS nodes, " +
@@ -1947,11 +2004,6 @@ async function architectOverview(request, env) {
       "SELECT command_id FROM commands WHERE status NOT IN ('pending', 'accepted') " +
       "ORDER BY created_at DESC LIMIT 50" +
       ") ORDER BY created_at DESC"
-    ).all(),
-    env.DB.prepare(
-      "SELECT event_id, actor_type, actor_id, action, target_type, " +
-      "target_id, created_at FROM audit_events " +
-      "ORDER BY event_id DESC LIMIT 30"
     ).all()
   ]);
 
@@ -1977,8 +2029,7 @@ async function architectOverview(request, env) {
     },
     nodes: nodesQuery.results || [],
     missions,
-    commands: commandsQuery.results || [],
-    audit_events: auditQuery.results || []
+    commands: commandsQuery.results || []
   });
 }
 
@@ -2261,6 +2312,12 @@ async function handleApi(request, env, url) {
     return request.method === "POST"
       ? startUpdateAllRollout(request, env)
       : methodNotAllowed(["POST"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/work-roles") {
+    return request.method === "GET"
+      ? architectWorkRoles(request, env)
+      : methodNotAllowed(["GET"]);
   }
 
   if (url.pathname === "/api/v1/architect/projects/check") {
