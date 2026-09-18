@@ -30,7 +30,19 @@ for (const id of [
   "createProjectButton",
   "projectChecks",
   "projectResult",
-  "projectsList"
+  "projectsList",
+  "liveOperations",
+  "liveNodesList",
+  "fleetRing",
+  "cpuChart",
+  "memoryChart",
+  "topologySvg",
+  "operationsAlert",
+  "operationsAlertList",
+  "closeOperationsAlert",
+  "unhealthyCount",
+  "projectRolePlan",
+  "workRoles"
 ]) {
   assert.match(architect, new RegExp(`id="${id}"`), `Architect control missing: ${id}`);
 }
@@ -49,6 +61,14 @@ assert.match(architect, /\/api\/v1\/architect\/projects/);
 assert.match(architect, /Source allowlisting/);
 assert.match(architect, /Deduplication/);
 assert.match(architect, /Safety classification/);
+assert.match(architect, /LIVE OPERATIONS CENTER/);
+assert.match(architect, /показываются только реальные данные Controller/);
+assert.match(architect, /function nodeHealth/);
+assert.match(architect, /function showOperationsBrief/);
+assert.match(architect, /Здоровье:/);
+assert.match(architect, /detail-toggle/);
+assert.match(architect, /\/api\/v1\/architect\/work-roles/);
+assert.doesNotMatch(architect, /Последние события аудита/);
 
 assert.match(index, /"restart", "stop", "rollback"/);
 assert.match(index, /stop: "offline"/);
@@ -63,6 +83,13 @@ assert.match(index, /agent_rollouts/);
 assert.match(index, /ensureRolloutCommandForNode/);
 assert.match(index, /architect_projects/);
 assert.match(index, /project_work_items/);
+assert.match(index, /WORK_ROLE_REGISTRY/);
+assert.match(index, /legacy_simulation/);
+assert.match(index, /"programmer"/);
+assert.match(index, /"mathematician"/);
+assert.match(index, /role_name TEXT NOT NULL DEFAULT 'planner'/);
+assert.match(index, /architectWorkRoles/);
+assert.doesNotMatch(index, /audit_events: auditQuery/);
 assert.match(agent, /"restart", "stop", "rollback"/);
 assert.match(agent, /elif command_type == "stop":/);
 assert.match(agent, /agent_stop_requested/);
