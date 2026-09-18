@@ -5,11 +5,9 @@ const architect = fs.readFileSync("architect.html", "utf8");
 const index = fs.readFileSync("src/index.js", "utf8");
 const agent = fs.readFileSync("agent/citadel_node_v1.py", "utf8");
 
-assert.match(
-  architect,
-  /<section class="card hidden" aria-hidden="true">[\s\S]*?<h2>Контрольные точки<\/h2>/,
-  "obsolete checkpoint panel must stay hidden"
-);
+assert.doesNotMatch(architect, /Контрольные точки/, "checkpoint UI must not be published");
+assert.doesNotMatch(architect, /\/api\/v1\/architect\/sessions/, "Architect UI must not load checkpoint sessions");
+assert.doesNotMatch(architect, /\/api\/v1\/architect\/storage/, "Architect UI must not load checkpoint storage");
 for (const id of [
   "ipButton",
   "healthButton",
@@ -42,7 +40,9 @@ for (const id of [
   "closeOperationsAlert",
   "unhealthyCount",
   "projectRolePlan",
-  "workRoles"
+  "workRoles",
+  "missionPanel",
+  "missionNodeState"
 ]) {
   assert.match(architect, new RegExp(`id="${id}"`), `Architect control missing: ${id}`);
 }
@@ -73,6 +73,8 @@ assert.doesNotMatch(architect, /Последние события аудита/)
 assert.match(index, /"restart", "stop", "rollback"/);
 assert.match(index, /stop: "offline"/);
 assert.match(index, /agent_update_required/);
+assert.match(index, /throw new ApiError\(409, "node_offline"\)/);
+assert.match(index, /throw new ApiError\(409, "node_paused"\)/);
 assert.match(architect, /node\.agent_version !== currentReleaseVersion/);
 assert.match(index, /task_text: taskText/);
 assert.match(index, /mission_types: \["system_inventory"\]/);
