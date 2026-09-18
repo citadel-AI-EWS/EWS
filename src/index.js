@@ -2172,7 +2172,8 @@ async function architectOverview(request, env) {
     counts: {
       nodes: counts?.nodes || 0,
       online_nodes: counts?.online_nodes || 0,
-      missions: counts?.missions || 0,
+      missions: counts?.active_missions || 0,
+      active_missions: counts?.active_missions || 0,
       reports: counts?.reports || 0,
       sessions: counts?.sessions || 0
     },
