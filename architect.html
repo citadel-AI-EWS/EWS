@@ -11,7 +11,7 @@
     main{max-width:760px;margin:auto}.brand{color:#8fb5ff;font-size:13px;font-weight:900;letter-spacing:.13em}
     h1{font-size:29px;line-height:1.15;margin:11px 0}h2{font-size:20px;margin:0 0 15px}p{color:#aeb9d2;line-height:1.45}
     .card{margin-top:17px;padding:19px;border:1px solid #2b3757;border-radius:18px;background:#11182a;box-shadow:0 18px 55px #0007}
-    label{display:block;margin:12px 0 7px;font-weight:750}input,select,textarea{width:100%;padding:13px;border:1px solid #3a496f;border-radius:11px;background:#090e1b;color:#fff;font-size:16px}
+    label{display:block;margin:12px 0 7px;font-weight:750}input,select,textarea{width:100%;padding:13px;border:1px solid #3a496f;border-radius:11px;background:#090e1b;color:#fff;font-size:16px}textarea{min-height:110px;resize:vertical;font-family:inherit}
     button{width:100%;margin-top:13px;padding:14px;border:0;border-radius:11px;background:#3478f6;color:#fff;font-size:16px;font-weight:850}
     button.secondary{background:#273451}button.danger{background:#703542}button:disabled{opacity:.55}.hidden{display:none!important}
     .toolbar{display:flex;gap:10px;flex-wrap:wrap}.toolbar button{width:auto;flex:1}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:17px}
@@ -52,7 +52,7 @@
         <div class="stat hidden"><b id="sessionCount">0</b><span>контрольных точек</span></div>
       </div>
 
-      <section class="card">
+      <section class="card hidden" aria-hidden="true">
         <div class="section-head">
           <h2>Контрольные точки</h2>
           <button id="refreshSessionsButton" class="secondary" type="button">Обновить</button>
