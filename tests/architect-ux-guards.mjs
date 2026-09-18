@@ -165,3 +165,12 @@ assert.match(agent, /mac_addresses/);
 assert.doesNotMatch(agent, /command_type == "shell"/);
 
 console.log("Architect UX regression guards: PASS");
+
+
+assert.match(architect, /id="openOperationsBrief"/);
+assert.match(architect, /function dismissOperationsBrief/);
+assert.match(architect, /event\.target === operationsAlert/);
+assert.match(architect, /event\.key !== "Escape"/);
+assert.doesNotMatch(architect, /if \(!openingBriefShown\) showOperationsBrief\(data\.nodes \|\| \[\]\)/);
+assert.match(architect, /PLAN \/ WAITING/);
+assert.match(architect, /Controller покажет READY-ноды и точный blocker/);

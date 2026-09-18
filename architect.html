@@ -57,6 +57,7 @@
     <section id="dashboard" class="hidden">
       <div class="toolbar">
         <button id="refreshButton" class="secondary" type="button" data-i18n="refresh">Обновить</button>
+        <button id="openOperationsBrief" class="secondary" type="button">Сводка</button>
         <button id="logoutButton" class="danger" type="button" data-i18n="logout">Выйти</button>
       </div>
 
@@ -253,7 +254,7 @@
 
   <div id="operationsAlert" class="ops-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="operationsAlertTitle">
     <div class="ops-modal">
-      <div class="ops-title">OPERATIONS BRIEF</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><div class="ops-title">OPERATIONS BRIEF</div><button id="closeOperationsAlertTop" class="secondary" type="button" style="width:38px;height:38px;margin:0;padding:0">×</button></div>
       <h2 id="operationsAlertTitle" data-i18n="briefTitle">Краткая оперативная сводка</h2>
       <p class="small" data-i18n="briefSub">Только проблемы, требующие внимания прямо сейчас.</p>
       <div id="operationsAlertList" class="brief-list"></div>
@@ -263,7 +264,7 @@
 
   <div id="projectCreatedOverlay" class="ops-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="projectCreatedTitle">
     <div class="ops-modal">
-      <div class="ops-title">PROJECT CREATED</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><div class="ops-title">PROJECT CREATED</div><button id="projectCreatedCloseTop" class="secondary" type="button" style="width:38px;height:38px;margin:0;padding:0">×</button></div>
       <h2 id="projectCreatedTitle">Проект создан</h2>
       <p class="small">Hub закончил четыре проверки, построил план и выбрал доступные ноды.</p>
       <div id="projectCreatedSummary" class="project-created-summary"></div>
@@ -369,6 +370,9 @@
     const operationsAlert = document.getElementById("operationsAlert");
     const operationsAlertList = document.getElementById("operationsAlertList");
     const closeOperationsAlert = document.getElementById("closeOperationsAlert");
+    const closeOperationsAlertTop = document.getElementById("closeOperationsAlertTop");
+    const openOperationsBrief = document.getElementById("openOperationsBrief");
+    const projectCreatedCloseTop = document.getElementById("projectCreatedCloseTop");
     const missionNodeState = document.getElementById("missionNodeState");
     const missionType = document.getElementById("missionType");
     const missionTitle = document.getElementById("missionTitle");
@@ -686,7 +690,7 @@
       }
     }
 
-    function showOperationsBrief(nodes) {
+    function renderOperationsBrief(nodes) {
       operationsAlertList.replaceChildren();
       const problems = [];
       for (const node of nodes) {
@@ -707,8 +711,22 @@
       } else {
         problems.forEach((problem) => addText(operationsAlertList, "div", problem, "brief-item"));
       }
+    }
+
+    function showOperationsBrief(nodes) {
+      renderOperationsBrief(nodes);
       operationsAlert.classList.remove("hidden");
       openingBriefShown = true;
+    }
+
+    function dismissOperationsBrief() {
+      operationsAlert.classList.add("hidden");
+      openingBriefShown = true;
+      sessionStorage.setItem("citadelOperationsBriefDismissed", "1");
+    }
+
+    function dismissProjectCreated() {
+      projectCreatedOverlay.classList.add("hidden");
     }
 
     function renderNodeDiagnostics() {
@@ -827,8 +845,14 @@
         const total = Number(project.work_item_count || 0);
         item.className = `item ${total > 0 && finished === total && failed === 0 ? "ok" : "warn"}`;
         const percent = total ? Math.round((finished / total) * 100) : 0;
-        addText(item, "strong", `${project.title} — ${project.status}`);
-        addText(item, "div", `Нод Hub: ${project.worker_count} · прогресс: ${completed}/${total} · ${percent}% · running: ${Number(project.running_work_items || 0)}`, "small");
+        const assigned = Number(project.assigned_work_items || 0);
+        const running = Number(project.running_work_items || 0);
+        const stage = running > 0 ? "RUNNING" : assigned > 0 ? "ASSIGNED" : total > 0 && finished >= total ? "COMPLETED" : "PLAN / WAITING";
+        addText(item, "strong", `${project.title} — ${stage} · ${percent}%`);
+        addText(item, "div", `Нод Hub: ${project.worker_count} · завершено: ${finished}/${total} · running: ${running} · assigned: ${assigned}`, "small");
+        if (stage === "PLAN / WAITING") {
+          addText(item, "div", "Ожидание: откройте отчёт — Controller покажет READY-ноды и точный blocker (agent / LM Studio / model / offline).", "small");
+        }
         addText(item, "div", `Project ID: ${project.project_id}`, "small");
         const open = addText(item, "button", "Перейти к отчёту", "secondary");
         open.type = "button";
@@ -1412,7 +1436,7 @@
       loadMoreReportsButton.classList.toggle("hidden", reportNextOffset === null);
       loginCard.classList.add("hidden");
       dashboard.classList.remove("hidden");
-      if (!openingBriefShown) showOperationsBrief(data.nodes || []);
+      renderOperationsBrief(data.nodes || []);
       setStatus("Live Operations подключён к Controller.", "good");
     }
 
@@ -1469,7 +1493,7 @@
       closeReportDetail();
       currentReports = [];
       reportNextOffset = null;
-      openingBriefShown = false;
+      openingBriefShown = true;
       operationsAlert.classList.add("hidden");
       projectCreatedOverlay.classList.add("hidden");
       projectReportCard.classList.add("hidden");
@@ -1530,7 +1554,20 @@
     });
 
     logoutButton.addEventListener("click", () => logout());
-    closeOperationsAlert.addEventListener("click", () => operationsAlert.classList.add("hidden"));
+    openOperationsBrief.addEventListener("click", () => showOperationsBrief(currentNodes));
+    closeOperationsAlert.addEventListener("click", dismissOperationsBrief);
+    closeOperationsAlertTop.addEventListener("click", dismissOperationsBrief);
+    operationsAlert.addEventListener("click", (event) => {
+      if (event.target === operationsAlert) dismissOperationsBrief();
+    });
+    projectCreatedOverlay.addEventListener("click", (event) => {
+      if (event.target === projectCreatedOverlay) dismissProjectCreated();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      if (!operationsAlert.classList.contains("hidden")) dismissOperationsBrief();
+      if (!projectCreatedOverlay.classList.contains("hidden")) dismissProjectCreated();
+    });
     controlNodeSelect.addEventListener("change", () => { updateControlButtons(); renderNodeDiagnostics(); });
     nodeSelect.addEventListener("change", renderMissionNodeState);
 
@@ -1702,7 +1739,8 @@
       projectReportCard.classList.add("hidden");
       activeProjectId = null;
     });
-    projectCreatedCloseButton.addEventListener("click", () => projectCreatedOverlay.classList.add("hidden"));
+    projectCreatedCloseButton.addEventListener("click", dismissProjectCreated);
+    projectCreatedCloseTop.addEventListener("click", dismissProjectCreated);
     projectGoReportButton.addEventListener("click", async () => {
       const projectId = pendingCreatedProjectId;
       projectCreatedOverlay.classList.add("hidden");
