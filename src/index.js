@@ -1924,57 +1924,62 @@ async function submitResult(request, env, nodeId, url) {
   const assignmentStatus = outcome === "failed" ? "failed" : "completed";
   const detailsJson = JSON.stringify({ result_id: resultId, outcome });
 
-  let statements;
-  try {
-    statements = await env.DB.batch([
-      env.DB.prepare(`
-        INSERT INTO results (
-          result_id, assignment_id, node_id, outcome,
-          summary, artifact_key, metrics_json
-        )
-        SELECT ?, ?, ?, ?, ?, ?, ?
-        FROM assignments
-        WHERE assignment_id = ?
-          AND node_id = ?
-          AND status IN ('assigned', 'running')
-      `).bind(
-        resultId,
-        assignmentId,
-        nodeId,
-        outcome,
-        summary,
-        artifactKey,
-        metricsJson,
-        assignmentId,
-        nodeId
-      ),
-      env.DB.prepare(`
-        INSERT INTO agent_reports (
-          report_id, result_id, assignment_id, mission_id, node_id,
-          report_type, report_json, report_sha256,
-          report_size_bytes, sensitivity
-        )
-        SELECT ?, r.result_id, r.assignment_id, a.mission_id, r.node_id,
-               ?, ?, ?, ?, ?
-        FROM results AS r
-        JOIN assignments AS a ON a.assignment_id = r.assignment_id
-        WHERE r.result_id = ?
-      `).bind(
-        reportId,
-        reportType,
-        reportJson,
-        reportSha256,
-        reportSizeBytes,
-        sensitivity,
-        resultId
-      ),
-      env.DB.prepare(`
-        UPDATE assignments
-        SET status = ?,
-            started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
-            completed_at = CURRENT_TIMESTAMP
-        WHERE assignment_id = ? AND node_id = ? AND changes() = 1
-      `).bind(assignmentStatus, assignmentId, nodeId),
+  const isProjectAssignment = assignmentId.startsWith("assignment_work_");
+  if (isProjectAssignment) await ensureProjectStorage(env);
+
+  const resultStatements = [
+    env.DB.prepare(`
+      INSERT INTO results (
+        result_id, assignment_id, node_id, outcome,
+        summary, artifact_key, metrics_json
+      )
+      SELECT ?, ?, ?, ?, ?, ?, ?
+      FROM assignments
+      WHERE assignment_id = ?
+        AND node_id = ?
+        AND status IN ('assigned', 'running')
+    `).bind(
+      resultId,
+      assignmentId,
+      nodeId,
+      outcome,
+      summary,
+      artifactKey,
+      metricsJson,
+      assignmentId,
+      nodeId
+    ),
+    env.DB.prepare(`
+      INSERT INTO agent_reports (
+        report_id, result_id, assignment_id, mission_id, node_id,
+        report_type, report_json, report_sha256,
+        report_size_bytes, sensitivity
+      )
+      SELECT ?, r.result_id, r.assignment_id, a.mission_id, r.node_id,
+             ?, ?, ?, ?, ?
+      FROM results AS r
+      JOIN assignments AS a ON a.assignment_id = r.assignment_id
+      WHERE r.result_id = ?
+    `).bind(
+      reportId,
+      reportType,
+      reportJson,
+      reportSha256,
+      reportSizeBytes,
+      sensitivity,
+      resultId
+    ),
+    env.DB.prepare(`
+      UPDATE assignments
+      SET status = ?,
+          started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
+          completed_at = CURRENT_TIMESTAMP
+      WHERE assignment_id = ? AND node_id = ? AND changes() = 1
+    `).bind(assignmentStatus, assignmentId, nodeId)
+  ];
+
+  if (isProjectAssignment) {
+    resultStatements.push(
       env.DB.prepare(`
         UPDATE project_work_items
         SET status = ?, updated_at = CURRENT_TIMESTAMP
@@ -2010,30 +2015,38 @@ async function submitResult(request, env, nodeId, url) {
           LIMIT 1
         )
           AND EXISTS (SELECT 1 FROM results WHERE result_id = ?)
-      `).bind(assignmentId, resultId),
-      env.DB.prepare(`
-        UPDATE missions
-        SET status = 'completed'
-        WHERE mission_id = (
-          SELECT mission_id FROM assignments WHERE assignment_id = ?
+      `).bind(assignmentId, resultId)
+    );
+  }
+
+  resultStatements.push(
+    env.DB.prepare(`
+      UPDATE missions
+      SET status = 'completed'
+      WHERE mission_id = (
+        SELECT mission_id FROM assignments WHERE assignment_id = ?
+      )
+        AND status != 'cancelled'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM assignments
+          WHERE assignments.mission_id = missions.mission_id
+            AND assignments.status IN ('assigned', 'running')
         )
-          AND status != 'cancelled'
-          AND NOT EXISTS (
-            SELECT 1
-            FROM assignments
-            WHERE assignments.mission_id = missions.mission_id
-              AND assignments.status IN ('assigned', 'running')
-          )
-          AND EXISTS (SELECT 1 FROM results WHERE result_id = ?)
-      `).bind(assignmentId, resultId),
-      env.DB.prepare(`
-        INSERT INTO audit_events (
-          actor_type, actor_id, action, target_type, target_id, details_json
-        )
-        SELECT 'node', ?, 'result.submitted', 'assignment', ?, ?
-        WHERE EXISTS (SELECT 1 FROM results WHERE result_id = ?)
-      `).bind(nodeId, assignmentId, detailsJson, resultId)
-    ]);
+        AND EXISTS (SELECT 1 FROM results WHERE result_id = ?)
+    `).bind(assignmentId, resultId),
+    env.DB.prepare(`
+      INSERT INTO audit_events (
+        actor_type, actor_id, action, target_type, target_id, details_json
+      )
+      SELECT 'node', ?, 'result.submitted', 'assignment', ?, ?
+      WHERE EXISTS (SELECT 1 FROM results WHERE result_id = ?)
+    `).bind(nodeId, assignmentId, detailsJson, resultId)
+  );
+
+  let statements;
+  try {
+    statements = await env.DB.batch(resultStatements);
   } catch (error) {
     if (String(error).includes("results.assignment_id")) {
       throw new ApiError(409, "result_already_exists");
