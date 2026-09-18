@@ -408,6 +408,252 @@ async function ensureRolloutCommandForNode(env, nodeId) {
   }
 }
 
+async function ensureProjectStorage(env) {
+  if (!projectSchemaPromise) {
+    projectSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS architect_projects (
+          project_id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          source_type TEXT NOT NULL,
+          task_text TEXT NOT NULL,
+          task_sha256 TEXT NOT NULL,
+          checks_json TEXT NOT NULL,
+          architect_approved INTEGER NOT NULL DEFAULT 0 CHECK (architect_approved IN (0,1)),
+          status TEXT NOT NULL DEFAULT 'planned'
+            CHECK (status IN ('planned','running','completed','blocked','cancelled')),
+          worker_count INTEGER NOT NULL DEFAULT 0 CHECK (worker_count >= 0),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_architect_projects_hash_status
+        ON architect_projects(task_sha256, status, created_at DESC)
+      `),
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS project_work_items (
+          work_item_id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          sequence_no INTEGER NOT NULL CHECK (sequence_no >= 1),
+          node_id TEXT,
+          task_text TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'planned'
+            CHECK (status IN ('planned','assigned','running','completed','failed','cancelled')),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (project_id) REFERENCES architect_projects(project_id) ON DELETE CASCADE,
+          FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE SET NULL
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_project_work_items_project_sequence
+        ON project_work_items(project_id, sequence_no)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_project_work_items_node_status
+        ON project_work_items(node_id, status, created_at)
+      `)
+    ]).catch((error) => {
+      projectSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await projectSchemaPromise;
+}
+
+function projectSafetyClassification(text) {
+  const normalized = text.toLowerCase();
+  const prohibitedSignals = [
+    /steal\s+(password|credential|token)/,
+    /credential\s+theft/,
+    /скраст[ьи].{0,20}(парол|токен|уч[её]тн)/,
+    /украст[ьи].{0,20}(парол|токен|уч[её]тн)/,
+    /self[- ]?propagat/,
+    /самораспростран/,
+    /stealth\s+persistence/,
+    /скрыт.{0,12}(закреп|автозапуск|персист)/,
+    /exploit.{0,30}(third[- ]party|чуж)/,
+    /взлом.{0,30}(чуж|сторонн)/,
+    /autonomous.{0,20}(payment|transaction|trade)/,
+    /автономн.{0,20}(плат[её]ж|транзакц|торгов)/
+  ];
+  const blocked = prohibitedSignals.some((pattern) => pattern.test(normalized));
+  return blocked
+    ? { classification: "blocked", allowed: false, reason: "project_policy_blocked" }
+    : { classification: "bounded_review", allowed: true, reason: "architect_review_required" };
+}
+
+function splitProjectText(text, maxChars = 2000) {
+  const paragraphs = text.split(/\n{2,}/).map((item) => item.trim()).filter(Boolean);
+  const blocks = [];
+  let current = "";
+  const pushCurrent = () => {
+    if (current.trim()) blocks.push(current.trim());
+    current = "";
+  };
+  for (const paragraph of paragraphs.length ? paragraphs : [text]) {
+    let rest = paragraph;
+    while (rest.length > maxChars) {
+      const slice = rest.slice(0, maxChars);
+      const splitAt = Math.max(slice.lastIndexOf(". "), slice.lastIndexOf("! "), slice.lastIndexOf("? "), slice.lastIndexOf(" "));
+      const cut = splitAt > maxChars * 0.6 ? splitAt + 1 : maxChars;
+      const part = rest.slice(0, cut).trim();
+      if (current) pushCurrent();
+      if (part) blocks.push(part);
+      rest = rest.slice(cut).trim();
+    }
+    if (!rest) continue;
+    const candidate = current ? current + "\n\n" + rest : rest;
+    if (candidate.length > maxChars) {
+      pushCurrent();
+      current = rest;
+    } else {
+      current = candidate;
+    }
+  }
+  pushCurrent();
+  return blocks.length ? blocks : [text];
+}
+
+async function evaluateProjectChecks(env, sourceType, title, taskText) {
+  await ensureProjectStorage(env);
+  const sourceAllowed = sourceType === "architect_manual";
+  const validationPass = title.length >= 1 && title.length <= 160 &&
+    taskText.length >= 1 && taskText.length <= 20000;
+  const taskSha256 = await sha256Hex(taskText);
+  const duplicate = await env.DB.prepare(
+    "SELECT project_id, status FROM architect_projects " +
+    "WHERE task_sha256 = ? AND status IN ('planned','running') ORDER BY created_at DESC LIMIT 1"
+  ).bind(taskSha256).first();
+  const safety = projectSafetyClassification(taskText);
+  return {
+    task_sha256: taskSha256,
+    checks: {
+      source_allowlisting: {
+        passed: sourceAllowed,
+        detail: sourceAllowed ? "architect_manual_allowed" : "source_not_allowed"
+      },
+      validation: {
+        passed: validationPass,
+        detail: validationPass ? "input_valid" : "invalid_project_input"
+      },
+      deduplication: {
+        passed: !duplicate,
+        detail: duplicate ? "active_duplicate_found" : "no_active_duplicate",
+        duplicate_project_id: duplicate?.project_id || null
+      },
+      safety_classification: {
+        passed: safety.allowed,
+        detail: safety.reason,
+        classification: safety.classification
+      }
+    }
+  };
+}
+
+function projectChecksPassed(checks) {
+  return Object.values(checks).every((item) => item.passed === true);
+}
+
+async function architectCheckProject(request, env) {
+  await authenticateArchitect(request, env);
+  const body = parseJsonObject(await readBodyText(request, 24 * 1024));
+  const sourceType = optionalString(body.source_type, "source_type", 40) || "architect_manual";
+  const title = requireString(body.title, "title", 160);
+  const taskText = requireString(body.task_text, "task_text", 20000);
+  const result = await evaluateProjectChecks(env, sourceType, title, taskText);
+  return json({
+    ok: true,
+    ready_for_architect_approval: projectChecksPassed(result.checks),
+    ...result
+  });
+}
+
+async function architectCreateProject(request, env) {
+  await authenticateArchitect(request, env);
+  const body = parseJsonObject(await readBodyText(request, 24 * 1024));
+  const sourceType = optionalString(body.source_type, "source_type", 40) || "architect_manual";
+  const title = requireString(body.title, "title", 160);
+  const taskText = requireString(body.task_text, "task_text", 20000);
+  const evaluated = await evaluateProjectChecks(env, sourceType, title, taskText);
+  if (!projectChecksPassed(evaluated.checks)) {
+    throw new ApiError(409, "project_checks_failed");
+  }
+
+  const nodesQuery = await env.DB.prepare(
+    "SELECT node_id, hostname, agent_version FROM nodes " +
+    "WHERE status = 'online' AND datetime(last_seen_at) >= datetime('now', '-5 minutes') " +
+    "ORDER BY last_seen_at DESC, node_id ASC"
+  ).all();
+  const nodes = nodesQuery.results || [];
+  if (!nodes.length) throw new ApiError(409, "no_available_nodes");
+
+  const blocks = splitProjectText(taskText);
+  const workerCount = Math.min(nodes.length, blocks.length);
+  const projectId = "project_" + crypto.randomUUID();
+  const checksJson = JSON.stringify(evaluated.checks);
+  const statements = [
+    env.DB.prepare(
+      "INSERT INTO architect_projects (" +
+      "project_id, title, source_type, task_text, task_sha256, checks_json, architect_approved, status, worker_count" +
+      ") VALUES (?, ?, ?, ?, ?, ?, 1, 'planned', ?)"
+    ).bind(projectId, title, sourceType, taskText, evaluated.task_sha256, checksJson, workerCount),
+    env.DB.prepare(
+      "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+      "VALUES ('architect', 'test-console', 'project.created', 'project', ?, ?)"
+    ).bind(projectId, JSON.stringify({ worker_count: workerCount, work_items: blocks.length }))
+  ];
+
+  const workItems = [];
+  for (let index = 0; index < blocks.length; index += 1) {
+    const node = nodes[index % workerCount];
+    const workItemId = "work_" + crypto.randomUUID();
+    workItems.push({
+      work_item_id: workItemId,
+      sequence_no: index + 1,
+      node_id: node.node_id,
+      hostname: node.hostname,
+      task_text: blocks[index],
+      status: "planned"
+    });
+    statements.push(
+      env.DB.prepare(
+        "INSERT INTO project_work_items (work_item_id, project_id, sequence_no, node_id, task_text, status) " +
+        "VALUES (?, ?, ?, ?, ?, 'planned')"
+      ).bind(workItemId, projectId, index + 1, node.node_id, blocks[index])
+    );
+  }
+  await env.DB.batch(statements);
+  return json({
+    ok: true,
+    project: {
+      project_id: projectId,
+      title,
+      status: "planned",
+      architect_approved: true,
+      worker_count: workerCount,
+      work_item_count: blocks.length,
+      checks: evaluated.checks,
+      work_items: workItems
+    },
+    execution: {
+      state: "planned",
+      detail: "hub_plan_created_waiting_for_project_worker_execution"
+    }
+  }, 201);
+}
+
+async function architectListProjects(request, env) {
+  await authenticateArchitect(request, env);
+  await ensureProjectStorage(env);
+  const rows = await env.DB.prepare(
+    "SELECT project_id, title, status, worker_count, created_at, updated_at " +
+    "FROM architect_projects ORDER BY created_at DESC LIMIT 50"
+  ).all();
+  return json({ ok: true, projects: rows.results || [] });
+}
+
 function bytesToHex(bytes) {
   return [...new Uint8Array(bytes)]
     .map((byte) => byte.toString(16).padStart(2, "0"))
@@ -2005,6 +2251,18 @@ async function handleApi(request, env, url) {
     return request.method === "POST"
       ? startUpdateAllRollout(request, env)
       : methodNotAllowed(["POST"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/projects/check") {
+    return request.method === "POST"
+      ? architectCheckProject(request, env)
+      : methodNotAllowed(["POST"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/projects") {
+    if (request.method === "POST") return architectCreateProject(request, env);
+    if (request.method === "GET") return architectListProjects(request, env);
+    return methodNotAllowed(["GET", "POST"]);
   }
 
   if (url.pathname === "/api/v1/hub/nodes") {
