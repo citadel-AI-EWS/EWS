@@ -841,17 +841,17 @@
         const item = document.createElement("div");
         const completed = Number(project.completed_work_items || 0);
         const failed = Number(project.failed_work_items || 0);
+        const finished = Number(project.finished_work_items ?? (completed + failed));
+        const total = Number(project.work_item_count || 0);
+        item.className = `item ${total > 0 && finished === total && failed === 0 ? "ok" : "warn"}`;
+        const percent = total ? Math.round((finished / total) * 100) : 0;
         const assigned = Number(project.assigned_work_items || 0);
         const running = Number(project.running_work_items || 0);
-        const total = Number(project.work_item_count || 0);
-        const finished = Number(project.finished_work_items ?? (completed + failed));
-        const percent = total ? Math.round((finished / total) * 100) : 0;
         const stage = running > 0 ? "RUNNING" : assigned > 0 ? "ASSIGNED" : total > 0 && finished >= total ? "COMPLETED" : "PLAN / WAITING";
-        item.className = `item ${total > 0 && finished >= total ? "ok" : "warn"}`;
         addText(item, "strong", `${project.title} — ${stage} · ${percent}%`);
-        addText(item, "div", `Hub workers: ${project.worker_count} · блоки: ${finished}/${total} завершено · running: ${running} · assigned: ${assigned}`, "small");
+        addText(item, "div", `Нод Hub: ${project.worker_count} · завершено: ${finished}/${total} · running: ${running} · assigned: ${assigned}`, "small");
         if (stage === "PLAN / WAITING") {
-          addText(item, "div", "Ожидание: откройте отчёт — там Controller покажет READY-ноды и точный blocker (agent / LM Studio / model / offline).", "small");
+          addText(item, "div", "Ожидание: откройте отчёт — Controller покажет READY-ноды и точный blocker (agent / LM Studio / model / offline).", "small");
         }
         addText(item, "div", `Project ID: ${project.project_id}`, "small");
         const open = addText(item, "button", "Перейти к отчёту", "secondary");
@@ -860,6 +860,124 @@
         projectsList.appendChild(item);
       }
       if (!currentProjects.length) addText(projectsList, "p", "Проектов пока нет.", "muted");
+    }
+
+    function sectionStorageKey(section, index) {
+      return "citadelArchitectSection:" + (section.id || "section-" + index);
+    }
+
+    function setSectionCollapsed(section, collapsed, persist = true) {
+      const header = section._collapseHeader;
+      const button = section._collapseButton;
+      if (!header || !button) return;
+      for (const child of [...section.children]) {
+        if (child === header) continue;
+        child.classList.toggle("section-collapsed-child", collapsed);
+      }
+      button.textContent = collapsed ? "+" : "−";
+      button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      section.classList.toggle("section-collapsed", collapsed);
+      if (persist) localStorage.setItem(section._collapseKey, collapsed ? "1" : "0");
+    }
+
+    function expandSection(section) {
+      if (section?._collapseHeader) setSectionCollapsed(section, false);
+    }
+
+    function installSectionCollapsers() {
+      const sections = [...dashboard.querySelectorAll(":scope > section")];
+      sections.forEach((section, index) => {
+        if (section.dataset.collapseReady === "1") return;
+        const heading = section.querySelector(":scope > h2, :scope > .section-head h2, :scope > .ops-head h2");
+        if (!heading) return;
+        const header = [...section.children].find((child) => child === heading || child.contains(heading));
+        if (!header) return;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "section-toggle-button";
+        button.setAttribute("aria-label", "Свернуть или открыть раздел");
+        heading.classList.add("section-toggle-title");
+        heading.appendChild(button);
+        section._collapseHeader = header;
+        section._collapseButton = button;
+        section._collapseKey = sectionStorageKey(section, index);
+        section.dataset.collapseReady = "1";
+        const saved = localStorage.getItem(section._collapseKey);
+        const defaultCollapsed = section.id !== "liveOperations";
+        const collapsed = saved === null ? defaultCollapsed : saved === "1";
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setSectionCollapsed(section, !section.classList.contains("section-collapsed"));
+        });
+        setSectionCollapsed(section, collapsed, false);
+      });
+    }
+
+    function projectStageIndex(state, finalReady) {
+      if (finalReady) return 4;
+      return { planned:0, assigned:1, running:2, completed:3, completed_with_failures:3 }[state] ?? 0;
+    }
+
+    function renderProjectStages(execution) {
+      const waitingForWorker = execution?.state === "planned" && Number(execution?.ready_workers_now || 0) === 0;
+      const stages = waitingForWorker
+        ? ["WAITING MODEL","ASSIGNED","RUNNING","COMPLETED","REPORT"]
+        : ["PLAN","ASSIGNED","RUNNING","COMPLETED","REPORT"];
+      const current = projectStageIndex(execution?.state, execution?.final_report_ready);
+      projectStageTrack.replaceChildren();
+      stages.forEach((name, index) => {
+        const chip = document.createElement("div");
+        chip.className = "project-stage " + (index < current ? "done" : index === current ? "current" : "");
+        chip.textContent = name;
+        projectStageTrack.appendChild(chip);
+      });
+    }
+
+    function workerBlockerText(code, worker) {
+      const map = {
+        offline: ["OFFLINE — нет свежего heartbeat","OFFLINE — no fresh heartbeat","OFFLINE — אין heartbeat עדכני"],
+        agent_outdated: [
+          "агент устарел: " + (worker.agent_version || "—") + " → " + (currentReleaseVersion || "current"),
+          "agent outdated: " + (worker.agent_version || "—") + " → " + (currentReleaseVersion || "current"),
+          "agent מיושן: " + (worker.agent_version || "—") + " → " + (currentReleaseVersion || "current")
+        ],
+        project_text_missing: ["нет capability project_text","project_text capability missing","חסרה יכולת project_text"],
+        lmstudio_not_installed: ["LM Studio не установлен","LM Studio is not installed","LM Studio אינו מותקן"],
+        lmstudio_server_stopped: ["LM Studio server не запущен","LM Studio server is stopped","שרת LM Studio אינו פועל"],
+        lmstudio_model_not_loaded: ["языковая модель не загружена","no language model loaded","לא נטענה מודל שפה"]
+      };
+      const value = map[code] || [code,code,code];
+      return lang === "he" ? value[2] : lang === "en" ? value[1] : value[0];
+    }
+
+    function renderWorkerReadiness(execution) {
+      projectWorkerReadiness.replaceChildren();
+      const workers = execution?.worker_readiness || [];
+      if (!workers.length) {
+        addText(projectWorkerReadiness, "div", "Controller пока не видит доступных нод.", "worker-waiting");
+        return;
+      }
+      for (const worker of workers) {
+        const row = document.createElement("div");
+        row.className = worker.ready ? "worker-ready" : "worker-waiting";
+        const name = worker.node_number
+          ? `CITADEL Node ${worker.node_number} · AG-${String(worker.node_number).padStart(2,"0")}${worker.hostname ? " · " + worker.hostname : ""}`
+          : (worker.hostname || worker.node_id);
+        addText(row, "b", (worker.ready ? "✓ READY · " : "◷ WAITING · ") + name);
+        if (worker.ready) {
+          addText(row, "div", `project_text · LM Studio · model: ${worker.lmstudio_loaded_model || "—"}`, "small");
+        } else {
+          addText(row, "div", (worker.blockers || []).map((code) => workerBlockerText(code, worker)).join(" · "), "small");
+          const prepare = addText(row, "button", "Подготовить ноду в Hub", "secondary");
+          prepare.type = "button";
+          prepare.style.marginTop = "8px";
+          prepare.addEventListener("click", () => {
+            location.href = `/hub/?lmnode=${encodeURIComponent(worker.node_id)}`;
+          });
+        }
+        projectWorkerReadiness.appendChild(row);
+      }
     }
 
     function renderProjectReport(project) {
