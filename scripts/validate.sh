@@ -55,6 +55,8 @@ for required in (
     "agent/lmstudio",
     "installHubCollapsers",
     "panelToggle",
+    'sessionStorage.getItem("citadel-architect-token")',
+    'new URLSearchParams(location.search).get("lmnode")',
 ):
     if required not in hub:
         raise SystemExit(f"required real Hub capability missing: {required}")
@@ -101,7 +103,7 @@ for required in ("architectGetProject", "project_specializations", "requested_ro
 for forbidden in ("Контрольные точки", "Последние события аудита"):
     if forbidden in architect:
         raise SystemExit(f"obsolete Architect UI surfaced again: {forbidden}")
-for required in ('data-lang="ru"', 'data-lang="en"', 'data-lang="he"', "missionNodeState", "readableReport", "wakeButton", "updateAgentState", "siteClock", "projectStageTrack", "projectWorkerReadiness"):
+for required in ('data-lang="ru"', 'data-lang="en"', 'data-lang="he"', "missionNodeState", "readableReport", "wakeButton", "updateAgentState", "siteClock", "projectStageTrack", "projectWorkerReadiness", "WAITING MODEL", "Подготовить ноду в Hub"):
     if required not in architect:
         raise SystemExit(f"Architect production UI capability missing: {required}")
 
