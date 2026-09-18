@@ -91,7 +91,7 @@ await inspectPage("/", async page => {
     return el && !el.textContent.includes("בודק");
   }, { timeout });
 
-  for (const href of ["/hub/", "/architect/", "/prototype/"]) {
+  for (const href of ["/hub/", "/architect/", "/architect/logs/"]) {
     const link = page.locator(`a[href="${href}"]`);
     if (await link.count() !== 1) addFinding("missing_navigation_link", "/", href);
   }
@@ -122,7 +122,16 @@ await inspectPage("/hub/", async page => {
   await page.locator("#sshHost").fill("");
   await page.locator("#sshUser").fill("");
 
-  await page.locator("#token").fill("synthetic-invalid-token");
+  const english = page.locator('button[data-lang="en"]');
+  if (await english.count()) {
+    await english.click();
+    await page.waitForTimeout(150);
+    const htmlLang = await page.locator("html").getAttribute("lang");
+    if (htmlLang !== "en") addFinding("language_toggle_no_effect", "/hub/", `html lang became ${htmlLang}`);
+    await page.locator('button[data-lang="ru"]').click();
+  }
+
+  await page.locator("#architectToken").fill("synthetic-invalid-token");
   await page.locator("#loginButton").click();
   await page.waitForTimeout(600);
   const afterInvalidLogin = (await page.locator("#modeLabel").innerText()).trim();
@@ -141,13 +150,13 @@ await inspectPage("/architect/", async page => {
   const restrictedVisible = await page.locator("#dashboard:not(.hidden)").count();
   if (restrictedVisible) addFinding("architect_content_exposed", "/architect/", "secure content visible before authentication");
 
-  await page.locator("#architectToken").fill("synthetic-invalid-token");
+  await page.locator("#token").fill("synthetic-invalid-token");
   await page.locator("#loginButton").click();
   await page.waitForTimeout(600);
   const stillLocked = await page.locator("#loginCard").isVisible();
   if (!stillLocked) addFinding("architect_invalid_auth", "/architect/", "invalid token appears to unlock Architect");
 
-  const dangerous = ["#pauseButton", "#resumeButton", "#updateButton", "#restartButton", "#rollbackButton", "#disconnectButton"];
+  const dangerous = ["#pauseButton", "#resumeButton", "#updateButton", "#updateAllAgentsButton", "#restartButton", "#stopButton", "#rollbackButton", "#rebootButton", "#shutdownButton", "#disconnectButton"];
   for (const selector of dangerous) {
     if (await page.locator(selector).count()) {
       const disabled = await page.locator(selector).isDisabled().catch(() => true);
@@ -161,28 +170,6 @@ await inspectPage("/architect/", async page => {
 await inspectPage("/architect/logs/", async page => {
   const passwordInputs = await page.locator('input[type="password"]').count();
   if (passwordInputs < 1) addFinding("logs_auth_missing", "/architect/logs/", "no password/token input found");
-});
-
-await inspectPage("/prototype/", async page => {
-  const langButton = page.locator("#langBtn");
-  if (await langButton.count()) {
-    const before = await langButton.innerText();
-    await langButton.click();
-    await page.waitForTimeout(150);
-    const after = await langButton.innerText();
-    if (before === after) addFinding("language_toggle_no_effect", "/prototype/", `label stayed ${before}`);
-    await langButton.click();
-  }
-
-  const safeNav = page.locator("button.nav:visible");
-  const count = Math.min(await safeNav.count(), 8);
-  for (let i = 0; i < count; i += 1) {
-    const button = safeNav.nth(i);
-    const label = (await button.innerText()).trim();
-    if (!label || forbiddenActionPattern.test(label)) continue;
-    await button.click();
-    await page.waitForTimeout(100);
-  }
 });
 
 const mobile = await context.newPage();

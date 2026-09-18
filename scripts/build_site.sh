@@ -62,7 +62,7 @@ cp "$ROOT/hub.html" "$OUTPUT/hub/index.html"
 cat > "$OUTPUT/_headers" <<'HEADERS'
 /*
   Cache-Control: no-store
-  Content-Security-Policy: default-src 'self'; connect-src 'self' https://*.execute-api.*.amazonaws.com; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'
+  Content-Security-Policy: default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'
   Permissions-Policy: camera=(), geolocation=(), microphone=(self), payment=(), usb=()
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
