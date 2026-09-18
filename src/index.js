@@ -2089,13 +2089,19 @@ async function architectCreateCommand(request, env, nodeId) {
   }
 
   const node = await env.DB.prepare(
-    "SELECT node_id, status, agent_version FROM nodes WHERE node_id = ?"
+    "SELECT node_id, status, agent_version, last_seen_at, " +
+    "CASE WHEN last_seen_at IS NOT NULL " +
+    "AND datetime(last_seen_at) >= datetime('now', '-5 minutes') THEN 1 ELSE 0 END AS recently_seen " +
+    "FROM nodes WHERE node_id = ?"
   ).bind(nodeId).first();
   if (!node) {
     throw new ApiError(404, "node_not_found");
   }
   if (node.status === "revoked") {
     throw new ApiError(409, "node_revoked");
+  }
+  if (Number(node.recently_seen || 0) !== 1) {
+    throw new ApiError(409, "node_offline");
   }
   if (commandType === "stop" && node.agent_version !== LATEST_NODE_RELEASE.version) {
     throw new ApiError(409, "agent_update_required");
@@ -2191,13 +2197,22 @@ async function architectCreateMission(request, env) {
   }
 
   const node = await env.DB.prepare(
-    "SELECT node_id, status FROM nodes WHERE node_id = ?"
+    "SELECT node_id, status, last_seen_at, " +
+    "CASE WHEN last_seen_at IS NOT NULL " +
+    "AND datetime(last_seen_at) >= datetime('now', '-5 minutes') THEN 1 ELSE 0 END AS recently_seen " +
+    "FROM nodes WHERE node_id = ?"
   ).bind(nodeId).first();
   if (!node) {
     throw new ApiError(404, "node_not_found");
   }
   if (node.status === "revoked") {
     throw new ApiError(409, "node_revoked");
+  }
+  if (node.status === "paused") {
+    throw new ApiError(409, "node_paused");
+  }
+  if (node.status !== "online" || Number(node.recently_seen || 0) !== 1) {
+    throw new ApiError(409, "node_offline");
   }
 
   const missionId = "mission_" + crypto.randomUUID();
