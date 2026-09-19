@@ -313,6 +313,21 @@
       pollAiState(node.node_id).then(()=>syncLmstudioPanel()).catch(()=>{});
       lmstudioPollTimer=setInterval(()=>pollAiState(node.node_id).then(()=>{syncLmstudioPanel();renderCurrent()}).catch(()=>{}),2000);
     }
+    let lmstudioModelSearchTimer=null;
+    async function searchModelsForLmstudio(){
+      const q=$("lmstudioModel").value.trim();
+      if(!architectToken||q.length<2)return;
+      try{
+        const data=await api("/api/v1/architect/models/search?q="+encodeURIComponent(q));
+        const list=$("lmstudioModelOptions");list.replaceChildren();
+        for(const item of data.models||[]){
+          const option=document.createElement("option");
+          option.value=item.id;
+          option.label=(item.gguf?"GGUF · ":"")+(item.downloads||0)+" downloads";
+          list.appendChild(option);
+        }
+      }catch{}
+    }
     async function sendLmstudio(type){
       const node=lmstudioNode();if(!node)return;
       const body={command_type:type};
@@ -527,7 +542,7 @@
     $("lmstudioProbe").addEventListener("click",()=>sendLmstudio("lmstudio_probe").catch(e=>toast("LM Studio",e.message,"bad")));
     $("lmstudioGet").addEventListener("click",()=>sendLmstudio("lmstudio_model_get").catch(e=>toast("LM Studio",e.message,"bad")));
     $("lmstudioLoad").addEventListener("click",()=>sendLmstudio("lmstudio_model_load").catch(e=>toast("LM Studio",e.message,"bad")));
-    $("lmstudioModel").addEventListener("input",syncLmstudioPanel);
+    $("lmstudioModel").addEventListener("input",()=>{syncLmstudioPanel();clearTimeout(lmstudioModelSearchTimer);lmstudioModelSearchTimer=setTimeout(searchModelsForLmstudio,400);});
     $("hybridClose").addEventListener("click",closeHybrid);
     document.querySelectorAll("[data-hybrid-mode]").forEach(button=>button.addEventListener("click",()=>{hybridMode=button.dataset.hybridMode;document.querySelectorAll("[data-hybrid-mode]").forEach(b=>b.classList.toggle("active",b===button))}));
     $("hybridSend").addEventListener("click",sendHybrid);
