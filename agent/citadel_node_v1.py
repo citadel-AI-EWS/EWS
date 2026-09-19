@@ -1409,6 +1409,7 @@ class Agent:
         staging = Path(tempfile.mkdtemp(prefix="citadel-update-", dir=self.config.data_dir))
         backup = self.config.data_dir / "update-backup"
         replaced: list[str] = []
+        existed_before: dict[str, bool] = {}
         try:
             for item in payload["files"]:
                 data = self.download_update_file(item["url"])
@@ -1432,6 +1433,7 @@ class Agent:
             for item in payload["files"]:
                 name = item["path"]
                 current = install_root / name
+                existed_before[name] = current.exists()
                 if current.exists():
                     shutil.copy2(current, backup / name)
                 os.replace(staging / name, current)
@@ -1463,8 +1465,11 @@ class Agent:
         except Exception:
             for name in replaced:
                 saved = backup / name
-                if saved.exists():
+                if existed_before.get(name, False) and saved.exists():
                     shutil.copy2(saved, install_root / name)
+                elif not existed_before.get(name, False):
+                    with contextlib.suppress(FileNotFoundError):
+                        (install_root / name).unlink()
             self.log.write("agent_update_rolled_back", files=replaced)
             raise
         finally:
