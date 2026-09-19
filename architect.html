@@ -773,7 +773,7 @@
         wakeState.textContent = "MAC известен, но сейчас нет живой relay-ноды в той же локальной сети.";
         wakeState.className = "status";
       } else {
-        wakeState.textContent = "Wake пока недоступен: эта нода ещё не передала MAC/LAN телеметрию версии 0.3.8.";
+        wakeState.textContent = "Wake пока недоступен: эта нода ещё не передала MAC/LAN телеметрию версии 0.3.9.";
         wakeState.className = "status";
       }
     }
@@ -1005,7 +1005,7 @@
         const readyNow = Number(execution.ready_workers_now || 0);
         projectReportStatus.textContent = readyNow > 0
           ? "PLAN принят. READY-нода найдена: Controller автоматически создаёт assignment. Следующая стадия — ASSIGNED/RUNNING."
-          : "WAITING FOR MODEL — проект сохранён, но сейчас нет ни одной READY-ноды. Нужны: агент 0.3.8, LM Studio/llmster и загруженная языковая модель. Нажмите «Подготовить ноду в Hub» ниже. После загрузки модели этот проект запустится автоматически — создавать его заново не нужно.";
+          : "WAITING FOR MODEL — проект сохранён, но сейчас нет ни одной READY-ноды. Нужны: агент 0.3.9, LM Studio/llmster и загруженная языковая модель. Нажмите «Подготовить ноду в Hub» ниже. После загрузки модели этот проект запустится автоматически — создавать его заново не нужно.";
         projectReportStatus.className = `status ${readyNow > 0 ? "good" : "bad"}`;
       } else if (execution.state === "assigned") {
         projectReportStatus.textContent = "Рабочие блоки назначены нодам и ожидают принятия агентом.";
