@@ -7,6 +7,7 @@ const nodeTest = fs.readFileSync("node-test.html", "utf8");
 const agentV1 = fs.readFileSync("agent/citadel_node_v1.py", "utf8");
 const agentV2 = fs.readFileSync("agent/citadel_node_v2.py", "utf8");
 const telemetry = fs.readFileSync("src/telemetry/normalize.js", "utf8");
+const telemetryCommon = fs.readFileSync("src/telemetry/common.js", "utf8");
 const buildSite = fs.readFileSync("scripts/build_site.sh", "utf8");
 const hub = fs.readFileSync("hub.html", "utf8");
 need(index.includes("auto_enrollment_windows"), "global auto-enrollment window missing");
