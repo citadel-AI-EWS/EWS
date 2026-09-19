@@ -19,6 +19,7 @@ const packet = {
 };
 assert.deepEqual(validateEvidencePacket(packet, ["src:1"]), { ok: true, evidence_count: 2 });
 assert.equal(validateEvidencePacket(packet, ["missing"]).error, "unknown_evidence_reference");
+assert.equal(validateEvidencePacket({ evidence: "bad" }).error, "invalid_evidence");
 assert.equal(
   validateEvidencePacket({ evidence: [{ evidence_id: "x", classification: "UNVERIFIED" }] }).error,
   "invalid_evidence_classification",
