@@ -3242,6 +3242,48 @@ async function architectNodeAiState(request, env, nodeId) {
   return json({ ok: true, node, ai: await nodeAiStateResponse(env, nodeId) });
 }
 
+async function architectSearchModels(request, env, url) {
+  await authenticateArchitect(request, env);
+  const query = requireString(url.searchParams.get("q"), "model_search", 80);
+  const hfUrl = new URL("https://huggingface.co/api/models");
+  hfUrl.searchParams.set("search", query);
+  hfUrl.searchParams.set("sort", "downloads");
+  hfUrl.searchParams.set("direction", "-1");
+  hfUrl.searchParams.set("limit", "30");
+  hfUrl.searchParams.set("full", "true");
+  let response;
+  try {
+    response = await fetch(hfUrl.toString(), {
+      headers: { "accept": "application/json", "user-agent": "CITADEL-EWS/1.0" }
+    });
+  } catch {
+    throw new ApiError(502, "huggingface_unavailable");
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status === 429 ? 429 : 502, "huggingface_search_failed");
+  }
+  let rows;
+  try {
+    rows = await response.json();
+  } catch {
+    throw new ApiError(502, "huggingface_invalid_response");
+  }
+  if (!Array.isArray(rows)) throw new ApiError(502, "huggingface_invalid_response");
+  const models = rows
+    .filter((item) => item && typeof item.id === "string")
+    .map((item) => ({
+      id: item.id,
+      downloads: Number(item.downloads || 0),
+      likes: Number(item.likes || 0),
+      pipeline_tag: typeof item.pipeline_tag === "string" ? item.pipeline_tag : null,
+      gguf: Array.isArray(item.tags) && item.tags.some((tag) => String(tag).toLowerCase() === "gguf"),
+      last_modified: item.lastModified || item.last_modified || null
+    }))
+    .sort((a,b) => Number(b.gguf) - Number(a.gguf) || b.downloads - a.downloads)
+    .slice(0, 16);
+  return json({ ok: true, query, models });
+}
+
 async function architectWakeNode(request, env, targetNodeId) {
   await authenticateArchitect(request, env);
   await Promise.all([ensureNodeNetworkStorage(env), ensureCommandStorage(env)]);
@@ -3498,6 +3540,12 @@ async function handleApi(request, env, url) {
     return request.method === "POST"
       ? startUpdateAllRollout(request, env)
       : methodNotAllowed(["POST"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/models/search") {
+    return request.method === "GET"
+      ? architectSearchModels(request, env, url)
+      : methodNotAllowed(["GET"]);
   }
 
   if (url.pathname === "/api/v1/architect/work-roles") {
