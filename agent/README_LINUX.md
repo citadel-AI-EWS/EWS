@@ -1,4 +1,4 @@
-CITADEL / EWS — Linux Node Installer 0.3.8
+CITADEL / EWS — Linux Node Installer 0.3.9
 
 1. Extract the archive completely.
 2. Run: bash START_HERE.sh
