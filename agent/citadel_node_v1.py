@@ -29,6 +29,7 @@ import sys
 import tempfile
 import time
 import urllib.parse
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -44,7 +45,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.9"
+VERSION = "0.3.10"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -235,10 +236,12 @@ class ApiClient:
             if not self.identity.node_id:
                 raise RuntimeError("node is not enrolled")
             timestamp = str(int(time.time()))
-            canonical = "\n".join((method, request_path, timestamp, sha256_text(body_text)))
+            request_id = str(uuid.uuid4())
+            canonical = "\n".join((method, request_path, timestamp, request_id, sha256_text(body_text)))
             headers.update({
                 "x-node-id": self.identity.node_id,
                 "x-node-timestamp": timestamp,
+                "x-node-request-id": request_id,
                 "x-node-signature": self.identity.sign(canonical.encode("utf-8")),
             })
 
@@ -1837,6 +1840,7 @@ def self_test() -> int:
                 "POST",
                 "/api/v1/nodes/node_test/heartbeat",
                 "1700000000",
+                "00000000-0000-4000-8000-000000000000",
                 sha256_text(json_text({"hello": "world"})),
             )
         ).encode("utf-8")
