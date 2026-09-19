@@ -15,6 +15,7 @@ const JSON_HEADERS = {
   "x-content-type-options": "nosniff"
 };
 const SIGNATURE_WINDOW_SECONDS = 300;
+const NONCE_REQUIRED_AGENT_VERSION = "0.3.10";
 const SECRET_KEY = /(pass(word)?|secret|token|api[_-]?key|authorization|cookie|private[_-]?key|credential)/i;
 const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
@@ -199,64 +200,100 @@ export async function authenticateArchitect(request, env) {
   }
 }
 
+function versionAtLeast(value, minimum) {
+  const parse = (input) => {
+    const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(input || ""));
+    return match ? match.slice(1).map(Number) : null;
+  };
+  const current = parse(value);
+  const target = parse(minimum);
+  if (!current || !target) return false;
+  for (let index = 0; index < 3; index += 1) {
+    if (current[index] > target[index]) return true;
+    if (current[index] < target[index]) return false;
+  }
+  return true;
+}
+
+async function ensureNodeRequestNonceStorage(env) {
+  await env.DB.batch([
+    env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS node_request_nonces (
+        node_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (node_id, request_id),
+        FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+      )
+    `),
+    env.DB.prepare(`
+      CREATE INDEX IF NOT EXISTS idx_node_request_nonces_received
+      ON node_request_nonces(received_at)
+    `)
+  ]);
+}
+
 export async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   const headerNodeId = request.headers.get("x-node-id");
   const timestamp = request.headers.get("x-node-timestamp");
+  const requestId = request.headers.get("x-node-request-id");
   const signatureValue = request.headers.get("x-node-signature");
   if (!headerNodeId || headerNodeId !== nodeId || !timestamp || !signatureValue) {
     throw new TelemetryError(401, "node_authentication_required");
   }
-  if (!/^\d{10,13}$/.test(timestamp)) {
-    throw new TelemetryError(401, "invalid_timestamp");
-  }
+  if (!/^\d{10,13}$/.test(timestamp)) throw new TelemetryError(401, "invalid_timestamp");
+
   const numericTimestamp = Number(timestamp);
-  const timestampSeconds = timestamp.length === 13
-    ? Math.floor(numericTimestamp / 1000)
-    : numericTimestamp;
+  const timestampSeconds = timestamp.length === 13 ? Math.floor(numericTimestamp / 1000) : numericTimestamp;
   if (Math.abs(Math.floor(Date.now() / 1000) - timestampSeconds) > SIGNATURE_WINDOW_SECONDS) {
     throw new TelemetryError(401, "expired_signature");
   }
 
   const node = await env.DB.prepare(
-    "SELECT node_id, public_key, status FROM nodes WHERE node_id = ?"
+    "SELECT node_id, public_key, status, agent_version FROM nodes WHERE node_id = ?"
   ).bind(nodeId).first();
   if (!node) throw new TelemetryError(401, "invalid_node");
   if (node.status === "revoked") throw new TelemetryError(403, "node_revoked");
 
-  let publicJwk;
-  try {
-    publicJwk = JSON.parse(node.public_key);
-  } catch {
-    throw new TelemetryError(401, "invalid_node_key");
+  if (!requestId && versionAtLeast(node.agent_version, NONCE_REQUIRED_AGENT_VERSION)) {
+    throw new TelemetryError(401, "node_request_id_required");
   }
+  if (requestId && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) {
+    throw new TelemetryError(401, "invalid_request_id");
+  }
+
+  let publicJwk;
+  try { publicJwk = JSON.parse(node.public_key); }
+  catch { throw new TelemetryError(401, "invalid_node_key"); }
+
   const bodyHash = await sha256Hex(bodyBytes);
-  const canonical = [
-    request.method.toUpperCase(),
-    `${url.pathname}${url.search}`,
-    timestamp,
-    bodyHash
-  ].join("\n");
+  const canonicalParts = [request.method.toUpperCase(), `${url.pathname}${url.search}`, timestamp];
+  if (requestId) canonicalParts.push(requestId);
+  canonicalParts.push(bodyHash);
+  const canonical = canonicalParts.join("\n");
 
   let verified = false;
   try {
-    const key = await crypto.subtle.importKey(
-      "jwk",
-      publicJwk,
-      { name: "Ed25519" },
-      false,
-      ["verify"]
-    );
+    const key = await crypto.subtle.importKey("jwk", publicJwk, { name: "Ed25519" }, false, ["verify"]);
     const signature = decodeBase64Url(signatureValue);
     verified = signature.byteLength === 64 && await crypto.subtle.verify(
-      "Ed25519",
-      key,
-      signature,
-      new TextEncoder().encode(canonical)
+      "Ed25519", key, signature, new TextEncoder().encode(canonical)
     );
   } catch {
     verified = false;
   }
   if (!verified) throw new TelemetryError(401, "invalid_signature");
+
+  if (requestId) {
+    await ensureNodeRequestNonceStorage(env);
+    const nonce = await env.DB.prepare(
+      "INSERT OR IGNORE INTO node_request_nonces (node_id, request_id) VALUES (?, ?)"
+    ).bind(nodeId, requestId).run();
+    if ((nonce?.meta?.changes || 0) !== 1) throw new TelemetryError(409, "replayed_request");
+    await env.DB.prepare(
+      "DELETE FROM node_request_nonces WHERE datetime(received_at) < datetime('now', '-10 minutes')"
+    ).run();
+  }
   return node;
 }
 
