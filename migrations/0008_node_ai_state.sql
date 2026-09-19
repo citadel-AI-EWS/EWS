@@ -16,3 +16,10 @@ CREATE TABLE IF NOT EXISTS node_ai_state (
 
 CREATE INDEX IF NOT EXISTS idx_node_ai_state_updated
   ON node_ai_state(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS node_ai_runtime_state (
+  node_id TEXT PRIMARY KEY,
+  state_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+);

@@ -33,6 +33,12 @@ export const ALLOWED_EVENT_TYPES = new Set([
   "lmstudio_installed",
   "lmstudio_model_downloaded",
   "lmstudio_model_loaded",
+  "lmstudio_state_report_failed",
+  "hybrid_query_completed",
+  "network_recovery_attempted",
+  "network_recovery_failed",
+  "network_profile_remember_failed",
+  "windows_sleep_hibernate_inhibit",
   "command_failure_ack_failed",
   "command_failed"
 ]);

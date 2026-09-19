@@ -9,6 +9,7 @@ Only locally registered mission handlers can execute.
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
 import contextlib
 import dataclasses
@@ -43,15 +44,17 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.8"
+VERSION = "0.3.9"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_model_get", "lmstudio_model_load"}
+SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}
 UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
 LMSTUDIO_INSTALL_FILE_NAMES = {"install_llmstudio_headless.ps1", "install_llmstudio_headless.sh"}
 LMSTUDIO_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,95})?(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,31})?$")
+LMSTUDIO_QUANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
+HYBRID_MODES = {"python", "lmstudio", "both"}
 
 
 def now_iso() -> str:
@@ -429,6 +432,9 @@ class Agent:
         self.stop_path = config.data_dir / "STOP"
         self.paused_path = config.data_dir / "PAUSED"
         self.lmstudio_state_path = config.data_dir / "lmstudio-state.json"
+        self.network_recovery_path = config.data_dir / "network-recovery.json"
+        self.last_network_recovery = 0.0
+        self.last_network_remember = 0.0
         self.last_heartbeat = 0.0
         self.enrollment_confirmed = False
 
@@ -494,6 +500,9 @@ class Agent:
             },
         )
         self.last_heartbeat = time.monotonic()
+        if time.monotonic() - self.last_network_remember >= 300:
+            self.remember_network_profile()
+            self.last_network_remember = time.monotonic()
 
     def resources_ok(self) -> tuple[bool, dict[str, float]]:
         cpu = float(psutil.cpu_percent(interval=0.1))
@@ -782,6 +791,28 @@ class Agent:
         state["updated_at"] = now_iso()
         atomic_write(self.lmstudio_state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
 
+    def report_ai_state(self, **updates: Any) -> None:
+        self.save_lmstudio_state(**updates)
+        if not self.identity.node_id:
+            return
+        state = self.lmstudio_state()
+        allowed = {
+            "installed", "selected_model", "loaded_model", "server_running", "last_action",
+            "progress_phase", "progress_current", "progress_total", "progress_bytes",
+            "progress_total_bytes", "progress_detail", "download_job_id",
+            "query_id", "query_mode", "query_status", "query_prompt", "query_answer",
+            "load_config",
+        }
+        body = {key: state.get(key) for key in allowed if key in state}
+        try:
+            self.api.request(
+                "POST",
+                f"/api/v1/nodes/{self.require_node_id()}/ai-state",
+                body,
+            )
+        except Exception as error:
+            self.log.write("lmstudio_state_report_failed", error=str(error)[:300])
+
     def find_lms(self) -> str | None:
         candidates: list[str | None] = [shutil.which("lms")]
         home = Path.home()
@@ -813,13 +844,207 @@ class Agent:
             raise RuntimeError(detail[:500])
         return result
 
+    def lmstudio_http_json(
+        self,
+        method: str,
+        path: str,
+        body: dict[str, Any] | None = None,
+        timeout: int = 120,
+    ) -> dict[str, Any]:
+        if not path.startswith("/api/v1/") and path != "/v1/models":
+            raise RuntimeError("lmstudio_path_not_allowed")
+        encoded = None if body is None else json_text(body).encode("utf-8")
+        headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
+        if encoded is not None:
+            headers["Content-Type"] = "application/json"
+        connection = http.client.HTTPConnection("127.0.0.1", 1234, timeout=timeout)
+        try:
+            connection.request(method.upper(), path, body=encoded, headers=headers)
+            response = connection.getresponse()
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
+            if len(raw) > MAX_RESPONSE_BYTES:
+                raise RuntimeError("lmstudio_response_too_large")
+            try:
+                value = json.loads(raw.decode("utf-8")) if raw else {}
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise RuntimeError("lmstudio_invalid_json") from exc
+            if not 200 <= response.status < 300:
+                detail = value.get("error") if isinstance(value, dict) else None
+                raise RuntimeError(f"lmstudio_http_{response.status}:{str(detail)[:300]}")
+            return value if isinstance(value, dict) else {"items": value}
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _loaded_model_name(item: Any) -> str | None:
+        if not isinstance(item, dict):
+            return None
+        for key in ("identifier", "modelKey", "model_key", "model", "path", "name", "id"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    def probe_lmstudio(self) -> dict[str, Any]:
+        state = self.lmstudio_state()
+        installed = self.find_lms() is not None
+        server_running = False
+        loaded_models: list[str] = []
+        if installed:
+            try:
+                status = self.run_lms(["server", "status", "--json", "--quiet"], timeout=15)
+                decoded = json.loads(status.stdout or "{}")
+                server_running = bool(decoded.get("running")) if isinstance(decoded, dict) else False
+            except Exception:
+                server_running = False
+            if server_running:
+                try:
+                    loaded = self.run_lms(["ps", "--json"], timeout=20)
+                    decoded = json.loads(loaded.stdout or "[]")
+                    rows = decoded if isinstance(decoded, list) else decoded.get("models", []) if isinstance(decoded, dict) else []
+                    for item in rows:
+                        name = self._loaded_model_name(item)
+                        if name and name not in loaded_models:
+                            loaded_models.append(name)
+                except Exception:
+                    loaded_models = []
+        loaded_model = loaded_models[0] if loaded_models else None
+        snapshot = {
+            "installed": installed,
+            "selected_model": state.get("selected_model"),
+            "loaded_model": loaded_model,
+            "server_running": server_running,
+            "last_action": state.get("last_action"),
+            "progress_phase": state.get("progress_phase"),
+            "progress_current": state.get("progress_current"),
+            "progress_total": state.get("progress_total"),
+            "progress_bytes": state.get("progress_bytes"),
+            "progress_total_bytes": state.get("progress_total_bytes"),
+            "progress_detail": state.get("progress_detail"),
+            "download_job_id": state.get("download_job_id"),
+            "query_id": state.get("query_id"),
+            "query_mode": state.get("query_mode"),
+            "query_status": state.get("query_status"),
+            "load_config": state.get("load_config"),
+            "loaded_models": loaded_models[:8],
+            "live_checked_at": now_iso(),
+        }
+        self.save_lmstudio_state(
+            installed=installed,
+            server_running=server_running,
+            loaded_model=loaded_model,
+            live_checked_at=snapshot["live_checked_at"],
+        )
+        return snapshot
+
+    @staticmethod
+    def validate_lmstudio_install_payload(payload: dict[str, Any]) -> bool:
+        asset = payload.get("asset")
+        if not isinstance(asset, dict):
+            return False
+        name = asset.get("path")
+        url = asset.get("url")
+        digest = asset.get("sha256")
+        if name not in LMSTUDIO_INSTALL_FILE_NAMES:
+            return False
+        parsed = urllib.parse.urlsplit(url) if isinstance(url, str) else None
+        if (
+            parsed is None
+            or parsed.scheme != "https"
+            or parsed.hostname != "raw.githubusercontent.com"
+            or parsed.path != f"/citadel-AI-EWS/EWS/main/agent/lmstudio/{name}"
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+        ):
+            return False
+        expected = "install_llmstudio_headless.ps1" if os.name == "nt" else "install_llmstudio_headless.sh"
+        return name == expected
+
+    @staticmethod
+    def validate_lmstudio_model_payload(payload: dict[str, Any]) -> bool:
+        model = payload.get("model")
+        if not isinstance(model, str) or not LMSTUDIO_MODEL_RE.fullmatch(model):
+            return False
+        source = payload.get("source", "catalog")
+        if source not in {"catalog", "huggingface"}:
+            return False
+        quantization = payload.get("quantization")
+        if quantization is not None and (
+            not isinstance(quantization, str) or not LMSTUDIO_QUANT_RE.fullmatch(quantization)
+        ):
+            return False
+        settings = payload.get("settings", {})
+        if not isinstance(settings, dict):
+            return False
+        allowed = {"context_length", "flash_attention", "offload_kv_cache_to_gpu", "num_experts"}
+        if any(key not in allowed for key in settings):
+            return False
+        context = settings.get("context_length")
+        if context is not None and (not isinstance(context, int) or context < 256 or context > 1048576):
+            return False
+        for key in ("flash_attention", "offload_kv_cache_to_gpu"):
+            if key in settings and not isinstance(settings[key], bool):
+                return False
+        experts = settings.get("num_experts")
+        if experts is not None and (not isinstance(experts, int) or experts < 1 or experts > 256):
+            return False
+        return True
+
+    @staticmethod
+    def validate_hybrid_payload(payload: dict[str, Any]) -> bool:
+        mode = payload.get("mode")
+        prompt = payload.get("prompt")
+        request_id = payload.get("request_id")
+        if mode not in HYBRID_MODES:
+            return False
+        if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 8000:
+            return False
+        if not isinstance(request_id, str) or not re.fullmatch(r"query_[A-Za-z0-9_-]{8,80}", request_id):
+            return False
+        settings = payload.get("settings", {})
+        if not isinstance(settings, dict):
+            return False
+        allowed = {"temperature", "top_p", "top_k", "min_p", "repeat_penalty", "max_output_tokens", "reasoning", "context_length"}
+        if any(key not in allowed for key in settings):
+            return False
+        for key in ("temperature", "top_p", "min_p"):
+            if key in settings and (not isinstance(settings[key], (int, float)) or not 0 <= float(settings[key]) <= 1):
+                return False
+        if "top_k" in settings and (not isinstance(settings["top_k"], int) or not 0 <= settings["top_k"] <= 1000):
+            return False
+        if "repeat_penalty" in settings and (
+            not isinstance(settings["repeat_penalty"], (int, float)) or not 0.5 <= float(settings["repeat_penalty"]) <= 2.0
+        ):
+            return False
+        if "max_output_tokens" in settings and (
+            not isinstance(settings["max_output_tokens"], int) or not 1 <= settings["max_output_tokens"] <= 32768
+        ):
+            return False
+        if "context_length" in settings and (
+            not isinstance(settings["context_length"], int) or not 256 <= settings["context_length"] <= 1048576
+        ):
+            return False
+        if "reasoning" in settings and settings["reasoning"] not in {"off", "low", "medium", "high", "on"}:
+            return False
+        return True
+
     def install_lmstudio(self, payload: dict[str, Any]) -> None:
         if not self.validate_lmstudio_install_payload(payload):
             raise RuntimeError("invalid lmstudio installer payload")
         asset = payload["asset"]
+        self.report_ai_state(
+            installed=False, last_action="installing",
+            progress_phase="helper_download", progress_current=0, progress_total=5,
+            progress_detail="Downloading reviewed CITADEL installer helper",
+        )
         data = self.download_update_file(asset["url"])
         if hashlib.sha256(data).hexdigest() != asset["sha256"]:
             raise RuntimeError("lmstudio installer helper hash mismatch")
+        self.report_ai_state(
+            progress_phase="helper_verified", progress_current=1, progress_total=5,
+            progress_detail="Installer helper SHA-256 verified",
+        )
         suffix = ".ps1" if os.name == "nt" else ".sh"
         fd, temp_name = tempfile.mkstemp(prefix="citadel-lmstudio-", suffix=suffix, dir=self.config.data_dir)
         os.close(fd)
@@ -836,6 +1061,10 @@ class Agent:
                 if not bash:
                     raise RuntimeError("bash unavailable")
                 argv = [bash, str(helper)]
+            self.report_ai_state(
+                progress_phase="upstream_installer", progress_current=2, progress_total=5,
+                progress_detail="Official LM Studio / llmster installer is running",
+            )
             result = subprocess.run(  # nosec B603
                 argv,
                 timeout=1800,
@@ -848,36 +1077,281 @@ class Agent:
                 raise RuntimeError(detail[:500])
             if not self.find_lms():
                 raise RuntimeError("lms CLI unavailable after installation")
-            self.save_lmstudio_state(installed=True, last_action="installed")
+            self.report_ai_state(
+                installed=True, progress_phase="runtime_verified", progress_current=3, progress_total=5,
+                progress_detail="lms CLI verified",
+            )
+            self.run_lms(["daemon", "up"], timeout=120)
+            self.report_ai_state(
+                installed=True, progress_phase="daemon_running", progress_current=4, progress_total=5,
+                progress_detail="llmster daemon running",
+            )
+            self.run_lms(["server", "start", "--port", "1234"], timeout=120)
+            self.report_ai_state(
+                installed=True, server_running=True, last_action="installed",
+                progress_phase="complete", progress_current=5, progress_total=5,
+                progress_detail="LM Studio server running on localhost:1234",
+            )
             self.log.write("lmstudio_installed")
         finally:
             with contextlib.suppress(FileNotFoundError):
                 helper.unlink()
 
+    def resolve_lmstudio_model_key(self, model: str, quantization: str | None = None) -> str:
+        try:
+            result = self.run_lms(["ls", "--json"], timeout=30)
+            decoded = json.loads(result.stdout or "[]")
+            rows = decoded if isinstance(decoded, list) else decoded.get("models", []) if isinstance(decoded, dict) else []
+            needle = model.lower()
+            quant = (quantization or "").lower()
+            best: str | None = None
+            for item in rows:
+                if not isinstance(item, dict):
+                    continue
+                encoded = json.dumps(item, ensure_ascii=False).lower()
+                if needle not in encoded and needle.split("/")[-1] not in encoded:
+                    continue
+                if quant and quant not in encoded:
+                    continue
+                candidate = self._loaded_model_name(item)
+                if candidate:
+                    best = candidate
+                    break
+            if best:
+                return best
+        except Exception as error:
+            self.log.write("lmstudio_model_key_resolution_fallback", error=str(error)[:300])
+        return model + (("@" + quantization.lower()) if quantization else "")
+
     def download_lmstudio_model(self, payload: dict[str, Any]) -> None:
         if not self.validate_lmstudio_model_payload(payload):
             raise RuntimeError("invalid lmstudio model")
         model = payload["model"]
+        source = payload.get("source", "catalog")
+        quantization = payload.get("quantization")
         self.run_lms(["daemon", "up"], timeout=120)
-        self.run_lms(["get", model, "-y"], timeout=7200)
-        self.save_lmstudio_state(installed=True, selected_model=model, last_action="model_downloaded")
-        self.log.write("lmstudio_model_downloaded", model=model)
+        self.run_lms(["server", "start", "--port", "1234"], timeout=120)
+        request_model = f"https://huggingface.co/{model}" if source == "huggingface" else model
+        body: dict[str, Any] = {"model": request_model}
+        if quantization:
+            body["quantization"] = quantization
+        self.report_ai_state(
+            installed=True, server_running=True, selected_model=model,
+            last_action="model_downloading", progress_phase="model_download",
+            progress_bytes=0, progress_total_bytes=None, progress_detail=f"Starting download: {model}",
+        )
+        job = self.lmstudio_http_json("POST", "/api/v1/models/download", body, timeout=120)
+        status = str(job.get("status") or "")
+        job_id = job.get("job_id")
+        if status not in {"already_downloaded", "completed"}:
+            if not isinstance(job_id, str) or not job_id:
+                raise RuntimeError("lmstudio_download_job_missing")
+            while True:
+                current = self.lmstudio_http_json(
+                    "GET",
+                    "/api/v1/models/download/status/" + urllib.parse.quote(job_id, safe=""),
+                    timeout=60,
+                )
+                status = str(current.get("status") or "")
+                downloaded = int(current.get("downloaded_bytes") or 0)
+                total = int(current.get("total_size_bytes") or 0) or None
+                self.report_ai_state(
+                    installed=True, server_running=True, selected_model=model,
+                    last_action="model_downloading", progress_phase="model_download",
+                    progress_bytes=downloaded, progress_total_bytes=total,
+                    download_job_id=job_id,
+                    progress_detail=f"{status}: {model}",
+                )
+                if status == "completed":
+                    break
+                if status == "failed":
+                    raise RuntimeError("lmstudio_model_download_failed")
+                time.sleep(2)
+        model_key = self.resolve_lmstudio_model_key(model, quantization)
+        self.report_ai_state(
+            installed=True, server_running=True, selected_model=model_key,
+            last_action="model_downloaded", progress_phase="download_complete",
+            progress_bytes=None, progress_total_bytes=None, download_job_id=job_id,
+            progress_detail=f"Downloaded: {model_key}",
+        )
+        self.log.write("lmstudio_model_downloaded", model=model_key)
 
     def load_lmstudio_model(self, payload: dict[str, Any]) -> None:
         if not self.validate_lmstudio_model_payload(payload):
             raise RuntimeError("invalid lmstudio model")
         model = payload["model"]
+        quantization = payload.get("quantization")
+        settings = payload.get("settings") or {}
+        model_key = self.resolve_lmstudio_model_key(model, quantization)
         self.run_lms(["daemon", "up"], timeout=120)
         self.run_lms(["server", "start", "--port", "1234"], timeout=120)
-        self.run_lms(["load", model, "-y"], timeout=1800)
-        self.save_lmstudio_state(
-            installed=True,
-            selected_model=model,
-            loaded_model=model,
-            server_running=True,
-            last_action="model_loaded",
+        body = {"model": model_key, "echo_load_config": True, **settings}
+        self.report_ai_state(
+            installed=True, server_running=True, selected_model=model_key,
+            last_action="model_loading", progress_phase="model_load",
+            progress_current=0, progress_total=1, progress_detail=f"Loading {model_key}",
         )
-        self.log.write("lmstudio_model_loaded", model=model)
+        loaded = self.lmstudio_http_json("POST", "/api/v1/models/load", body, timeout=1800)
+        if loaded.get("status") != "loaded":
+            raise RuntimeError("lmstudio_model_not_loaded")
+        load_config = loaded.get("load_config") if isinstance(loaded.get("load_config"), dict) else settings
+        instance = loaded.get("instance_id")
+        loaded_model = str(instance or model_key)
+        self.report_ai_state(
+            installed=True, selected_model=model_key, loaded_model=loaded_model,
+            server_running=True, last_action="model_loaded",
+            progress_phase="load_complete", progress_current=1, progress_total=1,
+            progress_detail=f"Loaded: {loaded_model}", load_config=load_config,
+        )
+        self.log.write("lmstudio_model_loaded", model=loaded_model)
+
+    def python_mode_answer(self, prompt: str) -> str:
+        stripped = prompt.strip()
+        expression = stripped[5:].strip() if stripped.lower().startswith("calc:") else stripped
+        if re.fullmatch(r"[0-9eE+\-*/%().\s]{1,300}", expression):
+            try:
+                tree = ast.parse(expression, mode="eval")
+                def calc(node: ast.AST) -> float | int:
+                    if isinstance(node, ast.Expression):
+                        return calc(node.body)
+                    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                        return node.value
+                    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+                        value = calc(node.operand)
+                        return value if isinstance(node.op, ast.UAdd) else -value
+                    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow)):
+                        left, right = calc(node.left), calc(node.right)
+                        if isinstance(node.op, ast.Pow) and abs(float(right)) > 10:
+                            raise ValueError("exponent too large")
+                        result = {
+                            ast.Add: lambda: left + right,
+                            ast.Sub: lambda: left - right,
+                            ast.Mult: lambda: left * right,
+                            ast.Div: lambda: left / right,
+                            ast.FloorDiv: lambda: left // right,
+                            ast.Mod: lambda: left % right,
+                            ast.Pow: lambda: left ** right,
+                        }[type(node.op)]()
+                        if abs(float(result)) > 1e15:
+                            raise ValueError("result too large")
+                        return result
+                    raise ValueError("unsupported expression")
+                return "Python calculation: " + str(calc(tree))
+            except Exception as error:
+                self.log.write("python_mode_calculation_fallback", error=str(error)[:300])
+        inv = system_inventory({"task_text": prompt})
+        return (
+            "Python agent deterministic node context:\n"
+            f"hostname={inv['hostname']}\n"
+            f"platform={inv['platform']} {inv['platform_release']}\n"
+            f"architecture={inv['architecture']}\n"
+            f"cpu_logical_count={inv['cpu_logical_count']}\n"
+            f"memory_total_bytes={inv['memory_total_bytes']}\n"
+            f"disk_free_bytes={inv['disk_home_free_bytes']}\n"
+            f"network={json_text(inv['network'])}"
+        )
+
+    def stream_lmstudio_answer(
+        self,
+        prompt: str,
+        settings: dict[str, Any],
+        request_id: str,
+        python_context: str | None = None,
+    ) -> str:
+        state = self.probe_lmstudio()
+        model = str(state.get("loaded_model") or state.get("selected_model") or "").strip()
+        if not model:
+            raise RuntimeError("lmstudio_model_not_loaded")
+        body: dict[str, Any] = {
+            "model": model,
+            "input": prompt,
+            "stream": True,
+            **settings,
+        }
+        if python_context:
+            body["system_prompt"] = (
+                "Answer the user's question using the deterministic CITADEL Python-node context below when relevant. "
+                "Do not invent machine state that is not present.\n\n" + python_context[:12000]
+            )
+        connection = http.client.HTTPConnection("127.0.0.1", 1234, timeout=1800)
+        answer = ""
+        last_report = 0.0
+        try:
+            connection.request(
+                "POST",
+                "/api/v1/chat",
+                body=json_text(body).encode("utf-8"),
+                headers={"Content-Type": "application/json", "Accept": "text/event-stream", "User-Agent": USER_AGENT},
+            )
+            response = connection.getresponse()
+            if response.status != 200:
+                raw = response.read(4096).decode("utf-8", errors="replace")
+                raise RuntimeError(f"lmstudio_http_{response.status}:{raw[:300]}")
+            event_type = ""
+            while True:
+                raw_line = response.readline()
+                if not raw_line:
+                    break
+                line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+                if line.startswith("event:"):
+                    event_type = line[6:].strip()
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    event = json.loads(line[5:].strip())
+                except json.JSONDecodeError:
+                    continue
+                kind = str(event.get("type") or event_type)
+                if kind == "message.delta":
+                    content = event.get("content")
+                    if isinstance(content, str):
+                        answer += content
+                        if len(answer) > 64000:
+                            answer = answer[:64000] + "\n[truncated]"
+                            break
+                        now = time.monotonic()
+                        if now - last_report >= 0.8:
+                            self.report_ai_state(
+                                query_id=request_id, query_status="running",
+                                query_answer=answer, last_action="hybrid_query",
+                            )
+                            last_report = now
+                elif kind == "error":
+                    error = event.get("error")
+                    raise RuntimeError("lmstudio_chat_error:" + str(error)[:300])
+        finally:
+            connection.close()
+        if not answer.strip():
+            raise RuntimeError("lmstudio_empty_response")
+        return answer.strip()
+
+    def run_hybrid_query(self, payload: dict[str, Any]) -> None:
+        if not self.validate_hybrid_payload(payload):
+            raise RuntimeError("invalid_hybrid_query")
+        mode = payload["mode"]
+        prompt = payload["prompt"].strip()
+        request_id = payload["request_id"]
+        settings = payload.get("settings") or {}
+        self.report_ai_state(
+            query_id=request_id, query_mode=mode, query_status="running",
+            query_prompt=prompt, query_answer="", last_action="hybrid_query",
+            progress_phase="query_running", progress_detail=f"Hybrid query: {mode}",
+        )
+        python_answer = self.python_mode_answer(prompt) if mode in {"python", "both"} else None
+        if mode == "python":
+            answer = python_answer or ""
+        else:
+            answer = self.stream_lmstudio_answer(
+                prompt, settings, request_id,
+                python_context=python_answer if mode == "both" else None,
+            )
+        self.report_ai_state(
+            query_id=request_id, query_mode=mode, query_status="completed",
+            query_prompt=prompt, query_answer=answer, last_action="hybrid_query_completed",
+            progress_phase="query_complete", progress_detail="Hybrid response completed",
+        )
+        self.log.write("hybrid_query_completed", mode=mode, request_id=request_id)
 
     def send_wake_packet(self, payload: dict[str, Any]) -> None:
         if not self.validate_wake_payload(payload):
@@ -1138,10 +1612,15 @@ class Agent:
                     self.send_wake_packet(command.get("payload") or {})
                 elif command_type == "lmstudio_install":
                     self.install_lmstudio(command.get("payload") or {})
+                elif command_type == "lmstudio_probe":
+                    snapshot = self.probe_lmstudio()
+                    self.report_ai_state(**{key: value for key, value in snapshot.items() if key != "loaded_models"})
                 elif command_type == "lmstudio_model_get":
                     self.download_lmstudio_model(command.get("payload") or {})
                 elif command_type == "lmstudio_model_load":
                     self.load_lmstudio_model(command.get("payload") or {})
+                elif command_type == "hybrid_query":
+                    self.run_hybrid_query(command.get("payload") or {})
                 self.ack_command(command_id, "completed")
                 self.log.write(
                     "command_completed",
@@ -1175,6 +1654,99 @@ class Agent:
                     error=str(error)[:300],
                 )
 
+    @staticmethod
+    def is_network_error(error: Exception) -> bool:
+        return isinstance(error, (OSError, TimeoutError, ConnectionError, http.client.HTTPException))
+
+    def remember_network_profile(self) -> None:
+        state = load_json(self.network_recovery_path, {}) or {}
+        try:
+            if os.name == "nt":
+                powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+                if powershell:
+                    script = (
+                        "Get-NetConnectionProfile | "
+                        "Where-Object {$_.IPv4Connectivity -ne 'Disconnected'} | "
+                        "Select-Object Name,InterfaceAlias,IPv4Connectivity | ConvertTo-Json -Compress"
+                    )
+                    result = subprocess.run(  # nosec B603
+                        [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+                        timeout=20, capture_output=True, text=True, shell=False,
+                    )
+                    if result.returncode == 0 and result.stdout.strip():
+                        decoded = json.loads(result.stdout)
+                        rows = decoded if isinstance(decoded, list) else [decoded]
+                        names = [str(item.get("Name") or "").strip() for item in rows if isinstance(item, dict)]
+                        names = [name for name in names if name]
+                        if names:
+                            state["windows_profiles"] = names[:8]
+            elif os.name == "posix":
+                nmcli = shutil.which("nmcli")
+                if nmcli:
+                    result = subprocess.run(  # nosec B603
+                        [nmcli, "-t", "-f", "NAME,TYPE", "connection", "show", "--active"],
+                        timeout=20, capture_output=True, text=True, shell=False,
+                    )
+                    if result.returncode == 0:
+                        profiles = []
+                        for line in result.stdout.splitlines():
+                            if ":" not in line:
+                                continue
+                            name, kind = line.rsplit(":", 1)
+                            if kind in {"wifi", "802-11-wireless", "ethernet", "802-3-ethernet"} and name:
+                                profiles.append({"name": name[:120], "type": kind})
+                        if profiles:
+                            state["linux_profiles"] = profiles[:8]
+            state["remembered_at"] = now_iso()
+            atomic_write(self.network_recovery_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+        except Exception as error:
+            self.log.write("network_profile_remember_failed", error=str(error)[:300])
+
+    def recover_network(self) -> None:
+        now = time.monotonic()
+        if now - self.last_network_recovery < 60:
+            return
+        self.last_network_recovery = now
+        state = load_json(self.network_recovery_path, {}) or {}
+        attempts: list[str] = []
+        try:
+            if os.name == "nt":
+                ipconfig = shutil.which("ipconfig.exe") or shutil.which("ipconfig")
+                if ipconfig:
+                    subprocess.run(  # nosec B603
+                        [ipconfig, "/renew"], timeout=60, capture_output=True, text=True, shell=False,
+                    )
+                    attempts.append("dhcp_renew")
+                netsh = shutil.which("netsh.exe") or shutil.which("netsh")
+                if netsh:
+                    for profile in state.get("windows_profiles") or []:
+                        if not isinstance(profile, str) or not profile or len(profile) > 120:
+                            continue
+                        subprocess.run(  # nosec B603
+                            [netsh, "wlan", "connect", f"name={profile}"],
+                            timeout=30, capture_output=True, text=True, shell=False,
+                        )
+                        attempts.append("wifi_saved_profile")
+                        break
+            elif os.name == "posix":
+                nmcli = shutil.which("nmcli")
+                if nmcli:
+                    subprocess.run(  # nosec B603
+                        [nmcli, "networking", "on"], timeout=20, capture_output=True, text=True, shell=False,
+                    )
+                    for item in state.get("linux_profiles") or []:
+                        name = item.get("name") if isinstance(item, dict) else None
+                        if isinstance(name, str) and name and len(name) <= 120:
+                            subprocess.run(  # nosec B603
+                                [nmcli, "connection", "up", name],
+                                timeout=60, capture_output=True, text=True, shell=False,
+                            )
+                            attempts.append("saved_connection")
+                            break
+            self.log.write("network_recovery_attempted", attempts=attempts)
+        except Exception as error:
+            self.log.write("network_recovery_failed", error=str(error)[:300])
+
     def cycle(self) -> None:
         self.enroll()
         if self.stop_path.exists():
@@ -1205,7 +1777,7 @@ class Agent:
                     es_continuous | es_system_required
                 )
             )
-            self.log.write("windows_sleep_inhibit", enabled=keep_awake)
+            self.log.write("windows_sleep_hibernate_inhibit", enabled=keep_awake)
         backoff = 2
         try:
             while True:
@@ -1223,6 +1795,8 @@ class Agent:
                     return 0
                 except Exception as error:
                     self.log.write("cycle_error", error=str(error)[:500])
+                    if self.is_network_error(error):
+                        self.recover_network()
                     if once:
                         raise
                     time.sleep(backoff)
@@ -1313,7 +1887,7 @@ def self_test() -> int:
             "unapproved command accepted",
         )
         require_test(
-            {"system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_model_get", "lmstudio_model_load"}.issubset(SUPPORTED_COMMANDS),
+            {"system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}.issubset(SUPPORTED_COMMANDS),
             "restricted power/wake/LM Studio commands missing",
         )
         require_test(
@@ -1335,6 +1909,32 @@ def self_test() -> int:
         require_test(
             not agent.validate_lmstudio_model_payload({"model": "x;calc.exe"}),
             "unsafe LM Studio model id accepted",
+        )
+        require_test(
+            agent.validate_lmstudio_model_payload({
+                "model": "Qwen/Qwen3-4B-GGUF",
+                "source": "huggingface",
+                "quantization": "Q4_K_M",
+                "settings": {"context_length": 8192, "flash_attention": True},
+            }),
+            "valid LM Studio settings rejected",
+        )
+        require_test(
+            agent.validate_hybrid_payload({
+                "request_id": "query_12345678",
+                "mode": "both",
+                "prompt": "status?",
+                "settings": {"temperature": 0.2, "max_output_tokens": 128},
+            }),
+            "valid Hybrid payload rejected",
+        )
+        require_test(
+            not agent.validate_hybrid_payload({
+                "request_id": "bad",
+                "mode": "shell",
+                "prompt": "x",
+            }),
+            "unsafe Hybrid payload accepted",
         )
 
         bom_json = root / "bom.json"
