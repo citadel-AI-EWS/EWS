@@ -18,9 +18,11 @@ const state = {
   node: {
     node_id: "node_report_test",
     public_key: JSON.stringify({ kty: "OKP", crv: "Ed25519", x: nodePublicJwk.x }),
-    status: "online"
+    status: "online",
+    agent_version: "0.3.10"
   },
-  result: null
+  result: null,
+  nonces: new Set()
 };
 
 function compact(sql) {
@@ -57,6 +59,13 @@ class Statement {
     throw new Error(`Unhandled all(): ${this.sql}`);
   }
   async run() {
+    if (this.sql.startsWith("INSERT OR IGNORE INTO node_request_nonces")) {
+      const key = this.args.join(":");
+      if (state.nonces.has(key)) return { meta: { changes: 0 } };
+      state.nonces.add(key);
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("DELETE FROM node_request_nonces")) return { meta: { changes: 0 } };
     if (this.sql.startsWith("INSERT OR IGNORE INTO agent_reports")) {
       return { meta: { changes: 0 } };
     }
@@ -136,11 +145,12 @@ const env = {
 async function signedNodePost(path, payload) {
   const body = JSON.stringify(payload);
   const timestamp = String(Math.floor(Date.now() / 1000));
+  const requestId = crypto.randomUUID();
   const bodyHash = Buffer.from(await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(body)
   )).toString("hex");
-  const canonical = ["POST", path, timestamp, bodyHash].join("\n");
+  const canonical = ["POST", path, timestamp, requestId, bodyHash].join("\n");
   const signature = await crypto.subtle.sign(
     "Ed25519",
     nodeKeys.privateKey,
@@ -153,6 +163,7 @@ async function signedNodePost(path, payload) {
       "content-type": "application/json",
       "x-node-id": state.node.node_id,
       "x-node-timestamp": timestamp,
+      "x-node-request-id": requestId,
       "x-node-signature": Buffer.from(signature).toString("base64url")
     },
     body
