@@ -432,6 +432,9 @@ class Agent:
         self.stop_path = config.data_dir / "STOP"
         self.paused_path = config.data_dir / "PAUSED"
         self.lmstudio_state_path = config.data_dir / "lmstudio-state.json"
+        self.network_recovery_path = config.data_dir / "network-recovery.json"
+        self.last_network_recovery = 0.0
+        self.last_network_remember = 0.0
         self.last_heartbeat = 0.0
         self.enrollment_confirmed = False
 
@@ -497,6 +500,9 @@ class Agent:
             },
         )
         self.last_heartbeat = time.monotonic()
+        if time.monotonic() - self.last_network_remember >= 300:
+            self.remember_network_profile()
+            self.last_network_remember = time.monotonic()
 
     def resources_ok(self) -> tuple[bool, dict[str, float]]:
         cpu = float(psutil.cpu_percent(interval=0.1))
@@ -1648,6 +1654,99 @@ class Agent:
                     error=str(error)[:300],
                 )
 
+    @staticmethod
+    def is_network_error(error: Exception) -> bool:
+        return isinstance(error, (OSError, TimeoutError, ConnectionError, http.client.HTTPException))
+
+    def remember_network_profile(self) -> None:
+        state = load_json(self.network_recovery_path, {}) or {}
+        try:
+            if os.name == "nt":
+                powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+                if powershell:
+                    script = (
+                        "Get-NetConnectionProfile | "
+                        "Where-Object {$_.IPv4Connectivity -ne 'Disconnected'} | "
+                        "Select-Object Name,InterfaceAlias,IPv4Connectivity | ConvertTo-Json -Compress"
+                    )
+                    result = subprocess.run(  # nosec B603
+                        [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+                        timeout=20, capture_output=True, text=True, shell=False,
+                    )
+                    if result.returncode == 0 and result.stdout.strip():
+                        decoded = json.loads(result.stdout)
+                        rows = decoded if isinstance(decoded, list) else [decoded]
+                        names = [str(item.get("Name") or "").strip() for item in rows if isinstance(item, dict)]
+                        names = [name for name in names if name]
+                        if names:
+                            state["windows_profiles"] = names[:8]
+            elif os.name == "posix":
+                nmcli = shutil.which("nmcli")
+                if nmcli:
+                    result = subprocess.run(  # nosec B603
+                        [nmcli, "-t", "-f", "NAME,TYPE", "connection", "show", "--active"],
+                        timeout=20, capture_output=True, text=True, shell=False,
+                    )
+                    if result.returncode == 0:
+                        profiles = []
+                        for line in result.stdout.splitlines():
+                            if ":" not in line:
+                                continue
+                            name, kind = line.rsplit(":", 1)
+                            if kind in {"wifi", "802-11-wireless", "ethernet", "802-3-ethernet"} and name:
+                                profiles.append({"name": name[:120], "type": kind})
+                        if profiles:
+                            state["linux_profiles"] = profiles[:8]
+            state["remembered_at"] = now_iso()
+            atomic_write(self.network_recovery_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+        except Exception as error:
+            self.log.write("network_profile_remember_failed", error=str(error)[:300])
+
+    def recover_network(self) -> None:
+        now = time.monotonic()
+        if now - self.last_network_recovery < 60:
+            return
+        self.last_network_recovery = now
+        state = load_json(self.network_recovery_path, {}) or {}
+        attempts: list[str] = []
+        try:
+            if os.name == "nt":
+                ipconfig = shutil.which("ipconfig.exe") or shutil.which("ipconfig")
+                if ipconfig:
+                    subprocess.run(  # nosec B603
+                        [ipconfig, "/renew"], timeout=60, capture_output=True, text=True, shell=False,
+                    )
+                    attempts.append("dhcp_renew")
+                netsh = shutil.which("netsh.exe") or shutil.which("netsh")
+                if netsh:
+                    for profile in state.get("windows_profiles") or []:
+                        if not isinstance(profile, str) or not profile or len(profile) > 120:
+                            continue
+                        subprocess.run(  # nosec B603
+                            [netsh, "wlan", "connect", f"name={profile}"],
+                            timeout=30, capture_output=True, text=True, shell=False,
+                        )
+                        attempts.append("wifi_saved_profile")
+                        break
+            elif os.name == "posix":
+                nmcli = shutil.which("nmcli")
+                if nmcli:
+                    subprocess.run(  # nosec B603
+                        [nmcli, "networking", "on"], timeout=20, capture_output=True, text=True, shell=False,
+                    )
+                    for item in state.get("linux_profiles") or []:
+                        name = item.get("name") if isinstance(item, dict) else None
+                        if isinstance(name, str) and name and len(name) <= 120:
+                            subprocess.run(  # nosec B603
+                                [nmcli, "connection", "up", name],
+                                timeout=60, capture_output=True, text=True, shell=False,
+                            )
+                            attempts.append("saved_connection")
+                            break
+            self.log.write("network_recovery_attempted", attempts=attempts)
+        except Exception as error:
+            self.log.write("network_recovery_failed", error=str(error)[:300])
+
     def cycle(self) -> None:
         self.enroll()
         if self.stop_path.exists():
@@ -1678,7 +1777,7 @@ class Agent:
                     es_continuous | es_system_required
                 )
             )
-            self.log.write("windows_sleep_inhibit", enabled=keep_awake)
+            self.log.write("windows_sleep_hibernate_inhibit", enabled=keep_awake)
         backoff = 2
         try:
             while True:
@@ -1696,6 +1795,8 @@ class Agent:
                     return 0
                 except Exception as error:
                     self.log.write("cycle_error", error=str(error)[:500])
+                    if self.is_network_error(error):
+                        self.recover_network()
                     if once:
                         raise
                     time.sleep(backoff)
