@@ -49,6 +49,17 @@ jobs:
       - name: Build immutable static site
         run: scripts/build_site.sh
 
+      - name: Sync optional OpenRouter quality-gate secret
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          if [ -n "$OPENROUTER_API_KEY" ]; then
+            printf '%s' "$OPENROUTER_API_KEY" | npx wrangler secret put OPENROUTER_API_KEY
+          else
+            echo "OPENROUTER_API_KEY is not configured; final quality gate will remain bypassed."
+          fi
+
       - name: Deploy TEST site and Worker
         uses: cloudflare/wrangler-action@v4
         with:
