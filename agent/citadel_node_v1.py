@@ -1119,8 +1119,8 @@ class Agent:
                     break
             if best:
                 return best
-        except Exception:
-            pass
+        except Exception as error:
+            self.log.write("lmstudio_model_key_resolution_fallback", error=str(error)[:300])
         return model + (("@" + quantization.lower()) if quantization else "")
 
     def download_lmstudio_model(self, payload: dict[str, Any]) -> None:
@@ -1237,8 +1237,8 @@ class Agent:
                         return result
                     raise ValueError("unsupported expression")
                 return "Python calculation: " + str(calc(tree))
-            except Exception:
-                pass
+            except Exception as error:
+                self.log.write("python_mode_calculation_fallback", error=str(error)[:300])
         inv = system_inventory({"task_text": prompt})
         return (
             "Python agent deterministic node context:\n"
