@@ -22,7 +22,7 @@ const ALLOWED_REPORT_SENSITIVITIES = new Set([
 ]);
 const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
-const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_model_get", "lmstudio_model_load"]);
+const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
 const POWER_COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN" });
 const LATEST_NODE_RELEASE = Object.freeze({
   version: "0.3.8",
@@ -399,6 +399,229 @@ async function ensureNodeNetworkStorage(env) {
   await nodeNetworkSchemaPromise;
 }
 
+async function upsertNodeAiState(env, nodeId, state) {
+  if (!state) return;
+  await ensureNodeAiStorage(env);
+  await env.DB.prepare(`
+    INSERT INTO node_ai_state (
+      node_id, installed, selected_model, loaded_model, server_running, last_action,
+      progress_phase, progress_current, progress_total, progress_bytes, progress_total_bytes,
+      progress_detail, download_job_id, query_id, query_mode, query_status,
+      query_prompt, query_answer, load_config_json, live_checked_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(node_id) DO UPDATE SET
+      installed = excluded.installed,
+      selected_model = COALESCE(excluded.selected_model, node_ai_state.selected_model),
+      loaded_model = excluded.loaded_model,
+      server_running = excluded.server_running,
+      last_action = COALESCE(excluded.last_action, node_ai_state.last_action),
+      progress_phase = COALESCE(excluded.progress_phase, node_ai_state.progress_phase),
+      progress_current = excluded.progress_current,
+      progress_total = excluded.progress_total,
+      progress_bytes = excluded.progress_bytes,
+      progress_total_bytes = excluded.progress_total_bytes,
+      progress_detail = COALESCE(excluded.progress_detail, node_ai_state.progress_detail),
+      download_job_id = excluded.download_job_id,
+      query_id = COALESCE(excluded.query_id, node_ai_state.query_id),
+      query_mode = COALESCE(excluded.query_mode, node_ai_state.query_mode),
+      query_status = COALESCE(excluded.query_status, node_ai_state.query_status),
+      query_prompt = COALESCE(excluded.query_prompt, node_ai_state.query_prompt),
+      query_answer = COALESCE(excluded.query_answer, node_ai_state.query_answer),
+      load_config_json = COALESCE(excluded.load_config_json, node_ai_state.load_config_json),
+      live_checked_at = COALESCE(excluded.live_checked_at, node_ai_state.live_checked_at),
+      updated_at = CURRENT_TIMESTAMP
+  `).bind(
+    nodeId, state.installed, state.selected_model, state.loaded_model, state.server_running,
+    state.last_action, state.progress_phase, state.progress_current, state.progress_total,
+    state.progress_bytes, state.progress_total_bytes, state.progress_detail, state.download_job_id,
+    state.query_id, state.query_mode, state.query_status, state.query_prompt, state.query_answer,
+    state.load_config_json, state.live_checked_at
+  ).run();
+}
+
+async function nodeAiStateResponse(env, nodeId) {
+  await ensureNodeAiStorage(env);
+  const row = await env.DB.prepare(`
+    SELECT node_id, runtime, installed, selected_model, loaded_model, server_running,
+      last_action, progress_phase, progress_current, progress_total, progress_bytes,
+      progress_total_bytes, progress_detail, download_job_id, query_id, query_mode,
+      query_status, query_prompt, query_answer, load_config_json, live_checked_at, updated_at
+    FROM node_ai_state WHERE node_id = ?
+  `).bind(nodeId).first();
+  if (!row) return {
+    node_id: nodeId, runtime: "lmstudio", installed: 0, server_running: 0,
+    selected_model: null, loaded_model: null
+  };
+  return {
+    ...row,
+    load_config: safeJson(row.load_config_json, null),
+    load_config_json: undefined
+  };
+}
+
+function normalizeLmQuantization(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const quantization = requireString(value, "lmstudio_quantization", 32);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/.test(quantization)) {
+    throw new ApiError(400, "invalid_lmstudio_quantization");
+  }
+  return quantization;
+}
+
+function normalizeLmLoadSettings(value) {
+  if (value === undefined || value === null) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ApiError(400, "invalid_lmstudio_settings");
+  }
+  const allowed = new Set(["context_length", "flash_attention", "offload_kv_cache_to_gpu", "num_experts"]);
+  const out = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (!allowed.has(key)) throw new ApiError(400, "invalid_lmstudio_setting");
+    if (key === "context_length") {
+      if (!Number.isInteger(raw) || raw < 256 || raw > 1048576) throw new ApiError(400, "invalid_context_length");
+      out[key] = raw;
+    } else if (key === "num_experts") {
+      if (!Number.isInteger(raw) || raw < 1 || raw > 256) throw new ApiError(400, "invalid_num_experts");
+      out[key] = raw;
+    } else {
+      if (typeof raw !== "boolean") throw new ApiError(400, "invalid_lmstudio_boolean_setting");
+      out[key] = raw;
+    }
+  }
+  return out;
+}
+
+function normalizeHybridSettings(value) {
+  if (value === undefined || value === null) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ApiError(400, "invalid_hybrid_settings");
+  const allowed = new Set(["temperature", "top_p", "top_k", "min_p", "repeat_penalty", "max_output_tokens", "reasoning", "context_length"]);
+  const out = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (!allowed.has(key)) throw new ApiError(400, "invalid_hybrid_setting");
+    if (["temperature", "top_p", "min_p"].includes(key)) {
+      if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0 || raw > 1) throw new ApiError(400, "invalid_hybrid_float");
+    } else if (key === "top_k") {
+      if (!Number.isInteger(raw) || raw < 0 || raw > 1000) throw new ApiError(400, "invalid_top_k");
+    } else if (key === "repeat_penalty") {
+      if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0.5 || raw > 2) throw new ApiError(400, "invalid_repeat_penalty");
+    } else if (key === "max_output_tokens") {
+      if (!Number.isInteger(raw) || raw < 1 || raw > 32768) throw new ApiError(400, "invalid_max_output_tokens");
+    } else if (key === "context_length") {
+      if (!Number.isInteger(raw) || raw < 256 || raw > 1048576) throw new ApiError(400, "invalid_context_length");
+    } else if (key === "reasoning") {
+      if (!["off","low","medium","high","on"].includes(raw)) throw new ApiError(400, "invalid_reasoning");
+    }
+    out[key] = raw;
+  }
+  return out;
+}
+
+function normalizeAiState(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const stringField = (name, max = 512) => {
+    const raw = value[name];
+    if (raw === undefined || raw === null || raw === "") return null;
+    if (typeof raw !== "string" || raw.length > max) throw new ApiError(400, "invalid_ai_state");
+    return raw;
+  };
+  const intField = (name, max = Number.MAX_SAFE_INTEGER) => {
+    const raw = value[name];
+    if (raw === undefined || raw === null) return null;
+    if (!Number.isSafeInteger(raw) || raw < 0 || raw > max) throw new ApiError(400, "invalid_ai_state");
+    return raw;
+  };
+  const installed = value.installed === true || value.installed === 1 ? 1 : 0;
+  const serverRunning = value.server_running === true || value.server_running === 1 ? 1 : 0;
+  const loadConfig = value.load_config && typeof value.load_config === "object" && !Array.isArray(value.load_config)
+    ? value.load_config : null;
+  const serializedConfig = loadConfig ? JSON.stringify(loadConfig) : null;
+  if (serializedConfig && new TextEncoder().encode(serializedConfig).byteLength > 8192) throw new ApiError(400, "ai_load_config_too_large");
+  return {
+    installed,
+    selected_model: stringField("selected_model", 192),
+    loaded_model: stringField("loaded_model", 192),
+    server_running: serverRunning,
+    last_action: stringField("last_action", 64),
+    progress_phase: stringField("progress_phase", 64),
+    progress_current: intField("progress_current", 1000000),
+    progress_total: intField("progress_total", 1000000),
+    progress_bytes: intField("progress_bytes"),
+    progress_total_bytes: intField("progress_total_bytes"),
+    progress_detail: stringField("progress_detail", 800),
+    download_job_id: stringField("download_job_id", 128),
+    query_id: stringField("query_id", 128),
+    query_mode: stringField("query_mode", 16),
+    query_status: stringField("query_status", 32),
+    query_prompt: stringField("query_prompt", 8000),
+    query_answer: value.query_answer === undefined || value.query_answer === null
+      ? null
+      : (typeof value.query_answer === "string" && value.query_answer.length <= 70000
+        ? value.query_answer
+        : (() => { throw new ApiError(400, "invalid_ai_state"); })()),
+    load_config_json: serializedConfig,
+    live_checked_at: stringField("live_checked_at", 64)
+  };
+}
+
+async function nodeUpdateAiState(request, env, nodeId, url) {
+  const { bytes: bodyBytes, text: bodyText } = await readBody(request, 128 * 1024);
+  await authenticateNode(request, env, nodeId, url, bodyBytes);
+  const state = normalizeAiState(parseJsonObject(bodyText));
+  if (!state) throw new ApiError(400, "invalid_ai_state");
+  await upsertNodeAiState(env, nodeId, state);
+  return json({ ok: true, node_id: nodeId, ai: await nodeAiStateResponse(env, nodeId) });
+}
+
+async function architectNodeAiState(request, env, nodeId) {
+  await authenticateArchitect(request, env);
+  const node = await env.DB.prepare(
+    "SELECT node_id, status, agent_version, last_seen_at FROM nodes WHERE node_id = ? AND status != 'revoked'"
+  ).bind(nodeId).first();
+  if (!node) throw new ApiError(404, "node_not_found");
+  return json({ ok: true, node, ai: await nodeAiStateResponse(env, nodeId) });
+}
+
+async function architectSearchModels(request, env, url) {
+  await authenticateArchitect(request, env);
+  const query = requireString(url.searchParams.get("q"), "model_search", 80);
+  const hfUrl = new URL("https://huggingface.co/api/models");
+  hfUrl.searchParams.set("search", query);
+  hfUrl.searchParams.set("sort", "downloads");
+  hfUrl.searchParams.set("direction", "-1");
+  hfUrl.searchParams.set("limit", "30");
+  hfUrl.searchParams.set("full", "true");
+  let response;
+  try {
+    response = await fetch(hfUrl.toString(), {
+      headers: { "accept": "application/json", "user-agent": "CITADEL-EWS/1.0" }
+    });
+  } catch {
+    throw new ApiError(502, "huggingface_unavailable");
+  }
+  if (!response.ok) throw new ApiError(response.status === 429 ? 429 : 502, "huggingface_search_failed");
+  let rows;
+  try {
+    rows = await response.json();
+  } catch {
+    throw new ApiError(502, "huggingface_invalid_response");
+  }
+  if (!Array.isArray(rows)) throw new ApiError(502, "huggingface_invalid_response");
+  const needle = query.toLowerCase();
+  const models = rows
+    .filter((item) => item && typeof item.id === "string" && item.id.toLowerCase().includes(needle))
+    .map((item) => ({
+      id: item.id,
+      downloads: Number(item.downloads || 0),
+      likes: Number(item.likes || 0),
+      pipeline_tag: typeof item.pipeline_tag === "string" ? item.pipeline_tag : null,
+      gguf: Array.isArray(item.tags) && item.tags.some((tag) => String(tag).toLowerCase() === "gguf"),
+      last_modified: item.lastModified || item.last_modified || null
+    }))
+    .sort((a,b) => Number(b.gguf) - Number(a.gguf) || b.downloads - a.downloads)
+    .slice(0, 16);
+  return json({ ok: true, query, models });
+}
+
 async function ensureNodeAiStorage(env) {
   if (!nodeAiSchemaPromise) {
     nodeAiSchemaPromise = env.DB.batch([
@@ -411,6 +634,20 @@ async function ensureNodeAiStorage(env) {
           loaded_model TEXT,
           server_running INTEGER NOT NULL DEFAULT 0 CHECK (server_running IN (0,1)),
           last_action TEXT,
+          progress_phase TEXT,
+          progress_current INTEGER,
+          progress_total INTEGER,
+          progress_bytes INTEGER,
+          progress_total_bytes INTEGER,
+          progress_detail TEXT,
+          download_job_id TEXT,
+          query_id TEXT,
+          query_mode TEXT,
+          query_status TEXT,
+          query_prompt TEXT,
+          query_answer TEXT,
+          load_config_json TEXT,
+          live_checked_at TEXT,
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
         )
@@ -1862,7 +2099,9 @@ async function heartbeat(request, env, nodeId, url) {
     ? null
     : normalizeCapabilities(body.capabilities);
   const network = normalizeNodeNetwork(body.network);
+  const lmstudioState = body.lmstudio === undefined ? null : normalizeAiState(body.lmstudio);
   if (network) await ensureNodeNetworkStorage(env);
+  if (lmstudioState) await ensureNodeAiStorage(env);
   const detailsJson = JSON.stringify({
     cpu_percent: cpuPercent,
     memory_percent: memoryPercent,
@@ -1910,6 +2149,9 @@ async function heartbeat(request, env, nodeId, url) {
     ));
   }
   const results = await env.DB.batch(heartbeatStatements);
+  if (lmstudioState && (results[0]?.meta?.changes || 0) === 1) {
+    await upsertNodeAiState(env, nodeId, lmstudioState);
+  }
 
   if ((results[0]?.meta?.changes || 0) !== 1) {
     throw new ApiError(404, "node_not_found");
@@ -2786,7 +3028,13 @@ async function architectOverview(request, env) {
       "n.enrolled_at, n.last_seen_at, net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json, " +
       "ai.installed AS lmstudio_installed, ai.selected_model AS lmstudio_selected_model, " +
       "ai.loaded_model AS lmstudio_loaded_model, ai.server_running AS lmstudio_server_running, " +
-      "ai.last_action AS lmstudio_last_action, ai.updated_at AS lmstudio_updated_at, " +
+      "ai.last_action AS lmstudio_last_action, ai.progress_phase AS lmstudio_progress_phase, " +
+      "ai.progress_current AS lmstudio_progress_current, ai.progress_total AS lmstudio_progress_total, " +
+      "ai.progress_bytes AS lmstudio_progress_bytes, ai.progress_total_bytes AS lmstudio_progress_total_bytes, " +
+      "ai.progress_detail AS lmstudio_progress_detail, ai.download_job_id AS lmstudio_download_job_id, " +
+      "ai.query_id AS lmstudio_query_id, ai.query_mode AS lmstudio_query_mode, " +
+      "ai.query_status AS lmstudio_query_status, ai.load_config_json AS lmstudio_load_config_json, " +
+      "ai.live_checked_at AS lmstudio_live_checked_at, ai.updated_at AS lmstudio_updated_at, " +
       "(SELECT nl.event_type FROM node_logs AS nl WHERE nl.node_id = n.node_id " +
       "ORDER BY datetime(nl.created_at) DESC, nl.event_id DESC LIMIT 1) AS last_event_type, " +
       "(SELECT nl.message FROM node_logs AS nl WHERE nl.node_id = n.node_id " +
@@ -2864,6 +3112,8 @@ async function architectOverview(request, env) {
       : null;
     return {
       ...node,
+      lmstudio_load_config: safeJson(node.lmstudio_load_config_json, null),
+      lmstudio_load_config_json: undefined,
       mac_addresses: Array.isArray(macAddresses) ? macAddresses : [],
       mac_addresses_json: undefined,
       wake_available: node.status === "offline" && Boolean(relay),
@@ -2948,7 +3198,8 @@ async function architectCreateCommand(request, env, nodeId) {
   if (commandType === "stop" && node.agent_version !== LATEST_NODE_RELEASE.version) {
     throw new ApiError(409, "agent_update_required");
   }
-  if (commandType.startsWith("lmstudio_") && node.agent_version !== LATEST_NODE_RELEASE.version) {
+  if ((commandType.startsWith("lmstudio_") || commandType === "hybrid_query") &&
+      node.agent_version !== LATEST_NODE_RELEASE.version) {
     throw new ApiError(409, "agent_update_required");
   }
   if (commandType === "pause" && node.status === "paused") {
@@ -2972,6 +3223,8 @@ async function architectCreateCommand(request, env, nodeId) {
     payload = LATEST_NODE_RELEASE;
   } else if (commandType === "lmstudio_install") {
     payload = { asset: lmstudioInstallAssetForNode(node) };
+  } else if (commandType === "lmstudio_probe") {
+    payload = {};
   } else if (commandType === "lmstudio_model_get" || commandType === "lmstudio_model_load") {
     await ensureNodeAiStorage(env);
     const aiState = await env.DB.prepare(
@@ -2980,7 +3233,32 @@ async function architectCreateCommand(request, env, nodeId) {
     if (Number(aiState?.installed || 0) !== 1) {
       throw new ApiError(409, "lmstudio_not_installed");
     }
-    payload = { model: normalizeLmModelId(body.model) };
+    const source = body.source === "huggingface" ? "huggingface" : "catalog";
+    payload = {
+      model: normalizeLmModelId(body.model),
+      source,
+      quantization: normalizeLmQuantization(body.quantization),
+      settings: commandType === "lmstudio_model_load" ? normalizeLmLoadSettings(body.settings) : {}
+    };
+  } else if (commandType === "hybrid_query") {
+    await ensureNodeAiStorage(env);
+    const aiState = await env.DB.prepare(
+      "SELECT installed, server_running, loaded_model FROM node_ai_state WHERE node_id = ?"
+    ).bind(nodeId).first();
+    const mode = requireString(body.mode, "hybrid_mode", 16);
+    if (!["python","lmstudio","both"].includes(mode)) throw new ApiError(400, "invalid_hybrid_mode");
+    if (mode !== "python" && (
+      Number(aiState?.installed || 0) !== 1 ||
+      Number(aiState?.server_running || 0) !== 1 ||
+      typeof aiState?.loaded_model !== "string" ||
+      !aiState.loaded_model
+    )) throw new ApiError(409, "lmstudio_not_ready");
+    payload = {
+      request_id: "query_" + crypto.randomUUID().replace(/-/g, ""),
+      mode,
+      prompt: requireString(body.prompt, "hybrid_prompt", 8000),
+      settings: normalizeHybridSettings(body.settings)
+    };
   }
   const payloadJson = JSON.stringify(payload);
   const createdAt = new Date().toISOString();
@@ -3217,7 +3495,7 @@ function apiDescription() {
     api_version: "v1",
     authentication: "CITADEL-Ed25519",
     mission_types: ["system_inventory"],
-    command_types: ["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_model_get", "lmstudio_model_load"],
+    command_types: ["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"],
     arbitrary_remote_execution: false
   });
 }
@@ -3267,6 +3545,19 @@ async function handleApi(request, env, url) {
       : methodNotAllowed(["GET"]);
   }
 
+  if (url.pathname === "/api/v1/architect/models/search") {
+    return request.method === "GET"
+      ? architectSearchModels(request, env, url)
+      : methodNotAllowed();
+  }
+  const architectAiMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/nodes\/([^/]+)\/ai-state$/
+  );
+  if (architectAiMatch) {
+    return request.method === "GET"
+      ? architectNodeAiState(request, env, decodeURIComponent(architectAiMatch[1]))
+      : methodNotAllowed();
+  }
   if (url.pathname === "/api/v1/architect/release") {
     return request.method === "GET"
       ? architectRelease(request, env)
@@ -3438,6 +3729,12 @@ async function handleApi(request, env, url) {
       : methodNotAllowed(["POST"]);
   }
 
+  match = url.pathname.match(/^\/api\/v1\/nodes\/([^/]+)\/ai-state$/);
+  if (match) {
+    return request.method === "POST"
+      ? nodeUpdateAiState(request, env, decodeURIComponent(match[1]), url)
+      : methodNotAllowed();
+  }
   match = url.pathname.match(/^\/api\/v1\/nodes\/([^/]+)\/commands$/);
   if (match) {
     return request.method === "GET"
