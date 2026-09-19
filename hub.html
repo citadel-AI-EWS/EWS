@@ -451,15 +451,12 @@
     loginButton.addEventListener("click",async()=>{
       const value=tokenInput.value.trim();
       if(!value)return toast("Token required","Enter Architect token","bad");
+      if(!(await waitForRefreshIdle())){
+        return toast("Controller busy","Try secure sign-in again","bad");
+      }
       architectToken=value;
       sessionStorage.setItem("citadel-architect-token",architectToken);
       tokenInput.value="";
-      if(!(await waitForRefreshIdle())){
-        architectToken="";
-        sessionStorage.removeItem("citadel-architect-token");
-        tokenInput.value=value;
-        return toast("Controller busy","Try secure sign-in again","bad");
-      }
       await refresh();
     });
     logoutButton.addEventListener("click",async()=>{architectToken="";sessionStorage.removeItem("citadel-architect-token");releaseVersion="";lastOverview=null;lastPresence=[];tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;await refreshPublic()});
