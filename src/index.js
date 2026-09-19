@@ -25,17 +25,17 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
 const POWER_COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.8",
+  version: "0.3.9",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "2426a6552ff5909e18abc53768dd734696b2d79b9723fe3d1d68e8de3595b304"
+      sha256: "37c203645e5f19dfd342427c9c8a3b1b95e83996a8dc4b67f6b258d3f03edec0"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "596bf53cffb589cdcd002d65ac76e03630e38e707639473cd8e844566bc197c9"
+      sha256: "dce8a2fb00144dbc22e72724723194c3aee58e19cccc119d87770e736a3725b8"
     }
   ]
 });
@@ -46,12 +46,12 @@ const LMSTUDIO_INTEGRATION = Object.freeze({
   windows_asset: Object.freeze({
     path: "install_llmstudio_headless.ps1",
     url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/install_llmstudio_headless.ps1",
-    sha256: "d9a96026bea2e7729f0b086d8d668c3f4f93b7725b5e0af3f2936b68f89475cf"
+    sha256: "13f5d2f696b1814ab7f636a32cfc1ee51974335e1fd4eceec79dc5ce8f00e74c"
   }),
   linux_asset: Object.freeze({
     path: "install_llmstudio_headless.sh",
     url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/install_llmstudio_headless.sh",
-    sha256: "15dcfd76d3c929ec2ca459a19879d565a9ec6483c33fcf9b3d8ba5a8ef145d39"
+    sha256: "d99c65042e8153a44436493c97c0a906a7af01c4f055f9126045b3cd060b48d3"
   }),
   model_presets: Object.freeze([
     { id: "ibm/granite-4-micro", label: "IBM Granite 4 Micro" },
