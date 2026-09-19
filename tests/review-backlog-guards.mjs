@@ -37,7 +37,12 @@ for (const eventType of [
   "wake_packet_sent",
   "lmstudio_installed",
   "lmstudio_model_downloaded",
-  "lmstudio_model_loaded"
+  "lmstudio_model_loaded",
+  "lmstudio_state_report_failed",
+  "hybrid_query_completed",
+  "network_recovery_failed",
+  "network_recovery_attempted",
+  "windows_sleep_hibernate_inhibit"
 ]) {
   need(telemetry.includes(`"${eventType}"`), `controller drops ${eventType}`);
 }
@@ -52,6 +57,16 @@ need(index.includes('"lmstudio_model_get"'), "LM Studio model download command m
 need(index.includes('"lmstudio_model_load"'), "LM Studio model load command missing from Controller allow-list");
 need(agentV1.includes('"lmstudio_install"'), "LM Studio install command missing from node allow-list");
 need(agentV1.includes("validate_lmstudio_model_payload"), "LM Studio model validation missing");
+need(agentV1.includes("windows_sleep_hibernate_inhibit"), "sleep/hibernate inhibition missing");
+need(agentV1.includes("recover_network"), "bounded network recovery missing");
+need(agentV1.includes("stream_lmstudio_answer"), "streaming Hybrid answer missing");
+need(agentV1.includes("/api/v1/models/download/status/"), "LM Studio download progress polling missing");
+need(index.includes("node_ai_runtime_state"), "extended AI runtime state missing");
+need(index.includes("nodeUpdateAiState"), "signed node AI-state endpoint missing");
+need(index.includes("architectSearchModels"), "Hugging Face model search missing");
+need(index.includes('"lmstudio_probe"'), "LM Studio probe command missing from Controller allow-list");
+need(index.includes('"hybrid_query"'), "Hybrid command missing from Controller allow-list");
+need(agentV1.includes("validate_hybrid_payload"), "Hybrid payload validation missing");
 need(agentV1.includes("execute_project_text"), "LM Studio project text worker missing");
 need(agentV1.includes('"project_text"'), "project_text capability missing");
 need(agentV1.includes('"127.0.0.1"'), "project worker must stay on local LM Studio endpoint");
