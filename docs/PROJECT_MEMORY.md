@@ -468,3 +468,11 @@ Architect requirements:
 - Hybrid modes: deterministic Python context, LM Studio, or both.
 - Windows sleep/hibernate inhibition while the long-running agent is active.
 - Bounded saved-network recovery on transient connectivity failures; no arbitrary remote shell.
+
+
+## Agent 0.3.10
+- Adds per-request UUIDv4 nonces to signed node requests and D1 replay rejection.
+- Keeps a compatibility gate so existing 0.3.9 nodes are not cut off during staged rollout.
+- Rejects stale Controller commands older than 15 minutes (or more than 60 seconds in the future).
+- Preserves rollback correctness when an update introduces a file that did not previously exist.
+- Retains 0.3.9 LM Studio v1, Hybrid, network recovery, sleep/hibernate inhibition and no-arbitrary-shell guarantees.
