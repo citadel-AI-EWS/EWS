@@ -32,13 +32,7 @@ try {
     if ($null -ne $Command) { $Lms = $Command.Source }
   }
   if ($null -eq $Lms) { throw "lms CLI was not found after installation." }
-
-  & $Lms daemon up
-  if ($LASTEXITCODE -ne 0) { throw "llmster daemon did not start." }
-  & $Lms server start --port 1234
-  if ($LASTEXITCODE -ne 0) { throw "LM Studio local server did not start." }
-
-  Write-Host "[CITADEL] LM Studio / llmster is installed and running."
+  Write-Host "[CITADEL] LM Studio / llmster is installed; CITADEL agent will start daemon/server."
 } finally {
   Remove-Item -LiteralPath $TempFile -Force -ErrorAction SilentlyContinue
 }
