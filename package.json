@@ -5,7 +5,7 @@
   "version": "0.4.0",
   "description": "EWS Architect console and TEST Controller deployment tooling",
   "scripts": {
-    "test": "node tests/telemetry-storage.mjs && node tests/report-storage.mjs && node tests/session-storage.mjs && node tests/update-integrity.mjs && node tests/review-backlog-guards.mjs && node tests/architect-ux-guards.mjs",
+    "test": "node tests/telemetry-storage.mjs && node tests/report-storage.mjs && node tests/session-storage.mjs && node tests/update-integrity.mjs && node tests/review-backlog-guards.mjs && node tests/architect-ux-guards.mjs && node tests/openrouter-quality-gate.mjs",
     "build": "bash scripts/build_site.sh",
     "check:cloudflare": "wrangler deploy --dry-run"
   },
