@@ -52,6 +52,11 @@ for required in (
     '"lmstudio_install"',
     '"lmstudio_model_get"',
     '"lmstudio_model_load"',
+    '"lmstudio_probe"',
+    '"hybrid_query"',
+    'id="hybridPanel"',
+    'id="lmstudioProgress"',
+    "/api/v1/architect/models/search",
     "agent/lmstudio",
     "installHubCollapsers",
     "panelToggle",
@@ -210,6 +215,16 @@ columns = {
 for column in ("report_type", "report_json", "report_sha256", "report_size_bytes", "sensitivity"):
     if column not in columns:
         raise SystemExit(f"fresh migration chain missing results.{column}")
+
+ai_columns = {row[1] for row in db.execute("PRAGMA table_info(node_ai_state)")}
+for column in (
+    "progress_phase", "progress_current", "progress_total", "progress_bytes",
+    "progress_total_bytes", "progress_detail", "download_job_id", "query_id",
+    "query_mode", "query_status", "query_prompt", "query_answer",
+    "load_config_json", "live_checked_at",
+):
+    if column not in ai_columns:
+        raise SystemExit(f"fresh migration chain missing node_ai_state.{column}")
 
 print("Fresh D1 migration chain: OK")
 PY
