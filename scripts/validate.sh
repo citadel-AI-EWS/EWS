@@ -91,11 +91,18 @@ for required in (
     "reportsDisclosure",
     "installSectionCollapsers",
     "section-toggle-button",
+    'id="experienceDisclosure"',
+    'id="experienceMeta"',
+    'id="experienceList"',
+    'id="refreshExperienceButton"',
+    "/api/v1/architect/experience",
 ):
     if required not in architect:
         raise SystemExit(f"required Architect Live Operations capability missing: {required}")
 if '/api/v1/architect/work-roles' not in worker or "architectWorkRoles" not in worker:
     raise SystemExit("Architect work-role API route/handler missing from Worker")
+if '/api/v1/architect/experience' not in worker or "architectExperience" not in worker:
+    raise SystemExit("Project Experience Registry API route/handler missing from Worker")
 for required in ("architectGetProject", "project_specializations", "requested_roles"):
     if required not in worker:
         raise SystemExit(f"Project report/specialization backend missing: {required}")
@@ -160,6 +167,8 @@ node --check /tmp/ews-node-test.js
 node --check /tmp/ews-hub.js
 node --check src/index.js
 node --check src/worker.js
+node --check src/experience/policy.js
+node --check src/experience/registry.js
 node --check src/presence.js
 node --check src/telemetry/common.js
 node --check src/telemetry/schema.js
@@ -175,6 +184,8 @@ node tests/telemetry-storage.mjs
 node tests/presence-storage.mjs
 node tests/update-integrity.mjs
 node tests/review-backlog-guards.mjs
+node tests/legacy-experience.mjs
+node tests/experience-registry.mjs
 node tests/architect-ux-guards.mjs
 node tests/hub-five-questions.mjs
 
@@ -275,6 +286,7 @@ test -s "$site_target/sentinel"
 find "$site_parent" -mindepth 1 -delete
 rmdir "$site_parent"
 
+sha256sum architect.html scripts/validate.sh src/index.js
 sha256sum -c SHA256SUMS.txt
 
 git diff --check
