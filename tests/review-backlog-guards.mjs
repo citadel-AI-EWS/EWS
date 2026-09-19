@@ -21,11 +21,11 @@ need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_tok
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
 need(setup.includes("$RunArguments"), "Windows paths are not quoted");
 need(setup.includes("refusing to start another copy"), "process inspection is not fail-closed");
-need(agentV1.includes('VERSION = "0.3.8"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.8"'), "v2 release not bumped");
-need(agentV2.includes('"windows_sleep_inhibit"'), "agent drops sleep event");
+need(agentV1.includes('VERSION = "0.3.9"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.9"'), "v2 release not bumped");
+need(agentV2.includes('"windows_sleep_hibernate_inhibit"'), "agent drops sleep/hibernate event");
 for (const eventType of [
-  "windows_sleep_inhibit",
+  "windows_sleep_hibernate_inhibit",
   "agent_updated",
   "agent_update_rolled_back",
   "agent_update_healthcheck_passed",
@@ -85,5 +85,5 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.8"'), "Controller release not bumped");
+need(index.includes('version: "0.3.9"'), "Controller release not bumped");
 console.log("Review backlog guards: PASS");
