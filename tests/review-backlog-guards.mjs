@@ -63,6 +63,8 @@ need(telemetryCommon.includes("replayed_request"), "telemetry replay rejection m
 need(index.includes("node_request_nonces"), "Controller request nonce storage missing");
 need(index.includes("agentRequiresRequestId"), "Controller compatibility gate for replay protection missing");
 need(index.includes("replayed_request"), "Controller replay rejection missing");
+need(index.includes("await expireStaleNodeCommands(env, nodeId);\n  await ensureRolloutCommandForNode(env, nodeId);"), "stale command expiry must run before rollout scheduling");
+need(index.includes("expireStaleNodeCommands"), "stale command expiry missing");
 need(agentV1.includes("x-node-request-id"), "agent request nonce header missing");
 need(agentV1.includes("recover_network"), "bounded network recovery missing");
 need(agentV1.includes("stream_lmstudio_answer"), "streaming Hybrid answer missing");
