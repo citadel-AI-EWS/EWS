@@ -286,6 +286,7 @@ test -s "$site_target/sentinel"
 find "$site_parent" -mindepth 1 -delete
 rmdir "$site_parent"
 
+sha256sum architect.html scripts/validate.sh src/index.js
 sha256sum -c SHA256SUMS.txt
 
 git diff --check
