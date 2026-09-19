@@ -38,6 +38,7 @@ Each request must include:
 
 - `x-node-id`
 - `x-node-timestamp` — Unix seconds or milliseconds, within five minutes.
+- `x-node-request-id` — UUIDv4 replay nonce. Required for agent 0.3.10 and newer.
 - `x-node-signature` — unpadded base64url Ed25519 signature.
 
 The signed UTF-8 message is:
@@ -46,11 +47,18 @@ The signed UTF-8 message is:
 METHOD
 /path?query
 TIMESTAMP
+REQUEST_ID
 SHA256_HEX_OF_EXACT_BODY
 ```
 
 For a request without a body, hash the empty string. The exact timestamp header
 value is included in the signed message. The private key never leaves the computer.
+
+During the staged 0.3.9 → 0.3.10 rollout, Controller temporarily accepts the legacy
+four-line canonical message only from nodes whose stored agent version is older than
+0.3.10 so they can fetch their signed self-update. Agent 0.3.10+ must send a UUIDv4
+request ID; reusing the same node/request-ID pair within the replay window returns
+HTTP 409 `replayed_request`.
 
 ## Controller-signed commands
 
