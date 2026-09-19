@@ -108,6 +108,8 @@ export async function reviewWithOpenRouter({
   };
   if (config.model === "openrouter/fusion") {
     payload.plugins = [{ id: "fusion", preset: config.fusionPreset }];
+    // The final gate is intentionally multi-model: do not let the outer model skip Fusion.
+    payload.tool_choice = "required";
   }
 
   const controller = new AbortController();
