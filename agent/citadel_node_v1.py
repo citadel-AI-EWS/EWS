@@ -28,6 +28,7 @@ import sys
 import tempfile
 import time
 import urllib.parse
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -50,6 +51,7 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_model_get", "lmstudio_model_load"}
 UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
+COMMAND_MAX_AGE_SECONDS = 15 * 60
 LMSTUDIO_INSTALL_FILE_NAMES = {"install_llmstudio_headless.ps1", "install_llmstudio_headless.sh"}
 LMSTUDIO_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,95})?(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,31})?$")
 
@@ -232,10 +234,12 @@ class ApiClient:
             if not self.identity.node_id:
                 raise RuntimeError("node is not enrolled")
             timestamp = str(int(time.time()))
-            canonical = "\n".join((method, request_path, timestamp, sha256_text(body_text)))
+            request_id = str(uuid.uuid4())
+            canonical = "\n".join((method, request_path, timestamp, request_id, sha256_text(body_text)))
             headers.update({
                 "x-node-id": self.identity.node_id,
                 "x-node-timestamp": timestamp,
+                "x-node-request-id": request_id,
                 "x-node-signature": self.identity.sign(canonical.encode("utf-8")),
             })
 
@@ -659,6 +663,13 @@ class Agent:
             return False
         if not all((command_id, created_at, signature, self.identity.node_id)):
             return False
+        try:
+            created = dt.datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            age = abs((dt.datetime.now(dt.timezone.utc) - created.astimezone(dt.timezone.utc)).total_seconds())
+            if age > COMMAND_MAX_AGE_SECONDS:
+                return False
+        except (TypeError, ValueError):
+            return False
         payload = command.get("payload") or {}
         if not isinstance(payload, dict):
             return False
@@ -932,6 +943,7 @@ class Agent:
         staging = Path(tempfile.mkdtemp(prefix="citadel-update-", dir=self.config.data_dir))
         backup = self.config.data_dir / "update-backup"
         replaced: list[str] = []
+        existed_before: dict[str, bool] = {}
         try:
             for item in payload["files"]:
                 data = self.download_update_file(item["url"])
@@ -955,6 +967,7 @@ class Agent:
             for item in payload["files"]:
                 name = item["path"]
                 current = install_root / name
+                existed_before[name] = current.exists()
                 if current.exists():
                     shutil.copy2(current, backup / name)
                 os.replace(staging / name, current)
@@ -988,6 +1001,9 @@ class Agent:
                 saved = backup / name
                 if saved.exists():
                     shutil.copy2(saved, install_root / name)
+                elif not existed_before.get(name, False):
+                    with contextlib.suppress(FileNotFoundError):
+                        (install_root / name).unlink()
             self.log.write("agent_update_rolled_back", files=replaced)
             raise
         finally:
@@ -1263,6 +1279,7 @@ def self_test() -> int:
                 "POST",
                 "/api/v1/nodes/node_test/heartbeat",
                 "1700000000",
+                "00000000-0000-4000-8000-000000000000",
                 sha256_text(json_text({"hello": "world"})),
             )
         ).encode("utf-8")
@@ -1290,7 +1307,7 @@ def self_test() -> int:
             "command_type": "pause",
             "payload": {},
             "status": "pending",
-            "created_at": "2026-09-12T00:00:00.000Z",
+            "created_at": now_iso(),
         }
         canonical = "\n".join(
             (
@@ -1306,6 +1323,23 @@ def self_test() -> int:
         require_test(
             agent.verify_controller_command(command),
             "valid controller signature rejected",
+        )
+        expired = dict(command)
+        expired["created_at"] = "2020-01-01T00:00:00.000Z"
+        expired_canonical = "\n".join(
+            (
+                "CITADEL-COMMAND-V1",
+                expired["command_id"],
+                "node_test",
+                "pause",
+                sha256_text("{}"),
+                expired["created_at"],
+            )
+        ).encode("utf-8")
+        expired["signature"] = b64url(controller_private.sign(expired_canonical))
+        require_test(
+            not agent.verify_controller_command(expired),
+            "expired controller command accepted",
         )
         command["command_type"] = "shell"
         require_test(

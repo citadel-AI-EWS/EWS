@@ -30,7 +30,7 @@ const LATEST_NODE_RELEASE = Object.freeze({
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "2426a6552ff5909e18abc53768dd734696b2d79b9723fe3d1d68e8de3595b304"
+      sha256: "71c6d973edc47be1ddc3b73f43c2af4a1f33393e3178bb1f4b1a51f4d9393c67"
     },
     {
       path: "citadel_node_v2.py",
@@ -1588,10 +1588,14 @@ function normalizeMetrics(value) {
 async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   const headerNodeId = request.headers.get("x-node-id");
   const timestamp = request.headers.get("x-node-timestamp");
+  const requestId = request.headers.get("x-node-request-id");
   const signatureValue = request.headers.get("x-node-signature");
 
-  if (!headerNodeId || headerNodeId !== nodeId || !timestamp || !signatureValue) {
+  if (!headerNodeId || headerNodeId !== nodeId || !timestamp || !requestId || !signatureValue) {
     throw new ApiError(401, "node_authentication_required");
+  }
+  if (!/^[a-f0-9-]{36}$/.test(requestId)) {
+    throw new ApiError(401, "invalid_request_id");
   }
   if (!/^\d{10,13}$/.test(timestamp)) {
     throw new ApiError(401, "invalid_timestamp");
@@ -1629,6 +1633,7 @@ async function authenticateNode(request, env, nodeId, url, bodyBytes) {
     request.method.toUpperCase(),
     `${url.pathname}${url.search}`,
     timestamp,
+    requestId,
     bodyHash
   ].join("\n");
 
@@ -1655,6 +1660,15 @@ async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   if (!verified) {
     throw new ApiError(401, "invalid_signature");
   }
+  const nonce = await env.DB.prepare(
+    "INSERT OR IGNORE INTO node_request_nonces (node_id, request_id) VALUES (?, ?)"
+  ).bind(nodeId, requestId).run();
+  if ((nonce?.meta?.changes || 0) !== 1) {
+    throw new ApiError(409, "replayed_request");
+  }
+  await env.DB.prepare(
+    "DELETE FROM node_request_nonces WHERE datetime(received_at) < datetime('now', '-10 minutes')"
+  ).run();
   return node;
 }
 
@@ -1738,7 +1752,7 @@ function enrollmentResponse(nodeId, nodeNumber, status = "online", responseStatu
     node: { node_id: nodeId, node_number: nodeNumber, status },
     authentication: {
       scheme: "CITADEL-Ed25519",
-      required_headers: ["x-node-id", "x-node-timestamp", "x-node-signature"],
+      required_headers: ["x-node-id", "x-node-timestamp", "x-node-request-id", "x-node-signature"],
       signature_window_seconds: SIGNATURE_WINDOW_SECONDS
     }
   }, responseStatus);

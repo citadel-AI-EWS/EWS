@@ -202,9 +202,13 @@ export async function authenticateArchitect(request, env) {
 export async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   const headerNodeId = request.headers.get("x-node-id");
   const timestamp = request.headers.get("x-node-timestamp");
+  const requestId = request.headers.get("x-node-request-id");
   const signatureValue = request.headers.get("x-node-signature");
-  if (!headerNodeId || headerNodeId !== nodeId || !timestamp || !signatureValue) {
+  if (!headerNodeId || headerNodeId !== nodeId || !timestamp || !requestId || !signatureValue) {
     throw new TelemetryError(401, "node_authentication_required");
+  }
+  if (!/^[a-f0-9-]{36}$/.test(requestId)) {
+    throw new TelemetryError(401, "invalid_request_id");
   }
   if (!/^\d{10,13}$/.test(timestamp)) {
     throw new TelemetryError(401, "invalid_timestamp");
@@ -234,6 +238,7 @@ export async function authenticateNode(request, env, nodeId, url, bodyBytes) {
     request.method.toUpperCase(),
     `${url.pathname}${url.search}`,
     timestamp,
+    requestId,
     bodyHash
   ].join("\n");
 
@@ -257,6 +262,15 @@ export async function authenticateNode(request, env, nodeId, url, bodyBytes) {
     verified = false;
   }
   if (!verified) throw new TelemetryError(401, "invalid_signature");
+  const nonce = await env.DB.prepare(
+    "INSERT OR IGNORE INTO node_request_nonces (node_id, request_id) VALUES (?, ?)"
+  ).bind(nodeId, requestId).run();
+  if ((nonce?.meta?.changes || 0) !== 1) {
+    throw new TelemetryError(409, "replayed_request");
+  }
+  await env.DB.prepare(
+    "DELETE FROM node_request_nonces WHERE datetime(received_at) < datetime('now', '-10 minutes')"
+  ).run();
   return node;
 }
 
