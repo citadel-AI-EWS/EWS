@@ -291,7 +291,7 @@ test -s "$site_target/sentinel"
 find "$site_parent" -mindepth 1 -delete
 rmdir "$site_parent"
 
-sha256sum architect.html scripts/validate.sh src/index.js
+sha256sum .github/workflows/deploy-cloudflare.yml NODE_API.md node-test.html package.json agent/citadel_node_v1.py agent/citadel_node_v2.py agent/setup_windows.ps1 agent/setup_linux.sh architect.html scripts/build_fixed_agent_package.py scripts/build_fixed_linux_agent_package.py scripts/validate.sh src/index.js src/telemetry/common.js tests/report-storage.mjs tests/telemetry-storage.mjs tests/review-backlog-guards.mjs
 sha256sum -c SHA256SUMS.txt
 
 git diff --check
