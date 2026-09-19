@@ -1,4 +1,5 @@
 import { getProjectExperienceRegistry } from "./experience/registry.js";
+import { openRouterQualityConfig, reviewWithOpenRouter } from "./quality/openrouter.js";
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -72,6 +73,7 @@ let rolloutSchemaPromise;
 let projectSchemaPromise;
 let nodeAiSchemaPromise;
 let nodeRequestNonceSchemaPromise;
+let qualityGateSchemaPromise;
 
 class ApiError extends Error {
   constructor(status, code) {
@@ -793,6 +795,261 @@ async function ensureProjectStorage(env) {
   await projectSchemaPromise;
 }
 
+
+async function ensureQualityGateStorage(env) {
+  if (!qualityGateSchemaPromise) {
+    qualityGateSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS project_quality_gates (
+          project_id TEXT PRIMARY KEY,
+          source_sha256 TEXT NOT NULL,
+          status TEXT NOT NULL
+            CHECK (status IN ('processing','completed','failed')),
+          provider TEXT NOT NULL DEFAULT 'openrouter',
+          requested_model TEXT,
+          resolved_model TEXT,
+          fusion_preset TEXT,
+          final_text TEXT,
+          error_code TEXT,
+          claim_id TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (project_id) REFERENCES architect_projects(project_id) ON DELETE CASCADE
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_project_quality_gates_status
+        ON project_quality_gates(status, updated_at)
+      `)
+    ]).catch((error) => {
+      qualityGateSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await qualityGateSchemaPromise;
+}
+
+function qualityGateErrorCode(error) {
+  const value = typeof error?.code === "string"
+    ? error.code
+    : (typeof error?.message === "string" ? error.message : "quality_gate_failed");
+  return value.replace(/[^a-zA-Z0-9_.:-]/g, "_").slice(0, 120) || "quality_gate_failed";
+}
+
+function qualityGateResultFromRow(row, rawText) {
+  if (!row) return null;
+  if (row.status === "completed" && typeof row.final_text === "string" && row.final_text.trim()) {
+    return {
+      ready: true,
+      status: "completed",
+      content: row.final_text,
+      reviewed: true,
+      model: row.resolved_model || row.requested_model || null,
+      error_code: null
+    };
+  }
+  if (row.status === "failed") {
+    return {
+      ready: true,
+      status: "degraded",
+      content: rawText,
+      reviewed: false,
+      model: row.resolved_model || row.requested_model || null,
+      error_code: row.error_code || "quality_gate_failed"
+    };
+  }
+  if (row.status === "processing") {
+    return {
+      ready: false,
+      status: "processing",
+      content: null,
+      reviewed: false,
+      model: row.requested_model || null,
+      error_code: null
+    };
+  }
+  return null;
+}
+
+async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
+  const draft = String(rawText || "").trim();
+  if (!draft) {
+    return {
+      ready: false,
+      status: "empty",
+      content: null,
+      reviewed: false,
+      model: null,
+      error_code: "empty_project_result"
+    };
+  }
+
+  const config = openRouterQualityConfig(env);
+  if (!config.configured) {
+    return {
+      ready: true,
+      status: "unconfigured",
+      content: draft,
+      reviewed: false,
+      model: null,
+      error_code: null
+    };
+  }
+
+  await ensureQualityGateStorage(env);
+  const sourceSha256 = await sha256Hex(
+    `${config.model}\n${config.fusionPreset}\n${String(originalTask || "")}\n\u0000${draft}`
+  );
+  let current = await env.DB.prepare(`
+    SELECT project_id, source_sha256, status, requested_model, resolved_model,
+      fusion_preset, final_text, error_code, claim_id, updated_at
+    FROM project_quality_gates
+    WHERE project_id = ?
+  `).bind(projectId).first();
+
+  if (current?.source_sha256 === sourceSha256) {
+    const cached = qualityGateResultFromRow(current, draft);
+    if (cached?.ready || current.status === "processing") {
+      if (current.status !== "processing") return cached;
+      const newClaimId = crypto.randomUUID();
+      const staleClaim = await env.DB.prepare(`
+        UPDATE project_quality_gates
+        SET claim_id = ?, requested_model = ?, fusion_preset = ?,
+            error_code = NULL, updated_at = CURRENT_TIMESTAMP
+        WHERE project_id = ?
+          AND source_sha256 = ?
+          AND status = 'processing'
+          AND datetime(updated_at) < datetime('now', '-5 minutes')
+      `).bind(
+        newClaimId,
+        config.model,
+        config.model === "openrouter/fusion" ? config.fusionPreset : null,
+        projectId,
+        sourceSha256
+      ).run();
+      if ((staleClaim?.meta?.changes || 0) === 0) return cached;
+      current = await env.DB.prepare(`
+        SELECT project_id, source_sha256, status, requested_model, resolved_model,
+          fusion_preset, final_text, error_code, claim_id, updated_at
+        FROM project_quality_gates WHERE project_id = ?
+      `).bind(projectId).first();
+    }
+  }
+
+  const claimId = current?.source_sha256 === sourceSha256 && current?.status === "processing"
+    ? current.claim_id
+    : crypto.randomUUID();
+
+  if (!(current?.source_sha256 === sourceSha256 && current?.status === "processing")) {
+    const claim = await env.DB.prepare(`
+      INSERT INTO project_quality_gates (
+        project_id, source_sha256, status, provider, requested_model,
+        fusion_preset, final_text, error_code, claim_id, updated_at
+      ) VALUES (?, ?, 'processing', 'openrouter', ?, ?, NULL, NULL, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(project_id) DO UPDATE SET
+        source_sha256 = excluded.source_sha256,
+        status = 'processing',
+        provider = 'openrouter',
+        requested_model = excluded.requested_model,
+        resolved_model = NULL,
+        fusion_preset = excluded.fusion_preset,
+        final_text = NULL,
+        error_code = NULL,
+        claim_id = excluded.claim_id,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE project_quality_gates.source_sha256 <> excluded.source_sha256
+    `).bind(
+      projectId,
+      sourceSha256,
+      config.model,
+      config.model === "openrouter/fusion" ? config.fusionPreset : null,
+      claimId
+    ).run();
+
+    if ((claim?.meta?.changes || 0) === 0) {
+      const row = await env.DB.prepare(`
+        SELECT project_id, source_sha256, status, requested_model, resolved_model,
+          fusion_preset, final_text, error_code, claim_id, updated_at
+        FROM project_quality_gates WHERE project_id = ?
+      `).bind(projectId).first();
+      return qualityGateResultFromRow(row, draft) || {
+        ready: false,
+        status: "processing",
+        content: null,
+        reviewed: false,
+        model: config.model,
+        error_code: null
+      };
+    }
+  }
+
+  try {
+    const reviewed = await reviewWithOpenRouter({
+      env,
+      originalTask,
+      draftAnswer: draft
+    });
+    const saved = await env.DB.prepare(`
+      UPDATE project_quality_gates
+      SET status = 'completed',
+          resolved_model = ?,
+          final_text = ?,
+          error_code = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE project_id = ?
+        AND source_sha256 = ?
+        AND claim_id = ?
+        AND status = 'processing'
+    `).bind(reviewed.model, reviewed.content, projectId, sourceSha256, claimId).run();
+
+    if ((saved?.meta?.changes || 0) === 1) {
+      return {
+        ready: true,
+        status: "completed",
+        content: reviewed.content,
+        reviewed: true,
+        model: reviewed.model,
+        error_code: null
+      };
+    }
+
+    const row = await env.DB.prepare(`
+      SELECT project_id, source_sha256, status, requested_model, resolved_model,
+        fusion_preset, final_text, error_code, claim_id, updated_at
+      FROM project_quality_gates WHERE project_id = ?
+    `).bind(projectId).first();
+    return qualityGateResultFromRow(row, draft) || {
+      ready: false,
+      status: "processing",
+      content: null,
+      reviewed: false,
+      model: config.model,
+      error_code: null
+    };
+  } catch (error) {
+    const errorCode = qualityGateErrorCode(error);
+    await env.DB.prepare(`
+      UPDATE project_quality_gates
+      SET status = 'failed',
+          error_code = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE project_id = ?
+        AND source_sha256 = ?
+        AND claim_id = ?
+        AND status = 'processing'
+    `).bind(errorCode, projectId, sourceSha256, claimId).run();
+
+    return {
+      ready: true,
+      status: "degraded",
+      content: draft,
+      reviewed: false,
+      model: config.model,
+      error_code: errorCode
+    };
+  }
+}
+
 function projectSafetyClassification(text) {
   const normalized = text.toLowerCase();
   const prohibitedSignals = [
@@ -1443,8 +1700,20 @@ async function architectGetProject(request, env, projectId) {
       content: typeof item.result.content === "string" ? item.result.content : null,
       status: item.status
     }));
-  const finalReportReady = total > 0 && finished === total;
-  const finalResultText = finalReportReady ? projectFinalText(finalSections) : null;
+  const workComplete = total > 0 && finished === total;
+  const rawResultText = workComplete ? projectFinalText(finalSections) : null;
+  const qualityGate = workComplete
+    ? await finalizeProjectAnswer(env, project.project_id, project.task_text, rawResultText)
+    : {
+        ready: false,
+        status: "waiting_for_workers",
+        content: null,
+        reviewed: false,
+        model: null,
+        error_code: null
+      };
+  const finalReportReady = workComplete && qualityGate.ready;
+  const finalResultText = finalReportReady ? qualityGate.content : null;
   return json({
     ok: true,
     project: {
@@ -1465,16 +1734,28 @@ async function architectGetProject(request, env, projectId) {
         total_work_items: total,
         final_report_ready: finalReportReady,
         progress_percent: total ? Math.round((finished / total) * 100) : 0,
-        detail: executionState === "planned"
-          ? "waiting_for_lmstudio_project_worker"
-          : executionState === "completed"
-            ? "all_project_work_items_completed"
-            : executionState
+        detail: workComplete && !finalReportReady
+          ? "final_quality_gate_running"
+          : finalReportReady && qualityGate.reviewed
+            ? "final_quality_gate_completed"
+            : finalReportReady && qualityGate.status === "degraded"
+              ? "final_quality_gate_degraded"
+              : executionState === "planned"
+                ? "waiting_for_lmstudio_project_worker"
+                : executionState === "completed"
+                  ? "all_project_work_items_completed"
+                  : executionState
       },
       final_report: {
         ready: finalReportReady,
         sections: finalSections,
-        combined_text: finalResultText
+        combined_text: finalResultText,
+        quality_gate: {
+          status: qualityGate.status,
+          reviewed: qualityGate.reviewed,
+          model: qualityGate.model,
+          error_code: qualityGate.error_code
+        }
       }
     }
   });
