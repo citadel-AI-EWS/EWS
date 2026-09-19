@@ -407,7 +407,7 @@
       syncLmstudioPanel();
       setState(`Secure controller data · ${new Date().toLocaleTimeString()}`)
     }
-    async function refresh(){if(refreshBusy)return;refreshBusy=true;$("networkChip").innerHTML='NETWORK <strong>SYNC</strong>';try{if(architectToken)await refreshSecure();else await refreshPublic();$("networkChip").innerHTML='NETWORK <strong>ONLINE</strong>'}catch(error){$("networkChip").innerHTML='NETWORK <strong>ERROR</strong>';$("controllerStatus").textContent=`CONTROLLER — ${error.message}`;$("controllerStatus").className="statusPill bad";if(architectToken&&["architect_authentication_required","invalid_architect_token"].includes(error.message)){architectToken="";tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;toast("Authentication failed",error.message,"bad");await refreshPublic()}else setState(`Controller error: ${error.message}`)}finally{refreshBusy=false}}
+    async function refresh(){if(refreshBusy)return;refreshBusy=true;$("networkChip").innerHTML='NETWORK <strong>SYNC</strong>';try{if(architectToken)await refreshSecure();else await refreshPublic();$("networkChip").innerHTML='NETWORK <strong>ONLINE</strong>'}catch(error){$("networkChip").innerHTML='NETWORK <strong>ERROR</strong>';$("controllerStatus").textContent=`CONTROLLER — ${error.message}`;$("controllerStatus").className="statusPill bad";if(architectToken&&["architect_authentication_required","invalid_architect_token"].includes(error.message)){architectToken="";sessionStorage.removeItem("citadel-architect-token");tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;toast("Authentication failed",error.message,"bad");await refreshPublic()}else setState(`Controller error: ${error.message}`)}finally{refreshBusy=false}}
 
     async function wakeNode(node){
       if(!node?.wake_available)return toast("Wake-on-LAN",lang==="he"?"אין relay חי או MAC/LAN עדיין לא ידועים":lang==="en"?"No live relay, or MAC/LAN is not known yet":"Нет живой relay-ноды или MAC/LAN ещё неизвестны","bad");
@@ -443,7 +443,25 @@
     $("lmstudioLoad").addEventListener("click",()=>sendLmstudio("lmstudio_model_load"));
     $("lmstudioModel").addEventListener("input",syncLmstudioPanel);
 
-    loginButton.addEventListener("click",async()=>{const value=tokenInput.value.trim();if(!value)return toast("Token required","Enter Architect token","bad");architectToken=value;sessionStorage.setItem("citadel-architect-token",architectToken);tokenInput.value="";await refresh()});
+    async function waitForRefreshIdle(){
+      const deadline=Date.now()+5000;
+      while(refreshBusy&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,50));
+      return !refreshBusy;
+    }
+    loginButton.addEventListener("click",async()=>{
+      const value=tokenInput.value.trim();
+      if(!value)return toast("Token required","Enter Architect token","bad");
+      architectToken=value;
+      sessionStorage.setItem("citadel-architect-token",architectToken);
+      tokenInput.value="";
+      if(!(await waitForRefreshIdle())){
+        architectToken="";
+        sessionStorage.removeItem("citadel-architect-token");
+        tokenInput.value=value;
+        return toast("Controller busy","Try secure sign-in again","bad");
+      }
+      await refresh();
+    });
     logoutButton.addEventListener("click",async()=>{architectToken="";sessionStorage.removeItem("citadel-architect-token");releaseVersion="";lastOverview=null;lastPresence=[];tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;await refreshPublic()});
     $("refreshButton").addEventListener("click",refresh);
     searchInput.addEventListener("input",()=>{nodePicker.value="";renderCurrent()});
