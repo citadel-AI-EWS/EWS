@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-
-const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
-const workerModule = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+const workerModule = await import(new URL("../src/index.js", import.meta.url));
 const { projectWorkerProfile, planProjectWork, projectFinalText } = workerModule;
 
 const scenarios = [
