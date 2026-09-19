@@ -29,7 +29,10 @@ export function validateEvidencePacket(packet, referencedIds = []) {
   if (!packet || typeof packet !== "object" || Array.isArray(packet)) {
     return { ok: false, error: "invalid_evidence_packet" };
   }
-  const evidence = Array.isArray(packet.evidence) ? packet.evidence : [];
+  if (packet.evidence !== undefined && !Array.isArray(packet.evidence)) {
+    return { ok: false, error: "invalid_evidence" };
+  }
+  const evidence = packet.evidence || [];
   if (evidence.length > EXPERIENCE_LIMITS.max_evidence_items) {
     return { ok: false, error: "too_many_evidence_items" };
   }
