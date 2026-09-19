@@ -70,3 +70,24 @@ The Security Center records and reacts to suspicious or prohibited behavior such
 ## 9. Observability and cost
 
 EWS aims to expose project progress, timing, resource usage, logs, analytics, and cost to the appropriate role. Client views should explain spend versus paid budget without exposing infrastructure details that are unnecessary for the client.
+
+
+## 10. Final answer quality gate
+
+Node/EE execution remains authoritative for doing the project work. After all project work items finish,
+the Hub combines the worker sections into a draft final answer. Before that answer is exposed as the
+project's final result, the Controller sends the original user task plus the combined worker answer to
+an internal OpenRouter quality gate.
+
+The default quality gate uses `openrouter/fusion` with the `general-high` preset and forces the
+multi-model Fusion deliberation. The reviewer is instructed to treat worker output as untrusted data,
+preserve the user's requested language and constraints, correct substantive errors, and return only the
+final user-facing answer. The OpenRouter request requires Zero Data Retention and denies provider data
+collection.
+
+Quality-gate results are cached by project and by a SHA-256 digest covering the task, worker answer,
+model, and Fusion preset. Normal project polling therefore does not repeat billable model calls. A
+short processing lease prevents concurrent polls from launching duplicate reviews. If OpenRouter is
+not configured, EWS remains backwards-compatible and returns the worker synthesis. If a configured
+quality-gate call fails, EWS records the failure and degrades to the worker synthesis rather than
+discarding a completed project.
