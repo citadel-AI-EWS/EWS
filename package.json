@@ -6,7 +6,8 @@
   "description": "EWS Architect console and TEST Controller deployment tooling",
   "scripts": {
     "build": "bash scripts/build_site.sh",
-    "check:cloudflare": "wrangler deploy --dry-run"
+    "check:cloudflare": "wrangler deploy --dry-run",
+    "test": "node tests/telemetry-storage.mjs && node tests/report-storage.mjs && node tests/session-storage.mjs && node tests/presence-storage.mjs && node tests/update-integrity.mjs && node tests/review-backlog-guards.mjs && node tests/architect-ux-guards.mjs && node tests/hub-five-questions.mjs && node tests/legacy-experience.mjs && node tests/experience-registry.mjs"
   },
   "devDependencies": {
     "wrangler": "4.131.2"
