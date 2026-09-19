@@ -41,7 +41,8 @@
     .lm-float{position:fixed;right:18px;bottom:58px;z-index:1200;width:min(430px,calc(100vw - 24px));padding:16px;border:1px solid #3a5684;border-radius:18px;background:linear-gradient(155deg,#111d32,#08111f);box-shadow:0 24px 70px #000b}.lm-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.lm-head button{width:34px!important;height:34px;margin:0!important;padding:0!important;border-radius:9px}.lm-status{margin-top:10px;padding:10px;border-radius:10px;background:#0a1425;font-size:12px;color:#a9bbd6;line-height:1.5}.lm-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}.lm-row button{margin-top:9px}.lm-float input{margin-top:7px}.lm-link{display:inline-block;margin-top:8px;color:#8ebdff;font-size:12px}.lm-node{font-weight:850;margin-top:5px}.lm-loaded{color:#65e4a1}.lm-pending{color:#ffc56a}@media(max-width:560px){.lm-float{right:12px;bottom:52px}.lm-row{grid-template-columns:1fr}}
     .site-clock{position:fixed;right:12px;bottom:10px;z-index:45;padding:7px 10px;border:1px solid var(--line2);border-radius:10px;background:#07141bea;color:#a9c3cc;font:12px/1.2 ui-monospace,SFMono-Regular,monospace;box-shadow:var(--shadow)}[dir="rtl"] .site-clock{right:auto;left:12px}.footer{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:20px;color:#5f7b86;font-size:11px}.footer a{color:#83dfff;text-decoration:none}.toast{position:fixed;right:22px;bottom:22px;z-index:50;min-width:260px;max-width:420px;border:1px solid var(--line2);background:#07141bea;border-radius:14px;padding:12px 14px;box-shadow:var(--shadow);transform:translateY(20px);opacity:0;pointer-events:none;transition:.2s ease}.toast.show{transform:none;opacity:1}.toast.ok{border-color:#27634c}.toast.bad{border-color:#6b3038}.toast strong{display:block;font-size:12px}.toast span{display:block;font-size:11px;color:var(--muted);margin-top:4px}
     @media(max-width:1100px){.metrics{grid-template-columns:repeat(3,1fr)}.layout,.hero{grid-template-columns:1fr}.topbar{position:relative;top:0}}@media(max-width:720px){.shell{width:min(100% - 18px,1480px);padding-top:9px}.topbar{grid-template-columns:1fr}.toptools{justify-content:flex-start}.heroCard{padding:20px}.metrics{grid-template-columns:1fr 1fr}.toolbar{grid-template-columns:1fr}.actionsTop{justify-content:flex-start}.grid{grid-template-columns:1fr}.sshGrid{grid-template-columns:1fr}.sshGrid .field:first-child{grid-column:auto}.nodeMeta{grid-template-columns:86px 1fr}.footer{align-items:flex-start;flex-direction:column}}
-  </style>
+      .hidden,[hidden]{display:none!important}.lm-float[hidden],.lm-float.hidden{display:none!important}
+    </style>
 </head>
 <body>
   <div class="scanline"></div>
@@ -120,19 +121,53 @@
 
     <footer class="footer"><span id="footerState">Auto-refresh every 10 seconds · real controller data only</span><span><a href="/architect/" data-i18n="architectPanel">Architect panel</a> · <a href="/architect/logs/" data-i18n="logs">Logs</a></span></footer>
   </main>
-  <div id="lmstudioPanel" class="lm-float hidden" role="dialog" aria-label="LM Studio node control">
-    <div class="lm-head"><div><b>LM Studio / llmster</b><div id="lmstudioNode" class="lm-node">—</div></div><button id="lmstudioClose" class="btn" type="button">×</button></div>
+  <div id="lmstudioPanel" class="lm-float hidden" hidden role="dialog" aria-label="LM Studio node control">
+    <div class="lm-head"><div><b>LM Studio / llmster</b><div id="lmstudioNode" class="lm-node">—</div></div><button id="lmstudioClose" class="btn" type="button" aria-label="Close">×</button></div>
     <a id="lmstudioGithub" class="lm-link" href="https://github.com/citadel-AI-EWS/EWS/tree/main/agent/lmstudio" target="_blank" rel="noopener noreferrer">Installer в GitHub</a>
     <div id="lmstudioStatus" class="lm-status">Выберите ноду.</div>
-    <button id="lmstudioInstall" class="btn cyan" type="button">Установить LM Studio / llmster</button>
+    <div id="lmstudioProgress" class="lm-progress hidden">
+      <div class="lm-progress-track"><i id="lmstudioProgressBar"></i></div>
+      <div id="lmstudioProgressText" class="lm-progress-text"></div>
+    </div>
+    <div class="lm-row">
+      <button id="lmstudioInstall" class="btn cyan" type="button">Установить LM Studio / llmster</button>
+      <button id="lmstudioProbe" class="btn" type="button">Проверить LM Studio</button>
+    </div>
     <label for="lmstudioModel" class="micro" style="display:block;margin-top:10px">Языковая модель для этой ноды</label>
-    <input id="lmstudioModel" list="lmstudioModelOptions" placeholder="например: ibm/granite-4-micro">
-    <datalist id="lmstudioModelOptions"></datalist>
+    <input id="lmstudioModel" autocomplete="off" placeholder="Введите, например: Qwen">
+    <div id="lmstudioModelResults" class="lm-search-results"></div>
+    <div class="lm-settings">
+      <label>Quantization<input id="lmstudioQuant" placeholder="Q4_K_M"></label>
+      <label>Context<input id="lmstudioContext" type="number" min="256" max="1048576" value="8192"></label>
+      <label><input id="lmstudioFlash" type="checkbox" checked> Flash Attention</label>
+      <label><input id="lmstudioKvGpu" type="checkbox" checked> KV cache GPU</label>
+      <label>MoE experts<input id="lmstudioExperts" type="number" min="1" max="256" placeholder="auto"></label>
+    </div>
     <div class="lm-row">
       <button id="lmstudioGet" class="btn" type="button">Скачать модель</button>
       <button id="lmstudioLoad" class="btn good" type="button">Загрузить модель</button>
     </div>
   </div>
+
+  <div id="hybridPanel" class="lm-float hybrid-float hidden" hidden role="dialog" aria-label="Hybrid node query">
+    <div class="lm-head"><div><b>HYBRID NODE</b><div id="hybridNode" class="lm-node">—</div></div><button id="hybridClose" class="btn" type="button" aria-label="Close">×</button></div>
+    <div class="hybrid-modes">
+      <button type="button" class="btn active" data-hybrid-mode="python">Python</button>
+      <button type="button" class="btn" data-hybrid-mode="lmstudio">LM Studio</button>
+      <button type="button" class="btn" data-hybrid-mode="both">Оба</button>
+    </div>
+    <textarea id="hybridPrompt" rows="5" placeholder="Вопрос этой ноде…"></textarea>
+    <div class="lm-settings">
+      <label>Temperature<input id="hybridTemperature" type="number" step="0.05" min="0" max="1" value="0.2"></label>
+      <label>Top P<input id="hybridTopP" type="number" step="0.05" min="0" max="1" value="0.95"></label>
+      <label>Max output<input id="hybridMaxTokens" type="number" min="1" max="32768" value="2048"></label>
+      <label>Reasoning<select id="hybridReasoning"><option value="">Auto</option><option value="off">off</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label>
+    </div>
+    <button id="hybridSend" class="btn good" type="button">Отправить вопрос</button>
+    <div id="hybridStatus" class="lm-status">Готово.</div>
+    <div id="hybridAnswer" class="hybrid-answer">Ответ появится здесь.</div>
+  </div>
+
   <div id="siteClock" class="site-clock" aria-label="Current date and time">—</div>
   <div id="toast" class="toast"><strong id="toastTitle"></strong><span id="toastText"></span></div>
 
@@ -140,7 +175,7 @@
     const $ = (id) => document.getElementById(id);
     const nodesEl = $("nodes"), tokenInput = $("architectToken"), loginButton = $("loginButton"), logoutButton = $("logoutButton");
     const searchInput = $("nodeSearch"), nodePicker = $("nodePicker"), updateAllButton = $("updateAllButton"), pauseAllButton = $("pauseAllButton"), exportButton = $("exportButton");
-    let architectToken = sessionStorage.getItem("citadel-architect-token") || "", releaseVersion = "", lmstudioConfig = null, lmstudioNodeId = "", requestedLmNodeId = new URLSearchParams(location.search).get("lmnode") || "", lastOverview = null, lastPresence = [], lastPublic = [], refreshBusy = false, lang = localStorage.getItem("citadelHubLang") || "ru";
+    let architectToken = sessionStorage.getItem("citadel-architect-token") || "", releaseVersion = "", lmstudioConfig = null, lmstudioNodeId = "", requestedLmNodeId = new URLSearchParams(location.search).get("lmnode") || "", lmstudioModelSource = "catalog", modelSearchTimer = null, lmstudioPollTimer = null, hybridNodeId = "", hybridMode = "python", hybridPollTimer = null, lastOverview = null, lastPresence = [], lastPublic = [], refreshBusy = false, lang = localStorage.getItem("citadelHubLang") || "ru";
 
     const I18N = {
       ru:{eyebrow:"REAL-TIME NODE CONTROL",title:"Живой центр управления.",subtitle:"Только реальные зарегистрированные компьютеры. Никаких демонстрационных счётчиков: состояние, IP, команды и обновления берутся из Controller.",secureAccess:"Architect secure access",tokenLabel:"Architect token",secureMode:"Защищённый режим",logout:"Выйти",authHint:"IP, управление узлами и обновление агента доступны только после авторизации.",online:"Online",onlineSub:"active nodes now",registered:"Registered",registeredSub:"real enrolled nodes",attention:"Требуют внимания",attentionSub:"offline / degraded nodes",release:"Release",releaseSub:"signed agent release",mode:"Mode",modeSub:"privileged data locked",refresh:"Обновить сейчас",export:"Экспорт snapshot",updateAll:"Обновить все",pauseAll:"Пауза всем",nodesTitle:"Nodes / компьютеры",sshNotReady:"Secure tunnel not configured",sshHost:"Cloudflare Access hostname",sshUser:"SSH user",copyCommand:"Копировать команду",browserSsh:"Browser SSH",sshNotice:"SSH не открывает порт 22 в интернет. Нужны Cloudflare Tunnel + Access и работающий SSH server на node.",architectPanel:"Architect panel",logs:"Logs"},
@@ -227,53 +262,188 @@
     function lmstudioNode(){
       return (lastOverview?.nodes||[]).find(n=>n.node_id===lmstudioNodeId)||null;
     }
+    function aiStateFresh(node){
+      const t=parseTimestamp(node?.lmstudio_live_checked_at||node?.lmstudio_updated_at);
+      return Number.isFinite(t)&&Date.now()-t<=120000;
+    }
+
+    function hybridNode(){
+      return (lastOverview?.nodes||[]).find(n=>n.node_id===hybridNodeId)||null;
+    }
+
+    function setPanelOpen(id,open){
+      const panel=$(id); panel.hidden=!open; panel.classList.toggle("hidden",!open);
+    }
+
+    function formatBytes(value){
+      const n=Number(value||0); if(!Number.isFinite(n)||n<=0)return"0 B";
+      const units=["B","KB","MB","GB","TB"];let v=n,i=0;while(v>=1024&&i<units.length-1){v/=1024;i++}
+      return (i<2?v.toFixed(0):v.toFixed(2))+" "+units[i];
+    }
+
+    function syncLmstudioProgress(node){
+      const box=$("lmstudioProgress"),bar=$("lmstudioProgressBar"),label=$("lmstudioProgressText");
+      const bytes=Number(node.lmstudio_progress_bytes||0),totalBytes=Number(node.lmstudio_progress_total_bytes||0);
+      const current=Number(node.lmstudio_progress_current||0),total=Number(node.lmstudio_progress_total||0);
+      let percent=null,text=node.lmstudio_progress_detail||"";
+      if(totalBytes>0){percent=Math.max(0,Math.min(100,Math.round(bytes*100/totalBytes)));text=(text?text+" · ":"")+formatBytes(bytes)+" / "+formatBytes(totalBytes)+" · "+percent+"%"}
+      else if(total>0){percent=Math.max(0,Math.min(100,Math.round(current*100/total)));text=(text?text+" · ":"")+current+"/"+total}
+      const active=Boolean(node.lmstudio_progress_phase)&&!["complete","download_complete","load_complete","query_complete"].includes(node.lmstudio_progress_phase);
+      box.classList.toggle("hidden",percent===null&&!active);
+      bar.style.width=(percent===null?0:percent)+"%";
+      label.textContent=text||node.lmstudio_progress_phase||"";
+    }
+
+    function startLmstudioPolling(){
+      clearInterval(lmstudioPollTimer);
+      lmstudioPollTimer=setInterval(refreshLmstudioState,1200);
+      refreshLmstudioState();
+    }
+
+    async function refreshLmstudioState(){
+      if(!lmstudioNodeId||$("lmstudioPanel").hidden||!architectToken)return;
+      try{
+        const data=await api("/api/v1/architect/nodes/"+encodeURIComponent(lmstudioNodeId)+"/ai-state");
+        const node=(lastOverview?.nodes||[]).find(n=>n.node_id===lmstudioNodeId);
+        if(node&&data.ai){
+          Object.assign(node,{
+            lmstudio_installed:data.ai.installed,lmstudio_selected_model:data.ai.selected_model,
+            lmstudio_loaded_model:data.ai.loaded_model,lmstudio_server_running:data.ai.server_running,
+            lmstudio_last_action:data.ai.last_action,lmstudio_progress_phase:data.ai.progress_phase,
+            lmstudio_progress_current:data.ai.progress_current,lmstudio_progress_total:data.ai.progress_total,
+            lmstudio_progress_bytes:data.ai.progress_bytes,lmstudio_progress_total_bytes:data.ai.progress_total_bytes,
+            lmstudio_progress_detail:data.ai.progress_detail,lmstudio_download_job_id:data.ai.download_job_id,
+            lmstudio_live_checked_at:data.ai.live_checked_at,lmstudio_updated_at:data.ai.updated_at,
+            lmstudio_load_config:data.ai.load_config
+          });
+        }
+        syncLmstudioPanel();renderCurrent();
+      }catch{}
+    }
+
+    function lmLoadSettings(){
+      const settings={};
+      const context=Number($("lmstudioContext").value); if(Number.isInteger(context)&&context>=256)settings.context_length=context;
+      settings.flash_attention=$("lmstudioFlash").checked;
+      settings.offload_kv_cache_to_gpu=$("lmstudioKvGpu").checked;
+      const experts=Number($("lmstudioExperts").value); if(Number.isInteger(experts)&&experts>0)settings.num_experts=experts;
+      return settings;
+    }
+
+    async function searchModels(){
+      const q=$("lmstudioModel").value.trim(),box=$("lmstudioModelResults"); box.replaceChildren();
+      if(q.length<2)return;
+      const hint=document.createElement("div");hint.className="micro";hint.textContent="Ищу реальные модели Hugging Face…";box.appendChild(hint);
+      try{
+        const data=await api("/api/v1/architect/models/search?q="+encodeURIComponent(q));box.replaceChildren();
+        for(const model of data.models||[]){
+          const row=document.createElement("button");row.type="button";row.className="lm-search-item";
+          const name=document.createElement("b");name.textContent=model.id+(model.gguf?" · GGUF":"");
+          const stats=document.createElement("span");stats.textContent="↓ "+Number(model.downloads||0).toLocaleString()+" · ★ "+Number(model.likes||0).toLocaleString()+" likes";
+          row.append(name,stats);row.addEventListener("click",()=>{$("lmstudioModel").value=model.id;lmstudioModelSource="huggingface";box.replaceChildren();});
+          box.appendChild(row);
+        }
+        if(!box.children.length){const empty=document.createElement("div");empty.className="micro";empty.textContent="Совпадений нет.";box.appendChild(empty)}
+      }catch(e){box.replaceChildren();const err=document.createElement("div");err.className="micro";err.textContent="Hugging Face: "+e.message;box.appendChild(err)}
+    }
+
+    function openHybrid(node){
+      hybridNodeId=node.node_id; hybridMode="python"; setPanelOpen("hybridPanel",true);
+      document.querySelectorAll("[data-hybrid-mode]").forEach(b=>b.classList.toggle("active",b.dataset.hybridMode===hybridMode));
+      syncHybridPanel(); startHybridPolling();
+    }
+
+    function syncHybridPanel(){
+      const panel=$("hybridPanel"),node=hybridNode();if(!node||panel.hidden)return;
+      $("hybridNode").textContent=(node.node_number?"CITADEL Node "+node.node_number:(node.hostname||node.node_id))+" · "+(node.lmstudio_loaded_model||"Python agent");
+      const status=node.lmstudio_query_status||"ready";$("hybridStatus").textContent="Статус: "+status+(node.lmstudio_query_mode?" · "+node.lmstudio_query_mode:"");
+      if(node.lmstudio_query_answer)$("hybridAnswer").textContent=node.lmstudio_query_answer;
+      $("hybridSend").disabled=lmstudioPending(node.node_id)||freshness(node)!=="online";
+    }
+
+    async function refreshHybridState(){
+      if(!hybridNodeId||$("hybridPanel").hidden||!architectToken)return;
+      try{
+        const data=await api("/api/v1/architect/nodes/"+encodeURIComponent(hybridNodeId)+"/ai-state");
+        const node=(lastOverview?.nodes||[]).find(n=>n.node_id===hybridNodeId);
+        if(node&&data.ai)Object.assign(node,{
+          lmstudio_query_id:data.ai.query_id,lmstudio_query_mode:data.ai.query_mode,lmstudio_query_status:data.ai.query_status,
+          lmstudio_query_prompt:data.ai.query_prompt,lmstudio_query_answer:data.ai.query_answer,
+          lmstudio_installed:data.ai.installed,lmstudio_server_running:data.ai.server_running,lmstudio_loaded_model:data.ai.loaded_model
+        });
+        syncHybridPanel();
+      }catch(e){$("hybridStatus").textContent="Ошибка: "+e.message}
+    }
+
+    function startHybridPolling(){clearInterval(hybridPollTimer);hybridPollTimer=setInterval(refreshHybridState,1200);refreshHybridState()}
+
+    function closeHybrid(){clearInterval(hybridPollTimer);hybridPollTimer=null;hybridNodeId="";setPanelOpen("hybridPanel",false)}
+
+    async function sendHybrid(){
+      const node=hybridNode(),prompt=$("hybridPrompt").value.trim();if(!node||!prompt)return;
+      const settings={
+        temperature:Number($("hybridTemperature").value),
+        top_p:Number($("hybridTopP").value),
+        max_output_tokens:Number($("hybridMaxTokens").value)
+      };
+      if($("hybridReasoning").value)settings.reasoning=$("hybridReasoning").value;
+      $("hybridAnswer").textContent="Ожидаю ответ…";$("hybridStatus").textContent="Команда отправляется…";
+      try{
+        await api("/api/v1/architect/nodes/"+encodeURIComponent(node.node_id)+"/commands",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({command_type:"hybrid_query",mode:hybridMode,prompt,settings})});
+        $("hybridStatus").textContent="Выполняется…";startHybridPolling();await refresh();
+      }catch(e){$("hybridStatus").textContent="Ошибка: "+e.message;toast("Hybrid",e.message,"bad")}
+    }
+
     function lmstudioPending(nodeId){
-      return (lastOverview?.commands||[]).some(c=>c.node_id===nodeId&&["pending","accepted"].includes(c.status)&&String(c.command_type||"").startsWith("lmstudio_"));
+      return (lastOverview?.commands||[]).some(c=>c.node_id===nodeId&&["pending","accepted"].includes(c.status)&&(
+        String(c.command_type||"").startsWith("lmstudio_")||c.command_type==="hybrid_query"
+      ));
     }
     function syncLmstudioPanel(){
       const panel=$("lmstudioPanel"),node=lmstudioNode();
-      if(!node||panel.classList.contains("hidden"))return;
+      if(!node||panel.hidden)return;
       $("lmstudioNode").textContent=(node.node_number?"CITADEL Node "+node.node_number:(node.hostname||node.node_id))+" · "+(node.hostname||"—");
       if(lmstudioConfig?.github_url)$("lmstudioGithub").href=lmstudioConfig.github_url;
       const pending=lmstudioPending(node.node_id);
-      const installed=Number(node.lmstudio_installed||0)===1;
+      const verified=aiStateFresh(node);
+      const installed=verified&&Number(node.lmstudio_installed||0)===1;
+      const liveServer=verified&&Number(node.lmstudio_server_running||0)===1;
       const currentAgent=Boolean(releaseVersion&&node.agent_version===releaseVersion);
-      const selected=node.lmstudio_selected_model||"";
       const loaded=node.lmstudio_loaded_model||"";
-      if(selected&&!$("lmstudioModel").value)$("lmstudioModel").value=selected;
       $("lmstudioStatus").textContent=installed
-        ?(loaded
-          ?"LM Studio установлен · активная модель: "+loaded+" · PROJECT WORKER READY"+(pending?" · команда выполняется":"")
-          :"LM Studio установлен · модель ещё не загружена"+(pending?" · команда выполняется":""))
-        :(currentAgent?"Runtime ещё не установлен.":"Сначала обновите агент этой ноды до "+(releaseVersion||"текущей версии")+".")+(pending?" · установка выполняется":"");
+        ?"LM Studio: "+(liveServer?"LIVE":"установлен, сервер не отвечает")+(loaded?" · модель: "+loaded:" · модель не загружена")+" · проверено "+(node.lmstudio_live_checked_at||node.lmstudio_updated_at||"—")
+        :(currentAgent?"LM Studio не обнаружен живой проверкой.":"Сначала обновите агент до "+(releaseVersion||"текущей версии")+".");
+      syncLmstudioProgress(node);
       $("lmstudioInstall").disabled=!currentAgent||installed||pending||freshness(node)!=="online";
-      $("lmstudioGet").disabled=!installed||pending||freshness(node)!=="online";
-      $("lmstudioLoad").disabled=!installed||pending||freshness(node)!=="online";
+      $("lmstudioProbe").disabled=!currentAgent||pending||freshness(node)!=="online";
+      $("lmstudioGet").disabled=!installed||!liveServer||pending||freshness(node)!=="online";
+      $("lmstudioLoad").disabled=!installed||!liveServer||pending||freshness(node)!=="online";
     }
-    function openLmstudio(node){
-      lmstudioNodeId=node.node_id;
-      $("lmstudioPanel").classList.remove("hidden");
+    async function openLmstudio(node){
+      lmstudioNodeId=node.node_id; lmstudioModelSource="catalog";
       $("lmstudioModel").value=node.lmstudio_selected_model||"";
-      syncLmstudioPanel();
+      setPanelOpen("lmstudioPanel",true);syncLmstudioPanel();startLmstudioPolling();
+      if(node.agent_version===releaseVersion&&!lmstudioPending(node.node_id)){
+        try{await sendLmstudio("lmstudio_probe",false)}catch{}
+      }
     }
-    async function sendLmstudio(type){
-      const node=lmstudioNode();
-      if(!node)return;
+    async function sendLmstudio(type,ask=true){
+      const node=lmstudioNode(); if(!node)return;
       const body={command_type:type};
       if(type==="lmstudio_model_get"||type==="lmstudio_model_load"){
-        const model=$("lmstudioModel").value.trim();
-        if(!model)return toast("LM Studio","Введите или выберите модель","bad");
+        const model=$("lmstudioModel").value.trim(); if(!model)return toast("LM Studio","Введите или выберите модель","bad");
         body.model=model;
+        const quant=$("lmstudioQuant").value.trim();
+        body.source=quant?"huggingface":lmstudioModelSource;
+        if(quant)body.quantization=quant;
+        if(type==="lmstudio_model_load")body.settings=lmLoadSettings();
       }
-      const labels={lmstudio_install:"install",lmstudio_model_get:"download model",lmstudio_model_load:"load model"};
+      const labels={lmstudio_install:"install",lmstudio_probe:"probe",lmstudio_model_get:"download model",lmstudio_model_load:"load model"};
       const label=labels[type]||type;
-      if(!confirm("LM Studio "+label+" → "+(node.hostname||node.node_id)+"?"))return;
-      try{
-        await api("/api/v1/architect/nodes/"+encodeURIComponent(node.node_id)+"/commands",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
-        toast("LM Studio",label+" queued → "+(node.hostname||node.node_id));
-        await refresh();
-        syncLmstudioPanel();
-      }catch(e){toast("LM Studio",e.message,"bad")}
+      if(ask&&!confirm("LM Studio "+label+" → "+(node.hostname||node.node_id)+"?"))return;
+      await api("/api/v1/architect/nodes/"+encodeURIComponent(node.node_id)+"/commands",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+      toast("LM Studio",label+" queued → "+(node.hostname||node.node_id));
+      await refresh(); syncLmstudioPanel();
     }
 
     function secureCard(node,presence,commands){
@@ -282,7 +452,7 @@
       el.dataset.search=`${node.hostname||""} ${node.node_id||""} ${ip} ${node.os_name||""} ${node.os_version||""} ${node.agent_version||""}`.toLowerCase();
       const pending=commands.some(c=>c.node_id===node.node_id&&["pending","accepted"].includes(c.status));
       const current=releaseVersion&&node.agent_version===releaseVersion;
-      el.innerHTML=`<div class="nodeTop"><div><div class="nodeName"></div><div class="nodeId"></div></div><span class="badge ${state}"></span></div><div class="nodeMetrics"><div class="nodeMetric"><span>CPU</span><b class="cpu"></b><div class="bar"><i class="cpuBar"></i></div></div><div class="nodeMetric"><span>RAM</span><b class="ram"></b><div class="bar"><i class="ramBar"></i></div></div></div><dl class="nodeMeta"><dt>IP</dt><dd class="ip"></dd><dt>LAN</dt><dd class="lan"></dd><dt>OS</dt><dd class="os"></dd><dt>ARCH</dt><dd class="arch"></dd><dt>AGENT</dt><dd class="agent"></dd><dt>LAST SEEN</dt><dd class="seen"></dd></dl><div class="offlineReason micro"></div><div class="nodeActions"></div>`;
+      el.innerHTML=`<div class="nodeTop"><div><div class="nodeName"></div><div class="nodeId"></div></div><span class="badge ${state}"></span></div><div class="nodeMetrics"><div class="nodeMetric"><span>CPU</span><b class="cpu"></b><div class="bar"><i class="cpuBar"></i></div></div><div class="nodeMetric"><span>RAM</span><b class="ram"></b><div class="bar"><i class="ramBar"></i></div></div></div><dl class="nodeMeta"><dt>IP</dt><dd class="ip"></dd><dt>LAN</dt><dd class="lan"></dd><dt>OS</dt><dd class="os"></dd><dt>ARCH</dt><dd class="arch"></dd><dt>AGENT</dt><dd class="agent"></dd><dt>AI</dt><dd class="ai"></dd><dt>LAST SEEN</dt><dd class="seen"></dd></dl><div class="offlineReason micro"></div><div class="nodeActions"></div>`;
       el.querySelector(".nodeName").textContent=node.hostname||node.node_id;
       el.querySelector(".nodeId").textContent=node.node_id;
       el.querySelector(".badge").textContent=state;
@@ -295,6 +465,8 @@
       el.querySelector(".os").textContent=`${esc(node.os_name)} ${esc(node.os_version)}`;
       el.querySelector(".arch").textContent=esc(node.architecture);
       el.querySelector(".agent").textContent=`${current?"✓":"✕"} ${esc(node.agent_version)}${releaseVersion?current?" · CURRENT":` · target ${releaseVersion}`:""}`;
+      const aiReady=aiStateFresh(node)&&Number(node.lmstudio_installed||0)===1&&Number(node.lmstudio_server_running||0)===1;
+      el.querySelector(".ai").textContent=aiReady?`✓ LM Studio · ${node.lmstudio_loaded_model||"no model"}`:"—";
       el.querySelector(".seen").textContent=`${relativeTime(node.last_seen_at)} · ${esc(node.last_seen_at)}`;
       const reason=el.querySelector(".offlineReason");
       reason.textContent=offlineReason(node);
@@ -305,6 +477,7 @@
       const add=(label,cls,fn,disabled=false)=>{const b=document.createElement("button");b.type="button";b.className=`btn ${cls||""}`;b.textContent=label;b.disabled=disabled;b.addEventListener("click",fn);actions.append(b);return b};
       add(lang==="he"?"אבחון":lang==="en"?"Diagnostics":"Диагностика","cyan",()=>sendDiagnostic(node.node_id),!live);
       add("LM Studio","cyan",()=>openLmstudio(node),!live||pending);
+      if(aiReady&&node.lmstudio_loaded_model)add("Hybrid","good",()=>openHybrid(node),!live||pending);
       add(current?(lang==="he"?"מעודכן":lang==="en"?"Up to date":"Актуально"):(lang==="he"?"עדכון":lang==="en"?"Update":"Обновить"),"good",()=>sendCommand(node.node_id,"update"),!live||pending||current);
       if(node.status==="paused")add(lang==="he"?"המשך":lang==="en"?"Resume":"Продолжить","",()=>sendCommand(node.node_id,"resume"),!live||pending);
       else add(lang==="he"?"השהה":lang==="en"?"Pause":"Пауза","warn",()=>sendCommand(node.node_id,"pause"),!live||pending);
@@ -405,6 +578,7 @@
         }
       }
       syncLmstudioPanel();
+      syncHybridPanel();
       setState(`Secure controller data · ${new Date().toLocaleTimeString()}`)
     }
     async function refresh(){if(refreshBusy)return;refreshBusy=true;$("networkChip").innerHTML='NETWORK <strong>SYNC</strong>';try{if(architectToken)await refreshSecure();else await refreshPublic();$("networkChip").innerHTML='NETWORK <strong>ONLINE</strong>'}catch(error){$("networkChip").innerHTML='NETWORK <strong>ERROR</strong>';$("controllerStatus").textContent=`CONTROLLER — ${error.message}`;$("controllerStatus").className="statusPill bad";if(architectToken&&["architect_authentication_required","invalid_architect_token"].includes(error.message)){architectToken="";sessionStorage.removeItem("citadel-architect-token");tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;toast("Authentication failed",error.message,"bad");await refreshPublic()}else setState(`Controller error: ${error.message}`)}finally{refreshBusy=false}}
@@ -437,11 +611,15 @@
       }catch(e){toast("Rollout failed",e.message,"bad");syncUpdateAllState()}
     }
 
-    $("lmstudioClose").addEventListener("click",()=>{$("lmstudioPanel").classList.add("hidden");lmstudioNodeId=""});
-    $("lmstudioInstall").addEventListener("click",()=>sendLmstudio("lmstudio_install"));
-    $("lmstudioGet").addEventListener("click",()=>sendLmstudio("lmstudio_model_get"));
-    $("lmstudioLoad").addEventListener("click",()=>sendLmstudio("lmstudio_model_load"));
-    $("lmstudioModel").addEventListener("input",syncLmstudioPanel);
+    $("lmstudioClose").addEventListener("click",()=>{clearInterval(lmstudioPollTimer);lmstudioPollTimer=null;lmstudioNodeId="";setPanelOpen("lmstudioPanel",false)});
+    $("lmstudioInstall").addEventListener("click",()=>sendLmstudio("lmstudio_install").catch(e=>toast("LM Studio",e.message,"bad")));
+    $("lmstudioProbe").addEventListener("click",()=>sendLmstudio("lmstudio_probe").catch(e=>toast("LM Studio",e.message,"bad")));
+    $("lmstudioGet").addEventListener("click",()=>sendLmstudio("lmstudio_model_get").catch(e=>toast("LM Studio",e.message,"bad")));
+    $("lmstudioLoad").addEventListener("click",()=>sendLmstudio("lmstudio_model_load").catch(e=>toast("LM Studio",e.message,"bad")));
+    $("lmstudioModel").addEventListener("input",()=>{lmstudioModelSource="catalog";clearTimeout(modelSearchTimer);modelSearchTimer=setTimeout(searchModels,400)});
+    $("hybridClose").addEventListener("click",closeHybrid);
+    document.querySelectorAll("[data-hybrid-mode]").forEach(button=>button.addEventListener("click",()=>{hybridMode=button.dataset.hybridMode;document.querySelectorAll("[data-hybrid-mode]").forEach(b=>b.classList.toggle("active",b===button))}));
+    $("hybridSend").addEventListener("click",sendHybrid);
 
     async function waitForRefreshIdle(){
       const deadline=Date.now()+5000;
@@ -459,7 +637,7 @@
       tokenInput.value="";
       await refresh();
     });
-    logoutButton.addEventListener("click",async()=>{architectToken="";sessionStorage.removeItem("citadel-architect-token");releaseVersion="";lastOverview=null;lastPresence=[];tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;await refreshPublic()});
+    logoutButton.addEventListener("click",async()=>{clearInterval(lmstudioPollTimer);lmstudioPollTimer=null;lmstudioNodeId="";setPanelOpen("lmstudioPanel",false);closeHybrid();architectToken="";sessionStorage.removeItem("citadel-architect-token");releaseVersion="";lastOverview=null;lastPresence=[];tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;await refreshPublic()});
     $("refreshButton").addEventListener("click",refresh);
     searchInput.addEventListener("input",()=>{nodePicker.value="";renderCurrent()});
     nodePicker.addEventListener("change",()=>{searchInput.value=nodePicker.value;renderCurrent()});
