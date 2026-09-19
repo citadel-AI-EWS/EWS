@@ -430,10 +430,10 @@ Required behavior:
 
 Implementation is being delivered in the same reviewed LM Studio release branch so project execution and per-node model control stay consistent.
 
-### Release correction — project worker is 0.3.9
+### Release correction — project worker is 0.3.10
 
 - LM Studio installation/model controls remain the historical 0.3.7 release.
-- The executable `project_text` worker and live project progress/final-report pipeline are released as agent 0.3.9.
+- The executable `project_text` worker and live project progress/final-report pipeline are released as agent 0.3.10.
 - This version bump is required so existing 0.3.7 nodes are recognized as outdated and receive the signed project-worker update instead of being incorrectly treated as current.
 
 ## 2026-09-18 — Adaptive Hub workers, collapsible UI, Linux package
@@ -461,7 +461,7 @@ Architect requirements:
 
 
 
-## Agent 0.3.9
+## Agent 0.3.10
 - LM Studio native REST v1 integration with localhost-only server access.
 - Signed `lmstudio_probe` and `hybrid_query` Controller commands.
 - Model download/load progress reported to Architect/Hub through signed AI-state telemetry.
