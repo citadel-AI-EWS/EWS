@@ -245,6 +245,18 @@
         <pre id="reportDetailBody" class="report-body"></pre>
       </section>
 
+      <details id="experienceDisclosure" class="card collapsible-card">
+        <summary><span>Опыт проекта</span><span class="disclosure-plus">+</span></summary>
+        <div class="collapsible-body">
+          <div class="section-head">
+            <p class="small" style="margin:0">Проверенные инженерные уроки старых версий. Секреты, сырые логи и пользовательские данные сюда не копируются.</p>
+            <button id="refreshExperienceButton" class="secondary" type="button">Обновить</button>
+          </div>
+          <div id="experienceMeta" class="status">История решений загружается…</div>
+          <div id="experienceList"></div>
+        </div>
+      </details>
+
     </section>
 
     <div id="status" class="status">Панель ожидает входа.</div>
@@ -310,6 +322,9 @@
     const reportDetailBody = document.getElementById("reportDetailBody");
     const closeReportButton = document.getElementById("closeReportButton");
     const loadMoreReportsButton = document.getElementById("loadMoreReportsButton");
+    const refreshExperienceButton = document.getElementById("refreshExperienceButton");
+    const experienceMeta = document.getElementById("experienceMeta");
+    const experienceList = document.getElementById("experienceList");
     const nodeSelect = document.getElementById("nodeSelect");
     const controlNodeSelect = document.getElementById("controlNodeSelect");
     const nodeDiagnostics = document.getElementById("nodeDiagnostics");
@@ -1407,15 +1422,44 @@
       }
     }
 
+    function renderExperience(registry) {
+      experienceList.replaceChildren();
+      const summary = registry.summary || {};
+      const statusCounts = summary.by_status || {};
+      experienceMeta.textContent = [
+        `Версия: ${registry.registry_version || "unknown"}`,
+        `Записей: ${summary.entries || 0}`,
+        `Принято: ${statusCounts.accepted || 0} · подтверждено: ${statusCounts.confirmed || 0} · ограничения: ${statusCounts.guardrail || 0}`,
+        `Уроки: ${statusCounts.lesson || 0} · отклонено: ${statusCounts.rejected || 0}`,
+        `Исторические циклы: ${registry.legacy_summary?.structured_runs || 0} · неуспешные: ${registry.legacy_summary?.structured_failures || 0}`,
+        "Хранилище: отдельный статический реестр; operational D1 не используется."
+      ].join("\n");
+      experienceMeta.className = "status good";
+
+      for (const entry of registry.entries || []) {
+        const item = document.createElement("div");
+        item.className = `item ${["accepted", "confirmed"].includes(entry.status) ? "ok" : "warn"}`;
+        addText(item, "strong", `${entry.id} · ${entry.area} · ${entry.status}`);
+        addText(item, "div", entry.problem);
+        addText(item, "div", `Решение: ${entry.decision}`, "small");
+        addText(item, "div", `Сейчас: ${entry.replacement}`, "small");
+        addText(item, "div", `Основание: ${entry.evidence}`, "small");
+        addText(item, "div", `Файлы: ${(entry.artifact_refs || []).join(", ")}`, "small");
+        experienceList.appendChild(item);
+      }
+      if (!(registry.entries || []).length) addText(experienceList, "p", "Проверенных записей опыта пока нет.", "muted");
+    }
+
     async function loadDashboard() {
       setStatus("Загружаю Live Operations…");
-      const [data, reports, presence, release, projects, roles] = await Promise.all([
+      const [data, reports, presence, release, projects, roles, experience] = await Promise.all([
         api("/api/v1/architect/overview"),
         api("/api/v1/architect/reports?limit=50&offset=0"),
         api("/api/v1/architect/presence"),
         api("/api/v1/architect/release"),
         api("/api/v1/architect/projects"),
-        api("/api/v1/architect/work-roles")
+        api("/api/v1/architect/work-roles"),
+        api("/api/v1/architect/experience")
       ]);
       currentPresence = presence.presence || [];
       currentReleaseVersion = release.release?.version || "";
@@ -1432,6 +1476,7 @@
       renderCommands(data.commands || []);
       renderReports(reports.reports || []);
       renderProjects(projects.projects || []);
+      renderExperience(experience);
       reportNextOffset = reports.next_offset ?? null;
       loadMoreReportsButton.classList.toggle("hidden", reportNextOffset === null);
       loginCard.classList.add("hidden");
@@ -1544,6 +1589,19 @@
         refreshReportsButton.disabled = false;
       }
     });
+    refreshExperienceButton.addEventListener("click", async () => {
+      refreshExperienceButton.disabled = true;
+      try {
+        const experience = await api("/api/v1/architect/experience");
+        renderExperience(experience);
+        setStatus("Опыт проекта обновлён.", "good");
+      } catch (error) {
+        setStatus(`Опыт проекта не обновлён: ${error.message}`, "bad");
+      } finally {
+        refreshExperienceButton.disabled = false;
+      }
+    });
+
     closeReportButton.addEventListener("click", closeReportDetail);
 
     loadMoreReportsButton.addEventListener("click", async () => {
