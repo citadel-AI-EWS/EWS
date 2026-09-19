@@ -17,6 +17,38 @@ const JSON_HEADERS = {
 const SIGNATURE_WINDOW_SECONDS = 300;
 const SECRET_KEY = /(pass(word)?|secret|token|api[_-]?key|authorization|cookie|private[_-]?key|credential)/i;
 const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+let nodeRequestNonceSchemaPromise;
+
+function agentRequiresRequestId(version) {
+  const match = String(version || "").match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return false;
+  const major = Number(match[1]), minor = Number(match[2]), patch = Number(match[3]);
+  return major > 0 || minor > 3 || (minor === 3 && patch >= 10);
+}
+
+async function ensureNodeRequestNonceStorage(env) {
+  if (!nodeRequestNonceSchemaPromise) {
+    nodeRequestNonceSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS node_request_nonces (
+          node_id TEXT NOT NULL,
+          request_id TEXT NOT NULL,
+          received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (node_id, request_id),
+          FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_node_request_nonces_received
+        ON node_request_nonces(received_at)
+      `)
+    ]).catch((error) => {
+      nodeRequestNonceSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await nodeRequestNonceSchemaPromise;
+}
 
 export class TelemetryError extends Error {
   constructor(status, code, headers = {}) {
@@ -202,12 +234,16 @@ export async function authenticateArchitect(request, env) {
 export async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   const headerNodeId = request.headers.get("x-node-id");
   const timestamp = request.headers.get("x-node-timestamp");
+  const requestId = request.headers.get("x-node-request-id");
   const signatureValue = request.headers.get("x-node-signature");
   if (!headerNodeId || headerNodeId !== nodeId || !timestamp || !signatureValue) {
     throw new TelemetryError(401, "node_authentication_required");
   }
   if (!/^\d{10,13}$/.test(timestamp)) {
     throw new TelemetryError(401, "invalid_timestamp");
+  }
+  if (requestId && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(requestId)) {
+    throw new TelemetryError(401, "invalid_request_id");
   }
   const numericTimestamp = Number(timestamp);
   const timestampSeconds = timestamp.length === 13
@@ -218,10 +254,15 @@ export async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   }
 
   const node = await env.DB.prepare(
-    "SELECT node_id, public_key, status FROM nodes WHERE node_id = ?"
+    "SELECT node_id, public_key, status, agent_version FROM nodes WHERE node_id = ?"
   ).bind(nodeId).first();
   if (!node) throw new TelemetryError(401, "invalid_node");
   if (node.status === "revoked") throw new TelemetryError(403, "node_revoked");
+
+  const replayProtected = agentRequiresRequestId(node.agent_version);
+  if (replayProtected && !requestId) {
+    throw new TelemetryError(401, "request_id_required");
+  }
 
   let publicJwk;
   try {
@@ -230,12 +271,14 @@ export async function authenticateNode(request, env, nodeId, url, bodyBytes) {
     throw new TelemetryError(401, "invalid_node_key");
   }
   const bodyHash = await sha256Hex(bodyBytes);
-  const canonical = [
+  const canonicalParts = [
     request.method.toUpperCase(),
     `${url.pathname}${url.search}`,
-    timestamp,
-    bodyHash
-  ].join("\n");
+    timestamp
+  ];
+  if (requestId) canonicalParts.push(requestId);
+  canonicalParts.push(bodyHash);
+  const canonical = canonicalParts.join("\n");
 
   let verified = false;
   try {
@@ -257,6 +300,19 @@ export async function authenticateNode(request, env, nodeId, url, bodyBytes) {
     verified = false;
   }
   if (!verified) throw new TelemetryError(401, "invalid_signature");
+
+  if (requestId) {
+    await ensureNodeRequestNonceStorage(env);
+    const nonce = await env.DB.prepare(
+      "INSERT OR IGNORE INTO node_request_nonces (node_id, request_id) VALUES (?, ?)"
+    ).bind(nodeId, requestId).run();
+    if ((nonce?.meta?.changes || 0) !== 1) {
+      throw new TelemetryError(409, "replayed_request");
+    }
+    await env.DB.prepare(
+      "DELETE FROM node_request_nonces WHERE datetime(received_at) < datetime('now', '-10 minutes')"
+    ).run();
+  }
   return node;
 }
 
