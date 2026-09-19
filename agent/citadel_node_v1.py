@@ -1885,7 +1885,7 @@ def self_test() -> int:
             "command_type": "pause",
             "payload": {},
             "status": "pending",
-            "created_at": "2026-09-12T00:00:00.000Z",
+            "created_at": now_iso(),
         }
         canonical = "\n".join(
             (
@@ -1901,6 +1901,25 @@ def self_test() -> int:
         require_test(
             agent.verify_controller_command(command),
             "valid controller signature rejected",
+        )
+        stale_command = dict(command)
+        stale_command["created_at"] = (
+            dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=COMMAND_MAX_AGE_SECONDS + 1)
+        ).isoformat(timespec="seconds")
+        stale_canonical = "\n".join(
+            (
+                "CITADEL-COMMAND-V1",
+                stale_command["command_id"],
+                "node_test",
+                "pause",
+                sha256_text("{}"),
+                stale_command["created_at"],
+            )
+        ).encode("utf-8")
+        stale_command["signature"] = b64url(controller_private.sign(stale_canonical))
+        require_test(
+            not agent.verify_controller_command(stale_command),
+            "stale controller command accepted",
         )
         command["command_type"] = "shell"
         require_test(
