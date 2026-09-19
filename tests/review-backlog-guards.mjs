@@ -65,5 +65,10 @@ need(buildSite.includes("connect-src 'self';"), "published CSP must keep same-or
 need(hub.includes("async function waitForRefreshIdle()"), "Hub secure login refresh-race guard missing");
 need(hub.includes("citadel-architect-token"), "Hub Architect session handling missing");
 need(hub.includes("if(!(await waitForRefreshIdle()))"), "Hub login does not wait for background refresh");
+const hubLoginStart = hub.indexOf('loginButton.addEventListener("click"');
+const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLoginStart);
+const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
+need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
+need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
 need(index.includes('version: "0.3.8"'), "Controller release not bumped");
 console.log("Review backlog guards: PASS");
