@@ -183,3 +183,10 @@ financial transaction capability.
 Architect routes require a separately configured bearer token. The browser
 console exposes only allow-listed safe missions, signed node controls and
 read-only operational telemetry.
+
+
+## Replay protection (agent 0.3.10+)
+
+Signed node requests from agent 0.3.10 and later include a UUIDv4 `x-node-request-id` header. The request id is part of the Ed25519 canonical request between the timestamp and body hash. The Controller stores recent per-node request ids and rejects reuse with `409 replayed_request`.
+
+For compatibility during rollout, nodes older than 0.3.10 may continue using the previous signature form inside the existing timestamp window. Once a node reports agent 0.3.10 or later, `x-node-request-id` is mandatory.
