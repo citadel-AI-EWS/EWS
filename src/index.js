@@ -13,6 +13,7 @@ const MAX_REPORT_BYTES = 512 * 1024;
 const MAX_SESSION_BODY_BYTES = 24 * 1024;
 const MAX_SESSION_SNAPSHOT_BYTES = 16 * 1024;
 const SIGNATURE_WINDOW_SECONDS = 300;
+const COMMAND_MAX_AGE_SECONDS = 15 * 60;
 const REPLAY_PROTECTED_AGENT_VERSION = "0.3.10";
 const AUTO_ENROLLMENT_DEFAULT_HOURLY_LIMIT = 120;
 const AUTO_ENROLLMENT_DEFAULT_NODE_CAP = 10000;
@@ -2789,8 +2790,51 @@ async function architectStorageUsage(request, env) {
   });
 }
 
+async function expireStaleNodeCommands(env, nodeId) {
+  const cutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
+  const stale = await env.DB.prepare(`
+    SELECT command_id, command_type, status, created_at
+    FROM commands
+    WHERE node_id = ?
+      AND status IN ('pending', 'accepted')
+      AND datetime(created_at) < datetime(?)
+    ORDER BY created_at ASC
+    LIMIT 20
+  `).bind(nodeId, cutoff).all();
+
+  const rows = stale.results || [];
+  for (const row of rows) {
+    const update = await env.DB.prepare(`
+      UPDATE commands
+      SET status = 'failed', completed_at = CURRENT_TIMESTAMP
+      WHERE command_id = ?
+        AND node_id = ?
+        AND status IN ('pending', 'accepted')
+        AND datetime(created_at) < datetime(?)
+    `).bind(row.command_id, nodeId, cutoff).run();
+    if ((update?.meta?.changes || 0) === 1) {
+      await env.DB.prepare(`
+        INSERT INTO audit_events (
+          actor_type, actor_id, action, target_type, target_id, details_json
+        ) VALUES ('controller', 'controller', 'command.expired', 'command', ?, ?)
+      `).bind(
+        row.command_id,
+        JSON.stringify({
+          node_id: nodeId,
+          command_type: row.command_type,
+          previous_status: row.status,
+          created_at: row.created_at,
+          max_age_seconds: COMMAND_MAX_AGE_SECONDS
+        })
+      ).run();
+    }
+  }
+  return rows.length;
+}
+
 async function listCommands(request, env, nodeId, url) {
   const node = await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
+  await expireStaleNodeCommands(env, nodeId);
   await ensureRolloutCommandForNode(env, nodeId);
 
   const query = await env.DB.prepare(`
