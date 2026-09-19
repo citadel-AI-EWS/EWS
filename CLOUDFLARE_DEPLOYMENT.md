@@ -13,6 +13,8 @@ Create the protected GitHub environment `cloudflare-test` and add:
 - `CLOUDFLARE_API_TOKEN` — a narrowly scoped token allowed to deploy only this Worker;
 - `ARCHITECT_TOKEN_HASH` — lowercase SHA-256 hex of the Architect bearer token, never the token itself;
 - `CONTROLLER_COMMAND_PRIVATE_JWK` — the protected Ed25519 Controller signing private JWK.
+- `OPENROUTER_API_KEY` — optional at deploy time, but required to activate the hidden final-answer
+  quality gate. Store it only as a GitHub environment secret or Cloudflare Worker secret; never commit it.
 
 To generate the Architect hash locally without exposing the token, use a trusted shell such as
 `printf %s "$ARCHITECT_TOKEN" | sha256sum` and store only the 64-character digest as the GitHub
