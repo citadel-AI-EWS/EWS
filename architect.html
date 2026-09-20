@@ -119,6 +119,9 @@
         <div class="enterprise-number"><span>Максимум CPU, %</span><input id="policyCpu" type="number" min="1" max="100"></div>
         <div class="enterprise-number"><span>Максимум RAM, %</span><input id="policyMemory" type="number" min="1" max="100"></div>
         <div class="enterprise-number"><span>Ошибки Event Log / час</span><input id="policyEvents" type="number" min="0" max="10000"></div>
+        <div class="enterprise-number"><span>Макс. возраст heartbeat, мин</span><input id="policyHeartbeatAge" type="number" min="1" max="1440"></div>
+        <div class="enterprise-number"><span>Минимум свободного диска, GB</span><input id="policyDiskFree" type="number" min="0" max="1048576" step="0.5"></div>
+        <div class="policy-grid"><label><input id="policyLanAddress" type="checkbox"> Требовать LAN IPv4 telemetry</label></div>
         <button id="saveEnterprisePolicyButton" class="secondary" type="button">Сохранить Desired State</button>
 
         <h3 style="margin:18px 0 8px">Sites / Node Groups</h3>
@@ -437,6 +440,9 @@
     const policyCpu = document.getElementById("policyCpu");
     const policyMemory = document.getElementById("policyMemory");
     const policyEvents = document.getElementById("policyEvents");
+    const policyHeartbeatAge = document.getElementById("policyHeartbeatAge");
+    const policyDiskFree = document.getElementById("policyDiskFree");
+    const policyLanAddress = document.getElementById("policyLanAddress");
     const saveEnterprisePolicyButton = document.getElementById("saveEnterprisePolicyButton");
     const newSiteName = document.getElementById("newSiteName");
     const createSiteButton = document.getElementById("createSiteButton");
@@ -1774,6 +1780,9 @@
         policyCpu,
         policyMemory,
         policyEvents,
+        policyHeartbeatAge,
+        policyDiskFree,
+        policyLanAddress,
         saveEnterprisePolicyButton,
         newSiteName,
         createSiteButton,
@@ -1910,6 +1919,9 @@
       policyCpu.value = policy.max_cpu_percent ?? 90;
       policyMemory.value = policy.max_memory_percent ?? 90;
       policyEvents.value = policy.max_event_errors_last_hour ?? 25;
+      policyHeartbeatAge.value = policy.max_heartbeat_age_minutes ?? 5;
+      policyDiskFree.value = policy.min_disk_free_gb ?? 5;
+      policyLanAddress.checked = policy.require_lan_address === true;
 
       fillSelect(enterpriseSiteSelect, data.sites || [], "site_id", "name", "Без Site");
       fillSelect(enterpriseGroupSelect, data.groups || [], "group_id", "name", "Без Group");
@@ -2205,7 +2217,10 @@
               require_managed_service_account: policyManagedAccount.checked,
               max_cpu_percent: Number(policyCpu.value),
               max_memory_percent: Number(policyMemory.value),
-              max_event_errors_last_hour: Number(policyEvents.value)
+              max_event_errors_last_hour: Number(policyEvents.value),
+              max_heartbeat_age_minutes: Number(policyHeartbeatAge.value),
+              min_disk_free_gb: Number(policyDiskFree.value),
+              require_lan_address: policyLanAddress.checked
             }
           })
         });
