@@ -40,6 +40,7 @@ need(serviceHost.includes('AutoLog = false'), "Windows service must not require 
 need(serviceHost.includes('CITADEL_SERVICE_STOP_FILE'), "transient service stop channel missing");
 need(serviceHost.includes('RequestAdditionalTime(60000)'), "SCM stop wait hint missing");
 need(serviceHost.includes('RestartExitCode = 75'), "service restart supervision missing");
+need(agentV1.includes('SERVICE_RESTART_EXIT_CODE = 75'), "agent service restart exit code missing");
 need(agentV1.includes('SERVICE_STOP_EXIT_CODE = 76'), "agent service stop exit code missing");
 need(agentV1.includes('"windows_core_service"'), "SCM service capability marker missing");
 need(agentV1.includes("windows-dpapi-local-machine-v1"), "Windows DPAPI identity protection missing");
