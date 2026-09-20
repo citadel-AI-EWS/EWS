@@ -2139,6 +2139,21 @@ def self_test() -> int:
             }),
             "valid LM Studio settings rejected",
         )
+        class _ServiceExitAgent(Agent):
+            def cycle(self) -> None:
+                raise SystemExit(SERVICE_RESTART_EXIT_CODE)
+
+        service_exit_config = AgentConfig(
+            "https://example.test",
+            root / "service-exit",
+            controller_public_x=controller_x,
+        )
+        service_exit_agent = _ServiceExitAgent(service_exit_config)
+        require_test(
+            service_exit_agent.run(once=True) == SERVICE_RESTART_EXIT_CODE,
+            "service-managed restart exit code was swallowed",
+        )
+
         require_test(
             agent.validate_hybrid_payload({
                 "request_id": "query_12345678",
