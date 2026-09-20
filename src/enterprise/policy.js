@@ -11,6 +11,9 @@ export const DEFAULT_ENTERPRISE_POLICY = Object.freeze({
   max_cpu_percent: 90,
   max_memory_percent: 90,
   max_event_errors_last_hour: 25,
+  max_heartbeat_age_minutes: 5,
+  min_disk_free_gb: 5,
+  require_lan_address: false,
   require_windows_update_service: true,
   require_no_pending_reboot: false,
   require_domain_join: false,
@@ -32,6 +35,23 @@ function boundedCount(value, fallback) {
   return Number.isInteger(numeric) && numeric >= 0 && numeric <= 10000
     ? numeric
     : fallback;
+}
+
+function boundedNumber(value, fallback, min, max) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= min && numeric <= max
+    ? numeric
+    : fallback;
+}
+
+function parseControllerTimestamp(value) {
+  if (!value) return null;
+  const raw = String(value);
+  const normalized = /[zZ]|[+-]\d\d:?\d\d$/.test(raw)
+    ? raw
+    : raw.replace(" ", "T") + "Z";
+  const timestamp = Date.parse(normalized);
+  return Number.isFinite(timestamp) ? timestamp : null;
 }
 
 export function normalizeEnterprisePolicy(value = {}) {
@@ -58,6 +78,19 @@ export function normalizeEnterprisePolicy(value = {}) {
       source.max_event_errors_last_hour,
       DEFAULT_ENTERPRISE_POLICY.max_event_errors_last_hour
     ),
+    max_heartbeat_age_minutes: boundedNumber(
+      source.max_heartbeat_age_minutes,
+      DEFAULT_ENTERPRISE_POLICY.max_heartbeat_age_minutes,
+      1,
+      1440
+    ),
+    min_disk_free_gb: boundedNumber(
+      source.min_disk_free_gb,
+      DEFAULT_ENTERPRISE_POLICY.min_disk_free_gb,
+      0,
+      1048576
+    ),
+    require_lan_address: source.require_lan_address === true,
     require_windows_update_service: source.require_windows_update_service === undefined
       ? DEFAULT_ENTERPRISE_POLICY.require_windows_update_service
       : source.require_windows_update_service === true,
@@ -132,6 +165,36 @@ export function evaluateEnterpriseNode(node, inventory, policyInput, latestVersi
       "memory",
       Number(node.memory_percent) <= policy.max_memory_percent,
       `${Number(node.memory_percent).toFixed(1)}% <= ${policy.max_memory_percent}%`
+    );
+  }
+
+  const lastSeen = parseControllerTimestamp(node?.last_seen_at);
+  const ageMinutes = lastSeen === null ? Infinity : Math.max(0, (Date.now() - lastSeen) / 60000);
+  pushCheck(
+    checks,
+    "heartbeat",
+    ageMinutes <= policy.max_heartbeat_age_minutes,
+    Number.isFinite(ageMinutes)
+      ? `${ageMinutes.toFixed(1)} min <= ${policy.max_heartbeat_age_minutes} min`
+      : "heartbeat timestamp unavailable"
+  );
+
+  if (inventory?.disk_home_free_bytes != null) {
+    const diskFreeGb = Number(inventory.disk_home_free_bytes) / 1073741824;
+    pushCheck(
+      checks,
+      "disk_free",
+      diskFreeGb >= policy.min_disk_free_gb,
+      `${diskFreeGb.toFixed(2)} GB >= ${policy.min_disk_free_gb} GB`
+    );
+  }
+
+  if (policy.require_lan_address) {
+    pushCheck(
+      checks,
+      "lan_address",
+      Boolean(inventory?.network?.lan_ipv4),
+      inventory?.network?.lan_ipv4 || "LAN IPv4 unavailable"
     );
   }
 
