@@ -18,7 +18,7 @@ $ReleaseVersion = "0.3.12"
 $ExpectedV1Sha256 = "c1d65650f5e90200e7d4135ee14bcbc3ef31d912970784d38db6a4d88432f637"
 $ExpectedV2Sha256 = "15083cb3c7de44a614794605aba1f95a372232479f17782661e22a73386eee7e"
 $ExpectedServiceHostSha256 = "f34cbdd554274b57af367f80bbe43c7b782b06cbc06f554fe394567a8e5d4d32"
-$ExpectedServiceHelperSha256 = "fe0789edac428b035d0eae29461a868279ca55094a020327f9fb7e7d89fd4f1c"
+$ExpectedServiceHelperSha256 = "e0e66f5a27018a283c65d42e6ead93e382706a163da682e6bd49f2b1fb9b0f99"
 
 function Get-Sha256([string]$Path) {
   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
