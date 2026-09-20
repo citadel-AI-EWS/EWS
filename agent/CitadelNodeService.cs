@@ -187,34 +187,32 @@ namespace CitadelEws
 
         private void StopChild(bool requestAdditionalTime, int gracefulWaitMs)
         {
-            Process current;
-            lock (sync)
-            {
-                stopping = true;
-                current = child;
-            }
-
             bool markerWritten = false;
             try
             {
-                if (current != null && !current.HasExited)
+                lock (sync)
                 {
-                    Directory.CreateDirectory(Path.GetDirectoryName(config.LifecycleStopFile));
-                    File.WriteAllText(
-                        config.LifecycleStopFile,
-                        "windows lifecycle stop " + DateTime.UtcNow.ToString("o") + Environment.NewLine
-                    );
-                    markerWritten = true;
-
-                    if (requestAdditionalTime)
+                    stopping = true;
+                    Process current = child;
+                    if (current != null && !current.HasExited)
                     {
-                        RequestAdditionalTime(60000);
-                    }
+                        Directory.CreateDirectory(Path.GetDirectoryName(config.LifecycleStopFile));
+                        File.WriteAllText(
+                            config.LifecycleStopFile,
+                            "windows lifecycle stop " + DateTime.UtcNow.ToString("o") + Environment.NewLine
+                        );
+                        markerWritten = true;
 
-                    if (!current.WaitForExit(gracefulWaitMs))
-                    {
-                        current.Kill();
-                        current.WaitForExit(5000);
+                        if (requestAdditionalTime)
+                        {
+                            RequestAdditionalTime(60000);
+                        }
+
+                        if (!current.WaitForExit(gracefulWaitMs))
+                        {
+                            current.Kill();
+                            current.WaitForExit(5000);
+                        }
                     }
                 }
 
@@ -278,35 +276,48 @@ namespace CitadelEws
         private static void RunSelfTest()
         {
             string root = Path.Combine(Path.GetTempPath(), "CitadelNodeServiceSelfTest");
-            Directory.CreateDirectory(root);
-            var config = ParseArgs(new string[] {
-                "--python", Path.Combine(root, "python.exe"),
-                "--agent", Path.Combine(root, "citadel_node_v2.py"),
-                "--config", Path.Combine(root, "config.json"),
-                "--stop-file", Path.Combine(root, "STOP"),
-                "--lifecycle-stop-file", Path.Combine(root, "SERVICE_STOP"),
-                "--hold-file", Path.Combine(root, "SERVICE_HOLD"),
-                "--ready-file", Path.Combine(root, "SERVICE_READY")
-            });
-            var service = new CitadelNodeService(config);
-            Directory.CreateDirectory(root);
-            File.WriteAllText(config.LifecycleStopFile, "stale transient marker");
-            service.DeleteLifecycleStopFile();
-            ProcessStartInfo start = service.BuildChildStartInfo();
-            if (File.Exists(config.LifecycleStopFile) ||
-                service.AutoLog ||
-                start.UseShellExecute ||
-                !start.CreateNoWindow ||
-                start.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] != "1" ||
-                start.EnvironmentVariables["CITADEL_SERVICE_STOP_FILE"] != config.LifecycleStopFile ||
-                start.EnvironmentVariables["CITADEL_SERVICE_HOLD_FILE"] != config.HoldFile ||
-                start.EnvironmentVariables["CITADEL_SERVICE_READY_FILE"] != config.ReadyFile ||
-                start.FileName != config.PythonPath ||
-                start.Arguments.IndexOf(" run --config ", StringComparison.Ordinal) < 0)
+            try
             {
-                throw new InvalidOperationException("CITADEL service child contract self-test failed.");
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, true);
+                }
+                Directory.CreateDirectory(root);
+                var config = ParseArgs(new string[] {
+                    "--python", Path.Combine(root, "python.exe"),
+                    "--agent", Path.Combine(root, "citadel_node_v2.py"),
+                    "--config", Path.Combine(root, "config.json"),
+                    "--stop-file", Path.Combine(root, "STOP"),
+                    "--lifecycle-stop-file", Path.Combine(root, "SERVICE_STOP"),
+                    "--hold-file", Path.Combine(root, "SERVICE_HOLD"),
+                    "--ready-file", Path.Combine(root, "SERVICE_READY")
+                });
+                var service = new CitadelNodeService(config);
+                File.WriteAllText(config.LifecycleStopFile, "stale transient marker");
+                service.DeleteLifecycleStopFile();
+                ProcessStartInfo start = service.BuildChildStartInfo();
+                if (File.Exists(config.LifecycleStopFile) ||
+                    service.AutoLog ||
+                    start.UseShellExecute ||
+                    !start.CreateNoWindow ||
+                    start.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] != "1" ||
+                    start.EnvironmentVariables["CITADEL_SERVICE_STOP_FILE"] != config.LifecycleStopFile ||
+                    start.EnvironmentVariables["CITADEL_SERVICE_HOLD_FILE"] != config.HoldFile ||
+                    start.EnvironmentVariables["CITADEL_SERVICE_READY_FILE"] != config.ReadyFile ||
+                    start.FileName != config.PythonPath ||
+                    start.Arguments.IndexOf(" run --config ", StringComparison.Ordinal) < 0)
+                {
+                    throw new InvalidOperationException("CITADEL service child contract self-test failed.");
+                }
+                Console.WriteLine("CITADEL Windows Service Host SELF TEST: PASS");
             }
-            Console.WriteLine("CITADEL Windows Service Host SELF TEST: PASS");
+            finally
+            {
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, true);
+                }
+            }
         }
 
         public static int Main(string[] args)
