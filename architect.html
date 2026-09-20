@@ -1720,13 +1720,202 @@
       securitySecretPanel.classList.add("hidden");
     }
 
+    function setEnterpriseAdminEnabled(enabled) {
+      for (const element of [
+        createRecoveryCodeButton,
+        rotateArchitectTokenButton,
+        createRbacTokenButton,
+        rbacRole,
+        rbacLabel,
+        policyLatestAgent,
+        policyWindowsService,
+        policyEnterpriseProbe,
+        policyUpdateService,
+        policyNoPendingReboot,
+        policyCpu,
+        policyMemory,
+        policyEvents,
+        saveEnterprisePolicyButton,
+        newSiteName,
+        createSiteButton,
+        newGroupName,
+        createGroupButton,
+        enterpriseNodeSelect,
+        enterpriseSiteSelect,
+        enterpriseGroupSelect,
+        assignEnterpriseScopeButton
+      ]) {
+        if (element) element.disabled = !enabled;
+      }
+      rbacPanel.classList.toggle("hidden", !enabled);
+    }
+
     function renderSecurityState(state = {}) {
+      currentArchitectRole = state.actor_role || "owner";
       architectSecurityState.textContent = [
+        `Роль: ${currentArchitectRole}`,
         state.recovery_configured ? "✓ Recovery-код настроен." : "⚠ Recovery-код ещё не создан.",
         state.token_rotated_at ? "Последняя смена токена: " + state.token_rotated_at : "Токен ещё не менялся через сайт.",
         state.bootstrap_mode ? "Сейчас используется bootstrap-режим Cloudflare secret." : "Активный токен управляется безопасной ротацией Controller."
       ].join("\n");
       architectSecurityState.className = "status " + (state.recovery_configured ? "good" : "");
+      setEnterpriseAdminEnabled(currentArchitectRole === "owner");
+    }
+
+    function renderRbacTokens(items = []) {
+      rbacTokenList.replaceChildren();
+      if (!items.length) {
+        addText(rbacTokenList, "div", "Дополнительных role token пока нет.");
+        return;
+      }
+      for (const item of items) {
+        const row = document.createElement("div");
+        row.className = "item";
+        addText(row, "strong", `${item.label} · ${item.role}`);
+        addText(row, "div", `${item.enabled ? "ACTIVE" : "REVOKED"} · создан: ${item.created_at || "—"} · использован: ${item.last_used_at || "—"}`, "small");
+        if (item.enabled) {
+          const revoke = addText(row, "button", "Отозвать token", "danger");
+          revoke.type = "button";
+          revoke.addEventListener("click", async () => {
+            if (!confirm(`Отозвать role token «${item.label}»?`)) return;
+            revoke.disabled = true;
+            try {
+              await api(`/api/v1/architect/security/access-tokens/${encodeURIComponent(item.token_id)}`, { method: "DELETE" });
+              await refreshRbacTokens();
+            } catch (error) {
+              setStatus("Role token не отозван: " + error.message, "bad");
+            }
+          });
+        }
+        rbacTokenList.appendChild(row);
+      }
+    }
+
+    async function refreshRbacTokens() {
+      if (currentArchitectRole !== "owner") return [];
+      const data = await api("/api/v1/architect/security/access-tokens");
+      renderRbacTokens(data.access_tokens || []);
+      return data.access_tokens || [];
+    }
+
+    function fillSelect(select, items, valueKey, labelKey, emptyLabel) {
+      const previous = select.value;
+      select.replaceChildren();
+      const empty = document.createElement("option");
+      empty.value = "";
+      empty.textContent = emptyLabel;
+      select.appendChild(empty);
+      for (const item of items || []) {
+        const option = document.createElement("option");
+        option.value = item[valueKey] || "";
+        option.textContent = item[labelKey] || option.value;
+        select.appendChild(option);
+      }
+      if ([...select.options].some((option) => option.value === previous)) select.value = previous;
+    }
+
+    function enterpriseServiceLabel(key) {
+      const labels = {
+        windows_service: "Windows Service",
+        dpapi_identity: "DPAPI identity",
+        event_log: "Windows Event Log",
+        cim_performance_counters: "CIM / Performance Counters",
+        gmsa_dmsa: "gMSA / dMSA",
+        windows_update_hotpatch: "Windows Update / Hotpatch",
+        hyper_v: "Hyper-V",
+        gpo_intune_mdm: "GPO / Intune / MDM",
+        rbac: "RBAC",
+        desired_state_policy: "Desired State / Policy Engine",
+        sites_node_groups: "Sites / Node Groups",
+        storage_integrity: "Storage integrity",
+        recovery_manifest: "Recovery manifest"
+      };
+      return labels[key] || key;
+    }
+
+    function renderEnterprise(data = {}) {
+      currentEnterprise = data;
+      enterpriseRoleBadge.textContent = `RBAC: ${data.actor_role || currentArchitectRole}`;
+      const counts = data.counts || {};
+      const storage = data.storage_integrity || {};
+      enterpriseSummary.textContent = [
+        `Compliance: ${counts.compliant_nodes || 0}/${counts.nodes || 0}`,
+        `Enterprise Probe: ${counts.windows_enterprise_probe_ready || 0}`,
+        `Отчёты с integrity metadata: ${storage.reports_with_integrity_metadata || 0}/${storage.total_reports || 0}`,
+        `Проверенных последних inventory: ${storage.verified_latest_system_inventories || 0}`
+      ].join("\n");
+      enterpriseSummary.className = "status " +
+        ((counts.nodes || 0) > 0 && counts.noncompliant_nodes === 0 ? "good" : "");
+
+      enterpriseServiceCatalog.replaceChildren();
+      for (const [key, status] of Object.entries(data.service_catalog || {})) {
+        const tile = document.createElement("div");
+        tile.className = "enterprise-tile";
+        addText(tile, "b", enterpriseServiceLabel(key));
+        addText(tile, "span", String(status));
+        enterpriseServiceCatalog.appendChild(tile);
+      }
+
+      const policy = data.policy || {};
+      policyLatestAgent.checked = policy.require_latest_agent === true;
+      policyWindowsService.checked = policy.require_windows_core_service === true;
+      policyEnterpriseProbe.checked = policy.require_windows_enterprise_probe === true;
+      policyUpdateService.checked = policy.require_windows_update_service === true;
+      policyNoPendingReboot.checked = policy.require_no_pending_reboot === true;
+      policyCpu.value = policy.max_cpu_percent ?? 90;
+      policyMemory.value = policy.max_memory_percent ?? 90;
+      policyEvents.value = policy.max_event_errors_last_hour ?? 25;
+
+      fillSelect(enterpriseSiteSelect, data.sites || [], "site_id", "name", "Без Site");
+      fillSelect(enterpriseGroupSelect, data.groups || [], "group_id", "name", "Без Group");
+      fillSelect(
+        enterpriseNodeSelect,
+        (data.nodes || []).map((node) => ({
+          node_id: node.node_id,
+          label: `${node.hostname || node.node_id} · ${node.os_name || "OS"}`
+        })),
+        "node_id",
+        "label",
+        "Выберите ноду"
+      );
+
+      enterpriseNodeCompliance.replaceChildren();
+      for (const node of data.nodes || []) {
+        const row = document.createElement("div");
+        row.className = "enterprise-node-row " + (node.compliance?.compliant ? "good" : "bad");
+        addText(row, "strong", `${node.hostname || node.node_id} · ${node.compliance?.compliant ? "COMPLIANT" : "ACTION NEEDED"}`);
+        addText(row, "div", `Site: ${node.site_name || "—"} · Group: ${node.group_name || "—"} · Agent: ${node.agent_version || "—"}`, "small");
+        const failed = (node.compliance?.checks || []).filter((check) => !check.ok);
+        addText(
+          row,
+          "div",
+          failed.length
+            ? "Нарушения: " + failed.map((check) => `${check.key}: ${check.detail}`).join(" · ")
+            : "Все активные правила Desired State выполнены.",
+          "small"
+        );
+        const enterprise = node.compliance?.windows_enterprise;
+        if (enterprise?.available) {
+          const events = Number(enterprise.event_log?.system?.critical_or_error_last_hour || 0) +
+            Number(enterprise.event_log?.application?.critical_or_error_last_hour || 0);
+          addText(
+            row,
+            "div",
+            `Microsoft: Event errors ${events} · Update ${enterprise.windows_update?.service_status || "—"} · Hyper-V VMs ${enterprise.hyper_v?.vm_count ?? "—"} · Intune ${enterprise.management?.intune_management_extension || "—"} · MDM ${enterprise.management?.mdm_enrollment_count ?? 0} · Service ${enterprise.service_identity?.service_account || "—"}`,
+            "small"
+          );
+        }
+        enterpriseNodeCompliance.appendChild(row);
+      }
+      if (!(data.nodes || []).length) addText(enterpriseNodeCompliance, "div", "Нод пока нет.", "muted");
+
+      setEnterpriseAdminEnabled((data.actor_role || currentArchitectRole) === "owner");
+    }
+
+    async function refreshEnterprise() {
+      const data = await api("/api/v1/architect/enterprise");
+      renderEnterprise(data);
+      return data;
     }
 
     async function refreshSecurityStatus() {
