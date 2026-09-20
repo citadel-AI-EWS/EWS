@@ -439,3 +439,15 @@ Implementation is being delivered in the same reviewed LM Studio release branch 
 - Windows recovery uses DHCP renew and only reconnects to previously saved Windows Wi-Fi profiles.
 - Linux recovery uses NetworkManager and only raises previously active saved connections.
 - The agent never reads, exports, or stores Wi-Fi passwords and never joins an unknown network automatically.
+
+## Architect access recovery rule
+
+- The current Architect bearer token must never be recoverable or displayable by the site.
+- Architect has an authenticated **Rotate token** action. Rotation generates a new bearer token, stores only its SHA-256 verifier, invalidates the old token immediately, and displays the new token once.
+- Architect can generate/replace a separate one-time recovery code while authenticated. Only its SHA-256 verifier is stored.
+- The login page has **Lost token** recovery. A valid unused recovery code rotates the bearer token, returns the new token once, consumes the recovery code, and invalidates the old token.
+- Recovery attempts are rate-limited in D1 by a hash of the connecting address and a 15-minute window.
+- Architect Logs and all other Architect-authenticated surfaces use the same active D1 token verifier.
+- The protected Cloudflare `ARCHITECT_TOKEN_HASH` remains the bootstrap verifier for first initialization; after in-site rotation, the D1 verifier is authoritative.
+- All token/recovery rotations are written to immutable audit events without secret values.
+
