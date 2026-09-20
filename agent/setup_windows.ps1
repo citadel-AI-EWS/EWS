@@ -17,7 +17,7 @@ $PythonWingetId = "Python.Python.3.14"
 $ReleaseVersion = "0.3.12"
 $ExpectedV1Sha256 = "c1d65650f5e90200e7d4135ee14bcbc3ef31d912970784d38db6a4d88432f637"
 $ExpectedV2Sha256 = "15083cb3c7de44a614794605aba1f95a372232479f17782661e22a73386eee7e"
-$ExpectedServiceHostSha256 = "f34cbdd554274b57af367f80bbe43c7b782b06cbc06f554fe394567a8e5d4d32"
+$ExpectedServiceHostSha256 = "0353aaeeb388392bc11609fba8d69d4c1992cfa1d5ed104501d0f529fd9c3645"
 $ExpectedServiceHelperSha256 = "e0e66f5a27018a283c65d42e6ead93e382706a163da682e6bd49f2b1fb9b0f99"
 
 function Get-Sha256([string]$Path) {
