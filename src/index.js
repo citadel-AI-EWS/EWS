@@ -13,6 +13,8 @@ const MAX_REPORT_BYTES = 512 * 1024;
 const MAX_SESSION_BODY_BYTES = 24 * 1024;
 const MAX_SESSION_SNAPSHOT_BYTES = 16 * 1024;
 const SIGNATURE_WINDOW_SECONDS = 300;
+const COMMAND_MAX_AGE_SECONDS = 15 * 60;
+const REPLAY_PROTECTED_AGENT_VERSION = "0.3.10";
 const AUTO_ENROLLMENT_DEFAULT_HOURLY_LIMIT = 120;
 const AUTO_ENROLLMENT_DEFAULT_NODE_CAP = 10000;
 const ALLOWED_OUTCOMES = new Set(["success", "failed", "partial"]);
@@ -27,17 +29,17 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
 const POWER_COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.9",
+  version: "0.3.10",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "4e9b27f03b7a9b70dcc3fd4aebb64f51d4cb6cefdc3ae847a32449f9f52cc8e4"
+      sha256: "de0cfe4a8cea2b985ae1410716ca7fb1ec11c1564e639411fb21e6133289a3b8"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "07b063110936068d6f48cf6aa8a0b39ca9e2fe43b0a2e5862e7a83dbabf34709"
+      sha256: "7d3cbeecaa9a58d30d1cc9e12a3cf60c86112a857df4188d02453caa09954a52"
     }
   ]
 });
@@ -69,6 +71,7 @@ let nodeNetworkSchemaPromise;
 let rolloutSchemaPromise;
 let projectSchemaPromise;
 let nodeAiSchemaPromise;
+let nodeRequestNonceSchemaPromise;
 
 class ApiError extends Error {
   constructor(status, code) {
@@ -165,6 +168,13 @@ function normalizeNodeNetwork(value) {
 function subnet24(value) {
   const parts = typeof value === "string" ? value.split(".") : [];
   return parts.length === 4 ? parts.slice(0, 3).join(".") : null;
+}
+
+function agentRequiresRequestId(version) {
+  const match = String(version || "").match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return false;
+  const major = Number(match[1]), minor = Number(match[2]), patch = Number(match[3]);
+  return major > 0 || minor > 3 || (minor === 3 && patch >= 10);
 }
 
 function parseJsonObject(text) {
@@ -374,6 +384,30 @@ async function ensureCommandStorage(env) {
     });
   }
   await commandIndexPromise;
+}
+
+async function ensureNodeRequestNonceStorage(env) {
+  if (!nodeRequestNonceSchemaPromise) {
+    nodeRequestNonceSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS node_request_nonces (
+          node_id TEXT NOT NULL,
+          request_id TEXT NOT NULL,
+          received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (node_id, request_id),
+          FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_node_request_nonces_received
+        ON node_request_nonces(received_at)
+      `)
+    ]).catch((error) => {
+      nodeRequestNonceSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await nodeRequestNonceSchemaPromise;
 }
 
 async function ensureNodeNetworkStorage(env) {
@@ -1753,6 +1787,7 @@ function normalizeMetrics(value) {
 async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   const headerNodeId = request.headers.get("x-node-id");
   const timestamp = request.headers.get("x-node-timestamp");
+  const requestId = request.headers.get("x-node-request-id");
   const signatureValue = request.headers.get("x-node-signature");
 
   if (!headerNodeId || headerNodeId !== nodeId || !timestamp || !signatureValue) {
@@ -1760,6 +1795,9 @@ async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   }
   if (!/^\d{10,13}$/.test(timestamp)) {
     throw new ApiError(401, "invalid_timestamp");
+  }
+  if (requestId && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(requestId)) {
+    throw new ApiError(401, "invalid_request_id");
   }
 
   const numericTimestamp = Number(timestamp);
@@ -1774,12 +1812,12 @@ async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   const node = await env.DB.prepare(
     "SELECT node_id, public_key, status, agent_version FROM nodes WHERE node_id = ?"
   ).bind(nodeId).first();
+  if (!node) throw new ApiError(401, "invalid_node");
+  if (node.status === "revoked") throw new ApiError(403, "node_revoked");
 
-  if (!node) {
-    throw new ApiError(401, "invalid_node");
-  }
-  if (node.status === "revoked") {
-    throw new ApiError(403, "node_revoked");
+  const replayProtected = agentRequiresRequestId(node.agent_version);
+  if (replayProtected && !requestId) {
+    throw new ApiError(401, "request_id_required");
   }
 
   let publicJwk;
@@ -1790,35 +1828,40 @@ async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   }
 
   const bodyHash = await sha256Hex(bodyBytes);
-  const canonicalRequest = [
+  const canonicalParts = [
     request.method.toUpperCase(),
     `${url.pathname}${url.search}`,
-    timestamp,
-    bodyHash
-  ].join("\n");
+    timestamp
+  ];
+  if (requestId) canonicalParts.push(requestId);
+  canonicalParts.push(bodyHash);
+  const canonicalRequest = canonicalParts.join("\n");
 
   let verified = false;
   try {
     const key = await crypto.subtle.importKey(
-      "jwk",
-      publicJwk,
-      { name: "Ed25519" },
-      false,
-      ["verify"]
+      "jwk", publicJwk, { name: "Ed25519" }, false, ["verify"]
     );
     const signature = decodeBase64Url(signatureValue);
     verified = signature.byteLength === 64 && await crypto.subtle.verify(
-      "Ed25519",
-      key,
-      signature,
-      new TextEncoder().encode(canonicalRequest)
+      "Ed25519", key, signature, new TextEncoder().encode(canonicalRequest)
     );
   } catch {
     verified = false;
   }
+  if (!verified) throw new ApiError(401, "invalid_signature");
 
-  if (!verified) {
-    throw new ApiError(401, "invalid_signature");
+  if (requestId) {
+    await ensureNodeRequestNonceStorage(env);
+    const nonce = await env.DB.prepare(
+      "INSERT OR IGNORE INTO node_request_nonces (node_id, request_id) VALUES (?, ?)"
+    ).bind(nodeId, requestId).run();
+    if ((nonce?.meta?.changes || 0) !== 1) {
+      throw new ApiError(409, "replayed_request");
+    }
+    await env.DB.prepare(
+      "DELETE FROM node_request_nonces WHERE datetime(received_at) < datetime('now', '-10 minutes')"
+    ).run();
   }
   return node;
 }
@@ -1903,7 +1946,7 @@ function enrollmentResponse(nodeId, nodeNumber, status = "online", responseStatu
     node: { node_id: nodeId, node_number: nodeNumber, status },
     authentication: {
       scheme: "CITADEL-Ed25519",
-      required_headers: ["x-node-id", "x-node-timestamp", "x-node-signature"],
+      required_headers: ["x-node-id", "x-node-timestamp", "x-node-request-id", "x-node-signature"],
       signature_window_seconds: SIGNATURE_WINDOW_SECONDS
     }
   }, responseStatus);
@@ -2747,8 +2790,51 @@ async function architectStorageUsage(request, env) {
   });
 }
 
+async function expireStaleNodeCommands(env, nodeId) {
+  const cutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
+  const stale = await env.DB.prepare(`
+    SELECT command_id, command_type, status, created_at
+    FROM commands
+    WHERE node_id = ?
+      AND status IN ('pending', 'accepted')
+      AND datetime(created_at) < datetime(?)
+    ORDER BY created_at ASC
+    LIMIT 20
+  `).bind(nodeId, cutoff).all();
+
+  const rows = stale.results || [];
+  for (const row of rows) {
+    const update = await env.DB.prepare(`
+      UPDATE commands
+      SET status = 'failed', completed_at = CURRENT_TIMESTAMP
+      WHERE command_id = ?
+        AND node_id = ?
+        AND status IN ('pending', 'accepted')
+        AND datetime(created_at) < datetime(?)
+    `).bind(row.command_id, nodeId, cutoff).run();
+    if ((update?.meta?.changes || 0) === 1) {
+      await env.DB.prepare(`
+        INSERT INTO audit_events (
+          actor_type, actor_id, action, target_type, target_id, details_json
+        ) VALUES ('controller', 'controller', 'command.expired', 'command', ?, ?)
+      `).bind(
+        row.command_id,
+        JSON.stringify({
+          node_id: nodeId,
+          command_type: row.command_type,
+          previous_status: row.status,
+          created_at: row.created_at,
+          max_age_seconds: COMMAND_MAX_AGE_SECONDS
+        })
+      ).run();
+    }
+  }
+  return rows.length;
+}
+
 async function listCommands(request, env, nodeId, url) {
   const node = await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
+  await expireStaleNodeCommands(env, nodeId);
   await ensureRolloutCommandForNode(env, nodeId);
 
   const query = await env.DB.prepare(`
