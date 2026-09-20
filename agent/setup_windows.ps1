@@ -41,7 +41,7 @@ foreach ($PathArg in @($InstallRoot, $StateRoot)) {
     throw "Unsafe CITADEL installation path."
   }
 }
-if ([string]::IsNullOrWhiteSpace($ControllerUrl) -or $ControllerUrl.Contains('"') -or $ControllerUrl.Contains([char]10) -or $ControllerUrl.Contains([char]13)) {
+if ([string]::IsNullOrWhiteSpace($ControllerUrl) -or $ControllerUrl.Contains('"') -or $ControllerUrl.IndexOf([char]10) -ge 0 -or $ControllerUrl.IndexOf([char]13) -ge 0) {
   throw "Unsafe ControllerUrl."
 }
 $PreElevationControllerUri = [System.Uri]$ControllerUrl
@@ -343,6 +343,7 @@ $LegacyProcessesBeforeCutover = @(Get-RunningLegacyCitadelAgents)
 $LegacyWasRunning = $LegacyProcessesBeforeCutover.Count -gt 0
 $LegacyShortcutExisted = Test-Path -LiteralPath $LegacyShortcutPath
 $CreatedService = $null -eq $ExistingService
+$CutoverCommitted = $false
 
 $BinPath = (Quote-CitadelServiceArg $ServiceExe) +
   " --python " + (Quote-CitadelServiceArg $VenvPython) +
@@ -388,6 +389,7 @@ try {
     if ($null -eq $ManagedChild) { Start-Sleep -Milliseconds 500 }
   } while ($null -eq $ManagedChild -and [DateTime]::UtcNow -lt $ChildDeadline)
   if ($null -eq $ManagedChild) { throw "SCM service started but no managed Python Core Agent child was observed." }
+  $CutoverCommitted = $true
 
   # Only after the new SCM service is demonstrably alive do we retire the
   # original user's Startup lifecycle. Until this point a staging failure
@@ -424,7 +426,11 @@ try {
 
 } catch {
   $CutoverError = $_
-  Write-Warning "[CITADEL] Service cutover failed; restoring the previous lifecycle."
+  if ($CutoverCommitted) {
+    Write-Warning "[CITADEL] New SCM service is already committed. It will not be rolled back after a secondary cleanup/metadata error."
+    throw $CutoverError
+  }
+  Write-Warning "[CITADEL] Service cutover failed before commit; restoring the previous lifecycle."
   try {
     Stop-CitadelServiceIfPresent
     if ($CreatedService) {
