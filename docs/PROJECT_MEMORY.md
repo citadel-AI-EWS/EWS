@@ -494,3 +494,15 @@ Architect requirements:
 - Windows setup restricts the state directory ACL to the installing user, SYSTEM and Administrators.
 - Replay protection remains compatible from 0.3.10 onward; 0.3.11 is a security hardening release, not a new command channel.
 - Windows Service lifecycle remains the next separate increment; do not combine it with this identity migration PR.
+
+## Architect access recovery
+
+- The site must never reveal or recover the current Architect bearer token.
+- While authenticated, Architect can rotate the token. Rotation stores only the new SHA-256 verifier in D1, invalidates the previous token immediately, and displays the new token once.
+- Architect can generate/replace a separate one-time recovery code. Only its SHA-256 verifier is stored.
+- The login screen provides a Lost Token flow. A valid unused recovery code rotates the bearer token, consumes the recovery code, and displays the replacement token once.
+- Recovery attempts are rate-limited in 15-minute windows using only a hash of the connecting address.
+- Architect Logs and every Architect-authenticated surface use the same active D1 verifier.
+- `ARCHITECT_TOKEN_HASH` remains the bootstrap verifier for initial setup; after site rotation, the D1 verifier is authoritative.
+- Token/recovery changes are audited without storing or logging secret values.
+
