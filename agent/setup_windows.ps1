@@ -15,9 +15,9 @@ $ServiceName = "CitadelEWSNode"
 $ServiceDisplayName = "CITADEL EWS Node"
 $PythonWingetId = "Python.Python.3.14"
 $ReleaseVersion = "0.3.12"
-$ExpectedV1Sha256 = "c1d65650f5e90200e7d4135ee14bcbc3ef31d912970784d38db6a4d88432f637"
-$ExpectedV2Sha256 = "15083cb3c7de44a614794605aba1f95a372232479f17782661e22a73386eee7e"
-$ExpectedServiceHostSha256 = "d42953344ad70ece4ade676c489b13d5b1d6841007c425e5eee63095ce9c6d08"
+$ExpectedV1Sha256 = "2dab753c8e836663d215656682ac304b5f297a7c0d726936111013fa70dacc65"
+$ExpectedV2Sha256 = "0fc1f2a8daac47c5c504951e32a9e8110e9f583d8d185d45645408814c3cac52"
+$ExpectedServiceHostSha256 = "892c5f388f9b54c0bcbb2956381dd601dfa8065b0e9258ba673e9505c2f81cad"
 $ExpectedServiceHelperSha256 = "e0e66f5a27018a283c65d42e6ead93e382706a163da682e6bd49f2b1fb9b0f99"
 
 function Get-Sha256([string]$Path) {
