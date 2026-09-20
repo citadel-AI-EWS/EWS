@@ -485,3 +485,12 @@ Architect requirements:
 - The Health action reuses CITADEL's existing signed system_inventory diagnostic mission path; no parallel command protocol is introduced.
 - Do not expose or depend on Tailscale in the CITADEL UI. The official channel remains the CITADEL HTTPS Worker/Controller API plus signed Agent requests and Architect authorization.
 - The integration ships only through the protected CI -> Cloudflare TEST deployment workflow.
+
+
+## Agent 0.3.11 — Windows node identity protection
+- Windows node private Ed25519 material is stored as a machine-bound DPAPI blob instead of plaintext PKCS#8 PEM.
+- Existing Windows `private_key_pem` identities migrate in place while preserving `node_id` and signing continuity.
+- A copied DPAPI identity file is not intended to be portable to another Windows host.
+- Windows setup restricts the state directory ACL to the installing user, SYSTEM and Administrators.
+- Replay protection remains compatible from 0.3.10 onward; 0.3.11 is a security hardening release, not a new command channel.
+- Windows Service lifecycle remains the next separate increment; do not combine it with this identity migration PR.
