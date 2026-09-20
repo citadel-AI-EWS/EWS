@@ -65,6 +65,83 @@ CRYPTPROTECT_UI_FORBIDDEN = 0x1
 CRYPTPROTECT_LOCAL_MACHINE = 0x4
 WINDOWS_ENTERPRISE_PROBE_SHA256 = "0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
 WINDOWS_ENTERPRISE_PROBE_MAX_BYTES = 256 * 1024
+WINDOWS_ENTERPRISE_PROBE_B64 = (
+    "JEVycm9yQWN0aW9uUHJlZmVyZW5jZSA9ICJTdG9wIgpTZXQtU3RyaWN0TW9kZSAtVmVyc2lvbiBMYXRlc3QKCmZ1bmN0aW9uIFNhZmUtQ2ltRmlyc3Qgewog"
+    "IHBhcmFtKFtQYXJhbWV0ZXIoTWFuZGF0b3J5ID0gJHRydWUpXVtzdHJpbmddJENsYXNzTmFtZSwgW3N0cmluZ10kRmlsdGVyID0gIiIpCiAgdHJ5IHsKICAg"
+    "IGlmIChbc3RyaW5nXTo6SXNOdWxsT3JXaGl0ZVNwYWNlKCRGaWx0ZXIpKSB7CiAgICAgIHJldHVybiBHZXQtQ2ltSW5zdGFuY2UgLUNsYXNzTmFtZSAkQ2xh"
+    "c3NOYW1lIC1FcnJvckFjdGlvbiBTdG9wIHwgU2VsZWN0LU9iamVjdCAtRmlyc3QgMQogICAgfQogICAgcmV0dXJuIEdldC1DaW1JbnN0YW5jZSAtQ2xhc3NO"
+    "YW1lICRDbGFzc05hbWUgLUZpbHRlciAkRmlsdGVyIC1FcnJvckFjdGlvbiBTdG9wIHwgU2VsZWN0LU9iamVjdCAtRmlyc3QgMQogIH0gY2F0Y2ggewogICAg"
+    "cmV0dXJuICRudWxsCiAgfQp9CgpmdW5jdGlvbiBTYWZlLVNlcnZpY2UgewogIHBhcmFtKFtQYXJhbWV0ZXIoTWFuZGF0b3J5ID0gJHRydWUpXVtzdHJpbmdd"
+    "JE5hbWUpCiAgdHJ5IHsgcmV0dXJuIEdldC1TZXJ2aWNlIC1OYW1lICROYW1lIC1FcnJvckFjdGlvbiBTdG9wIH0gY2F0Y2ggeyByZXR1cm4gJG51bGwgfQp9"
+    "CgpmdW5jdGlvbiBSZWdpc3RyeS1FeGlzdHMgewogIHBhcmFtKFtQYXJhbWV0ZXIoTWFuZGF0b3J5ID0gJHRydWUpXVtzdHJpbmddJFBhdGgpCiAgdHJ5IHsg"
+    "cmV0dXJuIFRlc3QtUGF0aCAtTGl0ZXJhbFBhdGggJFBhdGggLUVycm9yQWN0aW9uIFN0b3AgfSBjYXRjaCB7IHJldHVybiAkZmFsc2UgfQp9CgpmdW5jdGlv"
+    "biBSZWNlbnQtRXZlbnRTdW1tYXJ5IHsKICBwYXJhbShbUGFyYW1ldGVyKE1hbmRhdG9yeSA9ICR0cnVlKV1bc3RyaW5nXSRMb2dOYW1lKQogICRyZXN1bHQg"
+    "PSBbb3JkZXJlZF1AeyBsb2cgPSAkTG9nTmFtZTsgY3JpdGljYWxfb3JfZXJyb3JfbGFzdF9ob3VyID0gMDsgcXVlcnlfb2sgPSAkZmFsc2UgfQogIHRyeSB7"
+    "CiAgICAkc3RhcnQgPSAoR2V0LURhdGUpLkFkZEhvdXJzKC0xKQogICAgJGV2ZW50cyA9IEAoR2V0LVdpbkV2ZW50IC1GaWx0ZXJIYXNodGFibGUgQHsgTG9n"
+    "TmFtZSA9ICRMb2dOYW1lOyBMZXZlbCA9IDEsMjsgU3RhcnRUaW1lID0gJHN0YXJ0IH0gLU1heEV2ZW50cyAxMDAgLUVycm9yQWN0aW9uIFN0b3ApCiAgICAk"
+    "cmVzdWx0LmNyaXRpY2FsX29yX2Vycm9yX2xhc3RfaG91ciA9ICRldmVudHMuQ291bnQKICAgICRyZXN1bHQucXVlcnlfb2sgPSAkdHJ1ZQogIH0gY2F0Y2gg"
+    "ewogICAgJHJlc3VsdC5xdWVyeV9vayA9ICRmYWxzZQogIH0KICByZXR1cm4gJHJlc3VsdAp9Cgokb3MgPSBTYWZlLUNpbUZpcnN0ICJXaW4zMl9PcGVyYXRp"
+    "bmdTeXN0ZW0iCiRjb21wdXRlciA9IFNhZmUtQ2ltRmlyc3QgIldpbjMyX0NvbXB1dGVyU3lzdGVtIgokc2VydmljZSA9IFNhZmUtQ2ltRmlyc3QgIldpbjMy"
+    "X1NlcnZpY2UiICJOYW1lPSdDaXRhZGVsRVdTTm9kZSciCiRjcHVQZXJmID0gU2FmZS1DaW1GaXJzdCAiV2luMzJfUGVyZkZvcm1hdHRlZERhdGFfUGVyZk9T"
+    "X1Byb2Nlc3NvciIgIk5hbWU9J19Ub3RhbCciCiRtZW1vcnlQZXJmID0gU2FmZS1DaW1GaXJzdCAiV2luMzJfUGVyZkZvcm1hdHRlZERhdGFfUGVyZk9TX01l"
+    "bW9yeSIKJGh5cGVyVkZlYXR1cmUgPSBTYWZlLUNpbUZpcnN0ICJXaW4zMl9PcHRpb25hbEZlYXR1cmUiICJOYW1lPSdNaWNyb3NvZnQtSHlwZXItVi1BbGwn"
+    "Igokd3VTZXJ2aWNlID0gU2FmZS1TZXJ2aWNlICJ3dWF1c2VydiIKJGdwc3ZjID0gU2FmZS1TZXJ2aWNlICJncHN2YyIKJGludHVuZVNlcnZpY2UgPSBTYWZl"
+    "LVNlcnZpY2UgIkludHVuZU1hbmFnZW1lbnRFeHRlbnNpb24iCgokbGF0ZXN0SG90Zml4ID0gJG51bGwKdHJ5IHsKICAkbGF0ZXN0SG90Zml4ID0gR2V0LUNp"
+    "bUluc3RhbmNlIC1DbGFzc05hbWUgV2luMzJfUXVpY2tGaXhFbmdpbmVlcmluZyAtRXJyb3JBY3Rpb24gU3RvcCB8CiAgICBTb3J0LU9iamVjdCAtUHJvcGVy"
+    "dHkgSW5zdGFsbGVkT24gLURlc2NlbmRpbmcgfAogICAgU2VsZWN0LU9iamVjdCAtRmlyc3QgMQp9IGNhdGNoIHt9Cgokdm1Db3VudCA9ICRudWxsCiRydW5u"
+    "aW5nVm1Db3VudCA9ICRudWxsCiRoeXBlclZRdWVyeU9rID0gJGZhbHNlCnRyeSB7CiAgaWYgKEdldC1Db21tYW5kIEdldC1WTSAtRXJyb3JBY3Rpb24gU2ls"
+    "ZW50bHlDb250aW51ZSkgewogICAgJHZtcyA9IEAoR2V0LVZNIC1FcnJvckFjdGlvbiBTdG9wKQogICAgJHZtQ291bnQgPSAkdm1zLkNvdW50CiAgICAkcnVu"
+    "bmluZ1ZtQ291bnQgPSBAKCR2bXMgfCBXaGVyZS1PYmplY3QgeyAkXy5TdGF0ZSAtZXEgIlJ1bm5pbmciIH0pLkNvdW50CiAgICAkaHlwZXJWUXVlcnlPayA9"
+    "ICR0cnVlCiAgfQp9IGNhdGNoIHsKICAkaHlwZXJWUXVlcnlPayA9ICRmYWxzZQp9CgokbWRtRW5yb2xsbWVudENvdW50ID0gMAp0cnkgewogICRlbnJvbGxt"
+    "ZW50Um9vdCA9ICJIS0xNOlxTT0ZUV0FSRVxNaWNyb3NvZnRcRW5yb2xsbWVudHMiCiAgaWYgKFRlc3QtUGF0aCAtTGl0ZXJhbFBhdGggJGVucm9sbG1lbnRS"
+    "b290KSB7CiAgICAkbWRtRW5yb2xsbWVudENvdW50ID0gQChHZXQtQ2hpbGRJdGVtIC1MaXRlcmFsUGF0aCAkZW5yb2xsbWVudFJvb3QgLUVycm9yQWN0aW9u"
+    "IFN0b3ApLkNvdW50CiAgfQp9IGNhdGNoIHsKICAkbWRtRW5yb2xsbWVudENvdW50ID0gMAp9CgokcGVuZGluZ1JlYm9vdCA9ICgKICAoUmVnaXN0cnktRXhp"
+    "c3RzICJIS0xNOlxTT0ZUV0FSRVxNaWNyb3NvZnRcV2luZG93c1xDdXJyZW50VmVyc2lvblxDb21wb25lbnQgQmFzZWQgU2VydmljaW5nXFJlYm9vdFBlbmRp"
+    "bmciKSAtb3IKICAoUmVnaXN0cnktRXhpc3RzICJIS0xNOlxTT0ZUV0FSRVxNaWNyb3NvZnRcV2luZG93c1xDdXJyZW50VmVyc2lvblxXaW5kb3dzVXBkYXRl"
+    "XEF1dG8gVXBkYXRlXFJlYm9vdFJlcXVpcmVkIikKKQoKJHNlcnZpY2VBY2NvdW50ID0gaWYgKCRudWxsIC1uZSAkc2VydmljZSkgeyBbc3RyaW5nXSRzZXJ2"
+    "aWNlLlN0YXJ0TmFtZSB9IGVsc2UgeyAiIiB9CiRtYW5hZ2VkU2VydmljZUFjY291bnRDYW5kaWRhdGUgPSAoLW5vdCBbc3RyaW5nXTo6SXNOdWxsT3JXaGl0"
+    "ZVNwYWNlKCRzZXJ2aWNlQWNjb3VudCkpIC1hbmQgJHNlcnZpY2VBY2NvdW50LkVuZHNXaXRoKCIkIikKJGRvbWFpbkpvaW5lZCA9ICRmYWxzZQokZG9tYWlu"
+    "TmFtZSA9ICRudWxsCmlmICgkbnVsbCAtbmUgJGNvbXB1dGVyKSB7CiAgJGRvbWFpbkpvaW5lZCA9IFtib29sXSRjb21wdXRlci5QYXJ0T2ZEb21haW4KICBp"
+    "ZiAoJGRvbWFpbkpvaW5lZCkgeyAkZG9tYWluTmFtZSA9IFtzdHJpbmddJGNvbXB1dGVyLkRvbWFpbiB9Cn0KCiRnbXNhRG1zYSA9IFtvcmRlcmVkXUB7CiAg"
+    "Y29uZmlndXJlZCA9ICRtYW5hZ2VkU2VydmljZUFjY291bnRDYW5kaWRhdGUKICBzZXJ2aWNlX2FjY291bnQgPSBpZiAoJHNlcnZpY2VBY2NvdW50KSB7ICRz"
+    "ZXJ2aWNlQWNjb3VudCB9IGVsc2UgeyAkbnVsbCB9CiAgZG9tYWluX2pvaW5lZCA9ICRkb21haW5Kb2luZWQKICBkb21haW4gPSAkZG9tYWluTmFtZQogIGFk"
+    "X21vZHVsZV9hdmFpbGFibGUgPSBbYm9vbF0oR2V0LU1vZHVsZSAtTGlzdEF2YWlsYWJsZSAtTmFtZSBBY3RpdmVEaXJlY3RvcnkgfCBTZWxlY3QtT2JqZWN0"
+    "IC1GaXJzdCAxKQogIG5vdGUgPSBpZiAoJG1hbmFnZWRTZXJ2aWNlQWNjb3VudENhbmRpZGF0ZSkgewogICAgIk1hbmFnZWQgc2VydmljZSBhY2NvdW50IGNh"
+    "bmRpZGF0ZSBkZXRlY3RlZCBmcm9tIFdpbmRvd3MgU2VydmljZSBpZGVudGl0eTsgYWNjb3VudCBzdWJ0eXBlIGlzIG5vdCBndWVzc2VkIHdpdGhvdXQgYXV0"
+    "aG9yaXRhdGl2ZSBkaXJlY3RvcnkgZGF0YS4iCiAgfSBlbHNlIHsKICAgICJDSVRBREVMIGN1cnJlbnRseSB1c2VzIGl0cyBjb25maWd1cmVkIGxvY2FsIHNl"
+    "cnZpY2UgaWRlbnRpdHkuIGdNU0EvZE1TQSBjYW4gb25seSBiZSBhY3RpdmF0ZWQgb24gYW4gZWxpZ2libGUgZG9tYWluLW1hbmFnZWQgaG9zdC4iCiAgfQp9"
+    "CgokaG90cGF0Y2ggPSBbb3JkZXJlZF1AewogIHN0YXRlID0gImV4dGVybmFsLW1hbmFnZW1lbnQtcmVxdWlyZWQiCiAgcGVuZGluZ19yZWJvb3QgPSAkcGVu"
+    "ZGluZ1JlYm9vdAogIG5vdGUgPSAiVGhlIGxvY2FsIHByb2JlIHJlcG9ydHMgV2luZG93cyBVcGRhdGUvcmVib290IHN0YXRlIGJ1dCBkb2VzIG5vdCBjbGFp"
+    "bSBIb3RwYXRjaCBlbGlnaWJpbGl0eSB3aXRob3V0IGFuIGF1dGhvcml0YXRpdmUgTWljcm9zb2Z0IG1hbmFnZW1lbnQgc2lnbmFsLiIKfQoKJHJlc3VsdCA9"
+    "IFtvcmRlcmVkXUB7CiAgc2NoZW1hID0gImNpdGFkZWwud2luZG93cy5lbnRlcnByaXNlLnYxIgogIGNhcHR1cmVkX2F0ID0gKEdldC1EYXRlKS5Ub1VuaXZl"
+    "cnNhbFRpbWUoKS5Ub1N0cmluZygibyIpCiAgcmVhZG9ubHkgPSAkdHJ1ZQogIGNpbSA9IFtvcmRlcmVkXUB7CiAgICBvc19jYXB0aW9uID0gaWYgKCRudWxs"
+    "IC1uZSAkb3MpIHsgW3N0cmluZ10kb3MuQ2FwdGlvbiB9IGVsc2UgeyAkbnVsbCB9CiAgICBvc192ZXJzaW9uID0gaWYgKCRudWxsIC1uZSAkb3MpIHsgW3N0"
+    "cmluZ10kb3MuVmVyc2lvbiB9IGVsc2UgeyAkbnVsbCB9CiAgICBvc19idWlsZCA9IGlmICgkbnVsbCAtbmUgJG9zKSB7IFtzdHJpbmddJG9zLkJ1aWxkTnVt"
+    "YmVyIH0gZWxzZSB7ICRudWxsIH0KICAgIG1hbnVmYWN0dXJlciA9IGlmICgkbnVsbCAtbmUgJGNvbXB1dGVyKSB7IFtzdHJpbmddJGNvbXB1dGVyLk1hbnVm"
+    "YWN0dXJlciB9IGVsc2UgeyAkbnVsbCB9CiAgICBtb2RlbCA9IGlmICgkbnVsbCAtbmUgJGNvbXB1dGVyKSB7IFtzdHJpbmddJGNvbXB1dGVyLk1vZGVsIH0g"
+    "ZWxzZSB7ICRudWxsIH0KICAgIGRvbWFpbl9qb2luZWQgPSAkZG9tYWluSm9pbmVkCiAgICBkb21haW4gPSAkZG9tYWluTmFtZQogICAgY2l0YWRlbF9zZXJ2"
+    "aWNlX3N0YXRlID0gaWYgKCRudWxsIC1uZSAkc2VydmljZSkgeyBbc3RyaW5nXSRzZXJ2aWNlLlN0YXRlIH0gZWxzZSB7ICRudWxsIH0KICAgIGNpdGFkZWxf"
+    "c2VydmljZV9zdGFydF9tb2RlID0gaWYgKCRudWxsIC1uZSAkc2VydmljZSkgeyBbc3RyaW5nXSRzZXJ2aWNlLlN0YXJ0TW9kZSB9IGVsc2UgeyAkbnVsbCB9"
+    "CiAgfQogIHBlcmZvcm1hbmNlID0gW29yZGVyZWRdQHsKICAgIGNwdV9wZXJjZW50ID0gaWYgKCRudWxsIC1uZSAkY3B1UGVyZikgeyBbZG91YmxlXSRjcHVQ"
+    "ZXJmLlBlcmNlbnRQcm9jZXNzb3JUaW1lIH0gZWxzZSB7ICRudWxsIH0KICAgIG1lbW9yeV9hdmFpbGFibGVfbWIgPSBpZiAoJG51bGwgLW5lICRtZW1vcnlQ"
+    "ZXJmKSB7IFtkb3VibGVdJG1lbW9yeVBlcmYuQXZhaWxhYmxlTUJ5dGVzIH0gZWxzZSB7ICRudWxsIH0KICAgIHNvdXJjZSA9ICJDSU0gZm9ybWF0dGVkIHBl"
+    "cmZvcm1hbmNlIGNsYXNzZXMiCiAgfQogIGV2ZW50X2xvZyA9IFtvcmRlcmVkXUB7CiAgICBzeXN0ZW0gPSBSZWNlbnQtRXZlbnRTdW1tYXJ5ICJTeXN0ZW0i"
+    "CiAgICBhcHBsaWNhdGlvbiA9IFJlY2VudC1FdmVudFN1bW1hcnkgIkFwcGxpY2F0aW9uIgogIH0KICBzZXJ2aWNlX2lkZW50aXR5ID0gJGdtc2FEbXNhCiAg"
+    "d2luZG93c191cGRhdGUgPSBbb3JkZXJlZF1AewogICAgc2VydmljZV9zdGF0dXMgPSBpZiAoJG51bGwgLW5lICR3dVNlcnZpY2UpIHsgW3N0cmluZ10kd3VT"
+    "ZXJ2aWNlLlN0YXR1cyB9IGVsc2UgeyAkbnVsbCB9CiAgICBzZXJ2aWNlX3N0YXJ0X3R5cGUgPSBpZiAoJG51bGwgLW5lICR3dVNlcnZpY2UpIHsgW3N0cmlu"
+    "Z10kd3VTZXJ2aWNlLlN0YXJ0VHlwZSB9IGVsc2UgeyAkbnVsbCB9CiAgICBwZW5kaW5nX3JlYm9vdCA9ICRwZW5kaW5nUmVib290CiAgICBsYXRlc3RfaG90"
+    "Zml4X2lkID0gaWYgKCRudWxsIC1uZSAkbGF0ZXN0SG90Zml4KSB7IFtzdHJpbmddJGxhdGVzdEhvdGZpeC5Ib3RGaXhJRCB9IGVsc2UgeyAkbnVsbCB9CiAg"
+    "ICBsYXRlc3RfaG90Zml4X2luc3RhbGxlZF9vbiA9IGlmICgkbnVsbCAtbmUgJGxhdGVzdEhvdGZpeCAtYW5kICRudWxsIC1uZSAkbGF0ZXN0SG90Zml4Lklu"
+    "c3RhbGxlZE9uKSB7IFtzdHJpbmddJGxhdGVzdEhvdGZpeC5JbnN0YWxsZWRPbiB9IGVsc2UgeyAkbnVsbCB9CiAgICBob3RwYXRjaCA9ICRob3RwYXRjaAog"
+    "IH0KICBoeXBlcl92ID0gW29yZGVyZWRdQHsKICAgIG9wdGlvbmFsX2ZlYXR1cmVfc3RhdGUgPSBpZiAoJG51bGwgLW5lICRoeXBlclZGZWF0dXJlKSB7IFtp"
+    "bnRdJGh5cGVyVkZlYXR1cmUuSW5zdGFsbFN0YXRlIH0gZWxzZSB7ICRudWxsIH0KICAgIHF1ZXJ5X29rID0gJGh5cGVyVlF1ZXJ5T2sKICAgIHZtX2NvdW50"
+    "ID0gJHZtQ291bnQKICAgIHJ1bm5pbmdfdm1fY291bnQgPSAkcnVubmluZ1ZtQ291bnQKICAgIHJlYWRvbmx5ID0gJHRydWUKICB9CiAgbWFuYWdlbWVudCA9"
+    "IFtvcmRlcmVkXUB7CiAgICBncm91cF9wb2xpY3lfc2VydmljZSA9IGlmICgkbnVsbCAtbmUgJGdwc3ZjKSB7IFtzdHJpbmddJGdwc3ZjLlN0YXR1cyB9IGVs"
+    "c2UgeyAkbnVsbCB9CiAgICBtZG1fZW5yb2xsbWVudF9jb3VudCA9ICRtZG1FbnJvbGxtZW50Q291bnQKICAgIGludHVuZV9tYW5hZ2VtZW50X2V4dGVuc2lv"
+    "biA9IGlmICgkbnVsbCAtbmUgJGludHVuZVNlcnZpY2UpIHsgW3N0cmluZ10kaW50dW5lU2VydmljZS5TdGF0dXMgfSBlbHNlIHsgJG51bGwgfQogICAgZG9t"
+    "YWluX2pvaW5lZCA9ICRkb21haW5Kb2luZWQKICAgIGRvbWFpbiA9ICRkb21haW5OYW1lCiAgfQp9CgokcmVzdWx0IHwgQ29udmVydFRvLUpzb24gLURlcHRo"
+    "IDggLUNvbXByZXNzCg=="
+)
 
 
 def now_iso() -> str:
@@ -536,6 +613,37 @@ def _windows_enterprise_probe_file_valid() -> bool:
     )
 
 
+def _ensure_windows_enterprise_probe_file() -> bool:
+    """Restore the fixed, release-embedded probe if a legacy update lacked the companion file."""
+    if os.name != "nt":
+        return False
+    if _windows_enterprise_probe_file_valid():
+        return True
+    try:
+        data = base64.b64decode(WINDOWS_ENTERPRISE_PROBE_B64, validate=True)
+    except (ValueError, binascii.Error):
+        return False
+    if (
+        not data
+        or len(data) > WINDOWS_ENTERPRISE_PROBE_MAX_BYTES
+        or hashlib.sha256(data).hexdigest() != WINDOWS_ENTERPRISE_PROBE_SHA256
+    ):
+        return False
+
+    path = _windows_enterprise_probe_path()
+    fd, temp_name = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_name, path)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temp_name)
+    return _windows_enterprise_probe_file_valid()
+
+
 def windows_enterprise_probe() -> dict[str, Any]:
     """Run the reviewed, hash-pinned read-only Microsoft/Windows probe."""
     if os.name != "nt":
@@ -651,6 +759,8 @@ class Agent:
     def __init__(self, config: AgentConfig, config_path: Path | None = None) -> None:
         self.config = config
         self.config_path = (config_path or Path("config.json")).resolve()
+        if os.name == "nt":
+            _ensure_windows_enterprise_probe_file()
         config.data_dir.mkdir(parents=True, exist_ok=True)
         with contextlib.suppress(OSError):
             os.chmod(config.data_dir, 0o700)
