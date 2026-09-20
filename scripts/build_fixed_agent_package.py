@@ -284,7 +284,10 @@ def write_extras() -> None:
         "- localhost / 127.0.0.1 / ::1 согласованы для локального HTTP-теста.\n"
         "- Агент определяет текущий LAN/network IPv4; адреса не зашиты в код и могут меняться по DHCP.\n"
         "- LAN/network/MAC входят в system_inventory и heartbeat; Controller использует их для диагностики и ограниченного Wake-on-LAN.\n"
-        "- В архиве находятся сами agent-файлы: установка не скачивает Python-код из GitHub.\n\n"
+        "- Core Agent устанавливается как Windows Service CitadelEWSNode под LocalService с Automatic (Delayed Start).\n"
+        "- Старый Startup shortcut удаляется; существующая node identity мигрирует в ProgramData и сохраняется.\n"
+        "- setup_windows.ps1 -Uninstall выполняет явное удаление; -PreserveState сохраняет node state по запросу.\n"
+        "- В архиве находятся сами agent-файлы и проверяемый CitadelNodeService.cs: установка не скачивает Python-код из GitHub.\n\n"
         "Произвольный SSH shell в пакет не включён. Разрешены только подписанные allowlist-команды Controller, включая reboot/shutdown и ограниченный wake_peer без shell.\n"
     )
     (STAGE / "README_RU.txt").write_text(readme, encoding="utf-8", newline="\n")
