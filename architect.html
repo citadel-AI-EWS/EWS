@@ -761,7 +761,7 @@
         `Узел: ${nodeDisplayName(node)} · ${health.live ? "LIVE" : "OFFLINE"}`,
         `${lt("Живой","Live","חי")}: ${health.live ? lt("ДА","YES","כן") : lt("НЕТ","NO","לא")} · ${lt("Здоровье","Health","בריאות")}: ${health.healthy ? lt("ЗДОРОВ","HEALTHY","תקין") : lt("НЕЗДОРОВ","UNHEALTHY","לא תקין")}`,
         `Public IP: ${presence?.public_ip || "ещё не зафиксирован"}`,
-        `LAN IP: ${node.lan_ipv4 || "—"} · Tailscale: ${node.tailscale_ipv4 || "—"}`,
+        `LAN IP: ${node.lan_ipv4 || "—"}`,
         `CPU: ${node.cpu_percent == null ? "—" : Number(node.cpu_percent).toFixed(1) + "%"} · RAM: ${node.memory_percent == null ? "—" : Number(node.memory_percent).toFixed(1) + "%"}`,
         `Агент: ${node.agent_version || "—"} · Последняя связь: ${node.last_seen_at || "—"}`
       ];
@@ -1224,7 +1224,7 @@
           `Network: ${[presence?.country, presence?.colo].filter(Boolean).join(" / ") || "—"}${presence?.asn ? ` · ASN ${presence.asn}` : ""}`,
           `${lt("Зарегистрирован","Enrolled","נרשם")}: ${node.enrolled_at || "—"}`,
           `${lt("Версия агента","Agent version","גרסת agent")}: ${node.agent_version || "—"} · ${lt("Плановая роль","Planned role","תפקיד מתוכנן")}: ${node.planned_role || lt("не назначена","not assigned","לא הוקצה")}`,
-          `LAN IP: ${node.lan_ipv4 || "—"} · Tailscale: ${node.tailscale_ipv4 || "—"}`,
+          `LAN IP: ${node.lan_ipv4 || "—"}`,
           warningParts.length ? `Внимание: ${warningParts.join(" · ")}` : lt("Предупреждения: нет","Warnings: none","אזהרות: אין"),
           !health.live ? offlineExplanation(node) : ""
         ].filter(Boolean).forEach((line) => addText(details, "div", line));
@@ -1387,7 +1387,7 @@
         `Диск: всего ${gb(c.disk_home_total_bytes)} · свободно ${gb(c.disk_home_free_bytes)}`,
         "",
         `LAN IPv4: ${network.lan_ipv4 || "—"}`,
-        `Tailscale IPv4: ${network.tailscale_ipv4 || "—"}`,
+
         `MAC: ${Array.isArray(network.mac_addresses) && network.mac_addresses.length ? network.mac_addresses.join(", ") : "—"}`
       ];
       if (interfaces.length) {
