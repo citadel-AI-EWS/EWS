@@ -162,7 +162,7 @@ jobs:
             tar -tzf "$linux_tar" >/dev/null
           done
 
-  linux-agent-compat:
+  linux_agent_compat:
     name: Linux agent Python compatibility
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -222,13 +222,13 @@ jobs:
   gate:
     name: CI gate
     if: always()
-    needs: [validate-linux, agent-package, linux-agent-compat, windows-agent]
+    needs: [validate-linux, agent-package, linux_agent_compat, windows-agent]
     runs-on: ubuntu-latest
     steps:
       - name: Require every CI job to pass
         run: |
           test "${{ needs.validate-linux.result }}" = "success"
           test "${{ needs.agent-package.result }}" = "success"
-          test "${{ needs.linux-agent-compat.result }}" = "success"
+          test "${{ needs.linux_agent_compat.result }}" = "success"
           test "${{ needs.windows-agent.result }}" = "success"
           echo "All CI gates passed."
