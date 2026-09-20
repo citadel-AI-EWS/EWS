@@ -12,7 +12,12 @@ export const DEFAULT_ENTERPRISE_POLICY = Object.freeze({
   max_memory_percent: 90,
   max_event_errors_last_hour: 25,
   require_windows_update_service: true,
-  require_no_pending_reboot: false
+  require_no_pending_reboot: false,
+  require_domain_join: false,
+  require_group_policy_service: false,
+  require_intune_extension: false,
+  require_hyperv: false,
+  require_managed_service_account: false
 });
 
 function boundedPercent(value, fallback) {
@@ -56,7 +61,12 @@ export function normalizeEnterprisePolicy(value = {}) {
     require_windows_update_service: source.require_windows_update_service === undefined
       ? DEFAULT_ENTERPRISE_POLICY.require_windows_update_service
       : source.require_windows_update_service === true,
-    require_no_pending_reboot: source.require_no_pending_reboot === true
+    require_no_pending_reboot: source.require_no_pending_reboot === true,
+    require_domain_join: source.require_domain_join === true,
+    require_group_policy_service: source.require_group_policy_service === true,
+    require_intune_extension: source.require_intune_extension === true,
+    require_hyperv: source.require_hyperv === true,
+    require_managed_service_account: source.require_managed_service_account === true
   };
 }
 
@@ -177,6 +187,44 @@ export function evaluateEnterpriseNode(node, inventory, policyInput, latestVersi
           enterprise?.windows_update?.pending_reboot === true
             ? "reboot pending"
             : "no pending reboot detected"
+        );
+      }
+      if (policy.require_domain_join) {
+        pushCheck(
+          checks,
+          "domain_join",
+          enterprise?.management?.domain_joined === true,
+          enterprise?.management?.domain_joined === true
+            ? `joined to ${enterprise?.management?.domain || "domain"}`
+            : "host is not domain joined"
+        );
+      }
+      if (policy.require_group_policy_service) {
+        const gpsvc = String(enterprise?.management?.group_policy_service || "").toLowerCase();
+        pushCheck(checks, "group_policy", gpsvc === "running", gpsvc || "unknown");
+      }
+      if (policy.require_intune_extension) {
+        const intune = String(enterprise?.management?.intune_management_extension || "").toLowerCase();
+        pushCheck(checks, "intune_extension", intune === "running", intune || "not installed");
+      }
+      if (policy.require_hyperv) {
+        const hypervEnabled = Number(enterprise?.hyper_v?.optional_feature_state) === 1 ||
+          enterprise?.hyper_v?.query_ok === true;
+        pushCheck(
+          checks,
+          "hyper_v",
+          hypervEnabled,
+          hypervEnabled ? "Hyper-V available" : "Hyper-V not confirmed"
+        );
+      }
+      if (policy.require_managed_service_account) {
+        pushCheck(
+          checks,
+          "managed_service_account",
+          enterprise?.service_identity?.configured === true,
+          enterprise?.service_identity?.configured === true
+            ? String(enterprise?.service_identity?.service_account || "managed account")
+            : "managed service account not configured"
         );
       }
     }
