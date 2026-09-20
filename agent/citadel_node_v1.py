@@ -552,6 +552,8 @@ class Agent:
         self.log = JsonlLogger(config.data_dir / "agent.jsonl")
         self.results = ResultQueue(config.data_dir / "pending-results.json")
         self.stop_path = config.data_dir / "STOP"
+        lifecycle_stop = os.environ.get("CITADEL_SERVICE_STOP_FILE", "").strip()
+        self.lifecycle_stop_path = Path(lifecycle_stop).resolve() if lifecycle_stop else None
         self.paused_path = config.data_dir / "PAUSED"
         self.lmstudio_state_path = config.data_dir / "lmstudio-state.json"
         self.network_recovery_path = config.data_dir / "network-recovery.json"
@@ -1895,9 +1897,22 @@ class Agent:
         except Exception as error:
             self.log.write("network_recovery_failed", error=str(error)[:300])
 
+    def lifecycle_stop_requested(self) -> bool:
+        return bool(self.lifecycle_stop_path and self.lifecycle_stop_path.exists())
+
+    def interruptible_sleep(self, seconds: float) -> None:
+        deadline = time.monotonic() + max(0.0, seconds)
+        while True:
+            if self.lifecycle_stop_requested():
+                raise SystemExit(0)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.5, remaining))
+
     def cycle(self) -> None:
         self.enroll()
-        if self.stop_path.exists():
+        if self.lifecycle_stop_requested() or self.stop_path.exists():
             raise SystemExit(0)
         self.handle_commands()
         if time.monotonic() - self.last_heartbeat >= self.config.heartbeat_seconds:
@@ -1934,7 +1949,7 @@ class Agent:
                     backoff = 2
                     if once:
                         return 0
-                    time.sleep(self.config.poll_seconds)
+                    self.interruptible_sleep(self.config.poll_seconds)
                 except SystemExit as exit_request:
                     code = exit_request.code if isinstance(exit_request.code, int) else 0
                     reason = (
@@ -1955,7 +1970,7 @@ class Agent:
                         self.recover_network()
                     if once:
                         raise
-                    time.sleep(backoff)
+                    self.interruptible_sleep(backoff)
                     backoff = min(60, backoff * 2)
         finally:
             if os.name == "nt" and keep_awake:
@@ -2143,6 +2158,26 @@ def self_test() -> int:
             }),
             "valid LM Studio settings rejected",
         )
+        lifecycle_stop_path = root / "SERVICE_STOP"
+        previous_stop_file = os.environ.get("CITADEL_SERVICE_STOP_FILE")
+        try:
+            os.environ["CITADEL_SERVICE_STOP_FILE"] = str(lifecycle_stop_path)
+            lifecycle_agent = Agent(config)
+            require_test(
+                lifecycle_agent.lifecycle_stop_path == lifecycle_stop_path.resolve(),
+                "service lifecycle stop path was not accepted",
+            )
+            lifecycle_stop_path.write_text("stop\n", encoding="utf-8")
+            require_test(
+                lifecycle_agent.lifecycle_stop_requested(),
+                "service lifecycle stop marker was not detected",
+            )
+        finally:
+            if previous_stop_file is None:
+                os.environ.pop("CITADEL_SERVICE_STOP_FILE", None)
+            else:
+                os.environ["CITADEL_SERVICE_STOP_FILE"] = previous_stop_file
+
         previous_service_flag = os.environ.get("CITADEL_SERVICE_MANAGED")
         try:
             os.environ["CITADEL_SERVICE_MANAGED"] = "1"
