@@ -3491,17 +3491,88 @@ async function consumeRecoveryAttempt(request, env) {
 }
 
 async function architectSecurityStatus(request, env) {
-  await authenticateArchitect(request, env);
+  const actor = await authenticateArchitect(request, env);
   const state = await architectAuthState(env);
   return json({
     ok: true,
     security: {
+      actor_role: actor.role,
+      available_roles: Object.keys(ARCHITECT_ROLE_PERMISSIONS),
       recovery_configured: Boolean(state.recovery_hash) && Number(state.recovery_used || 0) === 0,
       bootstrap_mode: Number(state.bootstrap_mode || 0) === 1,
       token_rotated_at: state.token_rotated_at || null,
       recovery_created_at: state.recovery_created_at || null
     }
   });
+}
+
+async function architectListAccessTokens(request, env) {
+  await authenticateArchitect(request, env);
+  await ensureEnterpriseStorage(env);
+  const query = await env.DB.prepare(`
+    SELECT token_id, label, role, enabled, created_at, last_used_at, revoked_at
+    FROM architect_access_tokens
+    ORDER BY created_at DESC
+    LIMIT 100
+  `).all();
+  return json({ ok: true, access_tokens: query.results || [] });
+}
+
+async function architectCreateAccessToken(request, env) {
+  await authenticateArchitect(request, env);
+  await ensureEnterpriseStorage(env);
+  const body = parseJsonObject(await readBodyText(request, 4096));
+  const role = requireString(body.role, "role", 32);
+  if (!["viewer", "operator"].includes(role)) {
+    throw new ApiError(400, "invalid_role");
+  }
+  const label = requireString(body.label, "label", 120);
+  const token = randomArchitectSecret("citadel_role_");
+  const tokenHash = await sha256Hex(token);
+  const tokenId = `archtok_${crypto.randomUUID()}`;
+  await env.DB.batch([
+    env.DB.prepare(`
+      INSERT INTO architect_access_tokens (
+        token_id, token_hash, role, label, enabled
+      ) VALUES (?, ?, ?, ?, 1)
+    `).bind(tokenId, tokenHash, role, label),
+    env.DB.prepare(`
+      INSERT INTO audit_events (
+        actor_type, actor_id, action, target_type, target_id, details_json
+      ) VALUES ('architect', 'primary', 'architect.access_token.created',
+        'architect_access_token', ?, ?)
+    `).bind(tokenId, JSON.stringify({ role, label }))
+  ]);
+  return json({
+    ok: true,
+    access_token: {
+      token_id: tokenId,
+      label,
+      role,
+      token,
+      display_once: true
+    }
+  }, 201);
+}
+
+async function architectRevokeAccessToken(request, env, tokenId) {
+  await authenticateArchitect(request, env);
+  await ensureEnterpriseStorage(env);
+  const result = await env.DB.prepare(`
+    UPDATE architect_access_tokens
+    SET enabled = 0, revoked_at = CURRENT_TIMESTAMP
+    WHERE token_id = ? AND enabled = 1
+  `).bind(tokenId).run();
+  if ((result.meta?.changes || 0) !== 1) {
+    throw new ApiError(404, "access_token_not_found");
+  }
+  await env.DB.prepare(`
+    INSERT INTO audit_events (
+      actor_type, actor_id, action, target_type, target_id, details_json
+    ) VALUES ('architect', 'primary', 'architect.access_token.revoked',
+      'architect_access_token', ?, '{}')
+  `).bind(tokenId).run();
+  return json({ ok: true, revoked: true, token_id: tokenId });
 }
 
 async function architectCreateRecoveryCode(request, env) {
