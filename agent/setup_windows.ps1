@@ -14,11 +14,12 @@ Set-StrictMode -Version Latest
 $ServiceName = "CitadelEWSNode"
 $ServiceDisplayName = "CITADEL EWS Node"
 $PythonWingetId = "Python.Python.3.14"
-$ReleaseVersion = "0.3.12"
-$ExpectedV1Sha256 = "2dab753c8e836663d215656682ac304b5f297a7c0d726936111013fa70dacc65"
-$ExpectedV2Sha256 = "0fc1f2a8daac47c5c504951e32a9e8110e9f583d8d185d45645408814c3cac52"
+$ReleaseVersion = "0.3.13"
+$ExpectedV1Sha256 = "a39c41b4e5ae0cd8cbfe28b74cbadb4e3806c03ebe3a3fbfc1464dc01dcd68e6"
+$ExpectedV2Sha256 = "43d6d8492d43e3434c7ce90c946804c7cc1c05344ae3aaf27c7ed8220d34e803"
 $ExpectedServiceHostSha256 = "892c5f388f9b54c0bcbb2956381dd601dfa8065b0e9258ba673e9505c2f81cad"
 $ExpectedServiceHelperSha256 = "e0e66f5a27018a283c65d42e6ead93e382706a163da682e6bd49f2b1fb9b0f99"
+$ExpectedEnterpriseProbeSha256 = "0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
 
 function Get-Sha256([string]$Path) {
   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -295,7 +296,8 @@ try {
   Set-CitadelDirectoryAcl -Path $ReleaseRoot
 
   Copy-VerifiedReleaseFile "citadel_node_v1.py" $ExpectedV1Sha256 $ReleaseRoot
-Copy-VerifiedReleaseFile "citadel_node_v2.py" $ExpectedV2Sha256 $ReleaseRoot
+  Copy-VerifiedReleaseFile "citadel_node_v2.py" $ExpectedV2Sha256 $ReleaseRoot
+  Copy-VerifiedReleaseFile "windows_enterprise_probe.ps1" $ExpectedEnterpriseProbeSha256 $ReleaseRoot
 Copy-VerifiedReleaseFile "CitadelNodeService.cs" $ExpectedServiceHostSha256 $ReleaseRoot
 Copy-VerifiedReleaseFile "windows_service.ps1" $ExpectedServiceHelperSha256 $ReleaseRoot
 
