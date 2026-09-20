@@ -351,7 +351,7 @@ def build() -> Path:
     helper_hash = sha256(service_helper)
     if f'$ExpectedServiceHelperSha256 = "{helper_hash}"' not in setup_text:
         raise RuntimeError("setup_windows.ps1 service-helper hash pin does not match repository source")
-    if 'agent_version = "0.3.12"' not in setup_text:
+    if '$ReleaseVersion = "0.3.12"' not in setup_text:
         raise RuntimeError("setup_windows.ps1 release version is not 0.3.12")
     write_extras()
 
