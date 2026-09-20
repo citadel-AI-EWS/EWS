@@ -50,7 +50,8 @@ const healthyNode = {
   os_name: "Windows",
   agent_version: "0.3.13",
   cpu_percent: 21,
-  memory_percent: 44
+  memory_percent: 44,
+  last_seen_at: new Date().toISOString()
 };
 const healthy = evaluateEnterpriseNode(
   healthyNode,
