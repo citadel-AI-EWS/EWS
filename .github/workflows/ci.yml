@@ -61,6 +61,27 @@ jobs:
           --abi cp313 --abi abi3
           --requirement agent/requirements-win32.txt
           --dest .tmp-win32-wheels
+      - name: Verify Windows ARM64 dependency wheels exist
+        run: >-
+          python -m pip download --disable-pip-version-check --only-binary=:all:
+          --platform win_arm64 --python-version 313 --implementation cp
+          --abi cp313 --abi abi3
+          --requirement agent/requirements.txt
+          --dest .tmp-win-arm64-wheels
+      - name: Verify Linux x86_64 dependency wheels exist
+        run: >-
+          python -m pip download --disable-pip-version-check --only-binary=:all:
+          --platform manylinux2014_x86_64 --python-version 310 --implementation cp
+          --abi cp310 --abi abi3
+          --requirement agent/requirements.txt
+          --dest .tmp-linux-x86_64-wheels
+      - name: Verify Linux ARM64 dependency wheels exist
+        run: >-
+          python -m pip download --disable-pip-version-check --only-binary=:all:
+          --platform manylinux2014_aarch64 --python-version 310 --implementation cp
+          --abi cp310 --abi abi3
+          --requirement agent/requirements.txt
+          --dest .tmp-linux-arm64-wheels
       - name: Build self-contained Windows package
         run: python scripts/build_fixed_agent_package.py
       - name: Verify generated package
@@ -99,17 +120,22 @@ jobs:
 
       - name: Build self-contained Linux package
         run: python scripts/build_fixed_linux_agent_package.py
-      - name: Verify Linux package
+      - name: Verify Linux packages
         run: |
           set -euo pipefail
-          linux_dir="$(find dist -mindepth 1 -maxdepth 1 -type d -name 'CITADEL_LINUX_AGENT_*' | head -n 1)"
-          linux_tar="${linux_dir}.tar.gz"
-          test -n "$linux_dir"
-          test -f "$linux_tar"
-          bash -n "$linux_dir/setup_linux.sh" "$linux_dir/Install Linux Node.sh" "$linux_dir/START_HERE.sh"
-          python -m py_compile "$linux_dir/citadel_node_v1.py" "$linux_dir/citadel_node_v2.py"
-          python "$linux_dir/citadel_node_v2.py" self-test
-          python - "$linux_dir" <<'PY'
+          for spec in             "CITADEL_LINUX_X86_64_AGENT_0.3.11_COMPAT1:x86_64"             "CITADEL_LINUX_ARM64_AGENT_0.3.11_COMPAT1:arm64"
+          do
+            package_name="${spec%%:*}"
+            expected_arch="${spec##*:}"
+            linux_dir="dist/$package_name"
+            linux_tar="$linux_dir.tar.gz"
+            test -d "$linux_dir"
+            test -f "$linux_tar"
+            test "$(tr -d '[:space:]' < "$linux_dir/TARGET_ARCH")" = "$expected_arch"
+            bash -n "$linux_dir/setup_linux.sh" "$linux_dir/Install Linux Node.sh" "$linux_dir/START_HERE.sh"
+            python -m py_compile "$linux_dir/citadel_node_v1.py" "$linux_dir/citadel_node_v2.py"
+            python "$linux_dir/citadel_node_v2.py" self-test
+            python - "$linux_dir" <<'PY'
           from pathlib import Path
           import hashlib, sys
           root = Path(sys.argv[1])
@@ -123,16 +149,42 @@ jobs:
           required = {
               "citadel_node_v1.py", "citadel_node_v2.py", "requirements.txt",
               "setup_linux.sh", "Install Linux Node.sh", "START_HERE.sh",
-              "README_LINUX.md"
+              "README_LINUX.md", "TARGET_ARCH"
           }
           assert required <= seen, sorted(required - seen)
           setup = (root / "setup_linux.sh").read_text(encoding="utf-8").lower()
           assert "curl |" not in setup
           assert "wget |" not in setup
           assert "eval " not in setup
+          assert "--only-binary=:all:" in setup
           print("Linux package integrity: OK")
           PY
-          tar -tzf "$linux_tar" >/dev/null
+            tar -tzf "$linux_tar" >/dev/null
+          done
+
+  linux-agent-compat:
+    name: Linux agent Python compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: agent/requirements.txt
+      - name: Install binary-only agent dependencies
+        run: python -m pip install --disable-pip-version-check --only-binary=:all: --requirement agent/requirements.txt
+      - name: Compile and self-test agent
+        run: |
+          python -m py_compile agent/citadel_node_v1.py agent/citadel_node_v2.py
+          python agent/citadel_node_v2.py self-test
+      - name: Parse Linux installer
+        run: bash -n agent/setup_linux.sh "agent/Install Linux Node.sh"
 
   windows-agent:
     name: Windows agent validation
@@ -170,12 +222,13 @@ jobs:
   gate:
     name: CI gate
     if: always()
-    needs: [validate-linux, agent-package, windows-agent]
+    needs: [validate-linux, agent-package, linux-agent-compat, windows-agent]
     runs-on: ubuntu-latest
     steps:
       - name: Require every CI job to pass
         run: |
           test "${{ needs.validate-linux.result }}" = "success"
           test "${{ needs.agent-package.result }}" = "success"
+          test "${{ needs.linux-agent-compat.result }}" = "success"
           test "${{ needs.windows-agent.result }}" = "success"
           echo "All CI gates passed."
