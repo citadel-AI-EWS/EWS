@@ -38,6 +38,7 @@ def build() -> Path:
     names = [
         "citadel_node_v1.py",
         "citadel_node_v2.py",
+        "windows_enterprise_probe.ps1",
         "requirements.txt",
         "setup_linux.sh",
         "Install Linux Node.sh",
@@ -59,8 +60,9 @@ def build() -> Path:
         raise RuntimeError("repository v1 source is not release 0.3.13")
     if 'VERSION = "0.3.13"' not in v2.read_text(encoding="utf-8"):
         raise RuntimeError("repository v2 source is not release 0.3.13")
-    if sha256(v1) not in setup or sha256(v2) not in setup:
-        raise RuntimeError("setup_linux.sh SHA pins do not match repository agent files")
+    enterprise_probe = STAGE / "windows_enterprise_probe.ps1"
+    if sha256(v1) not in setup or sha256(v2) not in setup or sha256(enterprise_probe) not in setup:
+        raise RuntimeError("setup_linux.sh SHA pins do not match repository release files")
 
     write_start_here()
 
