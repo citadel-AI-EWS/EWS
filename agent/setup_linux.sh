@@ -35,9 +35,9 @@ fi
 
 find_python(){
   local candidate
-  for candidate in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do
+  for candidate in python3.14 python3.13 python3.12 python3; do
     if command -v "$candidate" >/dev/null 2>&1; then
-      if "$candidate" -c 'import struct,sys; raise SystemExit(0 if (3,10) <= sys.version_info[:2] < (4,0) and struct.calcsize("P")*8 == 64 else 1)' >/dev/null 2>&1; then
+      if "$candidate" -c 'import struct,sys; raise SystemExit(0 if (3,12) <= sys.version_info[:2] < (4,0) and struct.calcsize("P")*8 == 64 else 1)' >/dev/null 2>&1; then
         command -v "$candidate"
         return 0
       fi
@@ -46,7 +46,7 @@ find_python(){
   return 1
 }
 
-PYTHON_BIN="$(find_python)" || fail "Python 3.10-3.14 (64-bit) is required."
+PYTHON_BIN="$(find_python)" || fail "Python 3.12-3.14 (64-bit) is required."
 PYTHON_INFO="$("$PYTHON_BIN" -c 'import platform,struct,sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro} / {struct.calcsize(chr(80))*8}-bit / {platform.machine()}")')"
 log "Architecture: $ARCH"
 log "Using Python: $PYTHON_INFO"
@@ -85,7 +85,7 @@ if [[ ! -x "$VENV_PY" ]]; then
   "$PYTHON_BIN" -m venv "$VENV" || fail "A working Python venv module is required for $PYTHON_BIN."
 fi
 
-"$VENV_PY" -c 'import sys; raise SystemExit(0 if (3,10) <= sys.version_info[:2] < (4,0) else 1)' >/dev/null 2>&1 || fail "Existing virtual environment uses an unsupported Python version."
+"$VENV_PY" -c 'import sys; raise SystemExit(0 if (3,12) <= sys.version_info[:2] < (4,0) else 1)' >/dev/null 2>&1 || fail "Existing virtual environment uses an unsupported Python version."
 "$VENV_PY" -m pip install --disable-pip-version-check --upgrade pip
 "$VENV_PY" -m pip install --disable-pip-version-check --upgrade --only-binary=:all: --requirement "$INSTALL_ROOT/requirements.txt"
 
