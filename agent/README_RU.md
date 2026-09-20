@@ -1,5 +1,13 @@
 # CITADEL/EWS Python Node v1
 
+## Windows compatibility release 0.3.11-wincompat.1
+
+- `winget` больше не обязателен для установки Python.
+- Setup сначала использует уже установленный совместимый Python 3.12–3.14, затем пробует `winget`, а при его отсутствии или ошибке скачивает официальный Python 3.13.15 с python.org и проверяет SHA-256 до запуска.
+- Для 32-битного Python на Windows используется отдельный `requirements-win32.txt` с готовыми win32 wheels.
+- Windows dependency install выполняется с `--only-binary=:all:`, поэтому installer не пытается собирать C/Rust зависимости на старом или необычно настроенном ПК.
+- Этот compatibility release не обходит Windows security policy и не требует скрытой установки; он рассчитан на компьютеры, где пользователь разрешил установку.
+
 ## v0.3.11 — защищённая Windows identity
 
 - На Windows Ed25519 private key больше не сохраняется в `identity.json` как читаемый PKCS#8 PEM.
@@ -26,7 +34,7 @@
 
 ## Windows setup
 
-Адрес контроллера уже встроен. Setup при необходимости устанавливает Python 3.14 через Windows Package Manager, создаёт отдельное `.venv`, ставит зависимости, выполняет `doctor` и self-test, автоматически регистрирует узел и проверяет живой цикл с Controller. Узел получает постоянный номер; enrollment token, логин и код подтверждения не требуются.
+Адрес контроллера уже встроен. Setup использует совместимый Python 3.12–3.14; если Python отсутствует, Windows Package Manager используется как первый вариант, но не является обязательным. При отсутствии/ошибке `winget` Setup использует официальный проверяемый Python 3.13.15 installer, выбирая x86/x64/ARM64 по архитектуре Windows. Затем создаётся отдельное `.venv`, ставится подходящий набор бинарных зависимостей, выполняются `doctor` и self-test, узел автоматически регистрируется и проверяет живой цикл с Controller.
 
 ```powershell
 powershell -File .\setup_windows.ps1
