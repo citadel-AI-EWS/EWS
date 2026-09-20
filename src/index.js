@@ -67,6 +67,7 @@ let nodeNetworkSchemaPromise;
 let rolloutSchemaPromise;
 let projectSchemaPromise;
 let nodeAiSchemaPromise;
+let architectAuthSchemaPromise;
 
 class ApiError extends Error {
   constructor(status, code) {
@@ -2754,14 +2755,79 @@ function constantTimeHexEqual(left, right) {
   return difference === 0;
 }
 
-async function authenticateArchitect(request, env) {
-  const expectedHash = typeof env.ARCHITECT_TOKEN_HASH === "string"
+function bootstrapArchitectHash(env) {
+  const hash = typeof env.ARCHITECT_TOKEN_HASH === "string"
     ? env.ARCHITECT_TOKEN_HASH.trim().toLowerCase()
     : "";
-  if (!/^[a-f0-9]{64}$/.test(expectedHash)) {
+  if (!/^[a-f0-9]{64}$/.test(hash)) {
     throw new ApiError(503, "architect_auth_not_configured");
   }
+  return hash;
+}
 
+async function ensureArchitectAuthStorage(env) {
+  const bootstrapHash = bootstrapArchitectHash(env);
+  if (!architectAuthSchemaPromise) {
+    architectAuthSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS architect_auth_state (
+          singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+          token_hash TEXT NOT NULL,
+          bootstrap_mode INTEGER NOT NULL DEFAULT 1 CHECK (bootstrap_mode IN (0,1)),
+          recovery_hash TEXT,
+          recovery_used INTEGER NOT NULL DEFAULT 1 CHECK (recovery_used IN (0,1)),
+          token_rotated_at TEXT,
+          recovery_created_at TEXT,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `),
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS architect_recovery_attempts (
+          actor_hash TEXT NOT NULL,
+          window_key TEXT NOT NULL,
+          attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (actor_hash, window_key)
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_architect_recovery_attempts_updated
+        ON architect_recovery_attempts(updated_at)
+      `)
+    ]).catch((error) => {
+      architectAuthSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await architectAuthSchemaPromise;
+  await env.DB.prepare(`
+    INSERT OR IGNORE INTO architect_auth_state (
+      singleton_id, token_hash, bootstrap_mode, recovery_used
+    ) VALUES (1, ?, 1, 1)
+  `).bind(bootstrapHash).run();
+}
+
+function randomArchitectSecret(prefix) {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return prefix + bytesToBase64Url(bytes);
+}
+
+async function architectAuthState(env) {
+  await ensureArchitectAuthStorage(env);
+  const row = await env.DB.prepare(`
+    SELECT token_hash, bootstrap_mode, recovery_hash, recovery_used,
+      token_rotated_at, recovery_created_at, updated_at
+    FROM architect_auth_state WHERE singleton_id = 1
+  `).first();
+  if (!row || !/^[a-f0-9]{64}$/.test(String(row.token_hash || ""))) {
+    throw new ApiError(503, "architect_auth_not_configured");
+  }
+  return row;
+}
+
+async function authenticateArchitect(request, env) {
+  const state = await architectAuthState(env);
   const authorization = request.headers.get("authorization") || "";
   const match = authorization.match(/^Bearer\s+(.+)$/i);
   const token = match?.[1]?.trim() || "";
@@ -2770,9 +2836,157 @@ async function authenticateArchitect(request, env) {
   }
 
   const actualHash = await sha256Hex(token);
-  if (!constantTimeHexEqual(actualHash, expectedHash)) {
+  if (!constantTimeHexEqual(actualHash, String(state.token_hash).toLowerCase())) {
     throw new ApiError(401, "invalid_architect_token");
   }
+}
+
+function recoveryWindowKey(now = new Date()) {
+  const value = new Date(now);
+  value.setUTCMinutes(Math.floor(value.getUTCMinutes() / 15) * 15, 0, 0);
+  return value.toISOString();
+}
+
+async function consumeRecoveryAttempt(request, env) {
+  await ensureArchitectAuthStorage(env);
+  const rawActor = (request.headers.get("cf-connecting-ip") || "unknown").trim();
+  const actorHash = await sha256Hex(rawActor);
+  const windowKey = recoveryWindowKey();
+  const pruneBefore = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  await env.DB.prepare(
+    "DELETE FROM architect_recovery_attempts WHERE updated_at < ?"
+  ).bind(pruneBefore).run();
+  const row = await env.DB.prepare(`
+    INSERT INTO architect_recovery_attempts (actor_hash, window_key, attempts, updated_at)
+    VALUES (?, ?, 1, CURRENT_TIMESTAMP)
+    ON CONFLICT(actor_hash, window_key) DO UPDATE SET
+      attempts = architect_recovery_attempts.attempts + 1,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE architect_recovery_attempts.attempts < 5
+    RETURNING attempts
+  `).bind(actorHash, windowKey).first();
+  if (!row) throw new ApiError(429, "architect_recovery_rate_limited");
+}
+
+async function architectSecurityStatus(request, env) {
+  await authenticateArchitect(request, env);
+  const state = await architectAuthState(env);
+  return json({
+    ok: true,
+    security: {
+      recovery_configured: Boolean(state.recovery_hash) && Number(state.recovery_used || 0) === 0,
+      bootstrap_mode: Number(state.bootstrap_mode || 0) === 1,
+      token_rotated_at: state.token_rotated_at || null,
+      recovery_created_at: state.recovery_created_at || null
+    }
+  });
+}
+
+async function architectCreateRecoveryCode(request, env) {
+  await authenticateArchitect(request, env);
+  const body = parseJsonObject(await readBodyText(request, 4096));
+  if (body.confirm !== "CREATE_RECOVERY_CODE") {
+    throw new ApiError(400, "recovery_confirmation_required");
+  }
+  const recoveryCode = randomArchitectSecret("citadel_recovery_");
+  const recoveryHash = await sha256Hex(recoveryCode);
+  await env.DB.batch([
+    env.DB.prepare(`
+      UPDATE architect_auth_state
+      SET recovery_hash = ?, recovery_used = 0,
+          recovery_created_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE singleton_id = 1
+    `).bind(recoveryHash),
+    env.DB.prepare(`
+      INSERT INTO audit_events (
+        actor_type, actor_id, action, target_type, target_id, details_json
+      ) VALUES ('architect', 'security', 'architect.recovery_code.rotated',
+        'architect_auth', 'singleton', '{}')
+    `)
+  ]);
+  return json({
+    ok: true,
+    recovery_code: recoveryCode,
+    display_once: true
+  }, 201);
+}
+
+async function architectRotateToken(request, env) {
+  await authenticateArchitect(request, env);
+  const body = parseJsonObject(await readBodyText(request, 4096));
+  if (body.confirm !== "ROTATE_ARCHITECT_TOKEN") {
+    throw new ApiError(400, "token_rotation_confirmation_required");
+  }
+  const token = randomArchitectSecret("citadel_arch_");
+  const tokenHash = await sha256Hex(token);
+  await env.DB.batch([
+    env.DB.prepare(`
+      UPDATE architect_auth_state
+      SET token_hash = ?, bootstrap_mode = 0,
+          token_rotated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE singleton_id = 1
+    `).bind(tokenHash),
+    env.DB.prepare(`
+      INSERT INTO audit_events (
+        actor_type, actor_id, action, target_type, target_id, details_json
+      ) VALUES ('architect', 'security', 'architect.token.rotated',
+        'architect_auth', 'singleton', '{"method":"authenticated"}')
+    `)
+  ]);
+  return json({
+    ok: true,
+    architect_token: token,
+    display_once: true,
+    old_token_invalidated: true
+  });
+}
+
+async function architectRecoverToken(request, env) {
+  await consumeRecoveryAttempt(request, env);
+  const body = parseJsonObject(await readBodyText(request, 4096));
+  if (body.confirm !== "RECOVER_ARCHITECT_TOKEN") {
+    throw new ApiError(400, "recovery_confirmation_required");
+  }
+  const recoveryCode = requireString(body.recovery_code, "recovery_code", 512);
+  const state = await architectAuthState(env);
+  const expectedHash = typeof state.recovery_hash === "string"
+    ? state.recovery_hash.toLowerCase()
+    : "";
+  const actualHash = await sha256Hex(recoveryCode);
+  if (
+    Number(state.recovery_used || 1) !== 0 ||
+    !/^[a-f0-9]{64}$/.test(expectedHash) ||
+    !constantTimeHexEqual(actualHash, expectedHash)
+  ) {
+    throw new ApiError(401, "invalid_recovery_code");
+  }
+
+  const token = randomArchitectSecret("citadel_arch_");
+  const tokenHash = await sha256Hex(token);
+  const result = await env.DB.prepare(`
+    UPDATE architect_auth_state
+    SET token_hash = ?, bootstrap_mode = 0,
+        recovery_hash = NULL, recovery_used = 1,
+        token_rotated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+    WHERE singleton_id = 1 AND recovery_used = 0 AND recovery_hash = ?
+  `).bind(tokenHash, expectedHash).run();
+  if ((result.meta?.changes || 0) !== 1) {
+    throw new ApiError(409, "recovery_code_already_used");
+  }
+  await env.DB.prepare(`
+    INSERT INTO audit_events (
+      actor_type, actor_id, action, target_type, target_id, details_json
+    ) VALUES ('architect_recovery', 'recovery', 'architect.token.recovered',
+      'architect_auth', 'singleton', '{"recovery_code_consumed":true}')
+  `).run();
+
+  return json({
+    ok: true,
+    architect_token: token,
+    display_once: true,
+    old_token_invalidated: true,
+    recovery_code_consumed: true
+  });
 }
 
 async function architectOverview(request, env) {
@@ -3375,6 +3589,30 @@ async function handleApi(request, env, url) {
         database: "unavailable"
       }, 503);
     }
+  }
+
+  if (url.pathname === "/api/v1/architect/security/recover-token") {
+    return request.method === "POST"
+      ? architectRecoverToken(request, env)
+      : methodNotAllowed(["POST"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/security") {
+    return request.method === "GET"
+      ? architectSecurityStatus(request, env)
+      : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/security/recovery-code") {
+    return request.method === "POST"
+      ? architectCreateRecoveryCode(request, env)
+      : methodNotAllowed(["POST"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/security/rotate-token") {
+    return request.method === "POST"
+      ? architectRotateToken(request, env)
+      : methodNotAllowed(["POST"]);
   }
 
   if (url.pathname === "/api/v1/architect/overview") {
