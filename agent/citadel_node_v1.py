@@ -52,7 +52,8 @@ USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}
-UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1"}
+CORE_UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
+UPDATE_FILE_NAMES = CORE_UPDATE_FILE_NAMES | {"windows_enterprise_probe.ps1"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
 COMMAND_MAX_AGE_SECONDS = 15 * 60
 SERVICE_RESTART_EXIT_CODE = 75
@@ -1838,12 +1839,16 @@ class Agent:
     def rollback_last_update(self) -> None:
         install_root = Path(__file__).resolve().parent
         backup = self.config.data_dir / "update-backup"
-        missing = [name for name in UPDATE_FILE_NAMES if not (backup / name).is_file()]
-        if missing:
-            raise RuntimeError("complete update backup unavailable")
+        missing_core = [name for name in CORE_UPDATE_FILE_NAMES if not (backup / name).is_file()]
+        if missing_core:
+            raise RuntimeError("complete core update backup unavailable")
+        rollback_names = {
+            name for name in UPDATE_FILE_NAMES
+            if (backup / name).is_file()
+        }
         staging = Path(tempfile.mkdtemp(prefix="citadel-rollback-", dir=self.config.data_dir))
         try:
-            for name in sorted(UPDATE_FILE_NAMES):
+            for name in sorted(rollback_names):
                 shutil.copy2(backup / name, staging / name)
             entrypoint = staging / "citadel_node_v2.py"
             result = subprocess.run(  # nosec B603
@@ -1856,11 +1861,12 @@ class Agent:
             )
             if result.returncode != 0:
                 raise RuntimeError("rollback backup self-test failed")
-            for name in sorted(UPDATE_FILE_NAMES):
+            for name in sorted(rollback_names):
                 shutil.copy2(staging / name, install_root / name)
             self.log.write(
                 "agent_update_manual_rollback",
-                files=sorted(UPDATE_FILE_NAMES),
+                files=sorted(rollback_names),
+                legacy_companion_backup="windows_enterprise_probe.ps1" not in rollback_names,
             )
         finally:
             shutil.rmtree(staging, ignore_errors=True)
