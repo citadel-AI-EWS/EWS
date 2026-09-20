@@ -324,6 +324,9 @@ if ($LASTEXITCODE -ne 0) { throw "CITADEL Windows Service Host self-test failed.
 
 $StopPath = Join-Path $StateRoot "STOP"
 $LifecycleStopPath = Join-Path $StateRoot "SERVICE_STOP"
+$PausedPath = Join-Path $StateRoot "PAUSED"
+$PausedExistedBeforeCutover = Test-Path -LiteralPath $PausedPath
+$TemporaryCutoverPause = -not $PausedExistedBeforeCutover
 $PersistentStopExisted = Test-Path -LiteralPath $StopPath
 $PersistentStopContent = if ($PersistentStopExisted) { [System.IO.File]::ReadAllText($StopPath) } else { $null }
 
@@ -356,6 +359,9 @@ try {
     Write-Host "[CITADEL] Explicit administrator repair cleared the persistent STOP marker."
   }
   Remove-Item -LiteralPath $LifecycleStopPath -Force -ErrorAction SilentlyContinue
+  if ($TemporaryCutoverPause) {
+    [System.IO.File]::WriteAllText($PausedPath, "temporary service cutover pause" + [Environment]::NewLine, $Utf8NoBom)
+  }
 
   $Configured = Set-CitadelServiceDefinition -Name $ServiceName -DisplayName $ServiceDisplayName -BinaryPathName $BinPath -StartName "NT AUTHORITY\LocalService" -DelayedAutoStart $true
   Set-CitadelServiceRecovery -Name $ServiceName
@@ -389,6 +395,9 @@ try {
   }
   if ($LegacyShortcutExisted -and (Test-Path -LiteralPath $LegacyShortcutPath)) {
     Remove-Item -LiteralPath $LegacyShortcutPath -Force
+  }
+  if ($TemporaryCutoverPause -and (Test-Path -LiteralPath $PausedPath)) {
+    Remove-Item -LiteralPath $PausedPath -Force
   }
 
   $InstallState = @{
@@ -427,6 +436,12 @@ try {
     }
     if ($PersistentStopExisted -and -not (Test-Path -LiteralPath $StopPath)) {
       [System.IO.File]::WriteAllText($StopPath, $PersistentStopContent, $Utf8NoBom)
+    }
+    if ($TemporaryCutoverPause -and (Test-Path -LiteralPath $PausedPath)) {
+      Remove-Item -LiteralPath $PausedPath -Force
+    }
+    if (Test-Path -LiteralPath $ReleaseRoot) {
+      Remove-Item -LiteralPath $ReleaseRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
   } catch {
     Write-Warning ("[CITADEL] Rollback also encountered an error: " + $_.Exception.Message)
