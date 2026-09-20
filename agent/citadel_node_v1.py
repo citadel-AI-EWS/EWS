@@ -46,7 +46,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.11"
+VERSION = "0.3.12"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -54,6 +54,8 @@ SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback"
 UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
 COMMAND_MAX_AGE_SECONDS = 15 * 60
+SERVICE_RESTART_EXIT_CODE = 75
+SERVICE_STOP_EXIT_CODE = 76
 LMSTUDIO_INSTALL_FILE_NAMES = {"install_llmstudio_headless.ps1", "install_llmstudio_headless.sh"}
 LMSTUDIO_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,95})?(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,31})?$")
 LMSTUDIO_QUANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
@@ -1742,6 +1744,7 @@ class Agent:
                     restart_after = True
                 elif command_type == "uninstall":
                     atomic_write(self.stop_path, "controller stop " + now_iso() + "\n")
+                    stop_after = True
                 elif command_type in {"system_reboot", "system_shutdown"}:
                     self.schedule_system_power_action(command_type)
                 elif command_type == "wake_peer":
@@ -1763,9 +1766,14 @@ class Agent:
                     command_id=command_id,
                     command_type=command_type,
                 )
+                service_managed = os.environ.get("CITADEL_SERVICE_MANAGED") == "1"
                 if stop_after:
+                    if service_managed and command_type == "stop":
+                        raise SystemExit(SERVICE_STOP_EXIT_CODE)
                     raise SystemExit(0)
                 if restart_after:
+                    if service_managed:
+                        raise SystemExit(SERVICE_RESTART_EXIT_CODE)
                     entrypoint = Path(__file__).resolve().parent / "citadel_node_v2.py"
                     # The argv is fixed and the shell remains disabled.
                     subprocess.Popen(  # nosec B603
@@ -1923,9 +1931,17 @@ class Agent:
                     if once:
                         return 0
                     time.sleep(self.config.poll_seconds)
-                except SystemExit:
-                    self.log.write("agent_stop", reason="STOP")
-                    return 0
+                except SystemExit as exit_request:
+                    code = exit_request.code if isinstance(exit_request.code, int) else 0
+                    reason = (
+                        "service_restart"
+                        if code == SERVICE_RESTART_EXIT_CODE
+                        else "service_stop"
+                        if code == SERVICE_STOP_EXIT_CODE
+                        else "STOP"
+                    )
+                    self.log.write("agent_stop", reason=reason, exit_code=code)
+                    return code
                 except KeyboardInterrupt:
                     self.log.write("agent_stop", reason="keyboard_interrupt")
                     return 0
