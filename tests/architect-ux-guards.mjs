@@ -71,7 +71,37 @@ for (const id of [
   "rotateArchitectTokenButton",
   "securitySecretPanel",
   "securitySecretValue",
-  "homeButton"
+  "homeButton",
+  "rbacPanel",
+  "rbacRole",
+  "rbacLabel",
+  "createRbacTokenButton",
+  "rbacTokenList",
+  "enterpriseServicesCard",
+  "enterpriseRoleBadge",
+  "enterpriseSummary",
+  "enterpriseServiceCatalog",
+  "policyLatestAgent",
+  "policyWindowsService",
+  "policyEnterpriseProbe",
+  "policyUpdateService",
+  "policyNoPendingReboot",
+  "policyCpu",
+  "policyMemory",
+  "policyEvents",
+  "saveEnterprisePolicyButton",
+  "newSiteName",
+  "createSiteButton",
+  "newGroupName",
+  "createGroupButton",
+  "enterpriseNodeSelect",
+  "enterpriseSiteSelect",
+  "enterpriseGroupSelect",
+  "assignEnterpriseScopeButton",
+  "refreshEnterpriseButton",
+  "enterpriseNodeCompliance",
+  "recoveryManifestButton",
+  "recoveryManifestState"
 ]) {
   assert.match(architect, new RegExp(`id="${id}"`), `Architect control missing: ${id}`);
 }
@@ -111,6 +141,24 @@ assert.match(architect, /id="homeButton"[^>]+href="\/"/);
 assert.match(architect, /home:"Главная"/);
 assert.match(architect, /home:"Home"/);
 assert.match(architect, /home:"בית"/);
+assert.match(architect, /\/api\/v1\/architect\/enterprise/);
+assert.match(architect, /\/api\/v1\/architect\/security\/access-tokens/);
+assert.match(architect, /Desired State \/ Policy Engine/);
+assert.match(architect, /Windows Event Log/);
+assert.match(architect, /CIM \/ Performance Counters/);
+assert.match(architect, /gMSA \/ dMSA/);
+assert.match(architect, /Windows Update \/ Hotpatch/);
+assert.match(architect, /Hyper-V/);
+assert.match(architect, /GPO \/ Intune \/ MDM/);
+assert.match(architect, /Sites \/ Node Groups/);
+assert.match(architect, /recovery-manifest/);
+assert.match(index, /architectEnterpriseOverview/);
+assert.match(index, /architectCreateAccessToken/);
+assert.match(index, /architectSetEnterprisePolicy/);
+assert.match(index, /architectEnterpriseRecoveryManifest/);
+assert.match(index, /requiredArchitectPermission/);
+assert.doesNotMatch(index, /command_type\s*[:=]\s*["']shell["']/);
+
 assert.match(architect, /Ноды, проекты, миссии, отчёты, модели и данные не удаляются/);
 assert.match(architect, /\/api\/v1\/architect\/security\/recovery-code/);
 assert.match(architect, /\/api\/v1\/architect\/security\/rotate-token/);
