@@ -7,6 +7,7 @@ const nodeTest = fs.readFileSync("node-test.html", "utf8");
 const agentV1 = fs.readFileSync("agent/citadel_node_v1.py", "utf8");
 const agentV2 = fs.readFileSync("agent/citadel_node_v2.py", "utf8");
 const telemetry = fs.readFileSync("src/telemetry/normalize.js", "utf8");
+const telemetryCommon = fs.readFileSync("src/telemetry/common.js", "utf8");
 const buildSite = fs.readFileSync("scripts/build_site.sh", "utf8");
 const hub = fs.readFileSync("hub.html", "utf8");
 need(index.includes("auto_enrollment_windows"), "global auto-enrollment window missing");
@@ -21,8 +22,8 @@ need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_tok
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
 need(setup.includes("$RunArguments"), "Windows paths are not quoted");
 need(setup.includes("refusing to start another copy"), "process inspection is not fail-closed");
-need(agentV1.includes('VERSION = "0.3.9"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.9"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.10"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.10"'), "v2 release not bumped");
 need(agentV2.includes('"windows_sleep_hibernate_inhibit"'), "agent drops sleep/hibernate event");
 for (const eventType of [
   "windows_sleep_hibernate_inhibit",
@@ -58,6 +59,13 @@ need(index.includes('"lmstudio_model_load"'), "LM Studio model load command miss
 need(agentV1.includes('"lmstudio_install"'), "LM Studio install command missing from node allow-list");
 need(agentV1.includes("validate_lmstudio_model_payload"), "LM Studio model validation missing");
 need(agentV1.includes("windows_sleep_hibernate_inhibit"), "sleep/hibernate inhibition missing");
+need(telemetryCommon.includes("replayed_request"), "telemetry replay rejection missing");
+need(index.includes("node_request_nonces"), "Controller request nonce storage missing");
+need(index.includes("agentRequiresRequestId"), "Controller compatibility gate for replay protection missing");
+need(index.includes("replayed_request"), "Controller replay rejection missing");
+need(index.includes("await expireStaleNodeCommands(env, nodeId);\n  await ensureRolloutCommandForNode(env, nodeId);"), "stale command expiry must run before rollout scheduling");
+need(index.includes("expireStaleNodeCommands"), "stale command expiry missing");
+need(agentV1.includes("x-node-request-id"), "agent request nonce header missing");
 need(agentV1.includes("recover_network"), "bounded network recovery missing");
 need(agentV1.includes("stream_lmstudio_answer"), "streaming Hybrid answer missing");
 need(agentV1.includes("/api/v1/models/download/status/"), "LM Studio download progress polling missing");
@@ -85,5 +93,5 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.9"'), "Controller release not bumped");
+need(index.includes('version: "0.3.10"'), "Controller release not bumped");
 console.log("Review backlog guards: PASS");
