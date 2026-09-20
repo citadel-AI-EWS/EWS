@@ -22,8 +22,13 @@ need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_tok
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
 need(setup.includes("$RunArguments"), "Windows paths are not quoted");
 need(setup.includes("refusing to start another copy"), "process inspection is not fail-closed");
-need(agentV1.includes('VERSION = "0.3.10"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.10"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.11"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.11"'), "v2 release not bumped");
+need(agentV1.includes("windows-dpapi-local-machine-v1"), "Windows DPAPI identity protection missing");
+need(agentV1.includes("CryptProtectData"), "Windows DPAPI protect call missing");
+need(agentV1.includes("CryptUnprotectData"), "Windows DPAPI unprotect call missing");
+need(agentV1.includes("private_key_dpapi"), "protected Windows identity field missing");
+need(setup.includes("icacls.exe"), "Windows state ACL hardening missing");
 need(agentV2.includes('"windows_sleep_hibernate_inhibit"'), "agent drops sleep/hibernate event");
 for (const eventType of [
   "windows_sleep_hibernate_inhibit",
@@ -93,5 +98,5 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.10"'), "Controller release not bumped");
+need(index.includes('version: "0.3.11"'), "Controller release not bumped");
 console.log("Review backlog guards: PASS");

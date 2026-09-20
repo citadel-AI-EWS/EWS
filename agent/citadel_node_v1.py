@@ -12,6 +12,7 @@ import argparse
 import ast
 import base64
 import contextlib
+import ctypes
 import dataclasses
 import datetime as dt
 import hashlib
@@ -45,7 +46,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.10"
+VERSION = "0.3.11"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -57,6 +58,9 @@ LMSTUDIO_INSTALL_FILE_NAMES = {"install_llmstudio_headless.ps1", "install_llmstu
 LMSTUDIO_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,95})?(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,31})?$")
 LMSTUDIO_QUANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
 HYBRID_MODES = {"python", "lmstudio", "both"}
+WINDOWS_DPAPI_PROTECTION = "windows-dpapi-local-machine-v1"
+CRYPTPROTECT_UI_FORBIDDEN = 0x1
+CRYPTPROTECT_LOCAL_MACHINE = 0x4
 
 
 def now_iso() -> str:
@@ -69,6 +73,90 @@ def b64url(data: bytes) -> str:
 
 def unb64url(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * ((4 - len(value) % 4) % 4))
+
+
+def _windows_dpapi(data: bytes, *, protect: bool) -> bytes:
+    """Protect or unprotect a secret with machine-bound Windows DPAPI."""
+    if os.name != "nt":
+        raise RuntimeError("Windows DPAPI is only available on Windows")
+    if not data:
+        raise ValueError("DPAPI input must not be empty")
+
+    from ctypes import wintypes
+
+    class DataBlob(ctypes.Structure):
+        _fields_ = [
+            ("cbData", wintypes.DWORD),
+            ("pbData", ctypes.POINTER(ctypes.c_ubyte)),
+        ]
+
+    buffer = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
+    input_blob = DataBlob(
+        len(data),
+        ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)),
+    )
+    output_blob = DataBlob()
+
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    crypt32.CryptProtectData.argtypes = [
+        ctypes.POINTER(DataBlob),
+        wintypes.LPCWSTR,
+        ctypes.POINTER(DataBlob),
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(DataBlob),
+    ]
+    crypt32.CryptProtectData.restype = wintypes.BOOL
+    crypt32.CryptUnprotectData.argtypes = [
+        ctypes.POINTER(DataBlob),
+        ctypes.POINTER(wintypes.LPWSTR),
+        ctypes.POINTER(DataBlob),
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(DataBlob),
+    ]
+    crypt32.CryptUnprotectData.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+
+    if protect:
+        ok = crypt32.CryptProtectData(
+            ctypes.byref(input_blob),
+            "CITADEL/EWS node identity",
+            None,
+            None,
+            None,
+            CRYPTPROTECT_UI_FORBIDDEN | CRYPTPROTECT_LOCAL_MACHINE,
+            ctypes.byref(output_blob),
+        )
+    else:
+        ok = crypt32.CryptUnprotectData(
+            ctypes.byref(input_blob),
+            None,
+            None,
+            None,
+            None,
+            CRYPTPROTECT_UI_FORBIDDEN,
+            ctypes.byref(output_blob),
+        )
+    if not ok:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return ctypes.string_at(output_blob.pbData, output_blob.cbData)
+    finally:
+        if output_blob.pbData:
+            kernel32.LocalFree(ctypes.cast(output_blob.pbData, ctypes.c_void_p))
+
+
+def _windows_dpapi_protect(data: bytes) -> bytes:
+    return _windows_dpapi(data, protect=True)
+
+
+def _windows_dpapi_unprotect(data: bytes) -> bytes:
+    return _windows_dpapi(data, protect=False)
 
 
 def json_text(value: Any) -> str:
@@ -160,14 +248,30 @@ class Identity:
         self.node_id: str | None = None
         self.private_key: Ed25519PrivateKey | None = None
         state = load_json(path, {}) or {}
-        if state.get("private_key_pem"):
+        self.node_id = state.get("node_id") or None
+
+        if state.get("private_key_dpapi"):
+            if os.name != "nt":
+                raise ValueError("Windows-protected node identity cannot be used on this OS")
+            if state.get("key_protection") != WINDOWS_DPAPI_PROTECTION:
+                raise ValueError("unsupported Windows node identity protection format")
+            raw = _windows_dpapi_unprotect(unb64url(str(state["private_key_dpapi"])))
+            if len(raw) != 32:
+                raise ValueError("invalid Windows-protected Ed25519 private key")
+            self.private_key = Ed25519PrivateKey.from_private_bytes(raw)
+        elif state.get("private_key_pem"):
             key = serialization.load_pem_private_key(
                 state["private_key_pem"].encode("ascii"), password=None
             )
             if not isinstance(key, Ed25519PrivateKey):
                 raise ValueError("identity key is not Ed25519")
             self.private_key = key
-            self.node_id = state.get("node_id") or None
+            if os.name == "nt":
+                # One-time migration: replace the legacy plaintext PEM with a
+                # machine-bound DPAPI blob while preserving node_id.
+                self.save()
+        elif state:
+            raise ValueError("identity state does not contain a supported private key")
         else:
             self.private_key = Ed25519PrivateKey.generate()
             self.save()
@@ -178,15 +282,26 @@ class Identity:
         return self.private_key
 
     def save(self) -> None:
-        pem = self.require_key().private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        ).decode("ascii")
-        atomic_write(
-            self.path,
-            json.dumps({"node_id": self.node_id, "private_key_pem": pem}, indent=2) + "\n",
-        )
+        key = self.require_key()
+        if os.name == "nt":
+            raw = key.private_bytes(
+                serialization.Encoding.Raw,
+                serialization.PrivateFormat.Raw,
+                serialization.NoEncryption(),
+            )
+            payload = {
+                "node_id": self.node_id,
+                "key_protection": WINDOWS_DPAPI_PROTECTION,
+                "private_key_dpapi": b64url(_windows_dpapi_protect(raw)),
+            }
+        else:
+            pem = key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            ).decode("ascii")
+            payload = {"node_id": self.node_id, "private_key_pem": pem}
+        atomic_write(self.path, json.dumps(payload, indent=2) + "\n")
 
     def set_node_id(self, node_id: str) -> None:
         self.node_id = node_id
@@ -1851,8 +1966,17 @@ def require_test(condition: bool, message: str) -> None:
 def self_test() -> int:
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)
-        identity = Identity(root / "identity.json")
+        identity_path = root / "identity.json"
+        identity = Identity(identity_path)
         identity.set_node_id("node_test")
+        identity_state = load_json(identity_path, {}) or {}
+        if os.name == "nt":
+            require_test(
+                identity_state.get("key_protection") == WINDOWS_DPAPI_PROTECTION
+                and bool(identity_state.get("private_key_dpapi"))
+                and "private_key_pem" not in identity_state,
+                "Windows identity was not stored as DPAPI-protected key material",
+            )
         message = "\n".join(
             (
                 "POST",
@@ -1865,6 +1989,46 @@ def self_test() -> int:
             unb64url(identity.sign(message)),
             message,
         )
+        reloaded_identity = Identity(identity_path)
+        require_test(
+            reloaded_identity.node_id == "node_test",
+            "node_id changed while reloading node identity",
+        )
+        identity.require_key().public_key().verify(
+            unb64url(reloaded_identity.sign(message)),
+            message,
+        )
+
+        if os.name == "nt":
+            legacy_path = root / "legacy-identity.json"
+            legacy_key = Ed25519PrivateKey.generate()
+            legacy_pem = legacy_key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            ).decode("ascii")
+            atomic_write(
+                legacy_path,
+                json.dumps(
+                    {"node_id": "node_legacy", "private_key_pem": legacy_pem},
+                    indent=2,
+                )
+                + "\n",
+            )
+            migrated_identity = Identity(legacy_path)
+            migrated_state = load_json(legacy_path, {}) or {}
+            require_test(
+                migrated_identity.node_id == "node_legacy"
+                and migrated_state.get("key_protection") == WINDOWS_DPAPI_PROTECTION
+                and bool(migrated_state.get("private_key_dpapi"))
+                and "private_key_pem" not in migrated_state,
+                "legacy Windows identity did not migrate away from plaintext PEM",
+            )
+            legacy_message = b"legacy-identity-migration"
+            legacy_key.public_key().verify(
+                unb64url(migrated_identity.sign(legacy_message)),
+                legacy_message,
+            )
 
         controller_private = Ed25519PrivateKey.generate()
         controller_x = b64url(

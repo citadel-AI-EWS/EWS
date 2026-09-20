@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
-PACKAGE_NAME = "CITADEL_FIXED_AGENT_0.3.10_2026-09-20"
+PACKAGE_NAME = "CITADEL_FIXED_AGENT_0.3.11_2026-09-20"
 STAGE = DIST / PACKAGE_NAME
 ZIP_PATH = DIST / f"{PACKAGE_NAME}.zip"
 
@@ -40,7 +40,7 @@ def indented_block(value: str, spaces: int = 8) -> str:
 def patch_v1(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     text = must_replace(text, "import hashlib\n", "import hashlib\nimport ipaddress\n", "ipaddress import")
-    text = must_replace(text, 'VERSION = "0.3.0"', 'VERSION = "0.3.10"', "v1 version")
+    text = must_replace(text, 'VERSION = "0.3.0"', 'VERSION = "0.3.11"', "v1 version")
     text = must_replace(
         text,
         'return json.loads(path.read_text(encoding="utf-8"))',
@@ -252,7 +252,7 @@ def patch_v1(path: Path) -> None:
 
 def patch_v2(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
-    text = must_replace(text, 'VERSION = "0.3.0"', 'VERSION = "0.3.10"', "v2 version")
+    text = must_replace(text, 'VERSION = "0.3.0"', 'VERSION = "0.3.11"', "v2 version")
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
@@ -261,7 +261,7 @@ def patch_setup(path: Path, v1_hash: str, v2_hash: str) -> None:
     original = text
     text = re.sub(r'\$ExpectedV1Sha256 = "[0-9a-f]{64}"', f'$ExpectedV1Sha256 = "{v1_hash}"', text, count=1)
     text = re.sub(r'\$ExpectedV2Sha256 = "[0-9a-f]{64}"', f'$ExpectedV2Sha256 = "{v2_hash}"', text, count=1)
-    text = text.replace('agent_version = "0.3.0"', 'agent_version = "0.3.10"')
+    text = text.replace('agent_version = "0.3.0"', 'agent_version = "0.3.11"')
     if text == original:
         raise RuntimeError("setup_windows.ps1 was not patched")
     path.write_text(text, encoding="utf-8", newline="\n")
@@ -274,7 +274,7 @@ def write_extras() -> None:
         newline="",
     )
     readme = (
-        "CITADEL/EWS — исправленный самодостаточный пакет 0.3.10\n\n"
+        "CITADEL/EWS — исправленный самодостаточный пакет 0.3.11\n\n"
         "1. Распакуйте ZIP полностью.\n"
         "2. Запустите START_HERE.cmd.\n"
         "3. Агент использует HTTPS Controller: https://citadel-ai.init1.workers.dev\n\n"
@@ -329,17 +329,17 @@ def build() -> Path:
     setup_path = STAGE / "setup_windows.ps1"
     v1_hash = sha256(v1_path)
     v2_hash = sha256(v2_path)
-    if 'VERSION = "0.3.10"' not in v1_path.read_text(encoding="utf-8"):
-        raise RuntimeError("repository v1 source is not release 0.3.10")
-    if 'VERSION = "0.3.10"' not in v2_path.read_text(encoding="utf-8"):
-        raise RuntimeError("repository v2 source is not release 0.3.10")
+    if 'VERSION = "0.3.11"' not in v1_path.read_text(encoding="utf-8"):
+        raise RuntimeError("repository v1 source is not release 0.3.11")
+    if 'VERSION = "0.3.11"' not in v2_path.read_text(encoding="utf-8"):
+        raise RuntimeError("repository v2 source is not release 0.3.11")
     setup_text = setup_path.read_text(encoding="utf-8")
     if f'$ExpectedV1Sha256 = "{v1_hash}"' not in setup_text:
         raise RuntimeError("setup_windows.ps1 v1 hash pin does not match repository source")
     if f'$ExpectedV2Sha256 = "{v2_hash}"' not in setup_text:
         raise RuntimeError("setup_windows.ps1 v2 hash pin does not match repository source")
-    if 'agent_version = "0.3.10"' not in setup_text:
-        raise RuntimeError("setup_windows.ps1 release version is not 0.3.10")
+    if 'agent_version = "0.3.11"' not in setup_text:
+        raise RuntimeError("setup_windows.ps1 release version is not 0.3.11")
     write_extras()
 
     manifest_names = sorted(

@@ -7,8 +7,8 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $PythonWingetId = "Python.Python.3.14"
-$ExpectedV1Sha256 = "de0cfe4a8cea2b985ae1410716ca7fb1ec11c1564e639411fb21e6133289a3b8"
-$ExpectedV2Sha256 = "7d3cbeecaa9a58d30d1cc9e12a3cf60c86112a857df4188d02453caa09954a52"
+$ExpectedV1Sha256 = "d3c310ab378666cdd477a51a881169970910900428cb4d2027ff58c1545c48df"
+$ExpectedV2Sha256 = "ab81b7cb431dc1e3e9ee7bf19cbdc875db52f33045da809430435276c5a958f5"
 
 $ControllerUri = [System.Uri]$ControllerUrl
 $IsHttps = $ControllerUri.Scheme -eq "https"
@@ -101,6 +101,14 @@ if ($null -eq $PythonPath) {
 
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
+
+$CurrentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$Icacls = Get-Command icacls.exe -ErrorAction Stop
+& $Icacls.Source $StateRoot /inheritance:r /grant:r "*${CurrentUserSid}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
+if ($LASTEXITCODE -ne 0) {
+  throw "Unable to harden CITADEL state directory ACL."
+}
+Write-Host "[CITADEL] State directory ACL restricted to the installing user, SYSTEM and Administrators."
 
 $V1Changed = Copy-VerifiedAgentFile "citadel_node_v1.py" $ExpectedV1Sha256
 $V2Changed = Copy-VerifiedAgentFile "citadel_node_v2.py" $ExpectedV2Sha256
@@ -237,7 +245,7 @@ $InstallState = @{
   node_id = $NodeId
   controller_url = $ControllerUrl.TrimEnd('/')
   install_root = $InstallRoot
-  agent_version = "0.3.10"
+  agent_version = "0.3.11"
   v1_sha256 = $ExpectedV1Sha256
   v2_sha256 = $ExpectedV2Sha256
   updated_at = [DateTime]::UtcNow.ToString("o")
