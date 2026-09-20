@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import ast
 import base64
+import binascii
 import contextlib
 import ctypes
 import dataclasses
