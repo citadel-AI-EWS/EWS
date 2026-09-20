@@ -528,6 +528,7 @@ def system_inventory(payload: dict[str, Any]) -> dict[str, Any]:
         "platform_release": platform.release(),
         "architecture": platform.machine(),
         "python_version": platform.python_version(),
+        "windows_core_service": os.name == "nt" and os.environ.get("CITADEL_SERVICE_MANAGED") == "1",
         "cpu_logical_count": psutil.cpu_count(logical=True),
         "memory_total_bytes": int(memory.total),
         "disk_home_total_bytes": int(disk.total),
@@ -561,7 +562,10 @@ class Agent:
 
     @property
     def capabilities(self) -> list[str]:
-        return sorted(set(HANDLERS) | {"lmstudio_remote", "project_text"})
+        capabilities = set(HANDLERS) | {"lmstudio_remote", "project_text"}
+        if os.name == "nt" and os.environ.get("CITADEL_SERVICE_MANAGED") == "1":
+            capabilities.add("windows_core_service")
+        return sorted(capabilities)
 
     def require_node_id(self) -> str:
         if not self.identity.node_id:
@@ -2139,6 +2143,25 @@ def self_test() -> int:
             }),
             "valid LM Studio settings rejected",
         )
+        previous_service_flag = os.environ.get("CITADEL_SERVICE_MANAGED")
+        try:
+            os.environ["CITADEL_SERVICE_MANAGED"] = "1"
+            service_capability_agent = Agent(config)
+            if os.name == "nt":
+                require_test(
+                    "windows_core_service" in service_capability_agent.capabilities,
+                    "SCM-managed Windows agent did not advertise windows_core_service",
+                )
+                require_test(
+                    system_inventory({}).get("windows_core_service") is True,
+                    "Windows inventory did not report SCM service mode",
+                )
+        finally:
+            if previous_service_flag is None:
+                os.environ.pop("CITADEL_SERVICE_MANAGED", None)
+            else:
+                os.environ["CITADEL_SERVICE_MANAGED"] = previous_service_flag
+
         class _ServiceExitAgent(Agent):
             def cycle(self) -> None:
                 raise SystemExit(SERVICE_RESTART_EXIT_CODE)
