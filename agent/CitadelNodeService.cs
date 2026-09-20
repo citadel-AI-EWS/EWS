@@ -37,13 +37,6 @@ namespace CitadelEws
 
         protected override void OnStart(string[] args)
         {
-            if (File.Exists(config.StopFile))
-            {
-                throw new InvalidOperationException(
-                    "CITADEL STOP marker is present. Run the explicit installer/repair flow to clear it."
-                );
-            }
-
             stopping = false;
             supervisor = new Thread(Supervise);
             supervisor.IsBackground = true;
@@ -88,6 +81,12 @@ namespace CitadelEws
             {
                 while (!stopping)
                 {
+                    if (File.Exists(config.StopFile))
+                    {
+                        Thread.Sleep(1000);
+                        continue;
+                    }
+
                     Process current = StartChild();
                     lock (sync)
                     {
@@ -116,16 +115,23 @@ namespace CitadelEws
                         continue;
                     }
 
-                    if (code == StopExitCode || File.Exists(config.StopFile))
+                    if (code == StopExitCode)
                     {
-                        // A signed stop/uninstall request intentionally leaves
-                        // the SCM host alive but does not restart the Core Agent.
-                        // An administrator can later restart/repair the service.
+                        // A signed stop request intentionally leaves the SCM host
+                        // alive and dormant until the service is restarted.
                         while (!stopping)
                         {
                             Thread.Sleep(1000);
                         }
                         return;
+                    }
+
+                    if (File.Exists(config.StopFile))
+                    {
+                        // A signed uninstall/STOP marker persists across reboot.
+                        // The outer loop stays dormant until an explicit repair
+                        // clears the marker.
+                        continue;
                     }
 
                     // Unexpected child exit is a service failure. SCM recovery
