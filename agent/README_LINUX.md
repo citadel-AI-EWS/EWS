@@ -3,7 +3,7 @@ CITADEL / EWS — Linux Node Installer 0.3.11-linuxcompat.1
 Supported targets:
 - Linux x86_64 / amd64
 - Linux ARM64 / aarch64
-- Python 3.10 through 3.14, 64-bit
+- Python 3.12 through 3.14, 64-bit
 - systemd-based distributions
 
 1. Extract the matching archive completely.
