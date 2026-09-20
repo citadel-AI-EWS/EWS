@@ -38,8 +38,8 @@ const healthyWindowsInventory = {
     available: true,
     readonly: true,
     event_log: {
-      system: { critical_or_error_last_hour: 1 },
-      application: { critical_or_error_last_hour: 1 }
+      system: { critical_or_error_last_hour: 1, query_ok: true },
+      application: { critical_or_error_last_hour: 1, query_ok: true }
     },
     windows_update: {
       service_status: "Running",
@@ -71,8 +71,8 @@ const unhealthy = evaluateEnterpriseNode(
       available: true,
       readonly: true,
       event_log: {
-        system: { critical_or_error_last_hour: 50 },
-        application: { critical_or_error_last_hour: 10 }
+        system: { critical_or_error_last_hour: 50, query_ok: true },
+        application: { critical_or_error_last_hour: 10, query_ok: true }
       },
       windows_update: {
         service_status: "Stopped",
