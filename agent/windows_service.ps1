@@ -79,7 +79,7 @@ function Set-CitadelServiceDefinition {
   if (-not (Test-Path -LiteralPath $RegistryPath)) {
     throw "Windows service registry key is missing after configuration."
   }
-  Set-ItemProperty -LiteralPath $RegistryPath -Name DelayedAutostart -Type DWord -Value ($(if ($DelayedAutoStart) { 1 } else { 0 })) -Force
+  New-ItemProperty -LiteralPath $RegistryPath -Name DelayedAutostart -PropertyType DWord -Value ($(if ($DelayedAutoStart) { 1 } else { 0 })) -Force | Out-Null
 
   $Verified = Get-CitadelServiceCim $Name
   if ($null -eq $Verified) { throw "Windows service disappeared after configuration." }
@@ -108,10 +108,12 @@ function Restore-CitadelServiceDefinition {
   $Existing = Get-CitadelServiceCim $Name
   if ($null -eq $Existing) { throw "Cannot restore a missing Windows service." }
 
+  $RestoreStartMode = [string]$Snapshot.StartMode
+  if ($RestoreStartMode -eq "Auto") { $RestoreStartMode = "Automatic" }
   $Result = Invoke-CimMethod -InputObject $Existing -MethodName Change -Arguments @{
     DisplayName = [string]$Snapshot.DisplayName
     PathName = [string]$Snapshot.PathName
-    StartMode = [string]$Snapshot.StartMode
+    StartMode = $RestoreStartMode
     StartName = [string]$Snapshot.StartName
     StartPassword = ""
   } -ErrorAction Stop
@@ -120,7 +122,7 @@ function Restore-CitadelServiceDefinition {
   }
 
   $RegistryPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
-  Set-ItemProperty -LiteralPath $RegistryPath -Name DelayedAutostart -Type DWord -Value ([int]$Snapshot.DelayedAutostart) -Force
+  New-ItemProperty -LiteralPath $RegistryPath -Name DelayedAutostart -PropertyType DWord -Value ([int]$Snapshot.DelayedAutostart) -Force | Out-Null
 }
 
 function Remove-CitadelServiceDefinition {
