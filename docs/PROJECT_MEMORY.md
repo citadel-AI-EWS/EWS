@@ -528,6 +528,13 @@ Decision and implementation:
 - Installer removes the legacy Startup shortcut, uses machine-wide Python, creates a ProgramData venv, hardens ACLs, supports idempotent repair and explicit uninstall.
 - Service-managed agent restart/update uses reserved process exit code 75 so the SCM host reloads the updated Python files. Signed stop uses code 76 and leaves the service host dormant instead of triggering recovery.
 - `windows_core_service` is advertised only from an SCM-managed process. Controller/Hub must not infer service migration from version `0.3.12` alone.
+- Windows lifecycle stop is transient (`SERVICE_STOP`) and distinct from persistent signed uninstall `STOP`; stale transient markers are cleared by the service host on startup.
+- 0.3.12 install/repair is staged before cutover. Dependency install, Controller enrollment/live-cycle and service-host compilation happen while the previous lifecycle remains available.
+- Existing SCM configuration is snapshotted and restored on failed cutover. Legacy Startup processes are retired only after the new SCM host and its Python child are observed running.
+- Original-user migration is keyed by a validated SID carried through UAC elevation. Durable `PAUSED` state is migrated; uninstall without preserve-state removes both ProgramData and legacy user state.
+- ProgramData ACLs are rebuilt from an allowlist before secrets or executable files are copied. Unknown explicit ACEs are not retained.
+- Service ImagePath/account/start mode are configured through Win32_Service, delayed-auto is verified from the service registry, and CI performs a real SCM round-trip using a path containing spaces.
+- ServiceBase AutoLog is disabled because the node already has JSONL audit logging; the LocalService process does not depend on creating a privileged Event Log source.
 - A persistent STOP marker from signed uninstall is respected across reboot; local administrator repair clears it explicitly.
 - LM Studio remains the reviewed headless/llmster integration. Under the Core Service it is service-profile scoped and does not depend on an interactive desktop session.
 - No arbitrary shell, WinRM, credential collection, hidden persistence or inbound management port was added.
