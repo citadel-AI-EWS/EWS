@@ -17,6 +17,7 @@ const JSON_HEADERS = {
 const SIGNATURE_WINDOW_SECONDS = 300;
 const SECRET_KEY = /(pass(word)?|secret|token|api[_-]?key|authorization|cookie|private[_-]?key|credential)/i;
 const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+let architectAuthSchemaPromise;
 let nodeRequestNonceSchemaPromise;
 
 function agentRequiresRequestId(version) {
@@ -212,13 +213,48 @@ function constantTimeHexEqual(left, right) {
   return difference === 0;
 }
 
-export async function authenticateArchitect(request, env) {
-  const expectedHash = typeof env.ARCHITECT_TOKEN_HASH === "string"
+async function architectExpectedHash(env) {
+  const bootstrapHash = typeof env.ARCHITECT_TOKEN_HASH === "string"
     ? env.ARCHITECT_TOKEN_HASH.trim().toLowerCase()
     : "";
-  if (!/^[a-f0-9]{64}$/.test(expectedHash)) {
+  if (!/^[a-f0-9]{64}$/.test(bootstrapHash)) {
     throw new TelemetryError(503, "architect_auth_not_configured");
   }
+  if (!architectAuthSchemaPromise) {
+    architectAuthSchemaPromise = env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS architect_auth_state (
+        singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+        token_hash TEXT NOT NULL,
+        bootstrap_mode INTEGER NOT NULL DEFAULT 1 CHECK (bootstrap_mode IN (0,1)),
+        recovery_hash TEXT,
+        recovery_used INTEGER NOT NULL DEFAULT 1 CHECK (recovery_used IN (0,1)),
+        token_rotated_at TEXT,
+        recovery_created_at TEXT,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `).run().catch((error) => {
+      architectAuthSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await architectAuthSchemaPromise;
+  await env.DB.prepare(`
+    INSERT OR IGNORE INTO architect_auth_state (
+      singleton_id, token_hash, bootstrap_mode, recovery_used
+    ) VALUES (1, ?, 1, 1)
+  `).bind(bootstrapHash).run();
+  const row = await env.DB.prepare(
+    "SELECT token_hash FROM architect_auth_state WHERE singleton_id = 1"
+  ).first();
+  const activeHash = String(row?.token_hash || "").trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(activeHash)) {
+    throw new TelemetryError(503, "architect_auth_not_configured");
+  }
+  return activeHash;
+}
+
+export async function authenticateArchitect(request, env) {
+  const expectedHash = await architectExpectedHash(env);
   const authorization = request.headers.get("authorization") || "";
   const match = authorization.match(/^Bearer\s+(.+)$/i);
   const token = match?.[1]?.trim() || "";
