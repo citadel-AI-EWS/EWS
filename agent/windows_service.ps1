@@ -42,7 +42,7 @@ function Set-CitadelServiceDefinition {
     [bool]$DelayedAutoStart = $true
   )
   Assert-CitadelServiceName $Name
-  if ([string]::IsNullOrWhiteSpace($BinaryPathName) -or $BinaryPathName.Contains([char]0)) {
+  if ([string]::IsNullOrWhiteSpace($BinaryPathName) -or $BinaryPathName.IndexOf([char]0) -ge 0) {
     throw "Invalid Windows service ImagePath."
   }
 
