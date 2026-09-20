@@ -271,9 +271,30 @@ $ReleaseId = $ReleaseVersion + "-" + [Guid]::NewGuid().ToString("N")
 $ReleaseBase = Join-Path $InstallRoot "releases"
 $ReleaseRoot = Join-Path $ReleaseBase $ReleaseId
 Set-CitadelDirectoryAcl -Path $ReleaseBase
-Set-CitadelDirectoryAcl -Path $ReleaseRoot
 
-Copy-VerifiedReleaseFile "citadel_node_v1.py" $ExpectedV1Sha256 $ReleaseRoot
+$InstallStatePath = Join-Path $InstallRoot "install-state.json"
+$PreviousReleaseRoot = $null
+if (Test-Path -LiteralPath $InstallStatePath) {
+  try {
+    $PreviousInstallState = Get-Content -LiteralPath $InstallStatePath -Raw | ConvertFrom-Json
+    $CandidatePreviousRelease = [string]$PreviousInstallState.release_root
+    if (-not [string]::IsNullOrWhiteSpace($CandidatePreviousRelease)) {
+      $CandidatePreviousRelease = [System.IO.Path]::GetFullPath($CandidatePreviousRelease).TrimEnd('\')
+      $ReleaseBasePrefix = [System.IO.Path]::GetFullPath($ReleaseBase).TrimEnd('\') + '\'
+      if (($CandidatePreviousRelease + '\').StartsWith($ReleaseBasePrefix, [System.StringComparison]::OrdinalIgnoreCase) -and
+          (Test-Path -LiteralPath $CandidatePreviousRelease)) {
+        $PreviousReleaseRoot = $CandidatePreviousRelease
+      }
+    }
+  } catch {
+    Write-Warning "[CITADEL] Previous install-state could not be parsed; no rollback release will be retained from it."
+  }
+}
+
+try {
+  Set-CitadelDirectoryAcl -Path $ReleaseRoot
+
+  Copy-VerifiedReleaseFile "citadel_node_v1.py" $ExpectedV1Sha256 $ReleaseRoot
 Copy-VerifiedReleaseFile "citadel_node_v2.py" $ExpectedV2Sha256 $ReleaseRoot
 Copy-VerifiedReleaseFile "CitadelNodeService.cs" $ExpectedServiceHostSha256 $ReleaseRoot
 Copy-VerifiedReleaseFile "windows_service.ps1" $ExpectedServiceHelperSha256 $ReleaseRoot
@@ -337,6 +358,13 @@ if ($null -eq $Compiler) { throw ".NET Framework C# compiler is required for the
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $ServiceExe)) { throw "CITADEL Windows Service Host compilation failed." }
 & $ServiceExe --self-test
 if ($LASTEXITCODE -ne 0) { throw "CITADEL Windows Service Host self-test failed." }
+} catch {
+  $StageError = $_
+  if (Test-Path -LiteralPath $ReleaseRoot) {
+    Remove-Item -LiteralPath $ReleaseRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  throw $StageError
+}
 
 $StopPath = Join-Path $StateRoot "STOP"
 $LifecycleStopPath = Join-Path $StateRoot "SERVICE_STOP"
@@ -504,7 +532,27 @@ try {
     service_helper_sha256 = $ExpectedServiceHelperSha256
     updated_at = [DateTime]::UtcNow.ToString("o")
   } | ConvertTo-Json
-  [System.IO.File]::WriteAllText((Join-Path $InstallRoot "install-state.json"), $InstallState + [Environment]::NewLine, $Utf8NoBom)
+  [System.IO.File]::WriteAllText($InstallStatePath, $InstallState + [Environment]::NewLine, $Utf8NoBom)
+
+  $KeepReleasePaths = @($ReleaseRoot)
+  if ($null -ne $PreviousReleaseRoot) { $KeepReleasePaths += $PreviousReleaseRoot }
+  foreach ($ReleaseDirectory in @(Get-ChildItem -LiteralPath $ReleaseBase -Directory -ErrorAction SilentlyContinue)) {
+    $ReleaseFullPath = [System.IO.Path]::GetFullPath($ReleaseDirectory.FullName).TrimEnd('\')
+    $Keep = $false
+    foreach ($KeepPath in $KeepReleasePaths) {
+      if ([string]::Equals($ReleaseFullPath, ([System.IO.Path]::GetFullPath($KeepPath).TrimEnd('\')), [System.StringComparison]::OrdinalIgnoreCase)) {
+        $Keep = $true
+        break
+      }
+    }
+    if (-not $Keep) {
+      try {
+        Remove-Item -LiteralPath $ReleaseFullPath -Recurse -Force -ErrorAction Stop
+      } catch {
+        Write-Warning ("[CITADEL] Could not prune superseded release " + $ReleaseFullPath + ": " + $_.Exception.Message)
+      }
+    }
+  }
 
 } catch {
   $CutoverError = $_
