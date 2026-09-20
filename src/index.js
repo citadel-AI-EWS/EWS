@@ -1,5 +1,6 @@
 import { getProjectExperienceRegistry } from "./experience/registry.js";
 import { openRouterQualityConfig, reviewWithOpenRouter } from "./quality/openrouter.js";
+import { ARCHITECT_ROLE_PERMISSIONS, DEFAULT_ENTERPRISE_POLICY, evaluateEnterpriseNode, normalizeEnterprisePolicy, requiredArchitectPermission, roleHasPermission } from "./enterprise/policy.js";
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -30,17 +31,17 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
 const POWER_COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.12",
+  version: "0.3.13",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "2dab753c8e836663d215656682ac304b5f297a7c0d726936111013fa70dacc65"
+      sha256: "4461906dc1c1c4cd47c60a22c0fd2904ed1c6f8303ac0e88fdd9f9578701eb5a"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "0fc1f2a8daac47c5c504951e32a9e8110e9f583d8d185d45645408814c3cac52"
+      sha256: "43d6d8492d43e3434c7ce90c946804c7cc1c05344ae3aaf27c7ed8220d34e803"
     }
   ]
 });
@@ -75,6 +76,7 @@ let nodeAiSchemaPromise;
 let nodeRequestNonceSchemaPromise;
 let qualityGateSchemaPromise;
 let architectAuthSchemaPromise;
+let enterpriseSchemaPromise;
 
 class ApiError extends Error {
   constructor(status, code) {
@@ -3266,6 +3268,81 @@ function constantTimeHexEqual(left, right) {
   return difference === 0;
 }
 
+async function ensureEnterpriseStorage(env) {
+  if (!enterpriseSchemaPromise) {
+    enterpriseSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS architect_access_tokens (
+          token_id TEXT PRIMARY KEY,
+          token_hash TEXT NOT NULL UNIQUE,
+          role TEXT NOT NULL CHECK (role IN ('viewer','operator')),
+          label TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          last_used_at TEXT,
+          revoked_at TEXT
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_architect_access_tokens_enabled
+        ON architect_access_tokens(enabled, role, created_at DESC)
+      `),
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS enterprise_sites (
+          site_id TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          description TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `),
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS enterprise_node_groups (
+          group_id TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          description TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `),
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS enterprise_node_scope (
+          node_id TEXT PRIMARY KEY,
+          site_id TEXT,
+          group_id TEXT,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE,
+          FOREIGN KEY (site_id) REFERENCES enterprise_sites(site_id) ON DELETE SET NULL,
+          FOREIGN KEY (group_id) REFERENCES enterprise_node_groups(group_id) ON DELETE SET NULL
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_enterprise_node_scope_site
+        ON enterprise_node_scope(site_id, node_id)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_enterprise_node_scope_group
+        ON enterprise_node_scope(group_id, node_id)
+      `),
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS enterprise_desired_state (
+          singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+          policy_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `)
+    ]).catch((error) => {
+      enterpriseSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await enterpriseSchemaPromise;
+  await env.DB.prepare(`
+    INSERT OR IGNORE INTO enterprise_desired_state (singleton_id, policy_json)
+    VALUES (1, ?)
+  `).bind(JSON.stringify(DEFAULT_ENTERPRISE_POLICY)).run();
+}
+
 function bootstrapArchitectHash(env) {
   const hash = typeof env.ARCHITECT_TOKEN_HASH === "string"
     ? env.ARCHITECT_TOKEN_HASH.trim().toLowerCase()
@@ -3347,9 +3424,38 @@ async function authenticateArchitect(request, env) {
   }
 
   const actualHash = await sha256Hex(token);
-  if (!constantTimeHexEqual(actualHash, String(state.token_hash).toLowerCase())) {
-    throw new ApiError(401, "invalid_architect_token");
+  let actor = null;
+  if (constantTimeHexEqual(actualHash, String(state.token_hash).toLowerCase())) {
+    actor = { actor_id: "primary", role: "owner", token_id: null };
+  } else {
+    await ensureEnterpriseStorage(env);
+    const delegated = await env.DB.prepare(`
+      SELECT token_id, role
+      FROM architect_access_tokens
+      WHERE token_hash = ? AND enabled = 1 AND revoked_at IS NULL
+      LIMIT 1
+    `).bind(actualHash).first();
+    if (!delegated || !ARCHITECT_ROLE_PERMISSIONS[delegated.role]) {
+      throw new ApiError(401, "invalid_architect_token");
+    }
+    actor = {
+      actor_id: String(delegated.token_id),
+      token_id: String(delegated.token_id),
+      role: String(delegated.role)
+    };
+    await env.DB.prepare(`
+      UPDATE architect_access_tokens
+      SET last_used_at = CURRENT_TIMESTAMP
+      WHERE token_id = ?
+    `).bind(actor.token_id).run();
   }
+
+  const pathname = new URL(request.url).pathname;
+  const required = requiredArchitectPermission(request.method, pathname);
+  if (!roleHasPermission(actor.role, required)) {
+    throw new ApiError(403, "architect_permission_denied");
+  }
+  return actor;
 }
 
 function recoveryWindowKey(now = new Date()) {
@@ -3380,17 +3486,88 @@ async function consumeRecoveryAttempt(request, env) {
 }
 
 async function architectSecurityStatus(request, env) {
-  await authenticateArchitect(request, env);
+  const actor = await authenticateArchitect(request, env);
   const state = await architectAuthState(env);
   return json({
     ok: true,
     security: {
+      actor_role: actor.role,
+      available_roles: Object.keys(ARCHITECT_ROLE_PERMISSIONS),
       recovery_configured: Boolean(state.recovery_hash) && Number(state.recovery_used || 0) === 0,
       bootstrap_mode: Number(state.bootstrap_mode || 0) === 1,
       token_rotated_at: state.token_rotated_at || null,
       recovery_created_at: state.recovery_created_at || null
     }
   });
+}
+
+async function architectListAccessTokens(request, env) {
+  await authenticateArchitect(request, env);
+  await ensureEnterpriseStorage(env);
+  const query = await env.DB.prepare(`
+    SELECT token_id, label, role, enabled, created_at, last_used_at, revoked_at
+    FROM architect_access_tokens
+    ORDER BY created_at DESC
+    LIMIT 100
+  `).all();
+  return json({ ok: true, access_tokens: query.results || [] });
+}
+
+async function architectCreateAccessToken(request, env) {
+  await authenticateArchitect(request, env);
+  await ensureEnterpriseStorage(env);
+  const body = parseJsonObject(await readBodyText(request, 4096));
+  const role = requireString(body.role, "role", 32);
+  if (!["viewer", "operator"].includes(role)) {
+    throw new ApiError(400, "invalid_role");
+  }
+  const label = requireString(body.label, "label", 120);
+  const token = randomArchitectSecret("citadel_role_");
+  const tokenHash = await sha256Hex(token);
+  const tokenId = `archtok_${crypto.randomUUID()}`;
+  await env.DB.batch([
+    env.DB.prepare(`
+      INSERT INTO architect_access_tokens (
+        token_id, token_hash, role, label, enabled
+      ) VALUES (?, ?, ?, ?, 1)
+    `).bind(tokenId, tokenHash, role, label),
+    env.DB.prepare(`
+      INSERT INTO audit_events (
+        actor_type, actor_id, action, target_type, target_id, details_json
+      ) VALUES ('architect', 'primary', 'architect.access_token.created',
+        'architect_access_token', ?, ?)
+    `).bind(tokenId, JSON.stringify({ role, label }))
+  ]);
+  return json({
+    ok: true,
+    access_token: {
+      token_id: tokenId,
+      label,
+      role,
+      token,
+      display_once: true
+    }
+  }, 201);
+}
+
+async function architectRevokeAccessToken(request, env, tokenId) {
+  await authenticateArchitect(request, env);
+  await ensureEnterpriseStorage(env);
+  const result = await env.DB.prepare(`
+    UPDATE architect_access_tokens
+    SET enabled = 0, revoked_at = CURRENT_TIMESTAMP
+    WHERE token_id = ? AND enabled = 1
+  `).bind(tokenId).run();
+  if ((result.meta?.changes || 0) !== 1) {
+    throw new ApiError(404, "access_token_not_found");
+  }
+  await env.DB.prepare(`
+    INSERT INTO audit_events (
+      actor_type, actor_id, action, target_type, target_id, details_json
+    ) VALUES ('architect', 'primary', 'architect.access_token.revoked',
+      'architect_access_token', ?, '{}')
+  `).bind(tokenId).run();
+  return json({ ok: true, revoked: true, token_id: tokenId });
 }
 
 async function architectCreateRecoveryCode(request, env) {
@@ -3544,6 +3721,289 @@ async function architectRecoverToken(request, env) {
 async function architectExperience(request, env) {
   await authenticateArchitect(request, env);
   return json({ ok: true, ...getProjectExperienceRegistry() });
+}
+
+async function getEnterprisePolicy(env) {
+  await ensureEnterpriseStorage(env);
+  const row = await env.DB.prepare(`
+    SELECT policy_json, updated_at
+    FROM enterprise_desired_state
+    WHERE singleton_id = 1
+  `).first();
+  return {
+    policy: normalizeEnterprisePolicy(safeJson(row?.policy_json, DEFAULT_ENTERPRISE_POLICY)),
+    updated_at: row?.updated_at || null
+  };
+}
+
+async function architectEnterpriseOverview(request, env) {
+  const actor = await authenticateArchitect(request, env);
+  await Promise.all([
+    ensureEnterpriseStorage(env),
+    backfillLegacyReports(env)
+  ]);
+
+  const [policyState, sitesQuery, groupsQuery, scopesQuery, nodesQuery, reportsQuery, integrityCounts] =
+    await Promise.all([
+      getEnterprisePolicy(env),
+      env.DB.prepare(`
+        SELECT site_id, name, description, created_at, updated_at
+        FROM enterprise_sites ORDER BY name ASC
+      `).all(),
+      env.DB.prepare(`
+        SELECT group_id, name, description, created_at, updated_at
+        FROM enterprise_node_groups ORDER BY name ASC
+      `).all(),
+      env.DB.prepare(`
+        SELECT s.node_id, s.site_id, es.name AS site_name,
+          s.group_id, eg.name AS group_name, s.updated_at
+        FROM enterprise_node_scope AS s
+        LEFT JOIN enterprise_sites AS es ON es.site_id = s.site_id
+        LEFT JOIN enterprise_node_groups AS eg ON eg.group_id = s.group_id
+      `).all(),
+      env.DB.prepare(`
+        SELECT node_id, hostname, os_name, os_version, architecture,
+          agent_version, status, capabilities_json, cpu_percent, memory_percent,
+          enrolled_at, last_seen_at
+        FROM nodes
+        WHERE status != 'revoked'
+        ORDER BY last_seen_at DESC
+        LIMIT 500
+      `).all(),
+      env.DB.prepare(`
+        SELECT node_id, report_id, report_json, report_sha256,
+          report_size_bytes, created_at
+        FROM agent_reports
+        WHERE report_type = 'system_inventory'
+        ORDER BY created_at DESC, report_id DESC
+        LIMIT 1000
+      `).all(),
+      env.DB.prepare(`
+        SELECT
+          COUNT(*) AS total_reports,
+          SUM(CASE WHEN report_sha256 IS NOT NULL
+            AND length(report_sha256) = 64
+            AND report_size_bytes IS NOT NULL
+            AND report_size_bytes >= 0 THEN 1 ELSE 0 END) AS reports_with_integrity_metadata
+        FROM agent_reports
+      `).first()
+    ]);
+
+  const scopes = new Map((scopesQuery.results || []).map((row) => [row.node_id, row]));
+  const latestInventory = new Map();
+  for (const row of reportsQuery.results || []) {
+    if (!latestInventory.has(row.node_id)) latestInventory.set(row.node_id, row);
+  }
+
+  const nodes = [];
+  let compliant = 0;
+  let enterpriseProbeReady = 0;
+  let verifiedLatestInventories = 0;
+  for (const node of nodesQuery.results || []) {
+    const report = latestInventory.get(node.node_id);
+    const inventory = report ? safeJson(report.report_json, null) : null;
+    let inventoryIntegrity = null;
+    if (report?.report_json && report?.report_sha256) {
+      const digest = await sha256Hex(report.report_json);
+      inventoryIntegrity = constantTimeHexEqual(
+        digest,
+        String(report.report_sha256).toLowerCase()
+      );
+      if (inventoryIntegrity) verifiedLatestInventories += 1;
+    }
+    const compliance = evaluateEnterpriseNode(
+      node,
+      inventory,
+      policyState.policy,
+      LATEST_NODE_RELEASE.version
+    );
+    if (compliance.compliant) compliant += 1;
+    if (compliance.windows_enterprise?.available === true) enterpriseProbeReady += 1;
+    const scope = scopes.get(node.node_id) || {};
+    nodes.push({
+      ...node,
+      capabilities: safeJson(node.capabilities_json, []),
+      capabilities_json: undefined,
+      site_id: scope.site_id || null,
+      site_name: scope.site_name || null,
+      group_id: scope.group_id || null,
+      group_name: scope.group_name || null,
+      latest_inventory_at: report?.created_at || null,
+      latest_inventory_integrity: inventoryIntegrity,
+      compliance
+    });
+  }
+
+  return json({
+    ok: true,
+    actor_role: actor.role,
+    service_catalog: {
+      windows_service: "enabled",
+      dpapi_identity: "enabled",
+      event_log: "read_only_probe",
+      cim_performance_counters: "read_only_probe",
+      gmsa_dmsa: "readiness_and_identity_detection",
+      windows_update_hotpatch: "read_only_state",
+      hyper_v: "read_only_adapter",
+      gpo_intune_mdm: "read_only_detection",
+      rbac: "enabled",
+      desired_state_policy: "enabled",
+      sites_node_groups: "enabled",
+      storage_integrity: "sha256_verified",
+      recovery_manifest: "enabled"
+    },
+    policy: policyState.policy,
+    policy_updated_at: policyState.updated_at,
+    sites: sitesQuery.results || [],
+    groups: groupsQuery.results || [],
+    counts: {
+      nodes: nodes.length,
+      compliant_nodes: compliant,
+      noncompliant_nodes: nodes.length - compliant,
+      windows_enterprise_probe_ready: enterpriseProbeReady
+    },
+    storage_integrity: {
+      total_reports: Number(integrityCounts?.total_reports || 0),
+      reports_with_integrity_metadata: Number(integrityCounts?.reports_with_integrity_metadata || 0),
+      verified_latest_system_inventories: verifiedLatestInventories
+    },
+    nodes
+  });
+}
+
+async function architectSetEnterprisePolicy(request, env) {
+  await authenticateArchitect(request, env);
+  await ensureEnterpriseStorage(env);
+  const body = parseJsonObject(await readBodyText(request, 8192));
+  const policy = normalizeEnterprisePolicy(body.policy || body);
+  const policyJson = JSON.stringify(policy);
+  await env.DB.batch([
+    env.DB.prepare(`
+      INSERT INTO enterprise_desired_state (singleton_id, policy_json, updated_at)
+      VALUES (1, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(singleton_id) DO UPDATE SET
+        policy_json = excluded.policy_json,
+        updated_at = CURRENT_TIMESTAMP
+    `).bind(policyJson),
+    env.DB.prepare(`
+      INSERT INTO audit_events (
+        actor_type, actor_id, action, target_type, target_id, details_json
+      ) VALUES ('architect', 'primary', 'enterprise.policy.updated',
+        'enterprise_policy', 'singleton', ?)
+    `).bind(policyJson)
+  ]);
+  return json({ ok: true, policy });
+}
+
+async function architectCreateEnterpriseSite(request, env) {
+  await authenticateArchitect(request, env);
+  await ensureEnterpriseStorage(env);
+  const body = parseJsonObject(await readBodyText(request, 4096));
+  const name = requireString(body.name, "site_name", 120);
+  const description = optionalString(body.description, "site_description", 500) || "";
+  const siteId = `site_${crypto.randomUUID()}`;
+  try {
+    await env.DB.prepare(`
+      INSERT INTO enterprise_sites (site_id, name, description)
+      VALUES (?, ?, ?)
+    `).bind(siteId, name, description).run();
+  } catch (error) {
+    if (String(error).toLowerCase().includes("unique")) {
+      throw new ApiError(409, "site_name_exists");
+    }
+    throw error;
+  }
+  return json({ ok: true, site: { site_id: siteId, name, description } }, 201);
+}
+
+async function architectCreateEnterpriseGroup(request, env) {
+  await authenticateArchitect(request, env);
+  await ensureEnterpriseStorage(env);
+  const body = parseJsonObject(await readBodyText(request, 4096));
+  const name = requireString(body.name, "group_name", 120);
+  const description = optionalString(body.description, "group_description", 500) || "";
+  const groupId = `group_${crypto.randomUUID()}`;
+  try {
+    await env.DB.prepare(`
+      INSERT INTO enterprise_node_groups (group_id, name, description)
+      VALUES (?, ?, ?)
+    `).bind(groupId, name, description).run();
+  } catch (error) {
+    if (String(error).toLowerCase().includes("unique")) {
+      throw new ApiError(409, "group_name_exists");
+    }
+    throw error;
+  }
+  return json({ ok: true, group: { group_id: groupId, name, description } }, 201);
+}
+
+async function architectSetNodeEnterpriseScope(request, env, nodeId) {
+  await authenticateArchitect(request, env);
+  await ensureEnterpriseStorage(env);
+  const node = await env.DB.prepare(
+    "SELECT node_id FROM nodes WHERE node_id = ? AND status != 'revoked'"
+  ).bind(nodeId).first();
+  if (!node) throw new ApiError(404, "node_not_found");
+
+  const body = parseJsonObject(await readBodyText(request, 4096));
+  const siteId = optionalString(body.site_id, "site_id", 128);
+  const groupId = optionalString(body.group_id, "group_id", 128);
+  if (siteId) {
+    const site = await env.DB.prepare(
+      "SELECT site_id FROM enterprise_sites WHERE site_id = ?"
+    ).bind(siteId).first();
+    if (!site) throw new ApiError(400, "invalid_site_id");
+  }
+  if (groupId) {
+    const group = await env.DB.prepare(
+      "SELECT group_id FROM enterprise_node_groups WHERE group_id = ?"
+    ).bind(groupId).first();
+    if (!group) throw new ApiError(400, "invalid_group_id");
+  }
+
+  await env.DB.prepare(`
+    INSERT INTO enterprise_node_scope (node_id, site_id, group_id, updated_at)
+    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(node_id) DO UPDATE SET
+      site_id = excluded.site_id,
+      group_id = excluded.group_id,
+      updated_at = CURRENT_TIMESTAMP
+  `).bind(nodeId, siteId, groupId).run();
+  return json({ ok: true, node_id: nodeId, site_id: siteId, group_id: groupId });
+}
+
+async function architectEnterpriseRecoveryManifest(request, env) {
+  await authenticateArchitect(request, env);
+  await Promise.all([ensureEnterpriseStorage(env), backfillLegacyReports(env)]);
+  const [policyState, sites, groups, scopes, reports] = await Promise.all([
+    getEnterprisePolicy(env),
+    env.DB.prepare("SELECT site_id, name, description, updated_at FROM enterprise_sites ORDER BY name").all(),
+    env.DB.prepare("SELECT group_id, name, description, updated_at FROM enterprise_node_groups ORDER BY name").all(),
+    env.DB.prepare("SELECT node_id, site_id, group_id, updated_at FROM enterprise_node_scope ORDER BY node_id").all(),
+    env.DB.prepare(`
+      SELECT report_id, result_id, assignment_id, mission_id, node_id,
+        report_type, report_sha256, report_size_bytes, sensitivity, created_at
+      FROM agent_reports
+      ORDER BY created_at DESC, report_id DESC
+      LIMIT 5000
+    `).all()
+  ]);
+  const manifest = {
+    schema: "citadel.enterprise.recovery-manifest.v1",
+    generated_at: new Date().toISOString(),
+    policy: policyState.policy,
+    sites: sites.results || [],
+    groups: groups.results || [],
+    node_scope: scopes.results || [],
+    reports: reports.results || []
+  };
+  const manifestJson = JSON.stringify(manifest);
+  return json({
+    ok: true,
+    manifest,
+    manifest_sha256: await sha256Hex(manifestJson),
+    note: "Manifest catalogs integrity metadata and topology; it does not expose report bodies or secrets."
+  });
 }
 
 async function architectOverview(request, env) {
@@ -3710,13 +4170,19 @@ async function architectRelease(request, env) {
 }
 
 async function architectCreateCommand(request, env, nodeId) {
-  await authenticateArchitect(request, env);
+  const actor = await authenticateArchitect(request, env);
   await ensureCommandStorage(env);
   const bodyText = await readBodyText(request, 8 * 1024);
   const body = parseJsonObject(bodyText);
   const commandType = requireString(body.command_type, "command_type", 32);
   if (!ALLOWED_ARCHITECT_COMMAND_TYPES.has(commandType)) {
     throw new ApiError(400, "command_type_not_allowed");
+  }
+  if (
+    ["uninstall", "system_reboot", "system_shutdown"].includes(commandType) &&
+    !roleHasPermission(actor.role, "admin")
+  ) {
+    throw new ApiError(403, "architect_admin_required");
   }
   const requiredPowerConfirmation = POWER_COMMAND_CONFIRMATIONS[commandType];
   if (requiredPowerConfirmation) {
@@ -4164,6 +4630,21 @@ async function handleApi(request, env, url) {
       : methodNotAllowed(["GET"]);
   }
 
+  if (url.pathname === "/api/v1/architect/security/access-tokens") {
+    if (request.method === "GET") return architectListAccessTokens(request, env);
+    if (request.method === "POST") return architectCreateAccessToken(request, env);
+    return methodNotAllowed(["GET", "POST"]);
+  }
+
+  const accessTokenMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/security\/access-tokens\/([^/]+)$/
+  );
+  if (accessTokenMatch) {
+    return request.method === "DELETE"
+      ? architectRevokeAccessToken(request, env, decodeURIComponent(accessTokenMatch[1]))
+      : methodNotAllowed(["DELETE"]);
+  }
+
   if (url.pathname === "/api/v1/architect/security/recovery-code") {
     return request.method === "POST"
       ? architectCreateRecoveryCode(request, env)
@@ -4180,6 +4661,49 @@ async function handleApi(request, env, url) {
     return request.method === "GET"
       ? architectOverview(request, env)
       : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/enterprise") {
+    return request.method === "GET"
+      ? architectEnterpriseOverview(request, env)
+      : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/enterprise/policy") {
+    return request.method === "POST"
+      ? architectSetEnterprisePolicy(request, env)
+      : methodNotAllowed(["POST"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/enterprise/sites") {
+    return request.method === "POST"
+      ? architectCreateEnterpriseSite(request, env)
+      : methodNotAllowed(["POST"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/enterprise/groups") {
+    return request.method === "POST"
+      ? architectCreateEnterpriseGroup(request, env)
+      : methodNotAllowed(["POST"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/enterprise/recovery-manifest") {
+    return request.method === "GET"
+      ? architectEnterpriseRecoveryManifest(request, env)
+      : methodNotAllowed(["GET"]);
+  }
+
+  const enterpriseScopeMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/enterprise\/nodes\/([^/]+)\/scope$/
+  );
+  if (enterpriseScopeMatch) {
+    return request.method === "POST"
+      ? architectSetNodeEnterpriseScope(
+          request,
+          env,
+          decodeURIComponent(enterpriseScopeMatch[1])
+        )
+      : methodNotAllowed(["POST"]);
   }
 
   if (url.pathname === "/api/v1/architect/release") {

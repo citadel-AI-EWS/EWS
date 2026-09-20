@@ -29,7 +29,7 @@
     @keyframes livePulse{0%{box-shadow:0 0 0 0 rgba(56,220,132,.45)}70%{box-shadow:0 0 0 9px rgba(56,220,132,0)}100%{box-shadow:0 0 0 0 rgba(56,220,132,0)}}
     .ops-grid{position:relative;display:grid;grid-template-columns:repeat(12,1fr);gap:14px;margin-top:18px}.ops-kpi{grid-column:span 2;padding:15px;border:1px solid #273857;border-radius:15px;background:rgba(8,16,31,.78)}.ops-kpi b{display:block;font-size:27px}.ops-kpi span{font-size:12px;color:#8fa4c4}
     .charts-grid{position:relative;display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.chart-card{padding:16px;border:1px solid #273857;border-radius:16px;background:rgba(8,16,31,.8);min-height:180px}.chart-card h3{margin:0 0 12px;font-size:14px;letter-spacing:.04em}.chart-rows{display:flex;flex-direction:column;gap:9px}.chart-row{display:grid;grid-template-columns:minmax(92px,150px) 1fr 48px;gap:9px;align-items:center;font-size:12px}.chart-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#c8d8f0}.bar-track{height:9px;border-radius:999px;background:#121d30;overflow:hidden}.bar-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#4c91ff,#70e6c1);transform-origin:left;animation:barGrow .55s ease-out}.bar-fill.warn{background:linear-gradient(90deg,#ffb44f,#ff6d72)}@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
-    .agent-update-progress{grid-column:1/-1;margin-top:10px;padding:15px;border:1px solid #2a446d;border-radius:16px;background:linear-gradient(145deg,#0b1628,#0a1120);overflow:hidden}.agent-progress-head{display:flex;align-items:center;gap:15px}.agent-progress-ring{--agent-pct:0;flex:0 0 auto;width:78px;height:78px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#5b9cff calc(var(--agent-pct)*1%),#1a2941 0);position:relative;box-shadow:0 0 30px rgba(91,156,255,.16)}.agent-progress-ring:after{content:"";position:absolute;width:58px;height:58px;border-radius:50%;background:#0b1424;border:1px solid #294466}.agent-progress-ring b{position:relative;z-index:1;font-size:17px}.agent-progress-copy{min-width:0;flex:1}.agent-progress-copy strong{display:block;font-size:14px}.agent-progress-copy span{display:block;margin-top:5px;color:#93a9ca;font-size:12px;line-height:1.45}.agent-progress-track{height:8px;margin-top:13px;border-radius:999px;background:#17243a;overflow:hidden}.agent-progress-fill{height:100%;width:calc(var(--agent-pct)*1%);border-radius:999px;background:linear-gradient(90deg,#4f8fff,#65dec1);transition:width .55s ease;position:relative}.agent-progress-fill.moving:after{content:"";position:absolute;inset:0;background:linear-gradient(110deg,transparent 0 38%,rgba(255,255,255,.38) 50%,transparent 62%);animation:agentProgressSweep 1.25s linear infinite}.agent-update-progress.failed .agent-progress-ring{background:conic-gradient(#ff6d7a calc(var(--agent-pct)*1%),#351d29 0)}.agent-update-progress.failed .agent-progress-fill{background:linear-gradient(90deg,#ffb44f,#ff6874)}@keyframes agentProgressSweep{from{transform:translateX(-100%)}to{transform:translateX(100%)}}.agent-progress-stages{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin-top:11px}.agent-stage{padding:7px 5px;border:1px solid #253856;border-radius:9px;background:#101a2c;color:#7185a5;font-size:10px;text-align:center;line-height:1.25}.agent-stage.done{border-color:#2e6855;color:#8ee8bd;background:#0e2821}.agent-stage.active{border-color:#4e7ec3;color:#c8ddff;background:#122845;box-shadow:0 0 18px rgba(78,126,195,.12)}.agent-update-progress.failed .agent-stage.active{border-color:#85414a;color:#ffc0c5;background:#321922}@media(max-width:640px){.agent-progress-head{align-items:flex-start}.agent-progress-ring{width:66px;height:66px}.agent-progress-ring:after{width:48px;height:48px}.agent-progress-ring b{font-size:14px}.agent-progress-stages{grid-template-columns:1fr}.agent-stage{text-align:left;padding:7px 9px}}
+    .agent-update-progress{grid-column:1/-1;margin-top:10px;padding:15px;border:1px solid #2a446d;border-radius:16px;background:linear-gradient(145deg,#0b1628,#0a1120);overflow:hidden}.agent-progress-head{display:flex;align-items:center;gap:15px}.agent-progress-ring{--agent-pct:0;flex:0 0 auto;width:78px;height:78px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#5b9cff calc(var(--agent-pct)*1%),#1a2941 0);position:relative;box-shadow:0 0 30px rgba(91,156,255,.16)}.agent-progress-ring:after{content:"";position:absolute;width:58px;height:58px;border-radius:50%;background:#0b1424;border:1px solid #294466}.agent-progress-ring b{position:relative;z-index:1;font-size:17px}.agent-progress-copy{min-width:0;flex:1}.agent-progress-copy strong{display:block;font-size:14px}.agent-progress-copy span{display:block;margin-top:5px;color:#93a9ca;font-size:12px;line-height:1.45}.agent-progress-track{height:8px;margin-top:13px;border-radius:999px;background:#17243a;overflow:hidden}.agent-progress-fill{height:100%;width:calc(var(--agent-pct)*1%);border-radius:999px;background:linear-gradient(90deg,#4f8fff,#65dec1);transition:width .55s ease;position:relative}.agent-progress-fill.moving:after{content:"";position:absolute;inset:0;background:linear-gradient(110deg,transparent 0 38%,rgba(255,255,255,.38) 50%,transparent 62%);animation:agentProgressSweep 1.25s linear infinite}.agent-update-progress.failed .agent-progress-ring{background:conic-gradient(#ff6d7a calc(var(--agent-pct)*1%),#351d29 0)}.agent-update-progress.failed .agent-progress-fill{background:linear-gradient(90deg,#ffb44f,#ff6874)}@keyframes agentProgressSweep{from{transform:translateX(-100%)}to{transform:translateX(100%)}}.agent-progress-stages{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin-top:11px}.agent-stage{padding:7px 5px;border:1px solid #253856;border-radius:9px;background:#101a2c;color:#7185a5;font-size:10px;text-align:center;line-height:1.25}.agent-stage.done{border-color:#2e6855;color:#8ee8bd;background:#0e2821}.agent-stage.active{border-color:#4e7ec3;color:#c8ddff;background:#122845;box-shadow:0 0 18px rgba(78,126,195,.12)}.enterprise-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.enterprise-tile{padding:12px;border:1px solid #2b3f60;border-radius:12px;background:#0b1424}.enterprise-tile b{display:block;font-size:13px}.enterprise-tile span{display:block;margin-top:5px;font-size:12px;color:#93a7c6;overflow-wrap:anywhere}.enterprise-node-list{display:grid;gap:8px;margin-top:12px}.enterprise-node-row{padding:11px;border:1px solid #273a59;border-radius:11px;background:#0b1321}.enterprise-node-row.good{border-left:4px solid #35d07f}.enterprise-node-row.bad{border-left:4px solid #ff6874}.enterprise-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.policy-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:10px}.policy-grid label{display:flex;align-items:center;gap:8px;margin:0;padding:10px;border:1px solid #273857;border-radius:10px;background:#0b1321;font-size:13px}.policy-grid input[type="checkbox"]{width:auto}.enterprise-number{display:grid;grid-template-columns:1fr 120px;gap:9px;align-items:center;margin-top:8px}.enterprise-number input{margin:0}@media(max-width:760px){.enterprise-grid,.enterprise-form-grid,.policy-grid{grid-template-columns:1fr}.enterprise-number{grid-template-columns:1fr}}.agent-update-progress.failed .agent-stage.active{border-color:#85414a;color:#ffc0c5;background:#321922}@media(max-width:640px){.agent-progress-head{align-items:flex-start}.agent-progress-ring{width:66px;height:66px}.agent-progress-ring:after{width:48px;height:48px}.agent-progress-ring b{font-size:14px}.agent-progress-stages{grid-template-columns:1fr}.agent-stage{text-align:left;padding:7px 9px}}
     .fleet-ring-wrap{display:flex;gap:18px;align-items:center}.fleet-ring{--pct:0;flex:0 0 auto;width:112px;height:112px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#38d889 calc(var(--pct)*1%),#1a2941 0);position:relative;box-shadow:0 0 34px rgba(56,216,137,.12)}.fleet-ring:after{content:"";position:absolute;width:78px;height:78px;border-radius:50%;background:#0a1221;border:1px solid #263a5c}.fleet-ring b{position:relative;z-index:1;font-size:22px}.fleet-legend{font-size:12px;color:#9eb1cc;line-height:1.8}
     .node-grid{position:relative;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:14px}.node-card{border:1px solid #2a3c5d;border-radius:16px;background:linear-gradient(155deg,#0d1729,#0a1221);padding:15px;transition:.18s transform,.18s border-color,.18s box-shadow}.node-card:hover{transform:translateY(-1px);border-color:#4774b1;box-shadow:0 14px 35px #0005}.node-card.dead{border-color:#613743}.node-card.unhealthy{box-shadow:inset 3px 0 0 #ff6874}.node-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.node-name{font-weight:900;font-size:16px}.node-agent{margin-top:3px;color:#8ea6c9;font-size:12px}.node-status-lines{margin-top:11px;display:grid;gap:6px;font-size:13px}.state-live{color:#62e5a0}.state-dead{color:#ff7b86}.health-line{display:flex;align-items:center;justify-content:space-between;gap:10px}.detail-toggle{width:30px!important;height:30px;margin:0!important;padding:0!important;border-radius:9px!important;background:#223451!important;font-size:19px!important;line-height:1}.node-details{display:none;margin-top:12px;padding-top:12px;border-top:1px solid #243553;font-size:12px;color:#a8b9d3;line-height:1.7}.node-details.open{display:block;animation:detailIn .18s ease-out}@keyframes detailIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
     .topology-wrap{height:210px;position:relative;overflow:hidden;border-radius:12px;background:radial-gradient(circle at 50% 50%,rgba(62,121,211,.13),transparent 45%)}.topology-wrap svg{width:100%;height:100%}.topology-line{stroke:#355e91;stroke-width:1.5;stroke-dasharray:5 6;animation:dashFlow 5s linear infinite}.topology-node{fill:#122743;stroke:#5498ef;stroke-width:1.4}.topology-node.dead{fill:#341923;stroke:#ff6d7a}@keyframes dashFlow{to{stroke-dashoffset:-44}}
@@ -79,12 +79,69 @@
           <button id="createRecoveryCodeButton" class="secondary" type="button">Создать / заменить recovery-код</button>
           <button id="rotateArchitectTokenButton" class="danger" type="button">Сменить токен</button>
         </div>
+        <div id="rbacPanel" style="margin-top:14px">
+          <h3 style="margin:0 0 8px">RBAC · дополнительные роли</h3>
+          <p class="small">Owner может выдать отдельный токен: viewer — только чтение, operator — обычные операции. Перезагрузка/выключение/удаление ноды и security/enterprise-настройки остаются только owner.</p>
+          <div class="enterprise-form-grid">
+            <div><label for="rbacRole">Роль</label><select id="rbacRole"><option value="viewer">viewer</option><option value="operator">operator</option></select></div>
+            <div><label for="rbacLabel">Название</label><input id="rbacLabel" maxlength="120" placeholder="Например: оператор лаборатории"></div>
+          </div>
+          <button id="createRbacTokenButton" class="secondary" type="button">Создать role token</button>
+          <div id="rbacTokenList" class="status">Role tokens ещё не загружены.</div>
+        </div>
         <div id="securitySecretPanel" class="security-secret hidden">
           <b id="securitySecretTitle">Новый секрет</b>
           <pre id="securitySecretValue"></pre>
           <button id="copySecuritySecretButton" class="secondary" type="button">Копировать</button>
           <p class="security-warning">Сохраните сейчас. После закрытия этого блока сервер не сможет показать этот секрет повторно.</p>
         </div>
+      </section>
+
+      <section id="enterpriseServicesCard" class="card">
+        <div class="section-head"><h2>Enterprise / Microsoft Services</h2><span id="enterpriseRoleBadge" class="small"></span></div>
+        <p class="small">Read-only Microsoft/Windows adapters, RBAC, Desired State, Sites/Node Groups и контроль целостности. Никакого универсального PowerShell/WinRM или произвольного удалённого кода.</p>
+        <div id="enterpriseSummary" class="status">Загружаю Enterprise состояние…</div>
+        <div id="enterpriseServiceCatalog" class="enterprise-grid"></div>
+
+        <h3 style="margin:18px 0 8px">Desired State / Policy</h3>
+        <div class="policy-grid">
+          <label><input id="policyLatestAgent" type="checkbox"> Последняя версия агента</label>
+          <label><input id="policyWindowsService" type="checkbox"> Windows Core Service</label>
+          <label><input id="policyEnterpriseProbe" type="checkbox"> Enterprise Probe</label>
+          <label><input id="policyUpdateService" type="checkbox"> Windows Update service</label>
+          <label><input id="policyNoPendingReboot" type="checkbox"> Нет ожидающей перезагрузки</label>
+          <label><input id="policyDomainJoin" type="checkbox"> Domain joined</label>
+          <label><input id="policyGroupPolicy" type="checkbox"> Group Policy service</label>
+          <label><input id="policyIntune" type="checkbox"> Intune Management Extension</label>
+          <label><input id="policyHyperV" type="checkbox"> Hyper-V</label>
+          <label><input id="policyManagedAccount" type="checkbox"> gMSA/dMSA / managed service account</label>
+        </div>
+        <div class="enterprise-number"><span>Максимум CPU, %</span><input id="policyCpu" type="number" min="1" max="100"></div>
+        <div class="enterprise-number"><span>Максимум RAM, %</span><input id="policyMemory" type="number" min="1" max="100"></div>
+        <div class="enterprise-number"><span>Ошибки Event Log / час</span><input id="policyEvents" type="number" min="0" max="10000"></div>
+        <div class="enterprise-number"><span>Макс. возраст heartbeat, мин</span><input id="policyHeartbeatAge" type="number" min="1" max="1440"></div>
+        <div class="enterprise-number"><span>Минимум свободного диска, GB</span><input id="policyDiskFree" type="number" min="0" max="1048576" step="0.5"></div>
+        <div class="policy-grid"><label><input id="policyLanAddress" type="checkbox"> Требовать LAN IPv4 telemetry</label></div>
+        <button id="saveEnterprisePolicyButton" class="secondary" type="button">Сохранить Desired State</button>
+
+        <h3 style="margin:18px 0 8px">Sites / Node Groups</h3>
+        <div class="enterprise-form-grid">
+          <div><label for="newSiteName">Новый Site</label><input id="newSiteName" maxlength="120" placeholder="Например: Lab A"><button id="createSiteButton" class="secondary" type="button">Создать Site</button></div>
+          <div><label for="newGroupName">Новая Node Group</label><input id="newGroupName" maxlength="120" placeholder="Например: Windows GPU"><button id="createGroupButton" class="secondary" type="button">Создать Group</button></div>
+        </div>
+        <label for="enterpriseNodeSelect">Нода</label><select id="enterpriseNodeSelect"></select>
+        <div class="enterprise-form-grid">
+          <div><label for="enterpriseSiteSelect">Site</label><select id="enterpriseSiteSelect"></select></div>
+          <div><label for="enterpriseGroupSelect">Node Group</label><select id="enterpriseGroupSelect"></select></div>
+        </div>
+        <button id="assignEnterpriseScopeButton" class="secondary" type="button">Назначить Site / Group</button>
+
+        <div class="section-head" style="margin-top:18px"><h3 style="margin:0">Compliance</h3><button id="refreshEnterpriseButton" class="secondary" type="button">Обновить</button></div>
+        <div id="enterpriseNodeCompliance" class="enterprise-node-list"></div>
+
+        <h3 style="margin:18px 0 8px">Storage integrity / Recovery</h3>
+        <button id="recoveryManifestButton" class="secondary" type="button">Проверить recovery manifest</button>
+        <div id="recoveryManifestState" class="status">Manifest ещё не запрашивался.</div>
       </section>
 
       <section id="liveOperations" class="ops-shell">
@@ -362,6 +419,43 @@
     const securitySecretTitle = document.getElementById("securitySecretTitle");
     const securitySecretValue = document.getElementById("securitySecretValue");
     const copySecuritySecretButton = document.getElementById("copySecuritySecretButton");
+    const rbacPanel = document.getElementById("rbacPanel");
+    const rbacRole = document.getElementById("rbacRole");
+    const rbacLabel = document.getElementById("rbacLabel");
+    const createRbacTokenButton = document.getElementById("createRbacTokenButton");
+    const rbacTokenList = document.getElementById("rbacTokenList");
+    const enterpriseRoleBadge = document.getElementById("enterpriseRoleBadge");
+    const enterpriseSummary = document.getElementById("enterpriseSummary");
+    const enterpriseServiceCatalog = document.getElementById("enterpriseServiceCatalog");
+    const policyLatestAgent = document.getElementById("policyLatestAgent");
+    const policyWindowsService = document.getElementById("policyWindowsService");
+    const policyEnterpriseProbe = document.getElementById("policyEnterpriseProbe");
+    const policyUpdateService = document.getElementById("policyUpdateService");
+    const policyNoPendingReboot = document.getElementById("policyNoPendingReboot");
+    const policyDomainJoin = document.getElementById("policyDomainJoin");
+    const policyGroupPolicy = document.getElementById("policyGroupPolicy");
+    const policyIntune = document.getElementById("policyIntune");
+    const policyHyperV = document.getElementById("policyHyperV");
+    const policyManagedAccount = document.getElementById("policyManagedAccount");
+    const policyCpu = document.getElementById("policyCpu");
+    const policyMemory = document.getElementById("policyMemory");
+    const policyEvents = document.getElementById("policyEvents");
+    const policyHeartbeatAge = document.getElementById("policyHeartbeatAge");
+    const policyDiskFree = document.getElementById("policyDiskFree");
+    const policyLanAddress = document.getElementById("policyLanAddress");
+    const saveEnterprisePolicyButton = document.getElementById("saveEnterprisePolicyButton");
+    const newSiteName = document.getElementById("newSiteName");
+    const createSiteButton = document.getElementById("createSiteButton");
+    const newGroupName = document.getElementById("newGroupName");
+    const createGroupButton = document.getElementById("createGroupButton");
+    const enterpriseNodeSelect = document.getElementById("enterpriseNodeSelect");
+    const enterpriseSiteSelect = document.getElementById("enterpriseSiteSelect");
+    const enterpriseGroupSelect = document.getElementById("enterpriseGroupSelect");
+    const assignEnterpriseScopeButton = document.getElementById("assignEnterpriseScopeButton");
+    const refreshEnterpriseButton = document.getElementById("refreshEnterpriseButton");
+    const enterpriseNodeCompliance = document.getElementById("enterpriseNodeCompliance");
+    const recoveryManifestButton = document.getElementById("recoveryManifestButton");
+    const recoveryManifestState = document.getElementById("recoveryManifestState");
     const refreshButton = document.getElementById("refreshButton");
     const logoutButton = document.getElementById("logoutButton");
     const createMissionButton = document.getElementById("createMissionButton");
@@ -463,6 +557,8 @@
     let currentCommands = [];
     let currentPresence = [];
     let currentReleaseVersion = "";
+    let currentEnterprise = null;
+    let currentArchitectRole = "owner";
     let currentReports = [];
     let currentProjectCheck = null;
     let currentProjects = [];
@@ -1572,6 +1668,30 @@
       if (interfaces.length) {
         lines.push("", "Сетевые интерфейсы:", ...interfaces.map((item) => "• " + item));
       }
+      const enterprise = c.windows_enterprise && typeof c.windows_enterprise === "object"
+        ? c.windows_enterprise
+        : null;
+      if (enterprise?.available) {
+        const systemEvents = Number(enterprise.event_log?.system?.critical_or_error_last_hour || 0);
+        const appEvents = Number(enterprise.event_log?.application?.critical_or_error_last_hour || 0);
+        lines.push(
+          "",
+          "Microsoft / Windows Enterprise:",
+          `CIM: ${[enterprise.cim?.os_caption, enterprise.cim?.os_version, enterprise.cim?.os_build].filter(Boolean).join(" · ") || "—"}`,
+          `Модель: ${[enterprise.cim?.manufacturer, enterprise.cim?.model].filter(Boolean).join(" ") || "—"}`,
+          `Домен: ${enterprise.cim?.domain_joined ? (enterprise.cim?.domain || "joined") : "не присоединён"}`,
+          `Windows Service: ${enterprise.cim?.citadel_service_state || "—"} · ${enterprise.cim?.citadel_service_start_mode || "—"}`,
+          `Perf/CIM: CPU ${enterprise.performance?.cpu_percent ?? "—"}% · доступно RAM ${enterprise.performance?.memory_available_mb ?? "—"} MB`,
+          `Event Log / 1ч: System ${systemEvents} · Application ${appEvents}`,
+          `Service identity: ${enterprise.service_identity?.service_account || "—"} · managed-account candidate: ${enterprise.service_identity?.configured ? "да" : "нет"}`,
+          `Windows Update: ${enterprise.windows_update?.service_status || "—"} · reboot pending: ${enterprise.windows_update?.pending_reboot ? "да" : "нет"}`,
+          `Latest hotfix: ${enterprise.windows_update?.latest_hotfix_id || "—"} · Hotpatch: ${enterprise.windows_update?.hotpatch?.state || "—"}`,
+          `Hyper-V: feature ${enterprise.hyper_v?.optional_feature_state ?? "—"} · VMs ${enterprise.hyper_v?.vm_count ?? "—"} · running ${enterprise.hyper_v?.running_vm_count ?? "—"}`,
+          `GPO: ${enterprise.management?.group_policy_service || "—"} · Intune: ${enterprise.management?.intune_management_extension || "—"} · MDM enrollments: ${enterprise.management?.mdm_enrollment_count ?? 0}`
+        );
+      } else if (enterprise?.supported) {
+        lines.push("", `Microsoft / Windows Enterprise: ${enterprise.reason || "probe unavailable"}`);
+      }
       return lines.join("\n");
     }
 
@@ -1640,13 +1760,219 @@
       securitySecretPanel.classList.add("hidden");
     }
 
+    function setEnterpriseAdminEnabled(enabled) {
+      for (const element of [
+        createRecoveryCodeButton,
+        rotateArchitectTokenButton,
+        createRbacTokenButton,
+        rbacRole,
+        rbacLabel,
+        policyLatestAgent,
+        policyWindowsService,
+        policyEnterpriseProbe,
+        policyUpdateService,
+        policyNoPendingReboot,
+        policyDomainJoin,
+        policyGroupPolicy,
+        policyIntune,
+        policyHyperV,
+        policyManagedAccount,
+        policyCpu,
+        policyMemory,
+        policyEvents,
+        policyHeartbeatAge,
+        policyDiskFree,
+        policyLanAddress,
+        saveEnterprisePolicyButton,
+        newSiteName,
+        createSiteButton,
+        newGroupName,
+        createGroupButton,
+        enterpriseNodeSelect,
+        enterpriseSiteSelect,
+        enterpriseGroupSelect,
+        assignEnterpriseScopeButton,
+        recoveryManifestButton
+      ]) {
+        if (element) element.disabled = !enabled;
+      }
+      rbacPanel.classList.toggle("hidden", !enabled);
+    }
+
     function renderSecurityState(state = {}) {
+      currentArchitectRole = state.actor_role || "owner";
       architectSecurityState.textContent = [
+        `Роль: ${currentArchitectRole}`,
         state.recovery_configured ? "✓ Recovery-код настроен." : "⚠ Recovery-код ещё не создан.",
         state.token_rotated_at ? "Последняя смена токена: " + state.token_rotated_at : "Токен ещё не менялся через сайт.",
         state.bootstrap_mode ? "Сейчас используется bootstrap-режим Cloudflare secret." : "Активный токен управляется безопасной ротацией Controller."
       ].join("\n");
       architectSecurityState.className = "status " + (state.recovery_configured ? "good" : "");
+      setEnterpriseAdminEnabled(currentArchitectRole === "owner");
+    }
+
+    function renderRbacTokens(items = []) {
+      rbacTokenList.replaceChildren();
+      if (!items.length) {
+        addText(rbacTokenList, "div", "Дополнительных role token пока нет.");
+        return;
+      }
+      for (const item of items) {
+        const row = document.createElement("div");
+        row.className = "item";
+        addText(row, "strong", `${item.label} · ${item.role}`);
+        addText(row, "div", `${item.enabled ? "ACTIVE" : "REVOKED"} · создан: ${item.created_at || "—"} · использован: ${item.last_used_at || "—"}`, "small");
+        if (item.enabled) {
+          const revoke = addText(row, "button", "Отозвать token", "danger");
+          revoke.type = "button";
+          revoke.addEventListener("click", async () => {
+            if (!confirm(`Отозвать role token «${item.label}»?`)) return;
+            revoke.disabled = true;
+            try {
+              await api(`/api/v1/architect/security/access-tokens/${encodeURIComponent(item.token_id)}`, { method: "DELETE" });
+              await refreshRbacTokens();
+            } catch (error) {
+              setStatus("Role token не отозван: " + error.message, "bad");
+            }
+          });
+        }
+        rbacTokenList.appendChild(row);
+      }
+    }
+
+    async function refreshRbacTokens() {
+      if (currentArchitectRole !== "owner") return [];
+      const data = await api("/api/v1/architect/security/access-tokens");
+      renderRbacTokens(data.access_tokens || []);
+      return data.access_tokens || [];
+    }
+
+    function fillSelect(select, items, valueKey, labelKey, emptyLabel) {
+      const previous = select.value;
+      select.replaceChildren();
+      const empty = document.createElement("option");
+      empty.value = "";
+      empty.textContent = emptyLabel;
+      select.appendChild(empty);
+      for (const item of items || []) {
+        const option = document.createElement("option");
+        option.value = item[valueKey] || "";
+        option.textContent = item[labelKey] || option.value;
+        select.appendChild(option);
+      }
+      if ([...select.options].some((option) => option.value === previous)) select.value = previous;
+    }
+
+    function enterpriseServiceLabel(key) {
+      const labels = {
+        windows_service: "Windows Service",
+        dpapi_identity: "DPAPI identity",
+        event_log: "Windows Event Log",
+        cim_performance_counters: "CIM / Performance Counters",
+        gmsa_dmsa: "gMSA / dMSA",
+        windows_update_hotpatch: "Windows Update / Hotpatch",
+        hyper_v: "Hyper-V",
+        gpo_intune_mdm: "GPO / Intune / MDM",
+        rbac: "RBAC",
+        desired_state_policy: "Desired State / Policy Engine",
+        sites_node_groups: "Sites / Node Groups",
+        storage_integrity: "Storage integrity",
+        recovery_manifest: "Recovery manifest"
+      };
+      return labels[key] || key;
+    }
+
+    function renderEnterprise(data = {}) {
+      currentEnterprise = data;
+      enterpriseRoleBadge.textContent = `RBAC: ${data.actor_role || currentArchitectRole}`;
+      const counts = data.counts || {};
+      const storage = data.storage_integrity || {};
+      enterpriseSummary.textContent = [
+        `Compliance: ${counts.compliant_nodes || 0}/${counts.nodes || 0}`,
+        `Enterprise Probe: ${counts.windows_enterprise_probe_ready || 0}`,
+        `Отчёты с integrity metadata: ${storage.reports_with_integrity_metadata || 0}/${storage.total_reports || 0}`,
+        `Проверенных последних inventory: ${storage.verified_latest_system_inventories || 0}`
+      ].join("\n");
+      enterpriseSummary.className = "status " +
+        ((counts.nodes || 0) > 0 && counts.noncompliant_nodes === 0 ? "good" : "");
+
+      enterpriseServiceCatalog.replaceChildren();
+      for (const [key, status] of Object.entries(data.service_catalog || {})) {
+        const tile = document.createElement("div");
+        tile.className = "enterprise-tile";
+        addText(tile, "b", enterpriseServiceLabel(key));
+        addText(tile, "span", String(status));
+        enterpriseServiceCatalog.appendChild(tile);
+      }
+
+      const policy = data.policy || {};
+      policyLatestAgent.checked = policy.require_latest_agent === true;
+      policyWindowsService.checked = policy.require_windows_core_service === true;
+      policyEnterpriseProbe.checked = policy.require_windows_enterprise_probe === true;
+      policyUpdateService.checked = policy.require_windows_update_service === true;
+      policyNoPendingReboot.checked = policy.require_no_pending_reboot === true;
+      policyDomainJoin.checked = policy.require_domain_join === true;
+      policyGroupPolicy.checked = policy.require_group_policy_service === true;
+      policyIntune.checked = policy.require_intune_extension === true;
+      policyHyperV.checked = policy.require_hyperv === true;
+      policyManagedAccount.checked = policy.require_managed_service_account === true;
+      policyCpu.value = policy.max_cpu_percent ?? 90;
+      policyMemory.value = policy.max_memory_percent ?? 90;
+      policyEvents.value = policy.max_event_errors_last_hour ?? 25;
+      policyHeartbeatAge.value = policy.max_heartbeat_age_minutes ?? 5;
+      policyDiskFree.value = policy.min_disk_free_gb ?? 5;
+      policyLanAddress.checked = policy.require_lan_address === true;
+
+      fillSelect(enterpriseSiteSelect, data.sites || [], "site_id", "name", "Без Site");
+      fillSelect(enterpriseGroupSelect, data.groups || [], "group_id", "name", "Без Group");
+      fillSelect(
+        enterpriseNodeSelect,
+        (data.nodes || []).map((node) => ({
+          node_id: node.node_id,
+          label: `${node.hostname || node.node_id} · ${node.os_name || "OS"}`
+        })),
+        "node_id",
+        "label",
+        "Выберите ноду"
+      );
+
+      enterpriseNodeCompliance.replaceChildren();
+      for (const node of data.nodes || []) {
+        const row = document.createElement("div");
+        row.className = "enterprise-node-row " + (node.compliance?.compliant ? "good" : "bad");
+        addText(row, "strong", `${node.hostname || node.node_id} · ${node.compliance?.compliant ? "COMPLIANT" : "ACTION NEEDED"}`);
+        addText(row, "div", `Site: ${node.site_name || "—"} · Group: ${node.group_name || "—"} · Agent: ${node.agent_version || "—"}`, "small");
+        const failed = (node.compliance?.checks || []).filter((check) => !check.ok);
+        addText(
+          row,
+          "div",
+          failed.length
+            ? "Нарушения: " + failed.map((check) => `${check.key}: ${check.detail}`).join(" · ")
+            : "Все активные правила Desired State выполнены.",
+          "small"
+        );
+        const enterprise = node.compliance?.windows_enterprise;
+        if (enterprise?.available) {
+          const events = Number(enterprise.event_log?.system?.critical_or_error_last_hour || 0) +
+            Number(enterprise.event_log?.application?.critical_or_error_last_hour || 0);
+          addText(
+            row,
+            "div",
+            `Microsoft: Event errors ${events} · Update ${enterprise.windows_update?.service_status || "—"} · Hyper-V VMs ${enterprise.hyper_v?.vm_count ?? "—"} · Intune ${enterprise.management?.intune_management_extension || "—"} · MDM ${enterprise.management?.mdm_enrollment_count ?? 0} · Service ${enterprise.service_identity?.service_account || "—"}`,
+            "small"
+          );
+        }
+        enterpriseNodeCompliance.appendChild(row);
+      }
+      if (!(data.nodes || []).length) addText(enterpriseNodeCompliance, "div", "Нод пока нет.", "muted");
+
+      setEnterpriseAdminEnabled((data.actor_role || currentArchitectRole) === "owner");
+    }
+
+    async function refreshEnterprise() {
+      const data = await api("/api/v1/architect/enterprise");
+      renderEnterprise(data);
+      return data;
     }
 
     async function refreshSecurityStatus() {
@@ -1669,7 +1995,7 @@
 
     async function loadDashboard() {
       setStatus("Загружаю Live Operations…");
-      const [data, reports, presence, release, projects, roles, experience, security] = await Promise.all([
+      const [data, reports, presence, release, projects, roles, experience, security, enterprise] = await Promise.all([
         api("/api/v1/architect/overview"),
         api("/api/v1/architect/reports?limit=50&offset=0"),
         api("/api/v1/architect/presence"),
@@ -1677,10 +2003,13 @@
         api("/api/v1/architect/projects"),
         api("/api/v1/architect/work-roles"),
         api("/api/v1/architect/experience"),
-        api("/api/v1/architect/security")
+        api("/api/v1/architect/security"),
+        api("/api/v1/architect/enterprise")
       ]);
       currentPresence = presence.presence || [];
       renderSecurityState(security.security || {});
+      renderEnterprise(enterprise);
+      if (currentArchitectRole === "owner") refreshRbacTokens().catch(() => {});
       currentReleaseVersion = release.release?.version || "";
       updateButton.textContent = currentReleaseVersion
         ? `Обновить агент → ${currentReleaseVersion}`
@@ -1708,14 +2037,16 @@
       if (!architectToken || liveRefreshBusy) return null;
       liveRefreshBusy = true;
       try {
-        const [data, reports, presence, release, projects] = await Promise.all([
+        const [data, reports, presence, release, projects, enterprise] = await Promise.all([
           api("/api/v1/architect/overview"),
           api("/api/v1/architect/reports?limit=50&offset=0"),
           api("/api/v1/architect/presence"),
           api("/api/v1/architect/release"),
-          api("/api/v1/architect/projects")
+          api("/api/v1/architect/projects"),
+          api("/api/v1/architect/enterprise")
         ]);
         currentPresence = presence.presence || [];
+        renderEnterprise(enterprise);
         currentReleaseVersion = release.release?.version || "";
         document.getElementById("missionCount").textContent = data.counts.active_missions ?? data.counts.missions ?? 0;
         document.getElementById("reportCount").textContent = data.counts.reports ?? 0;
@@ -1842,6 +2173,159 @@
         setStatus("Токен не заменён: " + error.message, "bad");
       } finally {
         rotateArchitectTokenButton.disabled = false;
+      }
+    });
+
+    createRbacTokenButton.addEventListener("click", async () => {
+      const label = rbacLabel.value.trim();
+      if (!label) return setStatus("Введите название role token.", "bad");
+      createRbacTokenButton.disabled = true;
+      try {
+        const data = await api("/api/v1/architect/security/access-tokens", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ role: rbacRole.value, label })
+        });
+        showSecuritySecret(`Новый ${data.access_token.role} token · ${data.access_token.label}`, data.access_token.token);
+        rbacLabel.value = "";
+        await refreshRbacTokens();
+        setStatus("Role token создан. Сохраните его сейчас — повторно он не отображается.", "good");
+      } catch (error) {
+        setStatus("Role token не создан: " + error.message, "bad");
+      } finally {
+        createRbacTokenButton.disabled = currentArchitectRole !== "owner";
+      }
+    });
+
+    saveEnterprisePolicyButton.addEventListener("click", async () => {
+      saveEnterprisePolicyButton.disabled = true;
+      try {
+        await api("/api/v1/architect/enterprise/policy", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            policy: {
+              require_latest_agent: policyLatestAgent.checked,
+              require_windows_core_service: policyWindowsService.checked,
+              require_windows_enterprise_probe: policyEnterpriseProbe.checked,
+              require_windows_update_service: policyUpdateService.checked,
+              require_no_pending_reboot: policyNoPendingReboot.checked,
+              require_domain_join: policyDomainJoin.checked,
+              require_group_policy_service: policyGroupPolicy.checked,
+              require_intune_extension: policyIntune.checked,
+              require_hyperv: policyHyperV.checked,
+              require_managed_service_account: policyManagedAccount.checked,
+              max_cpu_percent: Number(policyCpu.value),
+              max_memory_percent: Number(policyMemory.value),
+              max_event_errors_last_hour: Number(policyEvents.value),
+              max_heartbeat_age_minutes: Number(policyHeartbeatAge.value),
+              min_disk_free_gb: Number(policyDiskFree.value),
+              require_lan_address: policyLanAddress.checked
+            }
+          })
+        });
+        await refreshEnterprise();
+        setStatus("Desired State сохранён и compliance пересчитан.", "good");
+      } catch (error) {
+        setStatus("Desired State не сохранён: " + error.message, "bad");
+      } finally {
+        saveEnterprisePolicyButton.disabled = currentArchitectRole !== "owner";
+      }
+    });
+
+    createSiteButton.addEventListener("click", async () => {
+      const name = newSiteName.value.trim();
+      if (!name) return setStatus("Введите название Site.", "bad");
+      createSiteButton.disabled = true;
+      try {
+        await api("/api/v1/architect/enterprise/sites", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name })
+        });
+        newSiteName.value = "";
+        await refreshEnterprise();
+        setStatus("Site создан.", "good");
+      } catch (error) {
+        setStatus("Site не создан: " + error.message, "bad");
+      } finally {
+        createSiteButton.disabled = currentArchitectRole !== "owner";
+      }
+    });
+
+    createGroupButton.addEventListener("click", async () => {
+      const name = newGroupName.value.trim();
+      if (!name) return setStatus("Введите название Node Group.", "bad");
+      createGroupButton.disabled = true;
+      try {
+        await api("/api/v1/architect/enterprise/groups", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name })
+        });
+        newGroupName.value = "";
+        await refreshEnterprise();
+        setStatus("Node Group создана.", "good");
+      } catch (error) {
+        setStatus("Node Group не создана: " + error.message, "bad");
+      } finally {
+        createGroupButton.disabled = currentArchitectRole !== "owner";
+      }
+    });
+
+    assignEnterpriseScopeButton.addEventListener("click", async () => {
+      const nodeId = enterpriseNodeSelect.value;
+      if (!nodeId) return setStatus("Выберите ноду для Site / Group.", "bad");
+      assignEnterpriseScopeButton.disabled = true;
+      try {
+        await api(`/api/v1/architect/enterprise/nodes/${encodeURIComponent(nodeId)}/scope`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            site_id: enterpriseSiteSelect.value || null,
+            group_id: enterpriseGroupSelect.value || null
+          })
+        });
+        await refreshEnterprise();
+        setStatus("Site / Node Group назначены.", "good");
+      } catch (error) {
+        setStatus("Назначение не выполнено: " + error.message, "bad");
+      } finally {
+        assignEnterpriseScopeButton.disabled = currentArchitectRole !== "owner";
+      }
+    });
+
+    refreshEnterpriseButton.addEventListener("click", async () => {
+      refreshEnterpriseButton.disabled = true;
+      try {
+        await refreshEnterprise();
+        setStatus("Enterprise состояние обновлено.", "good");
+      } catch (error) {
+        setStatus("Enterprise состояние не обновлено: " + error.message, "bad");
+      } finally {
+        refreshEnterpriseButton.disabled = false;
+      }
+    });
+
+    recoveryManifestButton.addEventListener("click", async () => {
+      recoveryManifestButton.disabled = true;
+      recoveryManifestState.textContent = "Проверяю recovery manifest…";
+      recoveryManifestState.className = "status";
+      try {
+        const data = await api("/api/v1/architect/enterprise/recovery-manifest");
+        const reportCount = Array.isArray(data.manifest?.reports) ? data.manifest.reports.length : 0;
+        recoveryManifestState.textContent = [
+          "✓ Recovery manifest сформирован.",
+          `SHA-256: ${data.manifest_sha256}`,
+          `Каталогизировано отчётов: ${reportCount}`,
+          "Manifest содержит topology и integrity metadata без тел отчётов и секретов."
+        ].join("\n");
+        recoveryManifestState.className = "status good";
+      } catch (error) {
+        recoveryManifestState.textContent = "Manifest не сформирован: " + error.message;
+        recoveryManifestState.className = "status bad";
+      } finally {
+        recoveryManifestButton.disabled = false;
       }
     });
 

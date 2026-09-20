@@ -1,5 +1,15 @@
 # CITADEL/EWS Python Node v1
 
+## v0.3.13 — Windows Enterprise Services
+
+- Агент включает hash-pinned read-only probe `windows_enterprise_probe.ps1`; он запускается только из локального allowlist-кода Agent с `shell=False`.
+- Probe собирает CIM/Performance Counters, краткие счётчики критических/ошибочных событий Windows Event Log, Windows Update/reboot/hotfix state, Hyper-V inventory, domain/GPO, MDM/Intune и service-identity readiness.
+- Для gMSA/dMSA агент сообщает только проверяемую готовность/identity-кандидат и не угадывает тип managed service account без авторитетных данных AD.
+- Hotpatch не объявляется включённым по локальным косвенным признакам: без внешнего Microsoft management signal показывается `external-management-required`.
+- Hyper-V, GPO/Intune/MDM и Event Log используются как read-only adapters; Agent не включает роли Windows, не меняет tenant/domain policy и не открывает WinRM.
+- Controller/Architect добавляют RBAC `owner / operator / viewer`, Desired State / compliance, Sites / Node Groups, SHA-256 verification последнего inventory и recovery manifest без тел отчётов и секретов.
+- Никакого универсального PowerShell/WinRM, удалённого shell или произвольного command text в Enterprise layer нет.
+
 ## v0.3.12 — Windows Core Service
 
 - Core Agent устанавливается как видимая Windows Service `CitadelEWSNode` под `NT AUTHORITY\LocalService`.

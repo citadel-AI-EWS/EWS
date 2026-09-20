@@ -58,7 +58,7 @@ jobs:
           import hashlib, sys
           root = Path(sys.argv[1])
           required = {
-              "citadel_node_v1.py", "citadel_node_v2.py", "requirements.txt",
+              "citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1", "requirements.txt",
               "requirements-win32.txt", "setup_windows.ps1", "Install Windows Node.cmd", "START_HERE.cmd",
               "README_RU.txt", "VERIFY_PACKAGE.ps1"
           }
@@ -98,7 +98,7 @@ jobs:
           import hashlib, sys
           root = Path(sys.argv[1])
           required = {
-              "citadel_node_v1.py", "citadel_node_v2.py", "requirements.txt",
+              "citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1", "requirements.txt",
               "setup_linux.sh", "Install Linux Node.sh", "START_HERE.sh",
               "README_LINUX.md"
           }

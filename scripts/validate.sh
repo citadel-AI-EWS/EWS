@@ -177,6 +177,7 @@ installer = Path("agent/Install Windows Node.cmd").read_text(encoding="utf-8").l
 service_helper = Path("agent/windows_service.ps1").read_text(encoding="utf-8")
 service_host = Path("agent/CitadelNodeService.cs").read_text(encoding="utf-8")
 agent_v1 = Path("agent/citadel_node_v1.py").read_text(encoding="utf-8")
+enterprise_probe = Path("agent/windows_enterprise_probe.ps1").read_text(encoding="utf-8")
 
 for forbidden in (
     "executionpolicy bypass",
@@ -200,6 +201,8 @@ for required in (
     "programdata\\citadelews\\state",
     "expectedservicehostsha256",
     "expectedservicehelpersha256",
+    "expectedenterpriseprobesha256",
+    "windows_enterprise_probe.ps1",
     "-uninstall",
 ):
     if required not in setup:
@@ -227,6 +230,39 @@ for forbidden in ("cmd.exe", "powershell.exe", "UseShellExecute = true"):
         raise SystemExit(f"unsafe Windows service host pattern detected: {forbidden}")
 if '"windows_core_service"' not in agent_v1:
     raise SystemExit("Windows SCM capability reporting is missing")
+
+for required in (
+    "Get-CimInstance",
+    "Get-WinEvent",
+    "Win32_PerfFormattedData_PerfOS_Processor",
+    "Win32_PerfFormattedData_PerfOS_Memory",
+    "Win32_QuickFixEngineering",
+    "Microsoft-Hyper-V-All",
+    "Get-VM",
+    "IntuneManagementExtension",
+    "SOFTWARE\\Microsoft\\Enrollments",
+    "readonly",
+):
+    if required not in enterprise_probe:
+        raise SystemExit(f"Windows Enterprise Probe capability missing: {required}")
+for forbidden in (
+    "Invoke-Expression",
+    "IEX ",
+    "DownloadString",
+    "DownloadFile",
+    "-ExecutionPolicy Bypass",
+    "Enable-PSRemoting",
+    "Invoke-Command",
+    "Enter-PSSession",
+    "New-PSSession",
+):
+    if forbidden.lower() in enterprise_probe.lower():
+        raise SystemExit(f"unsafe Windows Enterprise Probe pattern detected: {forbidden}")
+if '"windows_enterprise_readonly"' not in agent_v1:
+    raise SystemExit("Windows Enterprise Probe capability reporting is missing")
+if "WINDOWS_ENTERPRISE_PROBE_SHA256" not in agent_v1:
+    raise SystemExit("Windows Enterprise Probe is not hash pinned")
+
 
 linux_setup = Path("agent/setup_linux.sh").read_text(encoding="utf-8")
 linux_entry = Path("agent/Install Linux Node.sh").read_text(encoding="utf-8")
@@ -256,6 +292,7 @@ node --check src/quality/openrouter.js
 node --check src/worker.js
 node --check src/experience/policy.js
 node --check src/experience/registry.js
+node --check src/enterprise/policy.js
 node --check src/presence.js
 node --check src/telemetry/common.js
 node --check src/telemetry/schema.js
@@ -274,6 +311,7 @@ node tests/review-backlog-guards.mjs
 node tests/legacy-experience.mjs
 node tests/experience-registry.mjs
 node tests/architect-ux-guards.mjs
+node tests/enterprise-policy.mjs
 node tests/hub-five-questions.mjs
 node tests/openrouter-quality-gate.mjs
 
@@ -292,6 +330,8 @@ required = {
     "agent_rollouts", "architect_projects", "project_work_items",
     "project_specializations", "project_quality_gates", "node_network_state", "node_ai_state",
     "architect_auth_state", "architect_recovery_attempts",
+    "architect_access_tokens", "enterprise_sites", "enterprise_node_groups",
+    "enterprise_node_scope", "enterprise_desired_state",
 }
 tables = {
     row[0]
