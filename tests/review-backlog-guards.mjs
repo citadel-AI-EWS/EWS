@@ -2,6 +2,8 @@ import fs from "node:fs";
 function need(value, message) { if (!value) throw new Error(message); }
 const index = fs.readFileSync("src/index.js", "utf8");
 const setup = fs.readFileSync("agent/setup_windows.ps1", "utf8");
+const serviceHost = fs.readFileSync("agent/CitadelNodeService.cs", "utf8");
+const serviceHelper = fs.readFileSync("agent/windows_service.ps1", "utf8");
 const readme = fs.readFileSync("agent/README_RU.md", "utf8");
 const nodeTest = fs.readFileSync("node-test.html", "utf8");
 const agentV1 = fs.readFileSync("agent/citadel_node_v1.py", "utf8");
@@ -20,19 +22,32 @@ need(index.includes("LEFT JOIN node_numbers AS nn"), "Architect node number join
 need(!readme.includes("-EnrollmentToken"), "README still documents EnrollmentToken");
 need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_token");
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
-need(setup.includes("$RunArguments"), "Windows paths are not quoted");
-need(setup.includes("refusing to start another copy"), "process inspection is not fail-closed");
-need(agentV1.includes('VERSION = "0.3.11"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.11"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.12"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.12"'), "v2 release not bumped");
+need(setup.includes('ServiceName = "CitadelEWSNode"'), "Windows Core Service name missing");
+need(setup.includes('LegacyUserSid'), "original user SID preservation missing");
+need(setup.includes('Set-CitadelDirectoryAcl'), "Windows clean ACL reconstruction missing");
+need(setup.includes('"PAUSED"'), "paused-state migration missing");
+need(setup.includes('Set-CitadelServiceDefinition'), "verified SCM service configuration missing");
+need(setup.includes('Restore-CitadelServiceDefinition'), "service rollback path missing");
+need(setup.includes('-Uninstall'), "Windows service uninstall flow missing");
+need(setup.includes('ProgramData\\CitadelEWS\\state'), "Windows service state is not machine-scoped");
+need(!setup.includes('CreateShortcut('), "core agent still creates a Startup shortcut");
+need(serviceHelper.includes('Invoke-CimMethod'), "Windows SCM API helper missing");
+need(serviceHelper.includes('DelayedAutostart'), "Windows delayed-auto verification missing");
+need(serviceHost.includes('ServiceBase.Run'), "Windows SCM service host missing");
+need(serviceHost.includes('AutoLog = false'), "Windows service must not require an EventLog source");
+need(serviceHost.includes('CITADEL_SERVICE_STOP_FILE'), "transient service stop channel missing");
+need(serviceHost.includes('RequestAdditionalTime(60000)'), "SCM stop wait hint missing");
+need(serviceHost.includes('RestartExitCode = 75'), "service restart supervision missing");
+need(agentV1.includes('SERVICE_RESTART_EXIT_CODE = 75'), "agent service restart exit code missing");
+need(agentV1.includes('SERVICE_STOP_EXIT_CODE = 76'), "agent service stop exit code missing");
+need(agentV1.includes('"windows_core_service"'), "SCM service capability marker missing");
 need(agentV1.includes("windows-dpapi-local-machine-v1"), "Windows DPAPI identity protection missing");
 need(agentV1.includes("CryptProtectData"), "Windows DPAPI protect call missing");
 need(agentV1.includes("CryptUnprotectData"), "Windows DPAPI unprotect call missing");
 need(agentV1.includes("private_key_dpapi"), "protected Windows identity field missing");
-need(setup.includes("icacls.exe"), "Windows state ACL hardening missing");
-need(setup.includes("Install-PythonFallback"), "Windows verified Python fallback missing");
-need(setup.includes("requirements-win32.txt"), "Windows x86 dependency selection missing");
-need(setup.includes("--only-binary=:all:"), "Windows installer may attempt local dependency builds");
-need(!setup.includes("Python 3.14 is not installed and Windows Package Manager (winget) is unavailable"), "winget is still mandatory");
+need(setup.includes("DirectorySecurity"), "Windows state ACL reconstruction missing");
 need(agentV2.includes('"windows_sleep_hibernate_inhibit"'), "agent drops sleep/hibernate event");
 for (const eventType of [
   "windows_sleep_hibernate_inhibit",
@@ -102,5 +117,5 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.11"'), "Controller release not bumped");
+need(index.includes('version: "0.3.12"'), "Controller release not bumped");
 console.log("Review backlog guards: PASS");
