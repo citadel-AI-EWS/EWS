@@ -54,6 +54,13 @@ jobs:
           cache: pip
           cache-dependency-path: agent/requirements.txt
       - run: python -m pip install --disable-pip-version-check --requirement agent/requirements.txt
+      - name: Verify Windows x86 dependency wheels exist
+        run: >-
+          python -m pip download --disable-pip-version-check --only-binary=:all:
+          --platform win32 --python-version 313 --implementation cp
+          --abi cp313 --abi abi3
+          --requirement agent/requirements-win32.txt
+          --dest .tmp-win32-wheels
       - name: Build self-contained Windows package
         run: python scripts/build_fixed_agent_package.py
       - name: Verify generated package
@@ -80,7 +87,7 @@ jobs:
               seen.add(name)
           required = {
               "citadel_node_v1.py", "citadel_node_v2.py", "requirements.txt",
-              "setup_windows.ps1", "Install Windows Node.cmd", "START_HERE.cmd",
+              "requirements-win32.txt", "setup_windows.ps1", "Install Windows Node.cmd", "START_HERE.cmd",
               "README_RU.txt", "VERIFY_PACKAGE.ps1"
           }
           assert required <= seen, sorted(required - seen)
@@ -155,6 +162,9 @@ jobs:
           $installer = (Get-Content -LiteralPath "agent/Install Windows Node.cmd" -Raw).ToLowerInvariant()
           if ($installer.Contains("executionpolicy bypass")) { throw "ExecutionPolicy Bypass is forbidden" }
           if ($setup.ToLowerInvariant().Contains("executionpolicy bypass")) { throw "ExecutionPolicy Bypass is forbidden" }
+          if (-not $setup.Contains("Install-PythonFallback")) { throw "Verified Python fallback is missing" }
+          if (-not $setup.Contains("requirements-win32.txt")) { throw "Windows x86 dependency selection is missing" }
+          if ($setup.Contains("Python 3.14 is not installed and Windows Package Manager (winget) is unavailable")) { throw "winget is still mandatory" }
           Write-Host "Windows installer policy: OK"
 
   gate:

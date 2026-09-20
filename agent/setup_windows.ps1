@@ -6,7 +6,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
-$PythonWingetId = "Python.Python.3.14"
+$InstallerRelease = "0.3.11-wincompat.1"
+$PythonWingetId = "Python.Python.3.13"
+$FallbackPythonVersion = "3.13.15"
+$FallbackPythonX86Url = "https://www.python.org/ftp/python/3.13.15/python-3.13.15.exe"
+$FallbackPythonX86Sha256 = "741c07276eb2d57e7ee012d643f021c58cb38d11c5389be46c15d41d1a10b447"
+$FallbackPythonX64Url = "https://www.python.org/ftp/python/3.13.15/python-3.13.15-amd64.exe"
+$FallbackPythonX64Sha256 = "edec09c4853aeae9ac36efb8c9f95b6b8e2fee65eee56d9767a8b7c69c574403"
+$FallbackPythonArm64Url = "https://www.python.org/ftp/python/3.13.15/python-3.13.15-arm64.exe"
+$FallbackPythonArm64Sha256 = "c252c676087c49e6b94e95a273536b78921c28a5fc9f86d15d25392328247249"
 $ExpectedV1Sha256 = "d3c310ab378666cdd477a51a881169970910900428cb4d2027ff58c1545c48df"
 $ExpectedV2Sha256 = "ab81b7cb431dc1e3e9ee7bf19cbdc875db52f33045da809430435276c5a958f5"
 
@@ -49,22 +57,111 @@ function Copy-VerifiedAgentFile([string]$Name, [string]$ExpectedHash) {
   return $true
 }
 
-function Find-Python314 {
-  $Launcher = Get-Command py -ErrorAction SilentlyContinue
-  if ($null -ne $Launcher) {
-    $Resolved = & $Launcher.Source -3.14 -c "import sys; print(sys.executable)" 2>$null
-    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($Resolved)) {
-      return $Resolved.Trim()
-    }
+function Resolve-CompatiblePython([string]$Candidate) {
+  if ([string]::IsNullOrWhiteSpace($Candidate) -or -not (Test-Path -LiteralPath $Candidate)) {
+    return $null
   }
-  $Candidates = @(
-    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python314\python.exe"),
-    (Join-Path $env:ProgramFiles "Python314\python.exe")
-  )
-  foreach ($Candidate in $Candidates) {
-    if (Test-Path -LiteralPath $Candidate) { return $Candidate }
+  & $Candidate -c "import sys; raise SystemExit(0 if (3, 12) <= sys.version_info[:2] < (4, 0) else 1)" *> $null
+  if ($LASTEXITCODE -ne 0) { return $null }
+  $Resolved = & $Candidate -c "import sys; print(sys.executable)" 2>$null
+  if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($Resolved)) {
+    return $Resolved.Trim()
   }
   return $null
+}
+
+function Find-CompatiblePython {
+  $Launcher = Get-Command py -ErrorAction SilentlyContinue
+  if ($null -ne $Launcher) {
+    foreach ($Spec in @("-3.14", "-3.13", "-3.12")) {
+      $Resolved = & $Launcher.Source $Spec -c "import sys; print(sys.executable)" 2>$null
+      if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($Resolved)) {
+        $Compatible = Resolve-CompatiblePython $Resolved.Trim()
+        if ($null -ne $Compatible) { return $Compatible }
+      }
+    }
+  }
+
+  $PythonCommand = Get-Command python -ErrorAction SilentlyContinue
+  if ($null -ne $PythonCommand) {
+    $Compatible = Resolve-CompatiblePython $PythonCommand.Source
+    if ($null -ne $Compatible) { return $Compatible }
+  }
+
+  $Candidates = @(
+    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python314\python.exe"),
+    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python313\python.exe"),
+    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python313-32\python.exe"),
+    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"),
+    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312-32\python.exe")
+  )
+  if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
+    $Candidates += (Join-Path $env:ProgramFiles "Python314\python.exe")
+    $Candidates += (Join-Path $env:ProgramFiles "Python313\python.exe")
+    $Candidates += (Join-Path $env:ProgramFiles "Python312\python.exe")
+  }
+  $ProgramFilesX86 = [Environment]::GetFolderPath("ProgramFilesX86")
+  if (-not [string]::IsNullOrWhiteSpace($ProgramFilesX86)) {
+    $Candidates += (Join-Path $ProgramFilesX86 "Python313-32\python.exe")
+    $Candidates += (Join-Path $ProgramFilesX86 "Python312-32\python.exe")
+  }
+  foreach ($Candidate in $Candidates) {
+    $Compatible = Resolve-CompatiblePython $Candidate
+    if ($null -ne $Compatible) { return $Compatible }
+  }
+  return $null
+}
+
+function Get-WindowsArchitecture {
+  $ArchText = (($env:PROCESSOR_ARCHITEW6432, $env:PROCESSOR_ARCHITECTURE) -join " ").ToUpperInvariant()
+  if ($ArchText.Contains("ARM64")) { return "arm64" }
+  if ([Environment]::Is64BitOperatingSystem) { return "x64" }
+  return "x86"
+}
+
+function Install-PythonFallback([string]$Architecture) {
+  switch ($Architecture) {
+    "x86" {
+      $Url = $FallbackPythonX86Url
+      $ExpectedHash = $FallbackPythonX86Sha256
+    }
+    "arm64" {
+      $Url = $FallbackPythonArm64Url
+      $ExpectedHash = $FallbackPythonArm64Sha256
+    }
+    default {
+      $Url = $FallbackPythonX64Url
+      $ExpectedHash = $FallbackPythonX64Sha256
+    }
+  }
+
+  $TempInstaller = Join-Path $env:TEMP ("citadel-python-" + $FallbackPythonVersion + "-" + $Architecture + "-" + [guid]::NewGuid().ToString("N") + ".exe")
+  try {
+    Write-Host "[CITADEL] winget is unavailable or could not install Python. Downloading the official Python $FallbackPythonVersion $Architecture installer..."
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $Client = New-Object System.Net.WebClient
+    $Client.Headers["User-Agent"] = "CITADEL-EWS-Installer/$InstallerRelease"
+    $Client.DownloadFile($Url, $TempInstaller)
+    if ((Get-Sha256 $TempInstaller) -ne $ExpectedHash) {
+      throw "Downloaded Python installer failed SHA-256 verification."
+    }
+    $InstallArgs = @(
+      "/quiet",
+      "InstallAllUsers=0",
+      "PrependPath=0",
+      "Include_pip=1",
+      "Include_launcher=1",
+      "Include_test=0"
+    )
+    $Process = Start-Process -FilePath $TempInstaller -ArgumentList $InstallArgs -Wait -PassThru
+    if ($Process.ExitCode -ne 0) {
+      throw "Official Python installer failed with exit code $($Process.ExitCode)."
+    }
+  } finally {
+    if (Test-Path -LiteralPath $TempInstaller) {
+      Remove-Item -LiteralPath $TempInstaller -Force -ErrorAction SilentlyContinue
+    }
+  }
 }
 
 function Get-RunningCitadelAgents([string]$AgentScriptPath, [string]$ConfigPathValue) {
@@ -84,20 +181,30 @@ function Get-RunningCitadelAgents([string]$AgentScriptPath, [string]$ConfigPathV
   }
 }
 
-$PythonPath = Find-Python314
+$PythonPath = Find-CompatiblePython
 if ($null -eq $PythonPath) {
   $Winget = Get-Command winget -ErrorAction SilentlyContinue
-  if ($null -eq $Winget) {
-    throw "Python 3.14 is not installed and Windows Package Manager (winget) is unavailable."
+  if ($null -ne $Winget) {
+    Write-Host "[CITADEL] Trying Windows Package Manager for Python 3.13..."
+    & $Winget.Source install --exact --id $PythonWingetId --source winget --scope user --silent --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -eq 0) {
+      $PythonPath = Find-CompatiblePython
+    } else {
+      Write-Warning "[CITADEL] winget could not install Python (exit $LASTEXITCODE); using verified python.org fallback."
+    }
+  } else {
+    Write-Host "[CITADEL] Windows Package Manager is not available; using verified python.org fallback."
   }
-  Write-Host "[CITADEL] Installing Python 3.14 once..."
-  & $Winget.Source install --exact --id $PythonWingetId --source winget --scope user --silent --accept-package-agreements --accept-source-agreements
-  if ($LASTEXITCODE -ne 0) { throw "Automatic Python installation failed." }
-  $PythonPath = Find-Python314
 }
 if ($null -eq $PythonPath) {
-  throw "Python 3.14 is unavailable after installation."
+  Install-PythonFallback (Get-WindowsArchitecture)
+  $PythonPath = Find-CompatiblePython
 }
+if ($null -eq $PythonPath) {
+  throw "Compatible Python 3.12+ is unavailable after installation attempts."
+}
+$PythonInfo = (& $PythonPath -c "import platform,struct,sys; print(str(sys.version_info.major)+'.'+str(sys.version_info.minor)+'.'+str(sys.version_info.micro)+' / '+str(struct.calcsize('P')*8)+'-bit / '+platform.machine())").Trim()
+Write-Host "[CITADEL] Using Python: $PythonInfo"
 
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
@@ -113,28 +220,24 @@ Write-Host "[CITADEL] State directory ACL restricted to the installing user, SYS
 $V1Changed = Copy-VerifiedAgentFile "citadel_node_v1.py" $ExpectedV1Sha256
 $V2Changed = Copy-VerifiedAgentFile "citadel_node_v2.py" $ExpectedV2Sha256
 
-$RequirementsSource = Join-Path $SourceRoot "requirements.txt"
-$RequirementsPath = Join-Path $InstallRoot "requirements.txt"
-if (-not (Test-Path -LiteralPath $RequirementsSource)) {
-  throw "Required package file is missing: requirements.txt"
+$Requirements64Source = Join-Path $SourceRoot "requirements.txt"
+$Requirements32Source = Join-Path $SourceRoot "requirements-win32.txt"
+foreach ($RequiredFile in @($Requirements64Source, $Requirements32Source)) {
+  if (-not (Test-Path -LiteralPath $RequiredFile)) {
+    throw "Required package file is missing: $([System.IO.Path]::GetFileName($RequiredFile))"
+  }
 }
-$RequirementsHash = Get-Sha256 $RequirementsSource
-$RequirementsChanged = $true
-if (Test-Path -LiteralPath $RequirementsPath) {
-  $RequirementsChanged = (Get-Sha256 $RequirementsPath) -ne $RequirementsHash
-}
-if ($RequirementsChanged) {
-  Copy-Item -LiteralPath $RequirementsSource -Destination $RequirementsPath -Force
-} else {
-  Write-Host "[CITADEL] requirements.txt is unchanged; keeping the installed copy."
-}
+$Requirements64Path = Join-Path $InstallRoot "requirements.txt"
+$Requirements32Path = Join-Path $InstallRoot "requirements-win32.txt"
+Copy-Item -LiteralPath $Requirements64Source -Destination $Requirements64Path -Force
+Copy-Item -LiteralPath $Requirements32Source -Destination $Requirements32Path -Force
 
 $Venv = Join-Path $InstallRoot ".venv"
 $VenvPython = Join-Path $Venv "Scripts\python.exe"
 $VenvPythonw = Join-Path $Venv "Scripts\pythonw.exe"
 $CreateVenv = -not (Test-Path -LiteralPath $VenvPython)
 if (-not $CreateVenv) {
-  & $VenvPython -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" *> $null
+  & $VenvPython -c "import sys; raise SystemExit(0 if (3, 12) <= sys.version_info[:2] < (4, 0) else 1)" *> $null
   if ($LASTEXITCODE -ne 0) { $CreateVenv = $true }
 }
 if ($CreateVenv) {
@@ -145,6 +248,15 @@ if ($CreateVenv) {
 } else {
   Write-Host "[CITADEL] Existing Python environment found; reusing it."
 }
+
+$VenvBits = (& $VenvPython -c "import struct; print(struct.calcsize('P') * 8)").Trim()
+if ($VenvBits -eq "32") {
+  $RequirementsPath = $Requirements32Path
+  Write-Host "[CITADEL] 32-bit Python detected; using the verified win32 dependency set."
+} else {
+  $RequirementsPath = $Requirements64Path
+}
+$RequirementsHash = Get-Sha256 $RequirementsPath
 
 $RequirementsMarker = Join-Path $InstallRoot ".requirements.sha256"
 $MarkerMatches = $false
@@ -157,7 +269,7 @@ if (-not ($MarkerMatches -and $DependenciesWork)) {
   Write-Host "[CITADEL] Installing/updating agent dependencies..."
   & $VenvPython -m pip install --disable-pip-version-check --upgrade pip
   if ($LASTEXITCODE -ne 0) { throw "pip update failed." }
-  & $VenvPython -m pip install --disable-pip-version-check --upgrade --requirement $RequirementsPath
+  & $VenvPython -m pip install --disable-pip-version-check --upgrade --only-binary=:all: --requirement $RequirementsPath
   if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
   [System.IO.File]::WriteAllText($RequirementsMarker, $RequirementsHash + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
 } else {
@@ -246,6 +358,9 @@ $InstallState = @{
   controller_url = $ControllerUrl.TrimEnd('/')
   install_root = $InstallRoot
   agent_version = "0.3.11"
+  installer_release = $InstallerRelease
+  python = $PythonInfo
+  python_bits = [int]$VenvBits
   v1_sha256 = $ExpectedV1Sha256
   v2_sha256 = $ExpectedV2Sha256
   updated_at = [DateTime]::UtcNow.ToString("o")
