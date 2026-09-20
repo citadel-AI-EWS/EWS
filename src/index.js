@@ -1,5 +1,6 @@
 import { getProjectExperienceRegistry } from "./experience/registry.js";
 import { openRouterQualityConfig, reviewWithOpenRouter } from "./quality/openrouter.js";
+import { ARCHITECT_ROLE_PERMISSIONS, DEFAULT_ENTERPRISE_POLICY, evaluateEnterpriseNode, normalizeEnterprisePolicy, requiredArchitectPermission, roleHasPermission } from "./enterprise/policy.js";
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -30,17 +31,22 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
 const POWER_COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.12",
+  version: "0.3.13",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "2dab753c8e836663d215656682ac304b5f297a7c0d726936111013fa70dacc65"
+      sha256: "a39c41b4e5ae0cd8cbfe28b74cbadb4e3806c03ebe3a3fbfc1464dc01dcd68e6"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "0fc1f2a8daac47c5c504951e32a9e8110e9f583d8d185d45645408814c3cac52"
+      sha256: "43d6d8492d43e3434c7ce90c946804c7cc1c05344ae3aaf27c7ed8220d34e803"
+    },
+    {
+      path: "windows_enterprise_probe.ps1",
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/windows_enterprise_probe.ps1",
+      sha256: "0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
     }
   ]
 });
@@ -75,6 +81,7 @@ let nodeAiSchemaPromise;
 let nodeRequestNonceSchemaPromise;
 let qualityGateSchemaPromise;
 let architectAuthSchemaPromise;
+let enterpriseSchemaPromise;
 
 class ApiError extends Error {
   constructor(status, code) {
