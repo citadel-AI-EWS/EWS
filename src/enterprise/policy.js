@@ -68,6 +68,12 @@ export function requiredArchitectPermission(method, pathname) {
   const upper = String(method || "GET").toUpperCase();
   const path = String(pathname || "");
 
+  if (
+    path.startsWith("/api/v1/architect/security/access-tokens") ||
+    path === "/api/v1/architect/enterprise/recovery-manifest"
+  ) {
+    return "admin";
+  }
   if (upper === "GET" || upper === "HEAD") return "read";
   if (
     path.startsWith("/api/v1/architect/security/") ||
