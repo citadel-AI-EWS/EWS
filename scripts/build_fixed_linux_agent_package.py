@@ -74,7 +74,7 @@ def build_package(target_arch: str, package_name: str) -> Path:
         '--only-binary=:all:',
         'x86_64|amd64',
         'aarch64|arm64',
-        'python3.10',
+        'python3.12',
     ):
         if marker not in setup:
             raise RuntimeError(f"Linux compatibility marker missing: {marker}")
