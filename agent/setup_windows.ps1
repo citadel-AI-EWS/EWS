@@ -13,7 +13,7 @@ Set-StrictMode -Version Latest
 $ServiceName = "CitadelEWSNode"
 $ServiceDisplayName = "CITADEL EWS Node"
 $PythonWingetId = "Python.Python.3.14"
-$ExpectedV1Sha256 = "2475dde4eec9887492c48ff40d03cb2b9e5d6d01e4863d783557b23502a43993"
+$ExpectedV1Sha256 = "4319f5f9b9c68fa7e2098b93f0289f457094fccc6d077a812cdb6a119f29f4f5"
 $ExpectedV2Sha256 = "15083cb3c7de44a614794605aba1f95a372232479f17782661e22a73386eee7e"
 $ExpectedServiceHostSha256 = "4a9a166f0c51c87a26157103ddf6c47928a2717646b5cb7408a796bda4ef016e"
 
