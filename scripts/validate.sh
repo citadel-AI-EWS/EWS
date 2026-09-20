@@ -171,6 +171,7 @@ node --check /tmp/ews-architect-logs.js
 node --check /tmp/ews-node-test.js
 node --check /tmp/ews-hub.js
 node --check src/index.js
+node --check src/quality/openrouter.js
 node --check src/worker.js
 node --check src/experience/policy.js
 node --check src/experience/registry.js
@@ -193,6 +194,7 @@ node tests/legacy-experience.mjs
 node tests/experience-registry.mjs
 node tests/architect-ux-guards.mjs
 node tests/hub-five-questions.mjs
+node tests/openrouter-quality-gate.mjs
 
 python - <<'PY'
 from pathlib import Path
@@ -207,7 +209,7 @@ required = {
     "nodes", "missions", "assignments", "results", "commands", "audit_events",
     "agent_reports", "architect_sessions", "node_logs", "node_log_rate_limits",
     "agent_rollouts", "architect_projects", "project_work_items",
-    "project_specializations", "node_network_state", "node_ai_state",
+    "project_specializations", "project_quality_gates", "node_network_state", "node_ai_state",
 }
 tables = {
     row[0]
