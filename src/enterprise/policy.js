@@ -179,15 +179,16 @@ export function evaluateEnterpriseNode(node, inventory, policyInput, latestVersi
       : "heartbeat timestamp unavailable"
   );
 
-  if (inventory?.disk_home_free_bytes != null) {
-    const diskFreeGb = Number(inventory.disk_home_free_bytes) / 1073741824;
-    pushCheck(
-      checks,
-      "disk_free",
-      diskFreeGb >= policy.min_disk_free_gb,
-      `${diskFreeGb.toFixed(2)} GB >= ${policy.min_disk_free_gb} GB`
-    );
-  }
+  const diskFreeBytes = Number(inventory?.disk_home_free_bytes);
+  const diskFreeGb = Number.isFinite(diskFreeBytes) ? diskFreeBytes / 1073741824 : null;
+  pushCheck(
+    checks,
+    "disk_free",
+    diskFreeGb !== null && diskFreeGb >= policy.min_disk_free_gb,
+    diskFreeGb === null
+      ? "disk inventory unavailable"
+      : `${diskFreeGb.toFixed(2)} GB >= ${policy.min_disk_free_gb} GB`
+  );
 
   if (policy.require_lan_address) {
     pushCheck(
