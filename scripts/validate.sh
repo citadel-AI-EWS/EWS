@@ -90,18 +90,41 @@ for required in (
     "projectVoiceButton",
     "missionVoiceButton",
     "reportsDisclosure",
+    "lostTokenButton",
+    "recoveryLoginPanel",
+    "createRecoveryCodeButton",
+    "rotateArchitectTokenButton",
+    "securitySecretPanel",
 ):
     if required not in architect:
         raise SystemExit(f"required Architect Live Operations capability missing: {required}")
 if '/api/v1/architect/work-roles' not in worker or "architectWorkRoles" not in worker:
     raise SystemExit("Architect work-role API route/handler missing from Worker")
-for required in ("architectGetProject", "project_specializations", "requested_roles"):
+for required in (
+    "architectGetProject", "project_specializations", "requested_roles",
+    "architectRotateToken", "architectRecoverToken", "architectCreateRecoveryCode",
+    "architect_auth_state", "architect_recovery_attempts"
+):
     if required not in worker:
         raise SystemExit(f"Project report/specialization backend missing: {required}")
 
 for forbidden in ("Контрольные точки", "Последние события аудита"):
     if forbidden in architect:
         raise SystemExit(f"obsolete Architect UI surfaced again: {forbidden}")
+for required in (
+    "/api/v1/architect/security/recover-token",
+    "/api/v1/architect/security/recovery-code",
+    "/api/v1/architect/security/rotate-token",
+):
+    if required not in architect or required not in worker:
+        raise SystemExit(f"Architect security rotation capability missing: {required}")
+for forbidden in (
+    "/api/v1/architect/security/current-token",
+    "showCurrentArchitectToken",
+    "getCurrentArchitectToken",
+):
+    if forbidden in architect or forbidden in worker:
+        raise SystemExit(f"current Architect token exposure path detected: {forbidden}")
 for required in ('data-lang="ru"', 'data-lang="en"', 'data-lang="he"', "missionNodeState", "readableReport", "wakeButton", "updateAgentState", "siteClock"):
     if required not in architect:
         raise SystemExit(f"Architect production UI capability missing: {required}")
@@ -174,6 +197,7 @@ required = {
     "agent_reports", "architect_sessions", "node_logs", "node_log_rate_limits",
     "agent_rollouts", "architect_projects", "project_work_items",
     "project_specializations", "node_network_state", "node_ai_state",
+    "architect_auth_state", "architect_recovery_attempts",
 }
 tables = {
     row[0]
