@@ -147,6 +147,38 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python agent/citadel_node_v2.py self-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Validate Windows Enterprise Probe and legacy-upgrade bootstrap
+        shell: pwsh
+        run: |
+          $probePath = (Resolve-Path -LiteralPath "agent\windows_enterprise_probe.ps1").Path
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile($probePath, [ref]$tokens, [ref]$errors)
+          if ($errors.Count) { throw ($errors | Out-String) }
+
+          $probeJson = & powershell.exe -NoLogo -NoProfile -NonInteractive -File $probePath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $probe = $probeJson | ConvertFrom-Json
+          if ($probe.schema -ne "citadel.windows.enterprise.v1") { throw "Unexpected enterprise probe schema" }
+          if ($probe.readonly -ne $true) { throw "Enterprise probe must be read-only" }
+
+          $legacyUpgrade = Join-Path $env:RUNNER_TEMP "citadel-legacy-upgrade"
+          New-Item -ItemType Directory -Force -Path $legacyUpgrade | Out-Null
+          Copy-Item -LiteralPath "agent\citadel_node_v1.py" -Destination $legacyUpgrade
+          Copy-Item -LiteralPath "agent\citadel_node_v2.py" -Destination $legacyUpgrade
+          Push-Location $legacyUpgrade
+          try {
+            python .\citadel_node_v2.py self-test
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $restored = Join-Path $legacyUpgrade "windows_enterprise_probe.ps1"
+            if (-not (Test-Path -LiteralPath $restored)) { throw "Embedded enterprise probe was not restored" }
+            $expected = "0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
+            $actual = (Get-FileHash -LiteralPath $restored -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) { throw "Restored enterprise probe hash mismatch" }
+          } finally {
+            Pop-Location
+          }
+          Write-Host "Windows Enterprise Probe AST/runtime/bootstrap: OK"
       - name: Compile Windows SCM service host
         shell: pwsh
         run: |
