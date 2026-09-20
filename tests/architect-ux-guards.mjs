@@ -46,6 +46,11 @@ for (const id of [
   "wakeButton",
   "wakeState",
   "updateAgentState",
+  "agentUpdateProgress",
+  "agentUpdateRing",
+  "agentUpdatePercent",
+  "agentUpdateFill",
+  "agentUpdateStages",
   "siteClock",
   "projectCreatedOverlay",
   "projectCreatedSummary",
@@ -125,6 +130,14 @@ assert.match(index, /agent_update_required/);
 assert.match(index, /throw new ApiError\(409, "node_offline"\)/);
 assert.match(index, /throw new ApiError\(409, "node_paused"\)/);
 assert.match(architect, /node\.agent_version !== currentReleaseVersion/);
+assert.match(architect, /function latestAgentUpdateCommand/);
+assert.match(architect, /function renderAgentUpdateProgress/);
+assert.match(architect, /command\?\.status === "pending"/);
+assert.match(architect, /command\?\.status === "accepted"/);
+assert.match(architect, /command\?\.status === "completed"/);
+assert.match(architect, /command\?\.status === "failed"/);
+assert.match(architect, /новая версия подтверждена heartbeat/);
+assert.match(architect, /Это этапный индикатор Controller, а не измерение загруженных байтов/);
 assert.match(index, /task_text: taskText/);
 assert.match(index, /mission_types: \["system_inventory"\]/);
 assert.match(index, /source_allowlisting/);
