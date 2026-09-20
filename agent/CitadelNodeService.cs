@@ -270,6 +270,7 @@ namespace CitadelEws
         private static void RunSelfTest()
         {
             string root = Path.Combine(Path.GetTempPath(), "CitadelNodeServiceSelfTest");
+            Directory.CreateDirectory(root);
             var config = ParseArgs(new string[] {
                 "--python", Path.Combine(root, "python.exe"),
                 "--agent", Path.Combine(root, "citadel_node_v2.py"),
