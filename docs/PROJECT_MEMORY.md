@@ -506,3 +506,15 @@ Architect requirements:
 - `ARCHITECT_TOKEN_HASH` remains the bootstrap verifier for initial setup; after site rotation, the D1 verifier is authoritative.
 - Token/recovery changes are audited without storing or logging secret values.
 
+## 2026-09-20 — Explicit emergency Architect access reset
+
+Architect requested a clear on-site emergency recovery/reset option for use with the saved one-time recovery code.
+
+Decision and implementation:
+
+- The Architect login screen exposes a prominent `Аварийное восстановление / сброс доступа` action.
+- Emergency reset changes only the Architect bearer token. It does not delete nodes, projects, missions, reports, models, agent identities, or project data.
+- A valid unused recovery code rotates the Architect token, invalidates the old token immediately, consumes the recovery code, and displays the replacement token once.
+- Recovery secrets must never be pasted into chat, committed to Git, logged, or stored in project memory.
+- Recovery remains rate-limited and audited using the existing D1 security workflow.
+
