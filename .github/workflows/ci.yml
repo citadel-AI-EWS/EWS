@@ -54,13 +54,6 @@ jobs:
           cache: pip
           cache-dependency-path: agent/requirements.txt
       - run: python -m pip install --disable-pip-version-check --requirement agent/requirements.txt
-      - name: Verify Windows x86 dependency wheels exist
-        run: >-
-          python -m pip download --disable-pip-version-check --only-binary=:all:
-          --platform win32 --python-version 313 --implementation cp
-          --abi cp313 --abi abi3
-          --requirement agent/requirements-win32.txt
-          --dest .tmp-win32-wheels
       - name: Build self-contained Windows package
         run: python scripts/build_fixed_agent_package.py
       - name: Verify generated package
@@ -87,8 +80,8 @@ jobs:
               seen.add(name)
           required = {
               "citadel_node_v1.py", "citadel_node_v2.py", "requirements.txt",
-              "requirements-win32.txt", "setup_windows.ps1", "Install Windows Node.cmd", "START_HERE.cmd",
-              "README_RU.txt", "VERIFY_PACKAGE.ps1"
+              "setup_windows.ps1", "Install Windows Node.cmd", "START_HERE.cmd",
+              "CitadelNodeService.cs", "windows_service.ps1", "README_RU.txt", "VERIFY_PACKAGE.ps1"
           }
           assert required <= seen, sorted(required - seen)
           installer = (root / "Install Windows Node.cmd").read_text(encoding="utf-8").lower()
@@ -154,18 +147,72 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python agent/citadel_node_v2.py self-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Parse PowerShell installer and enforce policy
+      - name: Compile Windows SCM service host
         shell: pwsh
         run: |
-          $setup = Get-Content -LiteralPath "agent/setup_windows.ps1" -Raw
-          [void][ScriptBlock]::Create($setup)
+          $candidates = @(
+            (Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"),
+            (Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\csc.exe")
+          )
+          $csc = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $csc) { throw ".NET Framework csc.exe not found" }
+          $out = Join-Path $env:RUNNER_TEMP "CitadelNodeService.exe"
+          $source = (Resolve-Path -LiteralPath "agent\CitadelNodeService.cs").Path
+          & $csc /nologo /optimize+ /target:winexe "/out:$out" /reference:System.ServiceProcess.dll $source
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $out --self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "Windows service host compile/self-test: OK"
+      - name: Validate installer AST and real SCM configuration
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          $setupPath = (Resolve-Path -LiteralPath "agent\setup_windows.ps1").Path
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($setupPath, [ref]$tokens, [ref]$errors)
+          if ($errors.Count) { throw ($errors | Out-String) }
+          $commands = @($ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst]
+          }, $true) | ForEach-Object { $_.GetCommandName() })
+          foreach ($required in @(
+            "Set-CitadelDirectoryAcl",
+            "Set-CitadelServiceDefinition",
+            "Set-CitadelServiceRecovery",
+            "Start-Service",
+            "Get-CimInstance",
+            "Remove-CitadelServiceDefinition"
+          )) {
+            if ($commands -notcontains $required) { throw "Active installer command missing: $required" }
+          }
+
           $installer = (Get-Content -LiteralPath "agent/Install Windows Node.cmd" -Raw).ToLowerInvariant()
-          if ($installer.Contains("executionpolicy bypass")) { throw "ExecutionPolicy Bypass is forbidden" }
-          if ($setup.ToLowerInvariant().Contains("executionpolicy bypass")) { throw "ExecutionPolicy Bypass is forbidden" }
-          if (-not $setup.Contains("Install-PythonFallback")) { throw "Verified Python fallback is missing" }
-          if (-not $setup.Contains("requirements-win32.txt")) { throw "Windows x86 dependency selection is missing" }
-          if ($setup.Contains("Python 3.14 is not installed and Windows Package Manager (winget) is unavailable")) { throw "winget is still mandatory" }
-          Write-Host "Windows installer policy: OK"
+          $setupLower = (Get-Content -LiteralPath $setupPath -Raw).ToLowerInvariant()
+          if ($installer.Contains("executionpolicy bypass") -or $setupLower.Contains("executionpolicy bypass")) {
+            throw "ExecutionPolicy Bypass is forbidden"
+          }
+          if ($setupLower.Contains("createshortcut(") -or $setupLower.Contains("pythonw.exe")) {
+            throw "Legacy Startup lifecycle returned"
+          }
+
+          . (Resolve-Path -LiteralPath "agent\windows_service.ps1").Path
+          $testName = "CitadelEwsCi" + ([Guid]::NewGuid().ToString("N").Substring(0, 8))
+          $testDir = Join-Path $env:RUNNER_TEMP "Citadel Service Path Test"
+          New-Item -ItemType Directory -Force -Path $testDir | Out-Null
+          $mockExe = Join-Path $testDir "Mock Service.exe"
+          Copy-Item -LiteralPath (Join-Path $env:WINDIR "System32\cmd.exe") -Destination $mockExe -Force
+          $imagePath = '"' + $mockExe + '" /c exit 0'
+          try {
+            $configured = Set-CitadelServiceDefinition -Name $testName -DisplayName "CITADEL CI SCM Test" -BinaryPathName $imagePath -StartName "NT AUTHORITY\LocalService" -DelayedAutoStart $true
+            if ([string]$configured.PathName -ne $imagePath) { throw "SCM ImagePath round-trip failed" }
+            if ([string]$configured.StartMode -ne "Auto") { throw "SCM StartMode round-trip failed" }
+            if ([string]$configured.StartName -ne "NT AUTHORITY\LocalService") { throw "SCM account round-trip failed" }
+            $reg = Get-ItemProperty -LiteralPath ("HKLM:\SYSTEM\CurrentControlSet\Services\" + $testName) -Name DelayedAutostart
+            if ([int]$reg.DelayedAutostart -ne 1) { throw "SCM delayed-auto round-trip failed" }
+          } finally {
+            Remove-CitadelServiceDefinition -Name $testName
+          }
+          Write-Host "Windows installer AST + real SCM round-trip: OK"
 
   gate:
     name: CI gate
