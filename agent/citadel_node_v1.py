@@ -554,6 +554,10 @@ class Agent:
         self.stop_path = config.data_dir / "STOP"
         lifecycle_stop = os.environ.get("CITADEL_SERVICE_STOP_FILE", "").strip()
         self.lifecycle_stop_path = Path(lifecycle_stop).resolve() if lifecycle_stop else None
+        service_hold = os.environ.get("CITADEL_SERVICE_HOLD_FILE", "").strip()
+        self.service_hold_path = Path(service_hold).resolve() if service_hold else None
+        service_ready = os.environ.get("CITADEL_SERVICE_READY_FILE", "").strip()
+        self.service_ready_path = Path(service_ready).resolve() if service_ready else None
         self.paused_path = config.data_dir / "PAUSED"
         self.lmstudio_state_path = config.data_dir / "lmstudio-state.json"
         self.network_recovery_path = config.data_dir / "network-recovery.json"
@@ -1900,6 +1904,26 @@ class Agent:
     def lifecycle_stop_requested(self) -> bool:
         return bool(self.lifecycle_stop_path and self.lifecycle_stop_path.exists())
 
+    def service_hold_requested(self) -> bool:
+        return bool(self.service_hold_path and self.service_hold_path.exists())
+
+    def mark_service_ready(self) -> None:
+        if not self.service_ready_path:
+            return
+        atomic_write(
+            self.service_ready_path,
+            json.dumps(
+                {
+                    "node_id": self.require_node_id(),
+                    "agent_version": VERSION,
+                    "windows_core_service": "windows_core_service" in self.capabilities,
+                    "heartbeat_at": now_iso(),
+                },
+                sort_keys=True,
+            )
+            + "\n",
+        )
+
     def interruptible_sleep(self, seconds: float) -> None:
         deadline = time.monotonic() + max(0.0, seconds)
         while True:
@@ -1914,6 +1938,11 @@ class Agent:
         self.enroll()
         if self.lifecycle_stop_requested() or self.stop_path.exists():
             raise SystemExit(0)
+        if self.service_hold_requested():
+            if time.monotonic() - self.last_heartbeat >= self.config.heartbeat_seconds:
+                self.heartbeat()
+                self.mark_service_ready()
+            return
         self.handle_commands()
         if time.monotonic() - self.last_heartbeat >= self.config.heartbeat_seconds:
             self.heartbeat()
@@ -2158,6 +2187,34 @@ def self_test() -> int:
             }),
             "valid LM Studio settings rejected",
         )
+        service_hold_path = root / "SERVICE_HOLD"
+        service_ready_path = root / "SERVICE_READY"
+        previous_hold_file = os.environ.get("CITADEL_SERVICE_HOLD_FILE")
+        previous_ready_file = os.environ.get("CITADEL_SERVICE_READY_FILE")
+        try:
+            os.environ["CITADEL_SERVICE_HOLD_FILE"] = str(service_hold_path)
+            os.environ["CITADEL_SERVICE_READY_FILE"] = str(service_ready_path)
+            hold_agent = Agent(config)
+            require_test(
+                hold_agent.service_hold_path == service_hold_path.resolve()
+                and hold_agent.service_ready_path == service_ready_path.resolve(),
+                "service hold/readiness paths were not accepted",
+            )
+            service_hold_path.write_text("hold\n", encoding="utf-8")
+            require_test(
+                hold_agent.service_hold_requested(),
+                "service hold marker was not detected",
+            )
+        finally:
+            if previous_hold_file is None:
+                os.environ.pop("CITADEL_SERVICE_HOLD_FILE", None)
+            else:
+                os.environ["CITADEL_SERVICE_HOLD_FILE"] = previous_hold_file
+            if previous_ready_file is None:
+                os.environ.pop("CITADEL_SERVICE_READY_FILE", None)
+            else:
+                os.environ["CITADEL_SERVICE_READY_FILE"] = previous_ready_file
+
         lifecycle_stop_path = root / "SERVICE_STOP"
         previous_stop_file = os.environ.get("CITADEL_SERVICE_STOP_FILE")
         try:
