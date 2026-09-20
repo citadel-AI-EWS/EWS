@@ -1,0 +1,90 @@
+name: Reset Architect Access
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type RESET_ARCHITECT_ACCESS to confirm the verifier reset.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: architect-access-reset
+  cancel-in-progress: false
+
+jobs:
+  reset:
+    if: inputs.confirm == 'RESET_ARCHITECT_ACCESS'
+    runs-on: ubuntu-latest
+    environment: cloudflare-test
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install pinned Node dependencies
+        run: npm ci
+
+      - name: Validate protected Architect verifier
+        shell: bash
+        env:
+          ARCHITECT_TOKEN_HASH: ${{ secrets.ARCHITECT_TOKEN_HASH }}
+        run: |
+          if [[ ! "$ARCHITECT_TOKEN_HASH" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "ARCHITECT_TOKEN_HASH must be a lowercase SHA-256 hex value."
+            exit 1
+          fi
+
+      - name: Reset Architect verifier in remote D1
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ARCHITECT_TOKEN_HASH: ${{ secrets.ARCHITECT_TOKEN_HASH }}
+        run: |
+          set -euo pipefail
+          reset_sql="$RUNNER_TEMP/reset-architect-access.sql"
+          trap 'rm -f "$reset_sql"' EXIT
+          cat > "$reset_sql" <<SQL
+          UPDATE architect_auth_state
+          SET token_hash = '$ARCHITECT_TOKEN_HASH',
+              bootstrap_mode = 0,
+              recovery_hash = NULL,
+              recovery_used = 1,
+              token_rotated_at = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE singleton_id = 1;
+
+          INSERT INTO audit_events (
+            actor_type, actor_id, action, target_type, target_id, details_json
+          ) VALUES (
+            'github_actions', 'manual_reset', 'architect.token.reset',
+            'architect_auth', 'singleton', '{"method":"protected_github_environment"}'
+          );
+          SQL
+
+          npx wrangler d1 execute citadel-control --remote --file="$reset_sql"
+
+      - name: Verify Architect reset state
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          npx wrangler d1 execute citadel-control --remote --command             "SELECT singleton_id, bootstrap_mode, recovery_used, token_rotated_at FROM architect_auth_state WHERE singleton_id = 1;"
+
+      - name: Summary
+        if: success()
+        run: |
+          echo "### Architect access reset" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Protected GitHub environment: cloudflare-test" >> "$GITHUB_STEP_SUMMARY"
+          echo "- D1 verifier: updated" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Existing nodes, projects, missions, reports, and model data: unchanged" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Previous Architect token: invalidated" >> "$GITHUB_STEP_SUMMARY"
