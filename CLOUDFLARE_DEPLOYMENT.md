@@ -33,3 +33,12 @@ the workflow validates and deploys without local packaging or manual file copyin
 v14 mixed Client/Architect page. This environment had no Cloudflare authentication, so replacing that
 live deployment was technically impossible. A successful `wrangler deploy --dry-run` confirms the
 bundle/configuration, not ownership of or permission to update the live account.
+
+
+## AEGIS fleet integration — 2026-09-20
+
+The useful browser-side behavior recovered from the AEGIS Control Hub has been integrated into the canonical CITADEL Operations Hub rather than deployed as a second site. The integration keeps the real-node fleet view, session-scoped Architect authentication, 10-second refresh cadence, CPU/RAM and agent-version visibility, LM Studio readiness, computer identity, and an explicit per-node Health action backed by the existing signed diagnostic mission path.
+
+Tailscale-specific URL validation, labels, UI fields, and dependencies are intentionally excluded from this integration. CITADEL continues to use its own HTTPS Worker/Controller API, signed Agent requests, Architect bearer authorization, D1 state, and the existing protected Cloudflare deployment workflow.
+
+This integration is part of the canonical build produced by scripts/build_site.sh; a successful merge to main must therefore pass CI before the Cloudflare TEST deployment workflow can publish it.
