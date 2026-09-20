@@ -494,3 +494,15 @@ Architect requirements:
 - Windows setup restricts the state directory ACL to the installing user, SYSTEM and Administrators.
 - Replay protection remains compatible from 0.3.10 onward; 0.3.11 is a security hardening release, not a new command channel.
 - Windows Service lifecycle remains the next separate increment; do not combine it with this identity migration PR.
+
+
+## Agent 0.3.12 — Windows Core Service
+- Windows Core Agent moves from a user Startup shortcut/pythonw lifecycle to the visible SCM service `CitadelEWSNode`.
+- Service account: `NT AUTHORITY\LocalService`; startup: Automatic (Delayed Start); SCM recovery restarts unexpected service-host failures.
+- The checked-in `agent/CitadelNodeService.cs` host supervises only the fixed CITADEL Python entrypoint and never accepts arbitrary command text.
+- Existing user-profile node identity is migrated into `%ProgramData%\CitadelEWS\state`; the machine-bound DPAPI identity from 0.3.11 remains usable by LocalService on the same host.
+- Installer removes the legacy Startup shortcut, uses machine-wide Python, creates a ProgramData venv, hardens ACLs, supports idempotent repair and explicit uninstall.
+- Service-managed agent restart/update uses reserved process exit code 75 so the SCM host reloads the updated Python files. Signed stop uses code 76 and leaves the service host dormant instead of triggering recovery.
+- A persistent STOP marker from signed uninstall is respected; local administrator repair clears it explicitly.
+- LM Studio remains the reviewed headless/llmster integration. Under the Core Service it is service-profile scoped and does not depend on an interactive desktop session.
+- No arbitrary shell, WinRM, credential collection, hidden persistence or inbound management port was added.
