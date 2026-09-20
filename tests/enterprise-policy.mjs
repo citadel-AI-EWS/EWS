@@ -87,4 +87,34 @@ assert.ok(unhealthy.checks.some((check) => check.key === "latest_agent" && !chec
 assert.ok(unhealthy.checks.some((check) => check.key === "event_log" && !check.ok));
 assert.ok(unhealthy.checks.some((check) => check.key === "pending_reboot" && !check.ok));
 
+const microsoftPolicy = evaluateEnterpriseNode(
+  healthyNode,
+  {
+    ...healthyWindowsInventory,
+    windows_enterprise: {
+      ...healthyWindowsInventory.windows_enterprise,
+      management: {
+        domain_joined: false,
+        domain: null,
+        group_policy_service: "Stopped",
+        intune_management_extension: null
+      },
+      hyper_v: { optional_feature_state: 0, query_ok: false },
+      service_identity: { configured: false, service_account: "NT AUTHORITY\\LocalService" }
+    }
+  },
+  {
+    ...DEFAULT_ENTERPRISE_POLICY,
+    require_domain_join: true,
+    require_group_policy_service: true,
+    require_intune_extension: true,
+    require_hyperv: true,
+    require_managed_service_account: true
+  },
+  "0.3.13"
+);
+for (const key of ["domain_join", "group_policy", "intune_extension", "hyper_v", "managed_service_account"]) {
+  assert.ok(microsoftPolicy.checks.some((check) => check.key === key && !check.ok), key);
+}
+
 console.log("Enterprise policy/RBAC guards: PASS");
