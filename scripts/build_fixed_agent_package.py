@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
-PACKAGE_NAME = "CITADEL_FIXED_AGENT_0.3.12_2026-09-20"
+PACKAGE_NAME = "CITADEL_FIXED_AGENT_0.3.13_2026-09-20"
 STAGE = DIST / PACKAGE_NAME
 ZIP_PATH = DIST / f"{PACKAGE_NAME}.zip"
 
@@ -274,7 +274,7 @@ def write_extras() -> None:
         newline="",
     )
     readme = (
-        "CITADEL/EWS — исправленный самодостаточный пакет 0.3.12\n\n"
+        "CITADEL/EWS — исправленный самодостаточный пакет 0.3.13\n\n"
         "1. Распакуйте ZIP полностью.\n"
         "2. Запустите START_HERE.cmd.\n"
         "3. Агент использует HTTPS Controller: https://citadel-ai.init1.workers.dev\n\n"
@@ -284,7 +284,7 @@ def write_extras() -> None:
         "- localhost / 127.0.0.1 / ::1 согласованы для локального HTTP-теста.\n"
         "- Агент определяет текущий LAN/network IPv4; адреса не зашиты в код и могут меняться по DHCP.\n"
         "- LAN/network/MAC входят в system_inventory и heartbeat; Controller использует их для диагностики и ограниченного Wake-on-LAN.\n"
-        "- Core Agent устанавливается как Windows Service CitadelEWSNode под LocalService с Automatic (Delayed Start).\n"
+        "- Core Agent устанавливается как Windows Service CitadelEWSNode под LocalService с Automatic (Delayed Start).\n"        "- Read-only Enterprise Probe собирает CIM/Perf, Event Log, Windows Update, Hyper-V, domain/GPO, MDM/Intune и service-identity status без remote shell.\n"
         "- Старый Startup shortcut удаляется; существующая node identity мигрирует в ProgramData и сохраняется.\n"
         "- setup_windows.ps1 -Uninstall выполняет явное удаление; -PreserveState сохраняет node state по запросу.\n"
         "- В архиве находятся agent-файлы, проверяемый CitadelNodeService.cs и windows_service.ps1: установка не скачивает Python-код из GitHub.\n\n"
@@ -325,6 +325,7 @@ def build() -> Path:
         "Install Windows Node.cmd",
         "CitadelNodeService.cs",
         "windows_service.ps1",
+        "windows_enterprise_probe.ps1",
         "requirements.txt",
     ):
         shutil.copy2(ROOT / "agent" / name, STAGE / name)
@@ -334,10 +335,10 @@ def build() -> Path:
     setup_path = STAGE / "setup_windows.ps1"
     v1_hash = sha256(v1_path)
     v2_hash = sha256(v2_path)
-    if 'VERSION = "0.3.12"' not in v1_path.read_text(encoding="utf-8"):
-        raise RuntimeError("repository v1 source is not release 0.3.12")
-    if 'VERSION = "0.3.12"' not in v2_path.read_text(encoding="utf-8"):
-        raise RuntimeError("repository v2 source is not release 0.3.12")
+    if 'VERSION = "0.3.13"' not in v1_path.read_text(encoding="utf-8"):
+        raise RuntimeError("repository v1 source is not release 0.3.13")
+    if 'VERSION = "0.3.13"' not in v2_path.read_text(encoding="utf-8"):
+        raise RuntimeError("repository v2 source is not release 0.3.13")
     setup_text = setup_path.read_text(encoding="utf-8")
     service_source = STAGE / "CitadelNodeService.cs"
     service_helper = STAGE / "windows_service.ps1"
@@ -351,8 +352,12 @@ def build() -> Path:
     helper_hash = sha256(service_helper)
     if f'$ExpectedServiceHelperSha256 = "{helper_hash}"' not in setup_text:
         raise RuntimeError("setup_windows.ps1 service-helper hash pin does not match repository source")
-    if '$ReleaseVersion = "0.3.12"' not in setup_text:
-        raise RuntimeError("setup_windows.ps1 release version is not 0.3.12")
+    enterprise_probe = STAGE / "windows_enterprise_probe.ps1"
+    enterprise_probe_hash = sha256(enterprise_probe)
+    if f'$ExpectedEnterpriseProbeSha256 = "{enterprise_probe_hash}"' not in setup_text:
+        raise RuntimeError("setup_windows.ps1 enterprise-probe hash pin does not match repository source")
+    if '$ReleaseVersion = "0.3.13"' not in setup_text:
+        raise RuntimeError("setup_windows.ps1 release version is not 0.3.13")
     write_extras()
 
     manifest_names = sorted(
