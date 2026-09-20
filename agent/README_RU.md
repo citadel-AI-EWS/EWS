@@ -9,6 +9,13 @@
 - State/install ACL разрешают LocalService только необходимый Modify-доступ; SYSTEM и Administrators сохраняют полный контроль.
 - Подписанный `restart`/update перезапускает Python child внутри service-host; подписанный `stop` не вызывает recovery-loop.
 - Узел сообщает capability `windows_core_service` только когда Python Core реально запущен через SCM-host; одна версия 0.3.12 сама по себе не считается доказательством миграции.
+- Обычный Windows Stop/Shutdown использует отдельный временный файл `SERVICE_STOP`; постоянный `STOP` зарезервирован только для подписанного uninstall и не может случайно пережить перезагрузку из-за остановки Windows.
+- Установка строит новый versioned release полностью до cutover: venv, зависимости, self-test, enrollment/live-cycle и компиляция service-host проходят, пока старый агент продолжает работать.
+- При замене уже существующей службы её SCM-конфигурация сохраняется и восстанавливается при ошибке запуска новой версии.
+- Профиль исходного пользователя определяется по SID, переданному через UAC; identity/PAUSED/queue переносятся именно из его профиля, а не из профиля введённого администратора.
+- ACL для ProgramData собирается с нуля до копирования identity или исполняемых файлов: SYSTEM/Administrators — FullControl, LocalService — Modify.
+- Новый service-agent во время cutover временно стартует локально на PAUSED, чтобы не было окна двойного выполнения заданий со старым Startup-agent.
+- Конфигурация службы записывается через Win32_Service API и после записи перечитывается и проверяется; хрупкий `sc.exe binPath=` не используется.
 - `setup_windows.ps1 -Uninstall` удаляет службу и CITADEL-компоненты; `-PreserveState` оставляет node state по явному запросу.
 - LM Studio остаётся headless runtime: если он устанавливается из Core Service, он работает в профиле LocalService, без интерактивного desktop-сеанса.
 
