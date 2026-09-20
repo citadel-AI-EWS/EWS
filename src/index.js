@@ -3728,6 +3728,289 @@ async function architectExperience(request, env) {
   return json({ ok: true, ...getProjectExperienceRegistry() });
 }
 
+async function getEnterprisePolicy(env) {
+  await ensureEnterpriseStorage(env);
+  const row = await env.DB.prepare(`
+    SELECT policy_json, updated_at
+    FROM enterprise_desired_state
+    WHERE singleton_id = 1
+  `).first();
+  return {
+    policy: normalizeEnterprisePolicy(safeJson(row?.policy_json, DEFAULT_ENTERPRISE_POLICY)),
+    updated_at: row?.updated_at || null
+  };
+}
+
+async function architectEnterpriseOverview(request, env) {
+  const actor = await authenticateArchitect(request, env);
+  await Promise.all([
+    ensureEnterpriseStorage(env),
+    backfillLegacyReports(env)
+  ]);
+
+  const [policyState, sitesQuery, groupsQuery, scopesQuery, nodesQuery, reportsQuery, integrityCounts] =
+    await Promise.all([
+      getEnterprisePolicy(env),
+      env.DB.prepare(`
+        SELECT site_id, name, description, created_at, updated_at
+        FROM enterprise_sites ORDER BY name ASC
+      `).all(),
+      env.DB.prepare(`
+        SELECT group_id, name, description, created_at, updated_at
+        FROM enterprise_node_groups ORDER BY name ASC
+      `).all(),
+      env.DB.prepare(`
+        SELECT s.node_id, s.site_id, es.name AS site_name,
+          s.group_id, eg.name AS group_name, s.updated_at
+        FROM enterprise_node_scope AS s
+        LEFT JOIN enterprise_sites AS es ON es.site_id = s.site_id
+        LEFT JOIN enterprise_node_groups AS eg ON eg.group_id = s.group_id
+      `).all(),
+      env.DB.prepare(`
+        SELECT node_id, hostname, os_name, os_version, architecture,
+          agent_version, status, capabilities_json, cpu_percent, memory_percent,
+          enrolled_at, last_seen_at
+        FROM nodes
+        WHERE status != 'revoked'
+        ORDER BY last_seen_at DESC
+        LIMIT 500
+      `).all(),
+      env.DB.prepare(`
+        SELECT node_id, report_id, report_json, report_sha256,
+          report_size_bytes, created_at
+        FROM agent_reports
+        WHERE report_type = 'system_inventory'
+        ORDER BY created_at DESC, report_id DESC
+        LIMIT 1000
+      `).all(),
+      env.DB.prepare(`
+        SELECT
+          COUNT(*) AS total_reports,
+          SUM(CASE WHEN report_sha256 IS NOT NULL
+            AND length(report_sha256) = 64
+            AND report_size_bytes IS NOT NULL
+            AND report_size_bytes >= 0 THEN 1 ELSE 0 END) AS reports_with_integrity_metadata
+        FROM agent_reports
+      `).first()
+    ]);
+
+  const scopes = new Map((scopesQuery.results || []).map((row) => [row.node_id, row]));
+  const latestInventory = new Map();
+  for (const row of reportsQuery.results || []) {
+    if (!latestInventory.has(row.node_id)) latestInventory.set(row.node_id, row);
+  }
+
+  const nodes = [];
+  let compliant = 0;
+  let enterpriseProbeReady = 0;
+  let verifiedLatestInventories = 0;
+  for (const node of nodesQuery.results || []) {
+    const report = latestInventory.get(node.node_id);
+    const inventory = report ? safeJson(report.report_json, null) : null;
+    let inventoryIntegrity = null;
+    if (report?.report_json && report?.report_sha256) {
+      const digest = await sha256Hex(report.report_json);
+      inventoryIntegrity = constantTimeHexEqual(
+        digest,
+        String(report.report_sha256).toLowerCase()
+      );
+      if (inventoryIntegrity) verifiedLatestInventories += 1;
+    }
+    const compliance = evaluateEnterpriseNode(
+      node,
+      inventory,
+      policyState.policy,
+      LATEST_NODE_RELEASE.version
+    );
+    if (compliance.compliant) compliant += 1;
+    if (compliance.windows_enterprise?.available === true) enterpriseProbeReady += 1;
+    const scope = scopes.get(node.node_id) || {};
+    nodes.push({
+      ...node,
+      capabilities: safeJson(node.capabilities_json, []),
+      capabilities_json: undefined,
+      site_id: scope.site_id || null,
+      site_name: scope.site_name || null,
+      group_id: scope.group_id || null,
+      group_name: scope.group_name || null,
+      latest_inventory_at: report?.created_at || null,
+      latest_inventory_integrity: inventoryIntegrity,
+      compliance
+    });
+  }
+
+  return json({
+    ok: true,
+    actor_role: actor.role,
+    service_catalog: {
+      windows_service: "enabled",
+      dpapi_identity: "enabled",
+      event_log: "read_only_probe",
+      cim_performance_counters: "read_only_probe",
+      gmsa_dmsa: "readiness_and_identity_detection",
+      windows_update_hotpatch: "read_only_state",
+      hyper_v: "read_only_adapter",
+      gpo_intune_mdm: "read_only_detection",
+      rbac: "enabled",
+      desired_state_policy: "enabled",
+      sites_node_groups: "enabled",
+      storage_integrity: "sha256_verified",
+      recovery_manifest: "enabled"
+    },
+    policy: policyState.policy,
+    policy_updated_at: policyState.updated_at,
+    sites: sitesQuery.results || [],
+    groups: groupsQuery.results || [],
+    counts: {
+      nodes: nodes.length,
+      compliant_nodes: compliant,
+      noncompliant_nodes: nodes.length - compliant,
+      windows_enterprise_probe_ready: enterpriseProbeReady
+    },
+    storage_integrity: {
+      total_reports: Number(integrityCounts?.total_reports || 0),
+      reports_with_integrity_metadata: Number(integrityCounts?.reports_with_integrity_metadata || 0),
+      verified_latest_system_inventories: verifiedLatestInventories
+    },
+    nodes
+  });
+}
+
+async function architectSetEnterprisePolicy(request, env) {
+  await authenticateArchitect(request, env);
+  await ensureEnterpriseStorage(env);
+  const body = parseJsonObject(await readBodyText(request, 8192));
+  const policy = normalizeEnterprisePolicy(body.policy || body);
+  const policyJson = JSON.stringify(policy);
+  await env.DB.batch([
+    env.DB.prepare(`
+      INSERT INTO enterprise_desired_state (singleton_id, policy_json, updated_at)
+      VALUES (1, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(singleton_id) DO UPDATE SET
+        policy_json = excluded.policy_json,
+        updated_at = CURRENT_TIMESTAMP
+    `).bind(policyJson),
+    env.DB.prepare(`
+      INSERT INTO audit_events (
+        actor_type, actor_id, action, target_type, target_id, details_json
+      ) VALUES ('architect', 'primary', 'enterprise.policy.updated',
+        'enterprise_policy', 'singleton', ?)
+    `).bind(policyJson)
+  ]);
+  return json({ ok: true, policy });
+}
+
+async function architectCreateEnterpriseSite(request, env) {
+  await authenticateArchitect(request, env);
+  await ensureEnterpriseStorage(env);
+  const body = parseJsonObject(await readBodyText(request, 4096));
+  const name = requireString(body.name, "site_name", 120);
+  const description = optionalString(body.description, "site_description", 500) || "";
+  const siteId = `site_${crypto.randomUUID()}`;
+  try {
+    await env.DB.prepare(`
+      INSERT INTO enterprise_sites (site_id, name, description)
+      VALUES (?, ?, ?)
+    `).bind(siteId, name, description).run();
+  } catch (error) {
+    if (String(error).toLowerCase().includes("unique")) {
+      throw new ApiError(409, "site_name_exists");
+    }
+    throw error;
+  }
+  return json({ ok: true, site: { site_id: siteId, name, description } }, 201);
+}
+
+async function architectCreateEnterpriseGroup(request, env) {
+  await authenticateArchitect(request, env);
+  await ensureEnterpriseStorage(env);
+  const body = parseJsonObject(await readBodyText(request, 4096));
+  const name = requireString(body.name, "group_name", 120);
+  const description = optionalString(body.description, "group_description", 500) || "";
+  const groupId = `group_${crypto.randomUUID()}`;
+  try {
+    await env.DB.prepare(`
+      INSERT INTO enterprise_node_groups (group_id, name, description)
+      VALUES (?, ?, ?)
+    `).bind(groupId, name, description).run();
+  } catch (error) {
+    if (String(error).toLowerCase().includes("unique")) {
+      throw new ApiError(409, "group_name_exists");
+    }
+    throw error;
+  }
+  return json({ ok: true, group: { group_id: groupId, name, description } }, 201);
+}
+
+async function architectSetNodeEnterpriseScope(request, env, nodeId) {
+  await authenticateArchitect(request, env);
+  await ensureEnterpriseStorage(env);
+  const node = await env.DB.prepare(
+    "SELECT node_id FROM nodes WHERE node_id = ? AND status != 'revoked'"
+  ).bind(nodeId).first();
+  if (!node) throw new ApiError(404, "node_not_found");
+
+  const body = parseJsonObject(await readBodyText(request, 4096));
+  const siteId = optionalString(body.site_id, "site_id", 128);
+  const groupId = optionalString(body.group_id, "group_id", 128);
+  if (siteId) {
+    const site = await env.DB.prepare(
+      "SELECT site_id FROM enterprise_sites WHERE site_id = ?"
+    ).bind(siteId).first();
+    if (!site) throw new ApiError(400, "invalid_site_id");
+  }
+  if (groupId) {
+    const group = await env.DB.prepare(
+      "SELECT group_id FROM enterprise_node_groups WHERE group_id = ?"
+    ).bind(groupId).first();
+    if (!group) throw new ApiError(400, "invalid_group_id");
+  }
+
+  await env.DB.prepare(`
+    INSERT INTO enterprise_node_scope (node_id, site_id, group_id, updated_at)
+    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(node_id) DO UPDATE SET
+      site_id = excluded.site_id,
+      group_id = excluded.group_id,
+      updated_at = CURRENT_TIMESTAMP
+  `).bind(nodeId, siteId, groupId).run();
+  return json({ ok: true, node_id: nodeId, site_id: siteId, group_id: groupId });
+}
+
+async function architectEnterpriseRecoveryManifest(request, env) {
+  await authenticateArchitect(request, env);
+  await Promise.all([ensureEnterpriseStorage(env), backfillLegacyReports(env)]);
+  const [policyState, sites, groups, scopes, reports] = await Promise.all([
+    getEnterprisePolicy(env),
+    env.DB.prepare("SELECT site_id, name, description, updated_at FROM enterprise_sites ORDER BY name").all(),
+    env.DB.prepare("SELECT group_id, name, description, updated_at FROM enterprise_node_groups ORDER BY name").all(),
+    env.DB.prepare("SELECT node_id, site_id, group_id, updated_at FROM enterprise_node_scope ORDER BY node_id").all(),
+    env.DB.prepare(`
+      SELECT report_id, result_id, assignment_id, mission_id, node_id,
+        report_type, report_sha256, report_size_bytes, sensitivity, created_at
+      FROM agent_reports
+      ORDER BY created_at DESC, report_id DESC
+      LIMIT 5000
+    `).all()
+  ]);
+  const manifest = {
+    schema: "citadel.enterprise.recovery-manifest.v1",
+    generated_at: new Date().toISOString(),
+    policy: policyState.policy,
+    sites: sites.results || [],
+    groups: groups.results || [],
+    node_scope: scopes.results || [],
+    reports: reports.results || []
+  };
+  const manifestJson = JSON.stringify(manifest);
+  return json({
+    ok: true,
+    manifest,
+    manifest_sha256: await sha256Hex(manifestJson),
+    note: "Manifest catalogs integrity metadata and topology; it does not expose report bodies or secrets."
+  });
+}
+
 async function architectOverview(request, env) {
   await authenticateArchitect(request, env);
   await Promise.all([
