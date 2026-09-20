@@ -21,7 +21,7 @@
     .item strong{display:block;margin-bottom:5px}.status{margin-top:15px;padding:13px;border-radius:11px;background:#0b1222;white-space:pre-wrap;overflow-wrap:anywhere}
     .good{border-left:4px solid #35d07f}.bad{border-left:4px solid #ff6874}.muted{color:#93a0ba}.section-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
     .section-head button,.item button{width:auto;margin:0;padding:10px 12px}.report-body{margin:12px 0 0;padding:13px;border-radius:11px;background:#080e1d;color:#dfe7fb;white-space:pre-wrap;overflow-wrap:anywhere;max-height:55vh;overflow:auto}
-    .control-buttons{display:grid;grid-template-columns:1fr 1fr;gap:9px}.control-buttons button{margin-top:10px}.control-buttons .full{grid-column:1/-1}
+    .control-buttons{display:grid;grid-template-columns:1fr 1fr;gap:9px}.control-buttons button{margin-top:10px}.control-buttons .full{grid-column:1/-1}.security-secret{margin-top:12px;padding:13px;border:1px solid #42628f;border-radius:12px;background:#080e1d}.security-secret pre{white-space:pre-wrap;overflow-wrap:anywhere;user-select:all}.security-warning{font-size:12px;color:#e6be76}.login-recovery{margin-top:12px;padding-top:12px;border-top:1px solid #273857}
     .ops-shell{position:relative;overflow:hidden;margin-top:17px;padding:22px;border:1px solid #2c4368;border-radius:22px;background:linear-gradient(145deg,rgba(12,24,43,.98),rgba(8,14,28,.98));box-shadow:0 24px 80px #0008}
     .ops-shell:before{content:"";position:absolute;inset:0;pointer-events:none;background-image:linear-gradient(rgba(93,143,220,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(93,143,220,.055) 1px,transparent 1px);background-size:28px 28px;mask-image:linear-gradient(to bottom,black,transparent 88%)}
     .ops-head{position:relative;display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex-wrap:wrap}.ops-title{font-size:13px;font-weight:950;letter-spacing:.18em;color:#83b5ff}.ops-head h2{font-size:27px;margin:5px 0}.ops-sub{color:#8ca4c8;font-size:13px}
@@ -51,6 +51,13 @@
       <label for="token" data-i18n="tokenLabel">Секрет архитектора</label>
       <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="citadel_arch_…">
       <button id="loginButton" type="button" data-i18n="loginButton">Войти</button>
+      <button id="lostTokenButton" class="secondary" type="button">Я потерял токен</button>
+      <div id="recoveryLoginPanel" class="login-recovery hidden">
+        <label for="recoveryCodeInput">Одноразовый recovery-код</label>
+        <input id="recoveryCodeInput" type="password" autocomplete="off" spellcheck="false" placeholder="citadel_recovery_…">
+        <button id="recoverTokenButton" class="danger" type="button">Заменить потерянный токен</button>
+        <div id="recoveryLoginState" class="status">Recovery-код используется один раз. Старый токен после восстановления сразу перестанет работать.</div>
+      </div>
       <p class="small" data-i18n="loginHint">Секрет хранится только до закрытия этой вкладки.</p>
     </section>
 
@@ -60,6 +67,22 @@
         <button id="openOperationsBrief" class="secondary" type="button">Сводка</button>
         <button id="logoutButton" class="danger" type="button" data-i18n="logout">Выйти</button>
       </div>
+
+      <section id="architectSecurityCard" class="card">
+        <h2>Безопасность доступа Architect</h2>
+        <p class="small">Текущий токен никогда не отображается. Здесь можно выпустить новый токен или создать отдельный одноразовый recovery-код на случай потери.</p>
+        <div id="architectSecurityState" class="status">Проверяю состояние защиты…</div>
+        <div class="control-buttons">
+          <button id="createRecoveryCodeButton" class="secondary" type="button">Создать / заменить recovery-код</button>
+          <button id="rotateArchitectTokenButton" class="danger" type="button">Сменить токен</button>
+        </div>
+        <div id="securitySecretPanel" class="security-secret hidden">
+          <b id="securitySecretTitle">Новый секрет</b>
+          <pre id="securitySecretValue"></pre>
+          <button id="copySecuritySecretButton" class="secondary" type="button">Копировать</button>
+          <p class="security-warning">Сохраните сейчас. После закрытия этого блока сервер не сможет показать этот секрет повторно.</p>
+        </div>
+      </section>
 
       <section id="liveOperations" class="ops-shell">
         <div class="ops-head">
@@ -313,6 +336,18 @@
     const dashboard = document.getElementById("dashboard");
     const tokenInput = document.getElementById("token");
     const loginButton = document.getElementById("loginButton");
+    const lostTokenButton = document.getElementById("lostTokenButton");
+    const recoveryLoginPanel = document.getElementById("recoveryLoginPanel");
+    const recoveryCodeInput = document.getElementById("recoveryCodeInput");
+    const recoverTokenButton = document.getElementById("recoverTokenButton");
+    const recoveryLoginState = document.getElementById("recoveryLoginState");
+    const architectSecurityState = document.getElementById("architectSecurityState");
+    const createRecoveryCodeButton = document.getElementById("createRecoveryCodeButton");
+    const rotateArchitectTokenButton = document.getElementById("rotateArchitectTokenButton");
+    const securitySecretPanel = document.getElementById("securitySecretPanel");
+    const securitySecretTitle = document.getElementById("securitySecretTitle");
+    const securitySecretValue = document.getElementById("securitySecretValue");
+    const copySecuritySecretButton = document.getElementById("copySecuritySecretButton");
     const refreshButton = document.getElementById("refreshButton");
     const logoutButton = document.getElementById("logoutButton");
     const createMissionButton = document.getElementById("createMissionButton");
@@ -1450,18 +1485,58 @@
       if (!(registry.entries || []).length) addText(experienceList, "p", "Проверенных записей опыта пока нет.", "muted");
     }
 
+    function showSecuritySecret(title, value) {
+      securitySecretTitle.textContent = title;
+      securitySecretValue.textContent = value;
+      securitySecretPanel.classList.remove("hidden");
+    }
+
+    function hideSecuritySecret() {
+      securitySecretValue.textContent = "";
+      securitySecretPanel.classList.add("hidden");
+    }
+
+    function renderSecurityState(state = {}) {
+      architectSecurityState.textContent = [
+        state.recovery_configured ? "✓ Recovery-код настроен." : "⚠ Recovery-код ещё не создан.",
+        state.token_rotated_at ? "Последняя смена токена: " + state.token_rotated_at : "Токен ещё не менялся через сайт.",
+        state.bootstrap_mode ? "Сейчас используется bootstrap-режим Cloudflare secret." : "Активный токен управляется безопасной ротацией Controller."
+      ].join("\n");
+      architectSecurityState.className = "status " + (state.recovery_configured ? "good" : "");
+    }
+
+    async function refreshSecurityStatus() {
+      const data = await api("/api/v1/architect/security");
+      renderSecurityState(data.security || {});
+      return data.security || {};
+    }
+
+    async function publicSecurityRequest(path, body) {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify(body)
+      });
+      const data = await response.json().catch(() => ({ error: "invalid_server_response" }));
+      if (!response.ok) throw new Error(data.error || ("HTTP " + response.status));
+      return data;
+    }
+
     async function loadDashboard() {
       setStatus("Загружаю Live Operations…");
-      const [data, reports, presence, release, projects, roles, experience] = await Promise.all([
+      const [data, reports, presence, release, projects, roles, experience, security] = await Promise.all([
         api("/api/v1/architect/overview"),
         api("/api/v1/architect/reports?limit=50&offset=0"),
         api("/api/v1/architect/presence"),
         api("/api/v1/architect/release"),
         api("/api/v1/architect/projects"),
         api("/api/v1/architect/work-roles"),
-        api("/api/v1/architect/experience")
+        api("/api/v1/architect/experience"),
+        api("/api/v1/architect/security")
       ]);
       currentPresence = presence.presence || [];
+      renderSecurityState(security.security || {});
       currentReleaseVersion = release.release?.version || "";
       updateButton.textContent = currentReleaseVersion
         ? `Обновить агент → ${currentReleaseVersion}`
@@ -1535,6 +1610,9 @@
       architectToken = "";
       sessionStorage.removeItem("citadel-architect-token");
       tokenInput.value = "";
+      recoveryCodeInput.value = "";
+      recoveryLoginPanel.classList.add("hidden");
+      hideSecuritySecret();
       closeReportDetail();
       currentReports = [];
       reportNextOffset = null;
@@ -1548,6 +1626,91 @@
       loginCard.classList.remove("hidden");
       setStatus(message);
     }
+
+    lostTokenButton.addEventListener("click", () => {
+      recoveryLoginPanel.classList.toggle("hidden");
+      recoveryLoginState.textContent = "Введите сохранённый одноразовый recovery-код.";
+      recoveryLoginState.className = "status";
+    });
+
+    recoverTokenButton.addEventListener("click", async () => {
+      const recoveryCode = recoveryCodeInput.value.trim();
+      if (!recoveryCode) {
+        recoveryLoginState.textContent = "Введите recovery-код.";
+        recoveryLoginState.className = "status bad";
+        return;
+      }
+      if (!confirm("Старый Architect token будет немедленно аннулирован. Продолжить?")) return;
+      recoverTokenButton.disabled = true;
+      try {
+        const data = await publicSecurityRequest("/api/v1/architect/security/recover-token", {
+          recovery_code: recoveryCode,
+          confirm: "RECOVER_ARCHITECT_TOKEN"
+        });
+        architectToken = data.architect_token;
+        sessionStorage.setItem("citadel-architect-token", architectToken);
+        recoveryCodeInput.value = "";
+        await loadDashboard();
+        showSecuritySecret("Новый Architect token", architectToken);
+        setStatus("Доступ восстановлен. Старый токен аннулирован, recovery-код использован и больше не действует.", "good");
+      } catch (error) {
+        recoveryLoginState.textContent = "Восстановление не выполнено: " + error.message;
+        recoveryLoginState.className = "status bad";
+      } finally {
+        recoverTokenButton.disabled = false;
+      }
+    });
+
+    createRecoveryCodeButton.addEventListener("click", async () => {
+      if (!confirm("Создать новый recovery-код? Предыдущий recovery-код перестанет работать.")) return;
+      createRecoveryCodeButton.disabled = true;
+      try {
+        const data = await api("/api/v1/architect/security/recovery-code", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ confirm: "CREATE_RECOVERY_CODE" })
+        });
+        showSecuritySecret("Одноразовый recovery-код", data.recovery_code);
+        await refreshSecurityStatus();
+        setStatus("Новый recovery-код создан. Сохраните его отдельно от Architect token.", "good");
+      } catch (error) {
+        setStatus("Recovery-код не создан: " + error.message, "bad");
+      } finally {
+        createRecoveryCodeButton.disabled = false;
+      }
+    });
+
+    rotateArchitectTokenButton.addEventListener("click", async () => {
+      if (!confirm("Сменить Architect token? Старый токен перестанет работать сразу.")) return;
+      rotateArchitectTokenButton.disabled = true;
+      try {
+        const data = await api("/api/v1/architect/security/rotate-token", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ confirm: "ROTATE_ARCHITECT_TOKEN" })
+        });
+        architectToken = data.architect_token;
+        sessionStorage.setItem("citadel-architect-token", architectToken);
+        showSecuritySecret("Новый Architect token", architectToken);
+        await refreshSecurityStatus();
+        setStatus("Architect token заменён. Старый токен уже недействителен.", "good");
+      } catch (error) {
+        setStatus("Токен не заменён: " + error.message, "bad");
+      } finally {
+        rotateArchitectTokenButton.disabled = false;
+      }
+    });
+
+    copySecuritySecretButton.addEventListener("click", async () => {
+      const value = securitySecretValue.textContent.trim();
+      if (!value) return;
+      try {
+        await navigator.clipboard.writeText(value);
+        setStatus("Секрет скопирован. Сохраните его в безопасном месте.", "good");
+      } catch {
+        setStatus("Не удалось скопировать автоматически. Выделите секрет вручную.", "bad");
+      }
+    });
 
     loginButton.addEventListener("click", async () => {
       const token = tokenInput.value.trim();
