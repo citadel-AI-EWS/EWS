@@ -28,7 +28,12 @@ class Statement {
     this.args = args;
     return this;
   }
+  async first() {
+    if (this.sql.includes("SELECT token_hash") && this.sql.includes("FROM architect_auth_state")) return { token_hash: architectHash };
+    throw new Error(`Unhandled first(): ${this.sql}`);
+  }
   async run() {
+    if (this.sql.startsWith("INSERT OR IGNORE INTO architect_auth_state")) return { meta: { changes: 0 } };
     if (this.sql.startsWith("CREATE TABLE") || this.sql.startsWith("CREATE INDEX")) {
       return { meta: { changes: 0 } };
     }
