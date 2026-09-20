@@ -25,8 +25,6 @@ namespace CitadelEws
         private Thread supervisor;
         private Process child;
         private volatile bool stopping;
-        private volatile bool requestedStop;
-        private volatile bool preserveStopFile;
 
         internal CitadelNodeService(ServiceConfig config)
         {
@@ -47,8 +45,6 @@ namespace CitadelEws
             }
 
             stopping = false;
-            requestedStop = false;
-            preserveStopFile = false;
             supervisor = new Thread(Supervise);
             supervisor.IsBackground = true;
             supervisor.Name = "CITADEL Agent Supervisor";
@@ -114,24 +110,21 @@ namespace CitadelEws
                         return;
                     }
 
-                    if (File.Exists(config.StopFile))
-                    {
-                        preserveStopFile = true;
-                        requestedStop = true;
-                        Stop();
-                        return;
-                    }
-
                     if (code == RestartExitCode)
                     {
                         Thread.Sleep(1000);
                         continue;
                     }
 
-                    if (code == StopExitCode)
+                    if (code == StopExitCode || File.Exists(config.StopFile))
                     {
-                        requestedStop = true;
-                        Stop();
+                        // A signed stop/uninstall request intentionally leaves
+                        // the SCM host alive but does not restart the Core Agent.
+                        // An administrator can later restart/repair the service.
+                        while (!stopping)
+                        {
+                            Thread.Sleep(1000);
+                        }
                         return;
                     }
 
@@ -153,7 +146,6 @@ namespace CitadelEws
         private void StopChild(bool keepStopFile)
         {
             stopping = true;
-            preserveStopFile = preserveStopFile || keepStopFile;
 
             Process current;
             lock (sync)
@@ -162,7 +154,7 @@ namespace CitadelEws
             }
 
             bool wroteMarker = false;
-            if (!requestedStop && current != null && !current.HasExited)
+            if (current != null && !current.HasExited)
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(config.StopFile));
                 File.WriteAllText(
@@ -183,7 +175,7 @@ namespace CitadelEws
                 supervisor.Join(5000);
             }
 
-            if (wroteMarker && !preserveStopFile)
+            if (wroteMarker && !keepStopFile)
             {
                 try
                 {
