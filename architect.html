@@ -2119,6 +2119,151 @@
       }
     });
 
+    createRbacTokenButton.addEventListener("click", async () => {
+      const label = rbacLabel.value.trim();
+      if (!label) return setStatus("Введите название role token.", "bad");
+      createRbacTokenButton.disabled = true;
+      try {
+        const data = await api("/api/v1/architect/security/access-tokens", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ role: rbacRole.value, label })
+        });
+        showSecuritySecret(`Новый ${data.access_token.role} token · ${data.access_token.label}`, data.access_token.token);
+        rbacLabel.value = "";
+        await refreshRbacTokens();
+        setStatus("Role token создан. Сохраните его сейчас — повторно он не отображается.", "good");
+      } catch (error) {
+        setStatus("Role token не создан: " + error.message, "bad");
+      } finally {
+        createRbacTokenButton.disabled = currentArchitectRole !== "owner";
+      }
+    });
+
+    saveEnterprisePolicyButton.addEventListener("click", async () => {
+      saveEnterprisePolicyButton.disabled = true;
+      try {
+        await api("/api/v1/architect/enterprise/policy", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            policy: {
+              require_latest_agent: policyLatestAgent.checked,
+              require_windows_core_service: policyWindowsService.checked,
+              require_windows_enterprise_probe: policyEnterpriseProbe.checked,
+              require_windows_update_service: policyUpdateService.checked,
+              require_no_pending_reboot: policyNoPendingReboot.checked,
+              max_cpu_percent: Number(policyCpu.value),
+              max_memory_percent: Number(policyMemory.value),
+              max_event_errors_last_hour: Number(policyEvents.value)
+            }
+          })
+        });
+        await refreshEnterprise();
+        setStatus("Desired State сохранён и compliance пересчитан.", "good");
+      } catch (error) {
+        setStatus("Desired State не сохранён: " + error.message, "bad");
+      } finally {
+        saveEnterprisePolicyButton.disabled = currentArchitectRole !== "owner";
+      }
+    });
+
+    createSiteButton.addEventListener("click", async () => {
+      const name = newSiteName.value.trim();
+      if (!name) return setStatus("Введите название Site.", "bad");
+      createSiteButton.disabled = true;
+      try {
+        await api("/api/v1/architect/enterprise/sites", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name })
+        });
+        newSiteName.value = "";
+        await refreshEnterprise();
+        setStatus("Site создан.", "good");
+      } catch (error) {
+        setStatus("Site не создан: " + error.message, "bad");
+      } finally {
+        createSiteButton.disabled = currentArchitectRole !== "owner";
+      }
+    });
+
+    createGroupButton.addEventListener("click", async () => {
+      const name = newGroupName.value.trim();
+      if (!name) return setStatus("Введите название Node Group.", "bad");
+      createGroupButton.disabled = true;
+      try {
+        await api("/api/v1/architect/enterprise/groups", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name })
+        });
+        newGroupName.value = "";
+        await refreshEnterprise();
+        setStatus("Node Group создана.", "good");
+      } catch (error) {
+        setStatus("Node Group не создана: " + error.message, "bad");
+      } finally {
+        createGroupButton.disabled = currentArchitectRole !== "owner";
+      }
+    });
+
+    assignEnterpriseScopeButton.addEventListener("click", async () => {
+      const nodeId = enterpriseNodeSelect.value;
+      if (!nodeId) return setStatus("Выберите ноду для Site / Group.", "bad");
+      assignEnterpriseScopeButton.disabled = true;
+      try {
+        await api(`/api/v1/architect/enterprise/nodes/${encodeURIComponent(nodeId)}/scope`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            site_id: enterpriseSiteSelect.value || null,
+            group_id: enterpriseGroupSelect.value || null
+          })
+        });
+        await refreshEnterprise();
+        setStatus("Site / Node Group назначены.", "good");
+      } catch (error) {
+        setStatus("Назначение не выполнено: " + error.message, "bad");
+      } finally {
+        assignEnterpriseScopeButton.disabled = currentArchitectRole !== "owner";
+      }
+    });
+
+    refreshEnterpriseButton.addEventListener("click", async () => {
+      refreshEnterpriseButton.disabled = true;
+      try {
+        await refreshEnterprise();
+        setStatus("Enterprise состояние обновлено.", "good");
+      } catch (error) {
+        setStatus("Enterprise состояние не обновлено: " + error.message, "bad");
+      } finally {
+        refreshEnterpriseButton.disabled = false;
+      }
+    });
+
+    recoveryManifestButton.addEventListener("click", async () => {
+      recoveryManifestButton.disabled = true;
+      recoveryManifestState.textContent = "Проверяю recovery manifest…";
+      recoveryManifestState.className = "status";
+      try {
+        const data = await api("/api/v1/architect/enterprise/recovery-manifest");
+        const reportCount = Array.isArray(data.manifest?.reports) ? data.manifest.reports.length : 0;
+        recoveryManifestState.textContent = [
+          "✓ Recovery manifest сформирован.",
+          `SHA-256: ${data.manifest_sha256}`,
+          `Каталогизировано отчётов: ${reportCount}`,
+          "Manifest содержит topology и integrity metadata без тел отчётов и секретов."
+        ].join("\n");
+        recoveryManifestState.className = "status good";
+      } catch (error) {
+        recoveryManifestState.textContent = "Manifest не сформирован: " + error.message;
+        recoveryManifestState.className = "status bad";
+      } finally {
+        recoveryManifestButton.disabled = false;
+      }
+    });
+
     copySecuritySecretButton.addEventListener("click", async () => {
       const value = securitySecretValue.textContent.trim();
       if (!value) return;
