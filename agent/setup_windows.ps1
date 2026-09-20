@@ -1,282 +1,323 @@
 [CmdletBinding()]
 param(
   [string]$ControllerUrl = "https://citadel-ai.init1.workers.dev",
-  [string]$InstallRoot = "$env:LOCALAPPDATA\CitadelEWS\agent"
+  [string]$InstallRoot = "$env:ProgramData\CitadelEWS\agent",
+  [string]$StateRoot = "$env:ProgramData\CitadelEWS\state",
+  [switch]$Uninstall,
+  [switch]$PreserveState,
+  [string]$LegacyUserSid = ""
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
-$InstallerRelease = "0.3.11-wincompat.1"
-$PythonWingetId = "Python.Python.3.13"
-$FallbackPythonVersion = "3.13.15"
-$FallbackPythonX86Url = "https://www.python.org/ftp/python/3.13.15/python-3.13.15.exe"
-$FallbackPythonX86Sha256 = "741c07276eb2d57e7ee012d643f021c58cb38d11c5389be46c15d41d1a10b447"
-$FallbackPythonX64Url = "https://www.python.org/ftp/python/3.13.15/python-3.13.15-amd64.exe"
-$FallbackPythonX64Sha256 = "edec09c4853aeae9ac36efb8c9f95b6b8e2fee65eee56d9767a8b7c69c574403"
-$FallbackPythonArm64Url = "https://www.python.org/ftp/python/3.13.15/python-3.13.15-arm64.exe"
-$FallbackPythonArm64Sha256 = "c252c676087c49e6b94e95a273536b78921c28a5fc9f86d15d25392328247249"
-$ExpectedV1Sha256 = "d3c310ab378666cdd477a51a881169970910900428cb4d2027ff58c1545c48df"
-$ExpectedV2Sha256 = "ab81b7cb431dc1e3e9ee7bf19cbdc875db52f33045da809430435276c5a958f5"
 
-$ControllerUri = [System.Uri]$ControllerUrl
-$IsHttps = $ControllerUri.Scheme -eq "https"
-$IsLoopbackTest = $ControllerUri.Scheme -eq "http" -and @("127.0.0.1", "localhost", "::1") -contains $ControllerUri.DnsSafeHost
-if (-not ($IsHttps -or $IsLoopbackTest)) {
-  throw "ControllerUrl must use HTTPS; loopback HTTP is test-only."
-}
-
-$SourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$StateRoot = Join-Path $env:LOCALAPPDATA "CitadelEWS\state"
+$ServiceName = "CitadelEWSNode"
+$ServiceDisplayName = "CITADEL EWS Node"
+$PythonWingetId = "Python.Python.3.14"
+$ReleaseVersion = "0.3.12"
+$ExpectedV1Sha256 = "2dab753c8e836663d215656682ac304b5f297a7c0d726936111013fa70dacc65"
+$ExpectedV2Sha256 = "0fc1f2a8daac47c5c504951e32a9e8110e9f583d8d185d45645408814c3cac52"
+$ExpectedServiceHostSha256 = "892c5f388f9b54c0bcbb2956381dd601dfa8065b0e9258ba673e9505c2f81cad"
+$ExpectedServiceHelperSha256 = "e0e66f5a27018a283c65d42e6ead93e382706a163da682e6bd49f2b1fb9b0f99"
 
 function Get-Sha256([string]$Path) {
   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
-function Copy-VerifiedAgentFile([string]$Name, [string]$ExpectedHash) {
-  $Source = Join-Path $SourceRoot $Name
-  $Destination = Join-Path $InstallRoot $Name
-  if (-not (Test-Path -LiteralPath $Source)) {
-    throw "Required package file is missing: $Name"
+function Test-IsAdministrator {
+  $Identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+  $Principal = New-Object System.Security.Principal.WindowsPrincipal($Identity)
+  return $Principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if ([string]::IsNullOrWhiteSpace($LegacyUserSid)) {
+  $LegacyUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+}
+if ($LegacyUserSid -notmatch '^S-\d-\d+(-\d+)+$') {
+  throw "Invalid legacy user SID."
+}
+foreach ($PathArg in @($InstallRoot, $StateRoot)) {
+  if ([string]::IsNullOrWhiteSpace($PathArg) -or $PathArg.Contains('"')) {
+    throw "Unsafe CITADEL installation path."
   }
-  $SourceHash = Get-Sha256 $Source
-  if ($SourceHash -ne $ExpectedHash) {
-    throw "Package integrity check failed for $Name. Refusing to install an unknown agent file."
+}
+if ([string]::IsNullOrWhiteSpace($ControllerUrl) -or $ControllerUrl.Contains('"') -or $ControllerUrl.IndexOf([char]10) -ge 0 -or $ControllerUrl.IndexOf([char]13) -ge 0) {
+  throw "Unsafe ControllerUrl."
+}
+$PreElevationControllerUri = [System.Uri]$ControllerUrl
+$PreElevationHttps = $PreElevationControllerUri.Scheme -eq "https"
+$PreElevationLoopback = $PreElevationControllerUri.Scheme -eq "http" -and @("127.0.0.1", "localhost", "::1") -contains $PreElevationControllerUri.DnsSafeHost
+if (-not ($PreElevationHttps -or $PreElevationLoopback)) {
+  throw "ControllerUrl must use HTTPS; loopback HTTP is test-only."
+}
+
+if (-not (Test-IsAdministrator)) {
+  Write-Host "[CITADEL] Administrator approval is required to install the Windows Core Service."
+  $ElevatedArgs = @(
+    "-NoLogo", "-NoProfile", "-File", ('"' + $PSCommandPath + '"'),
+    "-ControllerUrl", ('"' + $ControllerUrl + '"'),
+    "-InstallRoot", ('"' + $InstallRoot + '"'),
+    "-StateRoot", ('"' + $StateRoot + '"'),
+    "-LegacyUserSid", ('"' + $LegacyUserSid + '"')
+  )
+  if ($Uninstall) { $ElevatedArgs += "-Uninstall" }
+  if ($PreserveState) { $ElevatedArgs += "-PreserveState" }
+  $Elevated = Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $ElevatedArgs -Wait -PassThru
+  exit $Elevated.ExitCode
+}
+
+$SourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ServiceHelperSource = Join-Path $SourceRoot "windows_service.ps1"
+if (-not (Test-Path -LiteralPath $ServiceHelperSource)) {
+  throw "Required package file is missing: windows_service.ps1"
+}
+if ((Get-Sha256 $ServiceHelperSource) -ne $ExpectedServiceHelperSha256) {
+  throw "Package integrity check failed for windows_service.ps1."
+}
+. $ServiceHelperSource
+
+$ProgramDataBase = [System.IO.Path]::GetFullPath($env:ProgramData).TrimEnd('\')
+$ProgramDataRoot = $ProgramDataBase + '\'
+$InstallRoot = [System.IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+$StateRoot = [System.IO.Path]::GetFullPath($StateRoot).TrimEnd('\')
+foreach ($MachinePath in @($InstallRoot, $StateRoot)) {
+  if ([string]::Equals($MachinePath, $ProgramDataBase, [System.StringComparison]::OrdinalIgnoreCase) -or
+      -not ($MachinePath + '\').StartsWith($ProgramDataRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Windows Core Service roots must be strict descendants of ProgramData."
   }
-  if (Test-Path -LiteralPath $Destination) {
-    $InstalledHash = Get-Sha256 $Destination
-    if ($InstalledHash -eq $ExpectedHash) {
-      Write-Host "[CITADEL] $Name already matches the current release; keeping it."
-      return $false
+}
+$InstallPrefix = $InstallRoot + '\'
+$StatePrefix = $StateRoot + '\'
+if ([string]::Equals($InstallRoot, $StateRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+    $InstallPrefix.StartsWith($StatePrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+    $StatePrefix.StartsWith($InstallPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+  throw "InstallRoot and StateRoot must be separate, non-overlapping ProgramData directories."
+}
+
+$LegacyProfile = Get-CimInstance Win32_UserProfile -Filter ("SID='" + $LegacyUserSid + "'") -ErrorAction Stop |
+  Select-Object -First 1
+if ($null -eq $LegacyProfile -or [string]::IsNullOrWhiteSpace([string]$LegacyProfile.LocalPath)) {
+  throw "Could not resolve the original user's legacy profile."
+}
+$LegacyProfileRoot = [System.IO.Path]::GetFullPath([string]$LegacyProfile.LocalPath)
+$LegacyStateRoot = Join-Path $LegacyProfileRoot "AppData\Local\CitadelEWS\state"
+$LegacyAgentRoot = Join-Path $LegacyProfileRoot "AppData\Local\CitadelEWS\agent"
+$LegacyStartupDir = Join-Path $LegacyProfileRoot "AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
+$LegacyShortcutPath = Join-Path $LegacyStartupDir "CITADEL EWS Agent.lnk"
+
+function Set-CitadelDirectoryAcl {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  New-Item -ItemType Directory -Force -Path $Path | Out-Null
+
+  $Acl = New-Object System.Security.AccessControl.DirectorySecurity
+  $Acl.SetAccessRuleProtection($true, $false)
+  $Inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+  $Propagation = [System.Security.AccessControl.PropagationFlags]::None
+  $Allow = [System.Security.AccessControl.AccessControlType]::Allow
+  $Rules = @(
+    @("S-1-5-18", [System.Security.AccessControl.FileSystemRights]::FullControl),
+    @("S-1-5-32-544", [System.Security.AccessControl.FileSystemRights]::FullControl),
+    @("S-1-5-19", [System.Security.AccessControl.FileSystemRights]::Modify)
+  )
+  foreach ($Rule in $Rules) {
+    $Sid = New-Object System.Security.Principal.SecurityIdentifier($Rule[0])
+    $Ace = New-Object System.Security.AccessControl.FileSystemAccessRule($Sid, $Rule[1], $Inheritance, $Propagation, $Allow)
+    [void]$Acl.AddAccessRule($Ace)
+  }
+  $Acl.SetOwner((New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")))
+  Set-Acl -LiteralPath $Path -AclObject $Acl
+
+  $AllowedSids = @("S-1-5-18", "S-1-5-32-544", "S-1-5-19")
+  $VerifiedAcl = Get-Acl -LiteralPath $Path
+  foreach ($Entry in $VerifiedAcl.Access) {
+    $SidValue = $Entry.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+    if ($AllowedSids -notcontains $SidValue) {
+      throw "Unexpected explicit ACL principal remained on $Path : $SidValue"
     }
   }
+}
+
+function Copy-VerifiedReleaseFile {
+  param(
+    [Parameter(Mandatory = $true)][string]$Name,
+    [Parameter(Mandatory = $true)][string]$ExpectedHash,
+    [Parameter(Mandatory = $true)][string]$DestinationRoot
+  )
+  $Source = Join-Path $SourceRoot $Name
+  $Destination = Join-Path $DestinationRoot $Name
+  if (-not (Test-Path -LiteralPath $Source)) { throw "Required package file is missing: $Name" }
+  if ((Get-Sha256 $Source) -ne $ExpectedHash) { throw "Package integrity check failed for $Name." }
   Copy-Item -LiteralPath $Source -Destination $Destination -Force
-  if ((Get-Sha256 $Destination) -ne $ExpectedHash) {
-    throw "Installed file verification failed: $Name"
-  }
-  Write-Host "[CITADEL] Installed verified $Name."
-  return $true
+  if ((Get-Sha256 $Destination) -ne $ExpectedHash) { throw "Installed file verification failed: $Name" }
 }
 
-function Resolve-CompatiblePython([string]$Candidate) {
-  if ([string]::IsNullOrWhiteSpace($Candidate) -or -not (Test-Path -LiteralPath $Candidate)) {
-    return $null
-  }
-  & $Candidate -c "import sys; raise SystemExit(0 if (3, 12) <= sys.version_info[:2] < (4, 0) else 1)" *> $null
-  if ($LASTEXITCODE -ne 0) { return $null }
-  $Resolved = & $Candidate -c "import sys; print(sys.executable)" 2>$null
-  if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($Resolved)) {
-    return $Resolved.Trim()
-  }
-  return $null
-}
-
-function Find-CompatiblePython {
+function Find-MachinePython314 {
+  $Candidate = Join-Path $env:ProgramFiles "Python314\python.exe"
+  if (Test-Path -LiteralPath $Candidate) { return $Candidate }
   $Launcher = Get-Command py -ErrorAction SilentlyContinue
   if ($null -ne $Launcher) {
-    foreach ($Spec in @("-3.14", "-3.13", "-3.12")) {
-      $Resolved = & $Launcher.Source $Spec -c "import sys; print(sys.executable)" 2>$null
-      if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($Resolved)) {
-        $Compatible = Resolve-CompatiblePython $Resolved.Trim()
-        if ($null -ne $Compatible) { return $Compatible }
-      }
+    $Resolved = & $Launcher.Source -3.14 -c "import sys; print(sys.executable)" 2>$null
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($Resolved)) {
+      $Resolved = $Resolved.Trim()
+      if ($Resolved.StartsWith($env:ProgramFiles, [System.StringComparison]::OrdinalIgnoreCase)) { return $Resolved }
     }
-  }
-
-  $PythonCommand = Get-Command python -ErrorAction SilentlyContinue
-  if ($null -ne $PythonCommand) {
-    $Compatible = Resolve-CompatiblePython $PythonCommand.Source
-    if ($null -ne $Compatible) { return $Compatible }
-  }
-
-  $Candidates = @(
-    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python314\python.exe"),
-    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python313\python.exe"),
-    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python313-32\python.exe"),
-    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"),
-    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312-32\python.exe")
-  )
-  if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
-    $Candidates += (Join-Path $env:ProgramFiles "Python314\python.exe")
-    $Candidates += (Join-Path $env:ProgramFiles "Python313\python.exe")
-    $Candidates += (Join-Path $env:ProgramFiles "Python312\python.exe")
-  }
-  $ProgramFilesX86 = [Environment]::GetFolderPath("ProgramFilesX86")
-  if (-not [string]::IsNullOrWhiteSpace($ProgramFilesX86)) {
-    $Candidates += (Join-Path $ProgramFilesX86 "Python313-32\python.exe")
-    $Candidates += (Join-Path $ProgramFilesX86 "Python312-32\python.exe")
-  }
-  foreach ($Candidate in $Candidates) {
-    $Compatible = Resolve-CompatiblePython $Candidate
-    if ($null -ne $Compatible) { return $Compatible }
   }
   return $null
 }
 
-function Get-WindowsArchitecture {
-  $ArchText = (($env:PROCESSOR_ARCHITEW6432, $env:PROCESSOR_ARCHITECTURE) -join " ").ToUpperInvariant()
-  if ($ArchText.Contains("ARM64")) { return "arm64" }
-  if ([Environment]::Is64BitOperatingSystem) { return "x64" }
-  return "x86"
+function Find-FrameworkCompiler {
+  foreach ($Candidate in @(
+    (Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"),
+    (Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\csc.exe")
+  )) {
+    if (Test-Path -LiteralPath $Candidate) { return $Candidate }
+  }
+  return $null
 }
 
-function Install-PythonFallback([string]$Architecture) {
-  switch ($Architecture) {
-    "x86" {
-      $Url = $FallbackPythonX86Url
-      $ExpectedHash = $FallbackPythonX86Sha256
-    }
-    "arm64" {
-      $Url = $FallbackPythonArm64Url
-      $ExpectedHash = $FallbackPythonArm64Sha256
-    }
-    default {
-      $Url = $FallbackPythonX64Url
-      $ExpectedHash = $FallbackPythonX64Sha256
-    }
-  }
-
-  $TempInstaller = Join-Path $env:TEMP ("citadel-python-" + $FallbackPythonVersion + "-" + $Architecture + "-" + [guid]::NewGuid().ToString("N") + ".exe")
-  try {
-    Write-Host "[CITADEL] winget is unavailable or could not install Python. Downloading the official Python $FallbackPythonVersion $Architecture installer..."
-    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    $Client = New-Object System.Net.WebClient
-    $Client.Headers["User-Agent"] = "CITADEL-EWS-Installer/$InstallerRelease"
-    $Client.DownloadFile($Url, $TempInstaller)
-    if ((Get-Sha256 $TempInstaller) -ne $ExpectedHash) {
-      throw "Downloaded Python installer failed SHA-256 verification."
-    }
-    $InstallArgs = @(
-      "/quiet",
-      "InstallAllUsers=0",
-      "PrependPath=0",
-      "Include_pip=1",
-      "Include_launcher=1",
-      "Include_test=0"
-    )
-    $Process = Start-Process -FilePath $TempInstaller -ArgumentList $InstallArgs -Wait -PassThru
-    if ($Process.ExitCode -ne 0) {
-      throw "Official Python installer failed with exit code $($Process.ExitCode)."
-    }
-  } finally {
-    if (Test-Path -LiteralPath $TempInstaller) {
-      Remove-Item -LiteralPath $TempInstaller -Force -ErrorAction SilentlyContinue
-    }
-  }
-}
-
-function Get-RunningCitadelAgents([string]$AgentScriptPath, [string]$ConfigPathValue) {
-  $AgentNeedle = [System.IO.Path]::GetFileName($AgentScriptPath)
-  $ConfigNeedle = [System.IO.Path]::GetFileName($ConfigPathValue)
+function Get-RunningLegacyCitadelAgents {
+  $Needles = @($LegacyAgentRoot, $LegacyStateRoot)
   try {
     return @(
       Get-CimInstance Win32_Process -ErrorAction Stop |
         Where-Object {
-          $_.CommandLine -and
-          $_.CommandLine.Contains($AgentNeedle) -and
-          $_.CommandLine.Contains($ConfigNeedle)
+          if (-not $_.CommandLine -or -not $_.CommandLine.Contains("citadel_node_v2.py")) { return $false }
+          foreach ($Needle in $Needles) {
+            if ($_.CommandLine.IndexOf($Needle, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }
+          }
+          return $false
         }
     )
   } catch {
-    throw "[CITADEL] Could not inspect running CITADEL processes safely; refusing to start another copy."
+    throw "[CITADEL] Could not inspect the original user's legacy agent safely."
   }
 }
 
-$PythonPath = Find-CompatiblePython
+function Stop-CitadelServiceIfPresent {
+  $Existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+  if ($null -eq $Existing -or $Existing.Status -eq "Stopped") { return }
+  Stop-Service -Name $ServiceName -Force
+  $Existing.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(75))
+}
+
+function Quote-CitadelServiceArg {
+  param([Parameter(Mandatory = $true)][string]$Value)
+  if ([string]::IsNullOrWhiteSpace($Value) -or $Value.Contains('"')) { throw "Unsafe Windows service argument path." }
+  return '"' + $Value + '"'
+}
+
+if ($Uninstall) {
+  Stop-CitadelServiceIfPresent
+  Remove-CitadelServiceDefinition -Name $ServiceName
+  foreach ($Process in (Get-RunningLegacyCitadelAgents)) {
+    Stop-Process -Id $Process.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+  if (Test-Path -LiteralPath $LegacyShortcutPath) {
+    Remove-Item -LiteralPath $LegacyShortcutPath -Force
+  }
+  if (Test-Path -LiteralPath $InstallRoot) {
+    Remove-Item -LiteralPath $InstallRoot -Recurse -Force
+  }
+  if (-not $PreserveState) {
+    foreach ($RootToRemove in @($StateRoot, $LegacyStateRoot)) {
+      if (Test-Path -LiteralPath $RootToRemove) {
+        Remove-Item -LiteralPath $RootToRemove -Recurse -Force
+      }
+    }
+  }
+  Write-Host "[CITADEL] Windows Core Service uninstalled."
+  if ($PreserveState) { Write-Host "[CITADEL] Node state was preserved by explicit request." }
+  exit 0
+}
+
+$PythonPath = Find-MachinePython314
 if ($null -eq $PythonPath) {
   $Winget = Get-Command winget -ErrorAction SilentlyContinue
-  if ($null -ne $Winget) {
-    Write-Host "[CITADEL] Trying Windows Package Manager for Python 3.13..."
-    & $Winget.Source install --exact --id $PythonWingetId --source winget --scope user --silent --accept-package-agreements --accept-source-agreements
-    if ($LASTEXITCODE -eq 0) {
-      $PythonPath = Find-CompatiblePython
-    } else {
-      Write-Warning "[CITADEL] winget could not install Python (exit $LASTEXITCODE); using verified python.org fallback."
+  if ($null -eq $Winget) {
+    throw "Python 3.14 machine installation is missing and Windows Package Manager is unavailable."
+  }
+  Write-Host "[CITADEL] Installing machine-wide Python 3.14..."
+  & $Winget.Source install --exact --id $PythonWingetId --source winget --scope machine --silent --accept-package-agreements --accept-source-agreements
+  if ($LASTEXITCODE -ne 0) { throw "Automatic machine-wide Python installation failed." }
+  $PythonPath = Find-MachinePython314
+}
+if ($null -eq $PythonPath) { throw "Machine-wide Python 3.14 is unavailable after installation." }
+
+# Harden the machine destinations before any identity, queue, or executable is
+# copied into them. The DACL is rebuilt from scratch; unexpected explicit ACEs
+# are not retained.
+Set-CitadelDirectoryAcl -Path $InstallRoot
+Set-CitadelDirectoryAcl -Path $StateRoot
+Write-Host "[CITADEL] Machine install/state ACLs rebuilt before migration."
+
+$NewIdentity = Join-Path $StateRoot "identity.json"
+$LegacyIdentity = Join-Path $LegacyStateRoot "identity.json"
+if (-not (Test-Path -LiteralPath $NewIdentity) -and (Test-Path -LiteralPath $LegacyIdentity)) {
+  Copy-Item -LiteralPath $LegacyIdentity -Destination $NewIdentity -Force
+  Write-Host "[CITADEL] Migrated existing node identity from the original user profile."
+}
+foreach ($StateName in @("pending-results.json", "network-recovery.json", "lmstudio-state.json", "PAUSED")) {
+  $LegacyFile = Join-Path $LegacyStateRoot $StateName
+  $NewFile = Join-Path $StateRoot $StateName
+  if (-not (Test-Path -LiteralPath $NewFile) -and (Test-Path -LiteralPath $LegacyFile)) {
+    Copy-Item -LiteralPath $LegacyFile -Destination $NewFile -Force
+  }
+}
+
+# Build a unique final release directory while the current service/legacy agent
+# is still running. A failed package install, dependency download, enrollment,
+# or compilation therefore does not take the existing node offline.
+$ReleaseId = $ReleaseVersion + "-" + [Guid]::NewGuid().ToString("N")
+$ReleaseBase = Join-Path $InstallRoot "releases"
+$ReleaseRoot = Join-Path $ReleaseBase $ReleaseId
+Set-CitadelDirectoryAcl -Path $ReleaseBase
+
+$InstallStatePath = Join-Path $InstallRoot "install-state.json"
+$PreviousReleaseRoot = $null
+if (Test-Path -LiteralPath $InstallStatePath) {
+  try {
+    $PreviousInstallState = Get-Content -LiteralPath $InstallStatePath -Raw | ConvertFrom-Json
+    $CandidatePreviousRelease = [string]$PreviousInstallState.release_root
+    if (-not [string]::IsNullOrWhiteSpace($CandidatePreviousRelease)) {
+      $CandidatePreviousRelease = [System.IO.Path]::GetFullPath($CandidatePreviousRelease).TrimEnd('\')
+      $ReleaseBasePrefix = [System.IO.Path]::GetFullPath($ReleaseBase).TrimEnd('\') + '\'
+      if (($CandidatePreviousRelease + '\').StartsWith($ReleaseBasePrefix, [System.StringComparison]::OrdinalIgnoreCase) -and
+          (Test-Path -LiteralPath $CandidatePreviousRelease)) {
+        $PreviousReleaseRoot = $CandidatePreviousRelease
+      }
     }
-  } else {
-    Write-Host "[CITADEL] Windows Package Manager is not available; using verified python.org fallback."
+  } catch {
+    Write-Warning "[CITADEL] Previous install-state could not be parsed; no rollback release will be retained from it."
   }
 }
-if ($null -eq $PythonPath) {
-  Install-PythonFallback (Get-WindowsArchitecture)
-  $PythonPath = Find-CompatiblePython
-}
-if ($null -eq $PythonPath) {
-  throw "Compatible Python 3.12+ is unavailable after installation attempts."
-}
-$PythonInfo = (& $PythonPath -c "import platform,struct,sys; print(str(sys.version_info.major)+'.'+str(sys.version_info.minor)+'.'+str(sys.version_info.micro)+' / '+str(struct.calcsize('P')*8)+'-bit / '+platform.machine())").Trim()
-Write-Host "[CITADEL] Using Python: $PythonInfo"
 
-New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
-New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
+try {
+  Set-CitadelDirectoryAcl -Path $ReleaseRoot
 
-$CurrentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$Icacls = Get-Command icacls.exe -ErrorAction Stop
-& $Icacls.Source $StateRoot /inheritance:r /grant:r "*${CurrentUserSid}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
-if ($LASTEXITCODE -ne 0) {
-  throw "Unable to harden CITADEL state directory ACL."
-}
-Write-Host "[CITADEL] State directory ACL restricted to the installing user, SYSTEM and Administrators."
+  Copy-VerifiedReleaseFile "citadel_node_v1.py" $ExpectedV1Sha256 $ReleaseRoot
+Copy-VerifiedReleaseFile "citadel_node_v2.py" $ExpectedV2Sha256 $ReleaseRoot
+Copy-VerifiedReleaseFile "CitadelNodeService.cs" $ExpectedServiceHostSha256 $ReleaseRoot
+Copy-VerifiedReleaseFile "windows_service.ps1" $ExpectedServiceHelperSha256 $ReleaseRoot
 
-$V1Changed = Copy-VerifiedAgentFile "citadel_node_v1.py" $ExpectedV1Sha256
-$V2Changed = Copy-VerifiedAgentFile "citadel_node_v2.py" $ExpectedV2Sha256
+$RequirementsSource = Join-Path $SourceRoot "requirements.txt"
+$RequirementsPath = Join-Path $ReleaseRoot "requirements.txt"
+if (-not (Test-Path -LiteralPath $RequirementsSource)) { throw "Required package file is missing: requirements.txt" }
+$RequirementsHash = Get-Sha256 $RequirementsSource
+Copy-Item -LiteralPath $RequirementsSource -Destination $RequirementsPath -Force
+if ((Get-Sha256 $RequirementsPath) -ne $RequirementsHash) { throw "requirements.txt verification failed." }
 
-$Requirements64Source = Join-Path $SourceRoot "requirements.txt"
-$Requirements32Source = Join-Path $SourceRoot "requirements-win32.txt"
-foreach ($RequiredFile in @($Requirements64Source, $Requirements32Source)) {
-  if (-not (Test-Path -LiteralPath $RequiredFile)) {
-    throw "Required package file is missing: $([System.IO.Path]::GetFileName($RequiredFile))"
-  }
-}
-$Requirements64Path = Join-Path $InstallRoot "requirements.txt"
-$Requirements32Path = Join-Path $InstallRoot "requirements-win32.txt"
-Copy-Item -LiteralPath $Requirements64Source -Destination $Requirements64Path -Force
-Copy-Item -LiteralPath $Requirements32Source -Destination $Requirements32Path -Force
-
-$Venv = Join-Path $InstallRoot ".venv"
+$Venv = Join-Path $ReleaseRoot ".venv"
 $VenvPython = Join-Path $Venv "Scripts\python.exe"
-$VenvPythonw = Join-Path $Venv "Scripts\pythonw.exe"
-$CreateVenv = -not (Test-Path -LiteralPath $VenvPython)
-if (-not $CreateVenv) {
-  & $VenvPython -c "import sys; raise SystemExit(0 if (3, 12) <= sys.version_info[:2] < (4, 0) else 1)" *> $null
-  if ($LASTEXITCODE -ne 0) { $CreateVenv = $true }
-}
-if ($CreateVenv) {
-  if (Test-Path -LiteralPath $Venv) { Remove-Item -LiteralPath $Venv -Recurse -Force }
-  Write-Host "[CITADEL] Creating the local Python environment..."
-  & $PythonPath -m venv $Venv
-  if ($LASTEXITCODE -ne 0) { throw "Unable to create Python virtual environment." }
-} else {
-  Write-Host "[CITADEL] Existing Python environment found; reusing it."
-}
-
-$VenvBits = (& $VenvPython -c "import struct; print(struct.calcsize('P') * 8)").Trim()
-if ($VenvBits -eq "32") {
-  $RequirementsPath = $Requirements32Path
-  Write-Host "[CITADEL] 32-bit Python detected; using the verified win32 dependency set."
-} else {
-  $RequirementsPath = $Requirements64Path
-}
-$RequirementsHash = Get-Sha256 $RequirementsPath
-
-$RequirementsMarker = Join-Path $InstallRoot ".requirements.sha256"
-$MarkerMatches = $false
-if (Test-Path -LiteralPath $RequirementsMarker) {
-  $MarkerMatches = ((Get-Content -LiteralPath $RequirementsMarker -Raw).Trim().ToLowerInvariant() -eq $RequirementsHash)
-}
+& $PythonPath -m venv $Venv
+if ($LASTEXITCODE -ne 0) { throw "Unable to create Python virtual environment." }
+& $VenvPython -m pip install --disable-pip-version-check --upgrade pip
+if ($LASTEXITCODE -ne 0) { throw "pip update failed." }
+& $VenvPython -m pip install --disable-pip-version-check --requirement $RequirementsPath
+if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
 & $VenvPython -c "import cryptography, psutil" *> $null
-$DependenciesWork = $LASTEXITCODE -eq 0
-if (-not ($MarkerMatches -and $DependenciesWork)) {
-  Write-Host "[CITADEL] Installing/updating agent dependencies..."
-  & $VenvPython -m pip install --disable-pip-version-check --upgrade pip
-  if ($LASTEXITCODE -ne 0) { throw "pip update failed." }
-  & $VenvPython -m pip install --disable-pip-version-check --upgrade --only-binary=:all: --requirement $RequirementsPath
-  if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
-  [System.IO.File]::WriteAllText($RequirementsMarker, $RequirementsHash + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
-} else {
-  Write-Host "[CITADEL] Dependencies are already ready; skipping download."
-}
+if ($LASTEXITCODE -ne 0) { throw "Installed agent dependencies are not importable." }
 
-$ConfigPath = Join-Path $InstallRoot "config.json"
+$ConfigPath = Join-Path $ReleaseRoot "config.json"
 $ConfigJson = @{
   controller_url = $ControllerUrl.TrimEnd('/')
   data_dir = $StateRoot
@@ -288,88 +329,268 @@ $ConfigJson = @{
   controller_public_x = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 } | ConvertTo-Json
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-$ConfigText = $ConfigJson + [Environment]::NewLine
-$ExistingConfigText = if (Test-Path -LiteralPath $ConfigPath) { [System.IO.File]::ReadAllText($ConfigPath) } else { "" }
-$ConfigChanged = $ExistingConfigText -ne $ConfigText
-if ($ConfigChanged) {
-  [System.IO.File]::WriteAllText($ConfigPath, $ConfigText, $Utf8NoBom)
-  Write-Host "[CITADEL] Configuration written as UTF-8 without BOM."
-} else {
-  Write-Host "[CITADEL] Configuration is unchanged."
-}
+[System.IO.File]::WriteAllText($ConfigPath, $ConfigJson + [Environment]::NewLine, $Utf8NoBom)
 
-$AgentScript = Join-Path $InstallRoot "citadel_node_v2.py"
-$StopPath = Join-Path $StateRoot "STOP"
-if (Test-Path -LiteralPath $StopPath) {
-  Remove-Item -LiteralPath $StopPath -Force
-  Write-Host "[CITADEL] Previous local STOP marker cleared by explicit reinstall."
-}
-
+$AgentScript = Join-Path $ReleaseRoot "citadel_node_v2.py"
 & $VenvPython $AgentScript doctor --config $ConfigPath
 if ($LASTEXITCODE -ne 0) { throw "Agent diagnostics failed." }
 & $VenvPython $AgentScript self-test
 if ($LASTEXITCODE -ne 0) { throw "Agent self-test failed." }
 
-$EnrollOutput = & $VenvPython $AgentScript enroll --config $ConfigPath
-if ($LASTEXITCODE -ne 0) { throw "Automatic enrollment failed." }
-$NodeId = (($EnrollOutput | Select-Object -Last 1) -as [string]).Trim()
-if (-not $NodeId.StartsWith("node_")) {
-  throw "Controller did not return a valid node id."
+$ProbeOutput = & $VenvPython $AgentScript probe --config $ConfigPath
+if ($LASTEXITCODE -ne 0) { throw "Passive Controller probe failed." }
+try {
+  $ProbeState = (($ProbeOutput | Select-Object -Last 1) -as [string]) | ConvertFrom-Json
+} catch {
+  throw "Controller probe returned invalid JSON."
 }
-Write-Host "[CITADEL] Controller enrollment confirmed: $NodeId"
+$NodeId = [string]$ProbeState.node_id
+if (-not $NodeId.StartsWith("node_") -or $ProbeState.ok -ne $true) {
+  throw "Controller probe did not return a valid node identity."
+}
+Write-Host "[CITADEL] Staged release passed passive enrollment/heartbeat probe: $NodeId"
 
-& $VenvPython $AgentScript once --config $ConfigPath
-if ($LASTEXITCODE -ne 0) { throw "Live Controller cycle failed after enrollment." }
-Write-Host "[CITADEL] Live heartbeat/controller cycle confirmed."
-
-$StartupDir = [Environment]::GetFolderPath("Startup")
-$ShortcutPath = Join-Path $StartupDir "CITADEL EWS Agent.lnk"
-$Shell = New-Object -ComObject WScript.Shell
-$Shortcut = $Shell.CreateShortcut($ShortcutPath)
-$Shortcut.TargetPath = $VenvPythonw
-$Shortcut.Arguments = ('"' + $AgentScript + '" run --config "' + $ConfigPath + '"')
-$Shortcut.WorkingDirectory = $InstallRoot
-$Shortcut.WindowStyle = 7
-$Shortcut.Description = "CITADEL EWS background agent"
-$Shortcut.Save()
-
-$RunningAgents = Get-RunningCitadelAgents $AgentScript $ConfigPath
-$RestartRequired = $V1Changed -or $V2Changed -or $ConfigChanged
-if ($RunningAgents.Count -gt 0 -and $RestartRequired) {
-  Write-Host "[CITADEL] Agent files/configuration changed; restarting the existing CITADEL process."
-  foreach ($Process in $RunningAgents) {
-    Stop-Process -Id $Process.ProcessId -Force -ErrorAction SilentlyContinue
+$ServiceSource = Join-Path $ReleaseRoot "CitadelNodeService.cs"
+$ServiceExe = Join-Path $ReleaseRoot "CitadelNodeService.exe"
+$Compiler = Find-FrameworkCompiler
+if ($null -eq $Compiler) { throw ".NET Framework C# compiler is required for the CITADEL service host." }
+& $Compiler /nologo /optimize+ /target:winexe "/out:$ServiceExe" /reference:System.ServiceProcess.dll $ServiceSource
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $ServiceExe)) { throw "CITADEL Windows Service Host compilation failed." }
+& $ServiceExe --self-test
+if ($LASTEXITCODE -ne 0) { throw "CITADEL Windows Service Host self-test failed." }
+} catch {
+  $StageError = $_
+  if (Test-Path -LiteralPath $ReleaseRoot) {
+    Remove-Item -LiteralPath $ReleaseRoot -Recurse -Force -ErrorAction SilentlyContinue
   }
-  Start-Sleep -Milliseconds 500
-  $RunningAgents = @()
+  throw $StageError
 }
 
-if ($RunningAgents.Count -eq 0) {
-  $RunArguments = '"' + $AgentScript + '" run --config "' + $ConfigPath + '"'
-  Start-Process -FilePath $VenvPythonw -ArgumentList $RunArguments -WorkingDirectory $InstallRoot -WindowStyle Hidden
+$StopPath = Join-Path $StateRoot "STOP"
+$LifecycleStopPath = Join-Path $StateRoot "SERVICE_STOP"
+$HoldPath = Join-Path $StateRoot "SERVICE_HOLD"
+$ReadyPath = Join-Path $StateRoot "SERVICE_READY"
+$PausedPath = Join-Path $StateRoot "PAUSED"
+$PersistentStopExisted = Test-Path -LiteralPath $StopPath
+$PersistentStopContent = if ($PersistentStopExisted) { [System.IO.File]::ReadAllText($StopPath) } else { $null }
+
+$ExistingService = Get-CitadelServiceCim -Name $ServiceName
+$ExistingSnapshot = if ($null -ne $ExistingService) { Get-CitadelServiceSnapshot -Name $ServiceName } else { $null }
+$ExistingWasRunning = $false
+if ($null -ne $ExistingService) {
+  $ExistingPsService = Get-Service -Name $ServiceName -ErrorAction Stop
+  $ExistingWasRunning = $ExistingPsService.Status -eq "Running"
+}
+$LegacyProcessesBeforeCutover = @(Get-RunningLegacyCitadelAgents)
+$LegacyShortcutExisted = Test-Path -LiteralPath $LegacyShortcutPath
+$CreatedService = $null -eq $ExistingService
+$CutoverCommitted = $false
+
+$LegacyStateMatchesNode = $false
+if ((Test-Path -LiteralPath $LegacyIdentity) -and (Test-Path -LiteralPath $NewIdentity)) {
+  try {
+    $LegacyIdentityState = Get-Content -LiteralPath $LegacyIdentity -Raw | ConvertFrom-Json
+    $NewIdentityState = Get-Content -LiteralPath $NewIdentity -Raw | ConvertFrom-Json
+    $LegacyStateMatchesNode = (
+      [string]$LegacyIdentityState.node_id -eq $NodeId -and
+      [string]$NewIdentityState.node_id -eq $NodeId
+    )
+  } catch {
+    throw "Unable to validate legacy identity before final state migration."
+  }
+}
+
+$BinPath = (Quote-CitadelServiceArg $ServiceExe) +
+  " --python " + (Quote-CitadelServiceArg $VenvPython) +
+  " --agent " + (Quote-CitadelServiceArg $AgentScript) +
+  " --config " + (Quote-CitadelServiceArg $ConfigPath) +
+  " --stop-file " + (Quote-CitadelServiceArg $StopPath) +
+  " --lifecycle-stop-file " + (Quote-CitadelServiceArg $LifecycleStopPath) +
+  " --hold-file " + (Quote-CitadelServiceArg $HoldPath) +
+  " --ready-file " + (Quote-CitadelServiceArg $ReadyPath)
+
+try {
+  if ($null -ne $ExistingService) {
+    Stop-CitadelServiceIfPresent
+  }
+
+  if ($PersistentStopExisted) {
+    Remove-Item -LiteralPath $StopPath -Force
+    Write-Host "[CITADEL] Explicit administrator repair cleared the persistent STOP marker."
+  }
+  Remove-Item -LiteralPath $LifecycleStopPath -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $ReadyPath -Force -ErrorAction SilentlyContinue
+  [System.IO.File]::WriteAllText($HoldPath, "service cutover hold" + [Environment]::NewLine, $Utf8NoBom)
+
+  $Configured = Set-CitadelServiceDefinition -Name $ServiceName -DisplayName $ServiceDisplayName -BinaryPathName $BinPath -StartName "NT AUTHORITY\LocalService" -DelayedAutoStart $true
+  Set-CitadelServiceRecovery -Name $ServiceName
+
+  Start-Service -Name $ServiceName
+  $Service = Get-Service -Name $ServiceName
+  $Service.WaitForStatus("Running", [TimeSpan]::FromSeconds(30))
   Start-Sleep -Seconds 1
-  Write-Host "[CITADEL] Started one background agent process."
-} else {
-  Write-Host "[CITADEL] Agent is already running; a second copy was not started."
-}
+  $Service.Refresh()
+  if ($Service.Status -ne "Running") { throw "CITADEL Windows Core Service did not remain running." }
 
-$InstallState = @{
-  node_id = $NodeId
-  controller_url = $ControllerUrl.TrimEnd('/')
-  install_root = $InstallRoot
-  agent_version = "0.3.11"
-  installer_release = $InstallerRelease
-  python = $PythonInfo
-  python_bits = [int]$VenvBits
-  v1_sha256 = $ExpectedV1Sha256
-  v2_sha256 = $ExpectedV2Sha256
-  updated_at = [DateTime]::UtcNow.ToString("o")
-} | ConvertTo-Json
-[System.IO.File]::WriteAllText((Join-Path $InstallRoot "install-state.json"), $InstallState + [Environment]::NewLine, $Utf8NoBom)
+  $ServiceCim = Get-CitadelServiceCim -Name $ServiceName
+  if ($null -eq $ServiceCim -or [int]$ServiceCim.ProcessId -le 0) {
+    throw "Windows SCM did not publish a running service process."
+  }
+
+  $ChildDeadline = [DateTime]::UtcNow.AddSeconds(20)
+  $ManagedChild = $null
+  do {
+    $ManagedChild = Get-CimInstance Win32_Process -Filter ("ParentProcessId=" + [int]$ServiceCim.ProcessId) -ErrorAction SilentlyContinue |
+      Where-Object { $_.CommandLine -and $_.CommandLine.Contains("citadel_node_v2.py") } |
+      Select-Object -First 1
+    if ($null -eq $ManagedChild) { Start-Sleep -Milliseconds 500 }
+  } while ($null -eq $ManagedChild -and [DateTime]::UtcNow -lt $ChildDeadline)
+  if ($null -eq $ManagedChild) { throw "SCM service started but no managed Python Core Agent child was observed." }
+
+  # The LocalService child is held away from commands, assignments and result
+  # queues until it proves Controller connectivity with an SCM-mode heartbeat.
+  $ReadyDeadline = [DateTime]::UtcNow.AddSeconds(45)
+  $ReadyState = $null
+  do {
+    if (Test-Path -LiteralPath $ReadyPath) {
+      try {
+        $ReadyState = Get-Content -LiteralPath $ReadyPath -Raw | ConvertFrom-Json
+      } catch {
+        throw "Managed service readiness marker is invalid JSON."
+      }
+      if ([string]$ReadyState.node_id -ne $NodeId -or
+          [string]$ReadyState.agent_version -ne $ReleaseVersion -or
+          $ReadyState.windows_core_service -ne $true) {
+        throw "Managed service readiness marker does not match this node/release."
+      }
+      break
+    }
+    Start-Sleep -Milliseconds 500
+  } while ([DateTime]::UtcNow -lt $ReadyDeadline)
+  if ($null -eq $ReadyState) {
+    throw "LocalService Core Agent did not confirm a Controller heartbeat during cutover."
+  }
+
+  # From this point the replacement service has proven network/controller
+  # health. A later cleanup problem must not roll it back to an unverified or
+  # partially stopped legacy lifecycle. The HOLD file stays in place until the
+  # final legacy state snapshot is complete.
+  $CutoverCommitted = $true
+
+  $LegacyCleanupFailed = $false
+  foreach ($Process in $LegacyProcessesBeforeCutover) {
+    try {
+      Stop-Process -Id $Process.ProcessId -Force -ErrorAction Stop
+      Wait-Process -Id $Process.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
+    } catch {
+      Write-Warning ("[CITADEL] Could not stop legacy agent process " + $Process.ProcessId + ": " + $_.Exception.Message)
+      $LegacyCleanupFailed = $true
+    }
+  }
+  if ($LegacyCleanupFailed) {
+    throw "Legacy agent cleanup is incomplete; new service remains safely held."
+  }
+
+  if ($LegacyStateMatchesNode) {
+    foreach ($StateName in @("pending-results.json", "network-recovery.json", "lmstudio-state.json")) {
+      $LegacyFile = Join-Path $LegacyStateRoot $StateName
+      $NewFile = Join-Path $StateRoot $StateName
+      if (Test-Path -LiteralPath $LegacyFile) {
+        Copy-Item -LiteralPath $LegacyFile -Destination $NewFile -Force
+      }
+    }
+    $LegacyPaused = Join-Path $LegacyStateRoot "PAUSED"
+    if (Test-Path -LiteralPath $LegacyPaused) {
+      Copy-Item -LiteralPath $LegacyPaused -Destination $PausedPath -Force
+    } elseif (Test-Path -LiteralPath $PausedPath) {
+      Remove-Item -LiteralPath $PausedPath -Force
+    }
+  }
+
+  if ($LegacyShortcutExisted -and (Test-Path -LiteralPath $LegacyShortcutPath)) {
+    Remove-Item -LiteralPath $LegacyShortcutPath -Force
+  }
+
+  Remove-Item -LiteralPath $HoldPath -Force
+  Remove-Item -LiteralPath $ReadyPath -Force -ErrorAction SilentlyContinue
+
+  $InstallState = @{
+    node_id = $NodeId
+    controller_url = $ControllerUrl.TrimEnd('/')
+    install_root = $InstallRoot
+    release_root = $ReleaseRoot
+    state_root = $StateRoot
+    agent_version = $ReleaseVersion
+    service_name = $ServiceName
+    service_account = [string]$Configured.StartName
+    service_start = "Automatic (Delayed Start)"
+    image_path = [string]$Configured.PathName
+    windows_core_service = $true
+    v1_sha256 = $ExpectedV1Sha256
+    v2_sha256 = $ExpectedV2Sha256
+    service_source_sha256 = $ExpectedServiceHostSha256
+    service_helper_sha256 = $ExpectedServiceHelperSha256
+    updated_at = [DateTime]::UtcNow.ToString("o")
+  } | ConvertTo-Json
+  [System.IO.File]::WriteAllText($InstallStatePath, $InstallState + [Environment]::NewLine, $Utf8NoBom)
+
+  $KeepReleasePaths = @($ReleaseRoot)
+  if ($null -ne $PreviousReleaseRoot) { $KeepReleasePaths += $PreviousReleaseRoot }
+  foreach ($ReleaseDirectory in @(Get-ChildItem -LiteralPath $ReleaseBase -Directory -ErrorAction SilentlyContinue)) {
+    $ReleaseFullPath = [System.IO.Path]::GetFullPath($ReleaseDirectory.FullName).TrimEnd('\')
+    $Keep = $false
+    foreach ($KeepPath in $KeepReleasePaths) {
+      if ([string]::Equals($ReleaseFullPath, ([System.IO.Path]::GetFullPath($KeepPath).TrimEnd('\')), [System.StringComparison]::OrdinalIgnoreCase)) {
+        $Keep = $true
+        break
+      }
+    }
+    if (-not $Keep) {
+      try {
+        Remove-Item -LiteralPath $ReleaseFullPath -Recurse -Force -ErrorAction Stop
+      } catch {
+        Write-Warning ("[CITADEL] Could not prune superseded release " + $ReleaseFullPath + ": " + $_.Exception.Message)
+      }
+    }
+  }
+
+} catch {
+  $CutoverError = $_
+  if ($CutoverCommitted) {
+    Write-Warning "[CITADEL] New SCM service is already committed. It will not be rolled back after a secondary cleanup/metadata error."
+    throw $CutoverError
+  }
+  Write-Warning "[CITADEL] Service cutover failed before commit; restoring the previous lifecycle."
+  try {
+    Stop-CitadelServiceIfPresent
+    if ($CreatedService) {
+      Remove-CitadelServiceDefinition -Name $ServiceName
+    } elseif ($null -ne $ExistingSnapshot) {
+      Restore-CitadelServiceDefinition -Name $ServiceName -Snapshot $ExistingSnapshot
+      if ($ExistingWasRunning) {
+        Start-Service -Name $ServiceName
+        (Get-Service -Name $ServiceName).WaitForStatus("Running", [TimeSpan]::FromSeconds(30))
+      }
+    }
+    if ($PersistentStopExisted -and -not (Test-Path -LiteralPath $StopPath)) {
+      [System.IO.File]::WriteAllText($StopPath, $PersistentStopContent, $Utf8NoBom)
+    }
+    Remove-Item -LiteralPath $HoldPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $ReadyPath -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $ReleaseRoot) {
+      Remove-Item -LiteralPath $ReleaseRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  } catch {
+    Write-Warning ("[CITADEL] Rollback also encountered an error: " + $_.Exception.Message)
+  }
+  throw $CutoverError
+}
 
 Write-Host ""
 Write-Host "[CITADEL] Setup/repair complete."
 Write-Host "[CITADEL] Node: $NodeId"
 Write-Host "[CITADEL] Controller: $($ControllerUrl.TrimEnd('/'))"
-Write-Host "[CITADEL] Re-running this installer reuses the same identity, environment and installation."
-Write-Host "[CITADEL] The agent polls signed Hub commands, including verified remote updates, automatically."
+Write-Host "[CITADEL] Release: $ReleaseRoot"
+Write-Host "[CITADEL] Windows service: $ServiceName / LocalService / Automatic (Delayed Start)"
+Write-Host "[CITADEL] SCM process and managed Python child were verified after cutover."
+Write-Host "[CITADEL] Re-running this installer stages and verifies a new release before touching the running lifecycle."
