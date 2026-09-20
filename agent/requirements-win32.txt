@@ -1,0 +1,5 @@
+# Windows x86 (32-bit) wheels for the CITADEL agent.
+# Keep this wheel-only: setup_windows.ps1 refuses source builds on Windows.
+cffi==2.1.1
+cryptography==48.0.1
+psutil==6.1.1
