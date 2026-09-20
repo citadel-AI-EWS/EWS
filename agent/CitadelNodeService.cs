@@ -13,6 +13,8 @@ namespace CitadelEws
         public string ConfigPath;
         public string StopFile;
         public string LifecycleStopFile;
+        public string HoldFile;
+        public string ReadyFile;
     }
 
     public sealed class CitadelNodeService : ServiceBase
@@ -80,6 +82,8 @@ namespace CitadelEws
             start.CreateNoWindow = true;
             start.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] = "1";
             start.EnvironmentVariables["CITADEL_SERVICE_STOP_FILE"] = config.LifecycleStopFile;
+            start.EnvironmentVariables["CITADEL_SERVICE_HOLD_FILE"] = config.HoldFile;
+            start.EnvironmentVariables["CITADEL_SERVICE_READY_FILE"] = config.ReadyFile;
             return start;
         }
 
@@ -252,6 +256,8 @@ namespace CitadelEws
                 else if (key == "--config") result.ConfigPath = value;
                 else if (key == "--stop-file") result.StopFile = value;
                 else if (key == "--lifecycle-stop-file") result.LifecycleStopFile = value;
+                else if (key == "--hold-file") result.HoldFile = value;
+                else if (key == "--ready-file") result.ReadyFile = value;
                 else throw new ArgumentException("Unknown service argument: " + key);
             }
 
@@ -259,7 +265,9 @@ namespace CitadelEws
                 String.IsNullOrWhiteSpace(result.AgentPath) ||
                 String.IsNullOrWhiteSpace(result.ConfigPath) ||
                 String.IsNullOrWhiteSpace(result.StopFile) ||
-                String.IsNullOrWhiteSpace(result.LifecycleStopFile))
+                String.IsNullOrWhiteSpace(result.LifecycleStopFile) ||
+                String.IsNullOrWhiteSpace(result.HoldFile) ||
+                String.IsNullOrWhiteSpace(result.ReadyFile))
             {
                 throw new ArgumentException("Missing required CITADEL service arguments.");
             }
@@ -276,7 +284,9 @@ namespace CitadelEws
                 "--agent", Path.Combine(root, "citadel_node_v2.py"),
                 "--config", Path.Combine(root, "config.json"),
                 "--stop-file", Path.Combine(root, "STOP"),
-                "--lifecycle-stop-file", Path.Combine(root, "SERVICE_STOP")
+                "--lifecycle-stop-file", Path.Combine(root, "SERVICE_STOP"),
+                "--hold-file", Path.Combine(root, "SERVICE_HOLD"),
+                "--ready-file", Path.Combine(root, "SERVICE_READY")
             });
             var service = new CitadelNodeService(config);
             Directory.CreateDirectory(root);
@@ -289,6 +299,8 @@ namespace CitadelEws
                 !start.CreateNoWindow ||
                 start.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] != "1" ||
                 start.EnvironmentVariables["CITADEL_SERVICE_STOP_FILE"] != config.LifecycleStopFile ||
+                start.EnvironmentVariables["CITADEL_SERVICE_HOLD_FILE"] != config.HoldFile ||
+                start.EnvironmentVariables["CITADEL_SERVICE_READY_FILE"] != config.ReadyFile ||
                 start.FileName != config.PythonPath ||
                 start.Arguments.IndexOf(" run --config ", StringComparison.Ordinal) < 0)
             {
