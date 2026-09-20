@@ -8,6 +8,7 @@
 - Installer переносит существующую node identity из старого профиля в `%ProgramData%\CitadelEWS\state` и сохраняет `node_id`.
 - State/install ACL разрешают LocalService только необходимый Modify-доступ; SYSTEM и Administrators сохраняют полный контроль.
 - Подписанный `restart`/update перезапускает Python child внутри service-host; подписанный `stop` не вызывает recovery-loop.
+- Узел сообщает capability `windows_core_service` только когда Python Core реально запущен через SCM-host; одна версия 0.3.12 сама по себе не считается доказательством миграции.
 - `setup_windows.ps1 -Uninstall` удаляет службу и CITADEL-компоненты; `-PreserveState` оставляет node state по явному запросу.
 - LM Studio остаётся headless runtime: если он устанавливается из Core Service, он работает в профиле LocalService, без интерактивного desktop-сеанса.
 
