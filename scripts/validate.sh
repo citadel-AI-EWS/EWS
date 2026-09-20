@@ -209,6 +209,10 @@ for forbidden in ("cmd.exe", "powershell.exe", "UseShellExecute = true"):
     if forbidden in service_host:
         raise SystemExit(f"unsafe Windows service host pattern detected: {forbidden}")
 
+agent_v1 = Path("agent/citadel_node_v1.py").read_text(encoding="utf-8")
+if '"windows_core_service"' not in agent_v1:
+    raise SystemExit("Windows SCM capability reporting is missing")
+
 linux_setup = Path("agent/setup_linux.sh").read_text(encoding="utf-8")
 linux_entry = Path("agent/Install Linux Node.sh").read_text(encoding="utf-8")
 for required in (
