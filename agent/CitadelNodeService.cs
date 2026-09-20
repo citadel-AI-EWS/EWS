@@ -278,8 +278,12 @@ namespace CitadelEws
                 "--lifecycle-stop-file", Path.Combine(root, "SERVICE_STOP")
             });
             var service = new CitadelNodeService(config);
+            File.WriteAllText(config.LifecycleStopFile, "stale transient marker");
+            service.DeleteLifecycleStopFile();
             ProcessStartInfo start = service.BuildChildStartInfo();
-            if (start.UseShellExecute ||
+            if (File.Exists(config.LifecycleStopFile) ||
+                service.AutoLog ||
+                start.UseShellExecute ||
                 !start.CreateNoWindow ||
                 start.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] != "1" ||
                 start.EnvironmentVariables["CITADEL_SERVICE_STOP_FILE"] != config.LifecycleStopFile ||
