@@ -527,6 +527,7 @@ Decision and implementation:
 - Existing user-profile node identity is migrated into `%ProgramData%\CitadelEWS\state`; the machine-bound DPAPI identity from 0.3.11 remains usable by LocalService on the same host.
 - Installer removes the legacy Startup shortcut, uses machine-wide Python, creates a ProgramData venv, hardens ACLs, supports idempotent repair and explicit uninstall.
 - Service-managed agent restart/update uses reserved process exit code 75 so the SCM host reloads the updated Python files. Signed stop uses code 76 and leaves the service host dormant instead of triggering recovery.
+- `windows_core_service` is advertised only from an SCM-managed process. Controller/Hub must not infer service migration from version `0.3.12` alone.
 - A persistent STOP marker from signed uninstall is respected across reboot; local administrator repair clears it explicitly.
 - LM Studio remains the reviewed headless/llmster integration. Under the Core Service it is service-profile scoped and does not depend on an interactive desktop session.
 - No arbitrary shell, WinRM, credential collection, hidden persistence or inbound management port was added.
