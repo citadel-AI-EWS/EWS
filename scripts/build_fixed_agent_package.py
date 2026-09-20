@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
-PACKAGE_NAME = "CITADEL_FIXED_AGENT_0.3.11_2026-09-20"
+PACKAGE_NAME = "CITADEL_FIXED_AGENT_0.3.11_WINCOMPAT1_2026-09-20"
 STAGE = DIST / PACKAGE_NAME
 ZIP_PATH = DIST / f"{PACKAGE_NAME}.zip"
 
@@ -274,11 +274,14 @@ def write_extras() -> None:
         newline="",
     )
     readme = (
-        "CITADEL/EWS — исправленный самодостаточный пакет 0.3.11\n\n"
+        "CITADEL/EWS — Windows compatibility release 0.3.11-wincompat.1\n\n"
         "1. Распакуйте ZIP полностью.\n"
         "2. Запустите START_HERE.cmd.\n"
         "3. Агент использует HTTPS Controller: https://citadel-ai.init1.workers.dev\n\n"
         "Исправлено в этом пакете:\n"
+        "- winget больше не является обязательным: при его отсутствии/ошибке используется официальный Python 3.13.15 с проверкой SHA-256.\n"
+        "- Поддержана 32-битная Windows 10: installer выбирает x86 Python и отдельный набор готовых win32 wheels.\n"
+        "- На Windows зависимости ставятся только из бинарных wheels; локальная сборка C/Rust пакетов не запускается.\n"
         "- JSON с UTF-8 BOM больше не ломает загрузку конфигурации.\n"
         "- При каждом запуске агент один раз сверяет node_id с Controller по Ed25519 public key; старый локальный ID автоматически исправляется.\n"
         "- localhost / 127.0.0.1 / ::1 согласованы для локального HTTP-теста.\n"
@@ -321,6 +324,7 @@ def build() -> Path:
         "setup_windows.ps1",
         "Install Windows Node.cmd",
         "requirements.txt",
+        "requirements-win32.txt",
     ):
         shutil.copy2(ROOT / "agent" / name, STAGE / name)
 
