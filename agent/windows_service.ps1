@@ -52,8 +52,8 @@ function Set-CitadelServiceDefinition {
       Name = $Name
       DisplayName = $DisplayName
       PathName = $BinaryPathName
-      ServiceType = [uint32]16
-      ErrorControl = [uint32]1
+      ServiceType = [byte]16
+      ErrorControl = [byte]1
       StartMode = "Automatic"
       DesktopInteract = $false
       StartName = $StartName
@@ -63,8 +63,8 @@ function Set-CitadelServiceDefinition {
     $Result = Invoke-CimMethod -InputObject $Existing -MethodName Change -Arguments @{
       DisplayName = $DisplayName
       PathName = $BinaryPathName
-      ServiceType = [uint32]16
-      ErrorControl = [uint32]1
+      ServiceType = [byte]16
+      ErrorControl = [byte]1
       StartMode = "Automatic"
       DesktopInteract = $false
       StartName = $StartName
