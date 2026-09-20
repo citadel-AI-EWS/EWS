@@ -39,6 +39,7 @@ class Statement {
     return this;
   }
   async first() {
+    if (this.sql.includes("SELECT token_hash") && this.sql.includes("FROM architect_auth_state")) return { token_hash: architectHash };
     if (this.sql.includes("SELECT node_id, public_key, status")) {
       return this.args[0] === state.node.node_id ? { ...state.node } : null;
     }
@@ -59,6 +60,7 @@ class Statement {
     throw new Error(`Unhandled all(): ${this.sql}`);
   }
   async run() {
+    if (this.sql.startsWith("INSERT OR IGNORE INTO architect_auth_state")) return { meta: { changes: 0 } };
     if (this.sql.startsWith("INSERT OR IGNORE INTO node_request_nonces")) {
       const key = this.args.join(":");
       if (state.nonces.has(key)) return { meta: { changes: 0 } };

@@ -24,6 +24,7 @@ class Statement {
     return this;
   }
   async first() {
+    if (this.sql.includes("SELECT token_hash") && this.sql.includes("FROM architect_auth_state")) return { token_hash: architectHash };
     if (this.sql.includes("AS nodes") && this.sql.includes("AS results")) {
       return { nodes: 1, active_missions: 2, results: 3, reports: 4 };
     }
@@ -57,6 +58,7 @@ class Statement {
     throw new Error(`Unhandled all(): ${this.sql}`);
   }
   async run() {
+    if (this.sql.startsWith("INSERT OR IGNORE INTO architect_auth_state")) return { meta: { changes: 0 } };
     if (this.sql.startsWith("INSERT OR IGNORE INTO agent_reports")) {
       return { meta: { changes: 0 } };
     }
