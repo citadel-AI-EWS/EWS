@@ -1652,6 +1652,30 @@
       if (interfaces.length) {
         lines.push("", "Сетевые интерфейсы:", ...interfaces.map((item) => "• " + item));
       }
+      const enterprise = c.windows_enterprise && typeof c.windows_enterprise === "object"
+        ? c.windows_enterprise
+        : null;
+      if (enterprise?.available) {
+        const systemEvents = Number(enterprise.event_log?.system?.critical_or_error_last_hour || 0);
+        const appEvents = Number(enterprise.event_log?.application?.critical_or_error_last_hour || 0);
+        lines.push(
+          "",
+          "Microsoft / Windows Enterprise:",
+          `CIM: ${[enterprise.cim?.os_caption, enterprise.cim?.os_version, enterprise.cim?.os_build].filter(Boolean).join(" · ") || "—"}`,
+          `Модель: ${[enterprise.cim?.manufacturer, enterprise.cim?.model].filter(Boolean).join(" ") || "—"}`,
+          `Домен: ${enterprise.cim?.domain_joined ? (enterprise.cim?.domain || "joined") : "не присоединён"}`,
+          `Windows Service: ${enterprise.cim?.citadel_service_state || "—"} · ${enterprise.cim?.citadel_service_start_mode || "—"}`,
+          `Perf/CIM: CPU ${enterprise.performance?.cpu_percent ?? "—"}% · доступно RAM ${enterprise.performance?.memory_available_mb ?? "—"} MB`,
+          `Event Log / 1ч: System ${systemEvents} · Application ${appEvents}`,
+          `Service identity: ${enterprise.service_identity?.service_account || "—"} · managed-account candidate: ${enterprise.service_identity?.configured ? "да" : "нет"}`,
+          `Windows Update: ${enterprise.windows_update?.service_status || "—"} · reboot pending: ${enterprise.windows_update?.pending_reboot ? "да" : "нет"}`,
+          `Latest hotfix: ${enterprise.windows_update?.latest_hotfix_id || "—"} · Hotpatch: ${enterprise.windows_update?.hotpatch?.state || "—"}`,
+          `Hyper-V: feature ${enterprise.hyper_v?.optional_feature_state ?? "—"} · VMs ${enterprise.hyper_v?.vm_count ?? "—"} · running ${enterprise.hyper_v?.running_vm_count ?? "—"}`,
+          `GPO: ${enterprise.management?.group_policy_service || "—"} · Intune: ${enterprise.management?.intune_management_extension || "—"} · MDM enrollments: ${enterprise.management?.mdm_enrollment_count ?? 0}`
+        );
+      } else if (enterprise?.supported) {
+        lines.push("", `Microsoft / Windows Enterprise: ${enterprise.reason || "probe unavailable"}`);
+      }
       return lines.join("\n");
     }
 
