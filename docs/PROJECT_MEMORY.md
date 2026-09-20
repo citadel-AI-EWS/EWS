@@ -520,6 +520,15 @@ Decision and implementation:
 
 
 
+## Agent 0.3.13 — Enterprise Services layer
+- Adds a reviewed, SHA-256 pinned `windows_enterprise_probe.ps1` executed locally only with fixed argv, `-NoProfile -NonInteractive -File`, and `shell=False`; no arbitrary PowerShell/WinRM command path is introduced.
+- Read-only Microsoft/Windows inventory covers CIM/Performance Counters, bounded Event Log error counts, Windows Update/reboot/hotfix state, Hyper-V inventory, domain/GPO, MDM/Intune and Windows service identity readiness.
+- gMSA/dMSA is treated as externally managed: CITADEL reports domain/service-account readiness and never guesses the subtype without authoritative AD data.
+- Hotpatch is reported as externally managed unless an authoritative Microsoft management signal exists; local heuristics do not claim eligibility.
+- Controller/Architect add RBAC roles owner/operator/viewer, Desired State compliance, Sites / Node Groups, system-inventory SHA-256 verification and a recovery manifest containing topology/integrity metadata but no report bodies or secrets.
+- owner remains the primary Architect token. operator can perform ordinary signed operations but cannot use security/enterprise admin APIs or uninstall/reboot/shutdown. viewer is read-only.
+- External tenant/domain features such as actual Intune enrollment, GPO issuance, gMSA/dMSA provisioning, Hyper-V installation and Hotpatch enrollment are detected/integrated but remain controlled by their external Windows/Microsoft infrastructure.
+
 ## Agent 0.3.12 — Windows Core Service
 - Windows Core Agent moves from a user Startup shortcut/pythonw lifecycle to the visible SCM service `CitadelEWSNode`.
 - Service account: `NT AUTHORITY\LocalService`; startup: Automatic (Delayed Start); SCM recovery restarts unexpected service-host failures.
