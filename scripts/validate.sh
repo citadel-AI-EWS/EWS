@@ -104,6 +104,11 @@ for required in (
     'id="experienceList"',
     'id="refreshExperienceButton"',
     "/api/v1/architect/experience",
+    'id="lostTokenButton"',
+    'id="recoveryLoginPanel"',
+    'id="createRecoveryCodeButton"',
+    'id="rotateArchitectTokenButton"',
+    'id="securitySecretPanel"',
 ):
     if required not in architect:
         raise SystemExit(f"required Architect Live Operations capability missing: {required}")
@@ -114,6 +119,31 @@ if '/api/v1/architect/experience' not in worker or "architectExperience" not in 
 for required in ("architectGetProject", "project_specializations", "requested_roles"):
     if required not in worker:
         raise SystemExit(f"Project report/specialization backend missing: {required}")
+for required in (
+    "architectRotateToken",
+    "architectRecoverToken",
+    "architectCreateRecoveryCode",
+    "architect_auth_state",
+    "architect_recovery_attempts",
+):
+    if required not in worker:
+        raise SystemExit(f"Architect auth recovery backend missing: {required}")
+
+for required in (
+    "/api/v1/architect/security/recover-token",
+    "/api/v1/architect/security/recovery-code",
+    "/api/v1/architect/security/rotate-token",
+):
+    if required not in architect or required not in worker:
+        raise SystemExit(f"Architect auth recovery route missing: {required}")
+
+for forbidden in (
+    "/api/v1/architect/security/current-token",
+    "showCurrentArchitectToken",
+    "getCurrentArchitectToken",
+):
+    if forbidden in architect or forbidden in worker:
+        raise SystemExit(f"current Architect token exposure path detected: {forbidden}")
 
 for forbidden in ("Контрольные точки", "Последние события аудита"):
     if forbidden in architect:
@@ -218,6 +248,7 @@ required = {
     "agent_reports", "architect_sessions", "node_logs", "node_log_rate_limits",
     "agent_rollouts", "architect_projects", "project_work_items",
     "project_specializations", "project_quality_gates", "node_network_state", "node_ai_state",
+    "architect_auth_state", "architect_recovery_attempts",
 }
 tables = {
     row[0]
