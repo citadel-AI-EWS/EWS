@@ -252,11 +252,12 @@
     async function signedRequest(identity, method, path, payload) {
       const body = payload === undefined ? "" : JSON.stringify(payload);
       const timestamp = String(Math.floor(Date.now() / 1000));
+      const requestId = crypto.randomUUID();
       const bodyHash = bytesToHex(await crypto.subtle.digest(
         "SHA-256",
         new TextEncoder().encode(body)
       ));
-      const canonical = [method, path, timestamp, bodyHash].join("\n");
+      const canonical = [method, path, timestamp, requestId, bodyHash].join("\n");
       const signature = await crypto.subtle.sign(
         "Ed25519",
         identity.privateKey,
@@ -265,6 +266,7 @@
       const headers = {
         "x-node-id": identity.nodeId,
         "x-node-timestamp": timestamp,
+        "x-node-request-id": requestId,
         "x-node-signature": bytesToBase64Url(signature)
       };
       if (body) headers["content-type"] = "application/json";
