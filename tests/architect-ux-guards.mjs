@@ -65,7 +65,8 @@ for (const id of [
   "createRecoveryCodeButton",
   "rotateArchitectTokenButton",
   "securitySecretPanel",
-  "securitySecretValue"
+  "securitySecretValue",
+  "homeButton"
 ]) {
   assert.match(architect, new RegExp(`id="${id}"`), `Architect control missing: ${id}`);
 }
@@ -101,6 +102,10 @@ assert.doesNotMatch(architect, /Последние события аудита/)
 assert.match(architect, /\/api\/v1\/architect\/security\/recover-token/);
 assert.match(architect, /Аварийное восстановление \/ сброс доступа/);
 assert.match(architect, /Выполнить аварийный сброс доступа/);
+assert.match(architect, /id="homeButton"[^>]+href="\/"/);
+assert.match(architect, /home:"Главная"/);
+assert.match(architect, /home:"Home"/);
+assert.match(architect, /home:"בית"/);
 assert.match(architect, /Ноды, проекты, миссии, отчёты, модели и данные не удаляются/);
 assert.match(architect, /\/api\/v1\/architect\/security\/recovery-code/);
 assert.match(architect, /\/api\/v1\/architect\/security\/rotate-token/);
