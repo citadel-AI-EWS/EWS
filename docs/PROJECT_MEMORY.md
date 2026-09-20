@@ -538,3 +538,13 @@ Decision and implementation:
 - A persistent STOP marker from signed uninstall is respected across reboot; local administrator repair clears it explicitly.
 - LM Studio remains the reviewed headless/llmster integration. Under the Core Service it is service-profile scoped and does not depend on an interactive desktop session.
 - No arbitrary shell, WinRM, credential collection, hidden persistence or inbound management port was added.
+
+## 2026-09-20 daily engineering check — release gate remains open
+
+- Baseline: main `96531cd9a3c10b2e45615b19e7a73b6f92da4350`, agent 0.3.12. CI run 35526367284, TEST deployment 35526415594 and synthetic browser run 35526438008 succeeded. Deployment live smoke passed at 17:37:05Z; an independent public smoke passed at 18:03:37Z with eight registered nodes. This does not certify privileged Fleet actions or a Windows machine upgrade.
+- Finding: package run 35526367377 failed because its manifest verifier still required the old win32 requirements file. Current Windows Core Service installer uses requirements.txt and packages CitadelNodeService.cs/windows_service.ps1. Fix checks those actual service files without weakening hash verification; add pull-request package validation before merge. Risk: blocked package publication. Rollback: revert this workflow-only change.
+- CodeRabbit PR93 checksum finding also applies to main: sidecars record a releases/ prefix, breaking verification after sibling downloads. Generate checksums from the releases directory. No agent code or release hashes changed.
+- Local verification: all seven npm test suites, both package builders, both workflow manifest/policy checks, packaged v1/v2 self-tests, ZIP/TAR integrity, repository SHA256SUMS and git diff --check passed. Full hosted PR checks and release are still pending at this entry.
+- AEGIS Fleet source remains in Hub, consumes Controller records, masks privileged columns without authentication, and Health queues system_inventory. No Tailscale text in Hub source. Privileged CPU/RAM/identity/LM readiness and actual signed mission completion were not exercised in this run; no Architect credential was supplied.
+- Unresolved: main retains the stale legacy-state replay condition reported on PR89; PR95 proposes migration gating but targets feature/windows-service-0312-final rather than main. Other PR89/PR93 review items require complete current-main triage. Do not release or mark these emails resolved on the strength of package validation alone.
+- Gmail: seven post-previous-run project review notifications were read; none moved to trash because release verification and review triage are incomplete. No production release performed by this check.
