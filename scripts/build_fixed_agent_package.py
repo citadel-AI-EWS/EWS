@@ -40,7 +40,7 @@ def indented_block(value: str, spaces: int = 8) -> str:
 def patch_v1(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     text = must_replace(text, "import hashlib\n", "import hashlib\nimport ipaddress\n", "ipaddress import")
-    text = must_replace(text, 'VERSION = "0.3.0"', 'VERSION = "0.3.12"', "v1 version")
+    text = must_replace(text, 'VERSION = "0.3.0"', 'VERSION = "0.3.13"', "v1 version")
     text = must_replace(
         text,
         'return json.loads(path.read_text(encoding="utf-8"))',
@@ -252,7 +252,7 @@ def patch_v1(path: Path) -> None:
 
 def patch_v2(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
-    text = must_replace(text, 'VERSION = "0.3.0"', 'VERSION = "0.3.12"', "v2 version")
+    text = must_replace(text, 'VERSION = "0.3.0"', 'VERSION = "0.3.13"', "v2 version")
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
@@ -261,7 +261,7 @@ def patch_setup(path: Path, v1_hash: str, v2_hash: str) -> None:
     original = text
     text = re.sub(r'\$ExpectedV1Sha256 = "[0-9a-f]{64}"', f'$ExpectedV1Sha256 = "{v1_hash}"', text, count=1)
     text = re.sub(r'\$ExpectedV2Sha256 = "[0-9a-f]{64}"', f'$ExpectedV2Sha256 = "{v2_hash}"', text, count=1)
-    text = text.replace('agent_version = "0.3.0"', 'agent_version = "0.3.12"')
+    text = text.replace('agent_version = "0.3.0"', 'agent_version = "0.3.13"')
     if text == original:
         raise RuntimeError("setup_windows.ps1 was not patched")
     path.write_text(text, encoding="utf-8", newline="\n")
