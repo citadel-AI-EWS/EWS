@@ -56,7 +56,16 @@ for (const id of [
   "projectFinalResult",
   "projectVoiceButton",
   "missionVoiceButton",
-  "reportsDisclosure"
+  "reportsDisclosure",
+  "lostTokenButton",
+  "recoveryLoginPanel",
+  "recoveryCodeInput",
+  "recoverTokenButton",
+  "architectSecurityState",
+  "createRecoveryCodeButton",
+  "rotateArchitectTokenButton",
+  "securitySecretPanel",
+  "securitySecretValue"
 ]) {
   assert.match(architect, new RegExp(`id="${id}"`), `Architect control missing: ${id}`);
 }
@@ -89,6 +98,18 @@ assert.match(architect, /lt\("Здоровье","Health","בריאות"\)/);
 assert.match(architect, /detail-toggle/);
 assert.match(architect, /\/api\/v1\/architect\/work-roles/);
 assert.doesNotMatch(architect, /Последние события аудита/);
+assert.match(architect, /\/api\/v1\/architect\/security\/recover-token/);
+assert.match(architect, /\/api\/v1\/architect\/security\/recovery-code/);
+assert.match(architect, /\/api\/v1\/architect\/security\/rotate-token/);
+assert.match(index, /architectRecoverToken/);
+assert.match(index, /architectRotateToken/);
+assert.match(index, /architectCreateRecoveryCode/);
+assert.match(index, /architect_auth_state/);
+assert.match(index, /architect_recovery_attempts/);
+assert.match(index, /old_token_invalidated: true/);
+assert.match(index, /recovery_code_consumed: true/);
+assert.doesNotMatch(index, /current-token/);
+assert.doesNotMatch(architect, /Показать текущий токен/);
 
 assert.match(index, /"restart", "stop", "rollback"/);
 assert.match(index, /stop: "offline"/);
