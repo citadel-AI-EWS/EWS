@@ -31,6 +31,8 @@ need(agentV1.includes("private_key_dpapi"), "protected Windows identity field mi
 need(setup.includes("icacls.exe"), "Windows state ACL hardening missing");
 need(setup.includes("Install-PythonFallback"), "Windows verified Python fallback missing");
 need(setup.includes("requirements-win32.txt"), "Windows x86 dependency selection missing");
+need(setup.includes("requirements-winarm64.txt"), "Windows ARM64 dependency selection missing");
+need(setup.includes('$WindowsArchitecture -eq "arm64"'), "Windows ARM64 architecture gate missing");
 need(setup.includes("--only-binary=:all:"), "Windows installer may attempt local dependency builds");
 need(!setup.includes("Python 3.14 is not installed and Windows Package Manager (winget) is unavailable"), "winget is still mandatory");
 need(agentV2.includes('"windows_sleep_hibernate_inhibit"'), "agent drops sleep/hibernate event");
