@@ -174,6 +174,10 @@ for page_name, page in (("hub", hub), ("architect", architect)):
 
 setup = Path("agent/setup_windows.ps1").read_text(encoding="utf-8").lower()
 installer = Path("agent/Install Windows Node.cmd").read_text(encoding="utf-8").lower()
+service_helper = Path("agent/windows_service.ps1").read_text(encoding="utf-8")
+service_host = Path("agent/CitadelNodeService.cs").read_text(encoding="utf-8")
+agent_v1 = Path("agent/citadel_node_v1.py").read_text(encoding="utf-8")
+
 for forbidden in (
     "executionpolicy bypass",
     "-executionpolicy bypass",
@@ -188,28 +192,39 @@ if "https://citadel-ai.init1.workers.dev" not in setup:
     raise SystemExit("Windows installer Controller URL is missing")
 for required in (
     'servicename = "citadelewsnode"',
-    "start= delayed-auto",
-    "nt authority\\localservice",
-    "failure $servicename",
+    "legacyusersid",
+    "set-citadeldirectoryacl",
+    "set-citadelservicedefinition",
+    "restore-citadelservicedefinition",
+    '"paused"',
     "programdata\\citadelews\\state",
     "expectedservicehostsha256",
+    "expectedservicehelpersha256",
     "-uninstall",
 ):
     if required not in setup:
         raise SystemExit(f"Windows Core Service capability missing: {required}")
-for forbidden in ("createshortcut(", "pythonw.exe"):
+for forbidden in ("createshortcut(", "pythonw.exe", "binpath="):
     if forbidden in setup:
-        raise SystemExit(f"legacy Windows Startup lifecycle returned: {forbidden}")
+        raise SystemExit(f"legacy/fragile Windows lifecycle returned: {forbidden}")
 
-service_host = Path("agent/CitadelNodeService.cs").read_text(encoding="utf-8")
-for required in ("ServiceBase.Run", "CITADEL_SERVICE_MANAGED", "RestartExitCode = 75", "StopExitCode = 76"):
+for required in ("Invoke-CimMethod", "Win32_Service", "DelayedAutostart", "PathName"):
+    if required not in service_helper:
+        raise SystemExit(f"Windows SCM helper capability missing: {required}")
+for required in (
+    "ServiceBase.Run",
+    "CITADEL_SERVICE_MANAGED",
+    "CITADEL_SERVICE_STOP_FILE",
+    "RequestAdditionalTime(60000)",
+    "AutoLog = false",
+    "RestartExitCode = 75",
+    "StopExitCode = 76",
+):
     if required not in service_host:
         raise SystemExit(f"Windows service host capability missing: {required}")
 for forbidden in ("cmd.exe", "powershell.exe", "UseShellExecute = true"):
     if forbidden in service_host:
         raise SystemExit(f"unsafe Windows service host pattern detected: {forbidden}")
-
-agent_v1 = Path("agent/citadel_node_v1.py").read_text(encoding="utf-8")
 if '"windows_core_service"' not in agent_v1:
     raise SystemExit("Windows SCM capability reporting is missing")
 
