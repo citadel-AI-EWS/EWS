@@ -29,6 +29,7 @@
     @keyframes livePulse{0%{box-shadow:0 0 0 0 rgba(56,220,132,.45)}70%{box-shadow:0 0 0 9px rgba(56,220,132,0)}100%{box-shadow:0 0 0 0 rgba(56,220,132,0)}}
     .ops-grid{position:relative;display:grid;grid-template-columns:repeat(12,1fr);gap:14px;margin-top:18px}.ops-kpi{grid-column:span 2;padding:15px;border:1px solid #273857;border-radius:15px;background:rgba(8,16,31,.78)}.ops-kpi b{display:block;font-size:27px}.ops-kpi span{font-size:12px;color:#8fa4c4}
     .charts-grid{position:relative;display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.chart-card{padding:16px;border:1px solid #273857;border-radius:16px;background:rgba(8,16,31,.8);min-height:180px}.chart-card h3{margin:0 0 12px;font-size:14px;letter-spacing:.04em}.chart-rows{display:flex;flex-direction:column;gap:9px}.chart-row{display:grid;grid-template-columns:minmax(92px,150px) 1fr 48px;gap:9px;align-items:center;font-size:12px}.chart-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#c8d8f0}.bar-track{height:9px;border-radius:999px;background:#121d30;overflow:hidden}.bar-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#4c91ff,#70e6c1);transform-origin:left;animation:barGrow .55s ease-out}.bar-fill.warn{background:linear-gradient(90deg,#ffb44f,#ff6d72)}@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+    .agent-update-progress{grid-column:1/-1;margin-top:10px;padding:15px;border:1px solid #2a446d;border-radius:16px;background:linear-gradient(145deg,#0b1628,#0a1120);overflow:hidden}.agent-progress-head{display:flex;align-items:center;gap:15px}.agent-progress-ring{--agent-pct:0;flex:0 0 auto;width:78px;height:78px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#5b9cff calc(var(--agent-pct)*1%),#1a2941 0);position:relative;box-shadow:0 0 30px rgba(91,156,255,.16)}.agent-progress-ring:after{content:"";position:absolute;width:58px;height:58px;border-radius:50%;background:#0b1424;border:1px solid #294466}.agent-progress-ring b{position:relative;z-index:1;font-size:17px}.agent-progress-copy{min-width:0;flex:1}.agent-progress-copy strong{display:block;font-size:14px}.agent-progress-copy span{display:block;margin-top:5px;color:#93a9ca;font-size:12px;line-height:1.45}.agent-progress-track{height:8px;margin-top:13px;border-radius:999px;background:#17243a;overflow:hidden}.agent-progress-fill{height:100%;width:calc(var(--agent-pct)*1%);border-radius:999px;background:linear-gradient(90deg,#4f8fff,#65dec1);transition:width .55s ease;position:relative}.agent-progress-fill.moving:after{content:"";position:absolute;inset:0;background:linear-gradient(110deg,transparent 0 38%,rgba(255,255,255,.38) 50%,transparent 62%);animation:agentProgressSweep 1.25s linear infinite}.agent-update-progress.failed .agent-progress-ring{background:conic-gradient(#ff6d7a calc(var(--agent-pct)*1%),#351d29 0)}.agent-update-progress.failed .agent-progress-fill{background:linear-gradient(90deg,#ffb44f,#ff6874)}@keyframes agentProgressSweep{from{transform:translateX(-100%)}to{transform:translateX(100%)}}.agent-progress-stages{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin-top:11px}.agent-stage{padding:7px 5px;border:1px solid #253856;border-radius:9px;background:#101a2c;color:#7185a5;font-size:10px;text-align:center;line-height:1.25}.agent-stage.done{border-color:#2e6855;color:#8ee8bd;background:#0e2821}.agent-stage.active{border-color:#4e7ec3;color:#c8ddff;background:#122845;box-shadow:0 0 18px rgba(78,126,195,.12)}.agent-update-progress.failed .agent-stage.active{border-color:#85414a;color:#ffc0c5;background:#321922}@media(max-width:640px){.agent-progress-head{align-items:flex-start}.agent-progress-ring{width:66px;height:66px}.agent-progress-ring:after{width:48px;height:48px}.agent-progress-ring b{font-size:14px}.agent-progress-stages{grid-template-columns:1fr}.agent-stage{text-align:left;padding:7px 9px}}
     .fleet-ring-wrap{display:flex;gap:18px;align-items:center}.fleet-ring{--pct:0;flex:0 0 auto;width:112px;height:112px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#38d889 calc(var(--pct)*1%),#1a2941 0);position:relative;box-shadow:0 0 34px rgba(56,216,137,.12)}.fleet-ring:after{content:"";position:absolute;width:78px;height:78px;border-radius:50%;background:#0a1221;border:1px solid #263a5c}.fleet-ring b{position:relative;z-index:1;font-size:22px}.fleet-legend{font-size:12px;color:#9eb1cc;line-height:1.8}
     .node-grid{position:relative;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:14px}.node-card{border:1px solid #2a3c5d;border-radius:16px;background:linear-gradient(155deg,#0d1729,#0a1221);padding:15px;transition:.18s transform,.18s border-color,.18s box-shadow}.node-card:hover{transform:translateY(-1px);border-color:#4774b1;box-shadow:0 14px 35px #0005}.node-card.dead{border-color:#613743}.node-card.unhealthy{box-shadow:inset 3px 0 0 #ff6874}.node-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.node-name{font-weight:900;font-size:16px}.node-agent{margin-top:3px;color:#8ea6c9;font-size:12px}.node-status-lines{margin-top:11px;display:grid;gap:6px;font-size:13px}.state-live{color:#62e5a0}.state-dead{color:#ff7b86}.health-line{display:flex;align-items:center;justify-content:space-between;gap:10px}.detail-toggle{width:30px!important;height:30px;margin:0!important;padding:0!important;border-radius:9px!important;background:#223451!important;font-size:19px!important;line-height:1}.node-details{display:none;margin-top:12px;padding-top:12px;border-top:1px solid #243553;font-size:12px;color:#a8b9d3;line-height:1.7}.node-details.open{display:block;animation:detailIn .18s ease-out}@keyframes detailIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
     .topology-wrap{height:210px;position:relative;overflow:hidden;border-radius:12px;background:radial-gradient(circle at 50% 50%,rgba(62,121,211,.13),transparent 45%)}.topology-wrap svg{width:100%;height:100%}.topology-line{stroke:#355e91;stroke-width:1.5;stroke-dasharray:5 6;animation:dashFlow 5s linear infinite}.topology-node{fill:#122743;stroke:#5498ef;stroke-width:1.4}.topology-node.dead{fill:#341923;stroke:#ff6d7a}@keyframes dashFlow{to{stroke-dashoffset:-44}}
@@ -136,6 +137,17 @@
           <button id="resumeButton" class="secondary" type="button" data-i18n="resume">Возобновить</button>
           <button id="updateButton" class="secondary full" type="button">Обновить агент дистанционно</button>
           <div id="updateAgentState" class="status full">Версия агента ещё не проверена.</div>
+          <div id="agentUpdateProgress" class="agent-update-progress full" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="agent-progress-head">
+              <div id="agentUpdateRing" class="agent-progress-ring" style="--agent-pct:0"><b id="agentUpdatePercent">0%</b></div>
+              <div class="agent-progress-copy">
+                <strong id="agentUpdateTitle">Обновление агента ещё не запускалось</strong>
+                <span id="agentUpdateDetail">Это этапный индикатор Controller, а не измерение загруженных байтов.</span>
+              </div>
+            </div>
+            <div class="agent-progress-track"><div id="agentUpdateFill" class="agent-progress-fill" style="--agent-pct:0"></div></div>
+            <div id="agentUpdateStages" class="agent-progress-stages"></div>
+          </div>
           <button id="wakeButton" class="secondary full" type="button" disabled>Разбудить ПК</button>
           <div id="wakeState" class="status full">Wake-on-LAN проверяется по реальной LAN/MAC телеметрии.</div>
           <button id="updateAllAgentsButton" class="secondary full" type="button">Обновить все агенты</button>
@@ -371,6 +383,13 @@
     const resumeButton = document.getElementById("resumeButton");
     const updateButton = document.getElementById("updateButton");
     const updateAgentState = document.getElementById("updateAgentState");
+    const agentUpdateProgress = document.getElementById("agentUpdateProgress");
+    const agentUpdateRing = document.getElementById("agentUpdateRing");
+    const agentUpdatePercent = document.getElementById("agentUpdatePercent");
+    const agentUpdateTitle = document.getElementById("agentUpdateTitle");
+    const agentUpdateDetail = document.getElementById("agentUpdateDetail");
+    const agentUpdateFill = document.getElementById("agentUpdateFill");
+    const agentUpdateStages = document.getElementById("agentUpdateStages");
     const wakeButton = document.getElementById("wakeButton");
     const wakeState = document.getElementById("wakeState");
     const updateAllAgentsButton = document.getElementById("updateAllAgentsButton");
@@ -781,6 +800,127 @@
       projectCreatedOverlay.classList.add("hidden");
     }
 
+    function latestAgentUpdateCommand(nodeId) {
+      return currentCommands
+        .filter((command) => command.node_id === nodeId && command.command_type === "update")
+        .sort((left, right) => {
+          const leftTime = Date.parse(left.created_at || left.completed_at || 0) || 0;
+          const rightTime = Date.parse(right.created_at || right.completed_at || 0) || 0;
+          return rightTime - leftTime;
+        })[0] || null;
+    }
+
+    function renderAgentUpdateProgress(node) {
+      const stages = [
+        lt("Команда","Command","פקודה"),
+        lt("Принято","Accepted","התקבל"),
+        lt("Установка","Install","התקנה"),
+        lt("Проверка","Verify","אימות"),
+        lt("Готово","Ready","מוכן")
+      ];
+      agentUpdateStages.replaceChildren();
+
+      if (!node) {
+        agentUpdateProgress.style.setProperty("--agent-pct", "0");
+        agentUpdateRing.style.setProperty("--agent-pct", "0");
+        agentUpdateFill.style.setProperty("--agent-pct", "0");
+        agentUpdatePercent.textContent = "0%";
+        agentUpdateTitle.textContent = lt("Выберите узел","Select a node","בחר node");
+        agentUpdateDetail.textContent = lt(
+          "График покажет реальные этапы обновления по данным Controller.",
+          "The chart will show real update stages reported by the Controller.",
+          "התרשים יציג שלבי עדכון אמיתיים לפי נתוני ה-Controller."
+        );
+        agentUpdateProgress.classList.remove("failed");
+        agentUpdateFill.classList.remove("moving");
+        agentUpdateProgress.setAttribute("aria-valuenow", "0");
+        stages.forEach((label) => addText(agentUpdateStages, "div", label, "agent-stage"));
+        return;
+      }
+
+      const command = latestAgentUpdateCommand(node.node_id);
+      const isCurrent = Boolean(currentReleaseVersion) && node.agent_version === currentReleaseVersion;
+      let pct = 0;
+      let activeStage = 0;
+      let completedThrough = -1;
+      let moving = false;
+      let failed = false;
+      let title = lt("Готов к обновлению","Ready to update","מוכן לעדכון");
+      let detail = lt(
+        "Обновление ещё не запущено для выбранного узла.",
+        "No update is currently running for the selected node.",
+        "אין כרגע עדכון פעיל עבור ה-node שנבחר."
+      );
+
+      if (isCurrent) {
+        pct = 100;
+        activeStage = 4;
+        completedThrough = 4;
+        title = lt("Агент готов","Agent ready","ה-agent מוכן");
+        detail = `v${node.agent_version} · ${lt("новая версия подтверждена heartbeat","new version confirmed by heartbeat","הגרסה החדשה אושרה ב-heartbeat")}`;
+      } else if (command?.status === "pending") {
+        pct = 18;
+        activeStage = 0;
+        moving = true;
+        title = lt("Команда обновления поставлена в очередь","Update command queued","פקודת העדכון בתור");
+        detail = lt(
+          "Controller ждёт, когда агент заберёт подписанную команду.",
+          "The Controller is waiting for the agent to fetch the signed command.",
+          "ה-Controller ממתין שה-agent ימשוך את הפקודה החתומה."
+        );
+      } else if (command?.status === "accepted") {
+        pct = 55;
+        activeStage = 2;
+        completedThrough = 1;
+        moving = true;
+        title = lt("Агент выполняет обновление","Agent is updating","ה-agent מבצע עדכון");
+        detail = lt(
+          "Команда принята агентом; локальная загрузка, проверка и установка выполняются на узле.",
+          "The agent accepted the command; local download, verification, and installation are running on the node.",
+          "ה-agent קיבל את הפקודה; הורדה, אימות והתקנה מקומיים מתבצעים ב-node."
+        );
+      } else if (command?.status === "completed") {
+        pct = 86;
+        activeStage = 3;
+        completedThrough = 2;
+        moving = true;
+        title = lt("Обновление выполнено, подтверждаю версию","Update completed, verifying version","העדכון הושלם, מאמת גרסה");
+        detail = lt(
+          "Controller получил завершение команды и ждёт heartbeat с новой версией.",
+          "The Controller received command completion and is waiting for a heartbeat with the new version.",
+          "ה-Controller קיבל השלמת פקודה וממתין ל-heartbeat עם הגרסה החדשה."
+        );
+      } else if (command?.status === "failed") {
+        pct = 45;
+        activeStage = 2;
+        completedThrough = 1;
+        failed = true;
+        title = lt("Обновление завершилось ошибкой","Update failed","העדכון נכשל");
+        detail = lt(
+          "Controller получил ошибку команды. Откройте журналы узла перед повторным запуском.",
+          "The Controller received a command failure. Check the node logs before retrying.",
+          "ה-Controller קיבל כשל פקודה. יש לבדוק את יומני ה-node לפני ניסיון נוסף."
+        );
+      }
+
+      agentUpdateProgress.classList.toggle("failed", failed);
+      agentUpdateFill.classList.toggle("moving", moving);
+      agentUpdateProgress.style.setProperty("--agent-pct", String(pct));
+      agentUpdateRing.style.setProperty("--agent-pct", String(pct));
+      agentUpdateFill.style.setProperty("--agent-pct", String(pct));
+      agentUpdatePercent.textContent = pct + "%";
+      agentUpdateTitle.textContent = title;
+      agentUpdateDetail.textContent = detail;
+      agentUpdateProgress.setAttribute("aria-valuenow", String(pct));
+      agentUpdateProgress.setAttribute("aria-valuetext", title);
+
+      stages.forEach((label, index) => {
+        const item = addText(agentUpdateStages, "div", label, "agent-stage");
+        if (index <= completedThrough) item.classList.add("done");
+        else if (index === activeStage) item.classList.add("active");
+      });
+    }
+
     function renderNodeDiagnostics() {
       const node = selectedNode();
       if (!node) {
@@ -788,6 +928,7 @@
         nodeDiagnostics.className = "status";
         updateAgentState.textContent = "Версия агента ещё не проверена.";
         updateAgentState.className = "status";
+        renderAgentUpdateProgress(null);
         wakeState.textContent = "Выберите узел.";
         wakeState.className = "status";
         return;
@@ -814,6 +955,7 @@
         updateAgentState.textContent = `✕ Агент не актуален · v${node.agent_version || "—"} → ${currentReleaseVersion || "неизвестная release"}`;
         updateAgentState.className = "status bad";
       }
+      renderAgentUpdateProgress(node);
 
       if (health.live) {
         wakeState.textContent = "ПК уже в сети — Wake-on-LAN не требуется.";
