@@ -3,6 +3,7 @@ function need(value, message) { if (!value) throw new Error(message); }
 const index = fs.readFileSync("src/index.js", "utf8");
 const setup = fs.readFileSync("agent/setup_windows.ps1", "utf8");
 const serviceHost = fs.readFileSync("agent/CitadelNodeService.cs", "utf8");
+const enterpriseProbe = fs.readFileSync("agent/windows_enterprise_probe.ps1", "utf8");
 const serviceHelper = fs.readFileSync("agent/windows_service.ps1", "utf8");
 const readme = fs.readFileSync("agent/README_RU.md", "utf8");
 const nodeTest = fs.readFileSync("node-test.html", "utf8");
@@ -22,8 +23,8 @@ need(index.includes("LEFT JOIN node_numbers AS nn"), "Architect node number join
 need(!readme.includes("-EnrollmentToken"), "README still documents EnrollmentToken");
 need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_token");
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
-need(agentV1.includes('VERSION = "0.3.12"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.12"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.13"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.13"'), "v2 release not bumped");
 need(setup.includes('ServiceName = "CitadelEWSNode"'), "Windows Core Service name missing");
 need(setup.includes('LegacyUserSid'), "original user SID preservation missing");
 need(setup.includes('Set-CitadelDirectoryAcl'), "Windows clean ACL reconstruction missing");
@@ -40,6 +41,15 @@ need(serviceHost.includes('AutoLog = false'), "Windows service must not require 
 need(serviceHost.includes('CITADEL_SERVICE_STOP_FILE'), "transient service stop channel missing");
 need(serviceHost.includes('RequestAdditionalTime(60000)'), "SCM stop wait hint missing");
 need(serviceHost.includes('RestartExitCode = 75'), "service restart supervision missing");
+need(agentV1.includes('"windows_enterprise_readonly"'), "enterprise probe capability missing");
+need(agentV1.includes("WINDOWS_ENTERPRISE_PROBE_SHA256"), "enterprise probe hash pin missing");
+need(enterpriseProbe.includes("Get-CimInstance"), "enterprise CIM probe missing");
+need(enterpriseProbe.includes("Get-WinEvent"), "enterprise Event Log probe missing");
+need(enterpriseProbe.includes("Get-VM"), "enterprise Hyper-V read-only adapter missing");
+need(enterpriseProbe.includes("IntuneManagementExtension"), "enterprise Intune detection missing");
+for (const forbidden of ["Invoke-Expression", "DownloadString", "Enable-PSRemoting", "Invoke-Command", "New-PSSession"]) {
+  need(!enterpriseProbe.includes(forbidden), `unsafe enterprise probe primitive returned: ${forbidden}`);
+}
 need(agentV1.includes('SERVICE_RESTART_EXIT_CODE = 75'), "agent service restart exit code missing");
 need(agentV1.includes('SERVICE_STOP_EXIT_CODE = 76'), "agent service stop exit code missing");
 need(agentV1.includes('"windows_core_service"'), "SCM service capability marker missing");
