@@ -45,6 +45,9 @@ for required in (
     "system_inventory",
     "/api/v1/architect/nodes/${encodeURIComponent(node.node_id)}/wake",
     'id="nodePicker"',
+    'id="fleetTablePanel"',
+    'id="fleetTableBody"',
+    "renderFleetTable",
     'id="siteClock"',
     'id="lmstudioPanel"',
     'id="lmstudioModel"',
@@ -131,6 +134,11 @@ for page_name, page in (("home", home), ("hub", hub), ("architect", architect), 
 for forbidden in ("Command feed", "Audit feed", "commandTimeline", "auditTimeline"):
     if forbidden in hub:
         raise SystemExit(f"obsolete Hub feed surfaced again: {forbidden}")
+
+for page_name, page in (("hub", hub), ("architect", architect)):
+    for forbidden in ("Tailscale", "tailscale_ipv4"):
+        if forbidden in page:
+            raise SystemExit(f"{page_name} must not expose Tailscale-specific UI: {forbidden}")
 
 setup = Path("agent/setup_windows.ps1").read_text(encoding="utf-8").lower()
 installer = Path("agent/Install Windows Node.cmd").read_text(encoding="utf-8").lower()

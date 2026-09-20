@@ -476,3 +476,12 @@ Architect requirements:
 - Rejects stale Controller commands older than 15 minutes (or more than 60 seconds in the future).
 - Preserves rollback correctness when an update introduces a file that did not previously exist.
 - Retains 0.3.9 LM Studio v1, Hybrid, network recovery, sleep/hibernate inhibition and no-arbitrary-shell guarantees.
+
+
+## 2026-09-20 — AEGIS fleet integration without Tailscale
+
+- Reuse the recovered AEGIS Control Hub interaction model inside the canonical CITADEL Operations Hub.
+- Keep real-node status, session-scoped secure access, 10-second polling, CPU/RAM, agent version, computer identity, LM Studio readiness and a per-node Health action.
+- The Health action reuses CITADEL's existing signed system_inventory diagnostic mission path; no parallel command protocol is introduced.
+- Do not expose or depend on Tailscale in the CITADEL UI. The official channel remains the CITADEL HTTPS Worker/Controller API plus signed Agent requests and Architect authorization.
+- The integration ships only through the protected CI -> Cloudflare TEST deployment workflow.
