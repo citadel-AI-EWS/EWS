@@ -226,11 +226,16 @@ export function evaluateEnterpriseNode(node, inventory, policyInput, latestVersi
       const eventCount =
         Number(enterprise?.event_log?.system?.critical_or_error_last_hour || 0) +
         Number(enterprise?.event_log?.application?.critical_or_error_last_hour || 0);
+      const eventQueriesOk =
+        enterprise?.event_log?.system?.query_ok === true &&
+        enterprise?.event_log?.application?.query_ok === true;
       pushCheck(
         checks,
         "event_log",
-        eventCount <= policy.max_event_errors_last_hour,
-        `${eventCount} critical/error events in last hour <= ${policy.max_event_errors_last_hour}`
+        eventQueriesOk && eventCount <= policy.max_event_errors_last_hour,
+        !eventQueriesOk
+          ? "Windows Event Log query unavailable"
+          : `${eventCount} critical/error events in last hour <= ${policy.max_event_errors_last_hour}`
       );
 
       if (policy.require_windows_update_service) {
