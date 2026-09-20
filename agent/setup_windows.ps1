@@ -15,7 +15,7 @@ $ServiceDisplayName = "CITADEL EWS Node"
 $PythonWingetId = "Python.Python.3.14"
 $ExpectedV1Sha256 = "2475dde4eec9887492c48ff40d03cb2b9e5d6d01e4863d783557b23502a43993"
 $ExpectedV2Sha256 = "15083cb3c7de44a614794605aba1f95a372232479f17782661e22a73386eee7e"
-$ExpectedServiceHostSha256 = "ca2d8e540114262caac05ca4cc6ddb6b4ce102c90effc0e43d7a4d17112c041a"
+$ExpectedServiceHostSha256 = "4a9a166f0c51c87a26157103ddf6c47928a2717646b5cb7408a796bda4ef016e"
 
 function Test-IsAdministrator {
   $Identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
