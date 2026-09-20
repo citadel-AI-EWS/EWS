@@ -41,6 +41,15 @@ foreach ($PathArg in @($InstallRoot, $StateRoot)) {
     throw "Unsafe CITADEL installation path."
   }
 }
+if ([string]::IsNullOrWhiteSpace($ControllerUrl) -or $ControllerUrl.Contains('"') -or $ControllerUrl.Contains([char]10) -or $ControllerUrl.Contains([char]13)) {
+  throw "Unsafe ControllerUrl."
+}
+$PreElevationControllerUri = [System.Uri]$ControllerUrl
+$PreElevationHttps = $PreElevationControllerUri.Scheme -eq "https"
+$PreElevationLoopback = $PreElevationControllerUri.Scheme -eq "http" -and @("127.0.0.1", "localhost", "::1") -contains $PreElevationControllerUri.DnsSafeHost
+if (-not ($PreElevationHttps -or $PreElevationLoopback)) {
+  throw "ControllerUrl must use HTTPS; loopback HTTP is test-only."
+}
 
 if (-not (Test-IsAdministrator)) {
   Write-Host "[CITADEL] Administrator approval is required to install the Windows Core Service."
@@ -86,13 +95,6 @@ $LegacyStateRoot = Join-Path $LegacyProfileRoot "AppData\Local\CitadelEWS\state"
 $LegacyAgentRoot = Join-Path $LegacyProfileRoot "AppData\Local\CitadelEWS\agent"
 $LegacyStartupDir = Join-Path $LegacyProfileRoot "AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
 $LegacyShortcutPath = Join-Path $LegacyStartupDir "CITADEL EWS Agent.lnk"
-
-$ControllerUri = [System.Uri]$ControllerUrl
-$IsHttps = $ControllerUri.Scheme -eq "https"
-$IsLoopbackTest = $ControllerUri.Scheme -eq "http" -and @("127.0.0.1", "localhost", "::1") -contains $ControllerUri.DnsSafeHost
-if (-not ($IsHttps -or $IsLoopbackTest)) {
-  throw "ControllerUrl must use HTTPS; loopback HTTP is test-only."
-}
 
 function Set-CitadelDirectoryAcl {
   param([Parameter(Mandatory = $true)][string]$Path)
