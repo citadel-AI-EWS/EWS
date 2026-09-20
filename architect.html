@@ -110,6 +110,11 @@
           <label><input id="policyEnterpriseProbe" type="checkbox"> Enterprise Probe</label>
           <label><input id="policyUpdateService" type="checkbox"> Windows Update service</label>
           <label><input id="policyNoPendingReboot" type="checkbox"> Нет ожидающей перезагрузки</label>
+          <label><input id="policyDomainJoin" type="checkbox"> Domain joined</label>
+          <label><input id="policyGroupPolicy" type="checkbox"> Group Policy service</label>
+          <label><input id="policyIntune" type="checkbox"> Intune Management Extension</label>
+          <label><input id="policyHyperV" type="checkbox"> Hyper-V</label>
+          <label><input id="policyManagedAccount" type="checkbox"> gMSA/dMSA / managed service account</label>
         </div>
         <div class="enterprise-number"><span>Максимум CPU, %</span><input id="policyCpu" type="number" min="1" max="100"></div>
         <div class="enterprise-number"><span>Максимум RAM, %</span><input id="policyMemory" type="number" min="1" max="100"></div>
@@ -424,6 +429,11 @@
     const policyEnterpriseProbe = document.getElementById("policyEnterpriseProbe");
     const policyUpdateService = document.getElementById("policyUpdateService");
     const policyNoPendingReboot = document.getElementById("policyNoPendingReboot");
+    const policyDomainJoin = document.getElementById("policyDomainJoin");
+    const policyGroupPolicy = document.getElementById("policyGroupPolicy");
+    const policyIntune = document.getElementById("policyIntune");
+    const policyHyperV = document.getElementById("policyHyperV");
+    const policyManagedAccount = document.getElementById("policyManagedAccount");
     const policyCpu = document.getElementById("policyCpu");
     const policyMemory = document.getElementById("policyMemory");
     const policyEvents = document.getElementById("policyEvents");
@@ -1756,6 +1766,11 @@
         policyEnterpriseProbe,
         policyUpdateService,
         policyNoPendingReboot,
+        policyDomainJoin,
+        policyGroupPolicy,
+        policyIntune,
+        policyHyperV,
+        policyManagedAccount,
         policyCpu,
         policyMemory,
         policyEvents,
@@ -1886,6 +1901,11 @@
       policyEnterpriseProbe.checked = policy.require_windows_enterprise_probe === true;
       policyUpdateService.checked = policy.require_windows_update_service === true;
       policyNoPendingReboot.checked = policy.require_no_pending_reboot === true;
+      policyDomainJoin.checked = policy.require_domain_join === true;
+      policyGroupPolicy.checked = policy.require_group_policy_service === true;
+      policyIntune.checked = policy.require_intune_extension === true;
+      policyHyperV.checked = policy.require_hyperv === true;
+      policyManagedAccount.checked = policy.require_managed_service_account === true;
       policyCpu.value = policy.max_cpu_percent ?? 90;
       policyMemory.value = policy.max_memory_percent ?? 90;
       policyEvents.value = policy.max_event_errors_last_hour ?? 25;
@@ -2177,6 +2197,11 @@
               require_windows_enterprise_probe: policyEnterpriseProbe.checked,
               require_windows_update_service: policyUpdateService.checked,
               require_no_pending_reboot: policyNoPendingReboot.checked,
+              require_domain_join: policyDomainJoin.checked,
+              require_group_policy_service: policyGroupPolicy.checked,
+              require_intune_extension: policyIntune.checked,
+              require_hyperv: policyHyperV.checked,
+              require_managed_service_account: policyManagedAccount.checked,
               max_cpu_percent: Number(policyCpu.value),
               max_memory_percent: Number(policyMemory.value),
               max_event_errors_last_hour: Number(policyEvents.value)
