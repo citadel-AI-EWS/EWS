@@ -30,17 +30,17 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
 const POWER_COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.11",
+  version: "0.3.12",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "d3c310ab378666cdd477a51a881169970910900428cb4d2027ff58c1545c48df"
+      sha256: "2475dde4eec9887492c48ff40d03cb2b9e5d6d01e4863d783557b23502a43993"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "ab81b7cb431dc1e3e9ee7bf19cbdc875db52f33045da809430435276c5a958f5"
+      sha256: "15083cb3c7de44a614794605aba1f95a372232479f17782661e22a73386eee7e"
     }
   ]
 });
