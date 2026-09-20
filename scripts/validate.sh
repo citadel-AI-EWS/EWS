@@ -154,6 +154,28 @@ for forbidden in (
 
 if "https://citadel-ai.init1.workers.dev" not in setup:
     raise SystemExit("Windows installer Controller URL is missing")
+for required in (
+    'servicename = "citadelewsnode"',
+    "start= delayed-auto",
+    "nt authority\\localservice",
+    "failure $servicename",
+    "programdata\\citadelews\\state",
+    "expectedservicehostsha256",
+    "-uninstall",
+):
+    if required not in setup:
+        raise SystemExit(f"Windows Core Service capability missing: {required}")
+for forbidden in ("createshortcut(", "pythonw.exe"):
+    if forbidden in setup:
+        raise SystemExit(f"legacy Windows Startup lifecycle returned: {forbidden}")
+
+service_host = Path("agent/CitadelNodeService.cs").read_text(encoding="utf-8")
+for required in ("ServiceBase.Run", "CITADEL_SERVICE_MANAGED", "RestartExitCode = 75", "StopExitCode = 76"):
+    if required not in service_host:
+        raise SystemExit(f"Windows service host capability missing: {required}")
+for forbidden in ("cmd.exe", "powershell.exe", "UseShellExecute = true"):
+    if forbidden in service_host:
+        raise SystemExit(f"unsafe Windows service host pattern detected: {forbidden}")
 
 linux_setup = Path("agent/setup_linux.sh").read_text(encoding="utf-8")
 linux_entry = Path("agent/Install Linux Node.sh").read_text(encoding="utf-8")
