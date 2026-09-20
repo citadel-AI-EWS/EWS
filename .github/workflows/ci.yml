@@ -157,7 +157,8 @@ jobs:
           $csc = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
           if (-not $csc) { throw ".NET Framework csc.exe not found" }
           $out = Join-Path $env:RUNNER_TEMP "CitadelNodeService.exe"
-          & $csc /nologo /optimize+ /target:winexe "/out:$out" /reference:System.ServiceProcess.dll "agent/CitadelNodeService.cs"
+          $source = (Resolve-Path -LiteralPath "agent\CitadelNodeService.cs").Path
+          & $csc /nologo /optimize+ /target:winexe "/out:$out" /reference:System.ServiceProcess.dll $source
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $out --self-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
