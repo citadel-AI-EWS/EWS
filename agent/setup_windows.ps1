@@ -340,9 +340,9 @@ if ($LASTEXITCODE -ne 0) { throw "CITADEL Windows Service Host self-test failed.
 
 $StopPath = Join-Path $StateRoot "STOP"
 $LifecycleStopPath = Join-Path $StateRoot "SERVICE_STOP"
+$HoldPath = Join-Path $StateRoot "SERVICE_HOLD"
+$ReadyPath = Join-Path $StateRoot "SERVICE_READY"
 $PausedPath = Join-Path $StateRoot "PAUSED"
-$PausedExistedBeforeCutover = Test-Path -LiteralPath $PausedPath
-$TemporaryCutoverPause = -not $PausedExistedBeforeCutover
 $PersistentStopExisted = Test-Path -LiteralPath $StopPath
 $PersistentStopContent = if ($PersistentStopExisted) { [System.IO.File]::ReadAllText($StopPath) } else { $null }
 
@@ -354,17 +354,32 @@ if ($null -ne $ExistingService) {
   $ExistingWasRunning = $ExistingPsService.Status -eq "Running"
 }
 $LegacyProcessesBeforeCutover = @(Get-RunningLegacyCitadelAgents)
-$LegacyWasRunning = $LegacyProcessesBeforeCutover.Count -gt 0
 $LegacyShortcutExisted = Test-Path -LiteralPath $LegacyShortcutPath
 $CreatedService = $null -eq $ExistingService
 $CutoverCommitted = $false
+
+$LegacyStateMatchesNode = $false
+if ((Test-Path -LiteralPath $LegacyIdentity) -and (Test-Path -LiteralPath $NewIdentity)) {
+  try {
+    $LegacyIdentityState = Get-Content -LiteralPath $LegacyIdentity -Raw | ConvertFrom-Json
+    $NewIdentityState = Get-Content -LiteralPath $NewIdentity -Raw | ConvertFrom-Json
+    $LegacyStateMatchesNode = (
+      [string]$LegacyIdentityState.node_id -eq $NodeId -and
+      [string]$NewIdentityState.node_id -eq $NodeId
+    )
+  } catch {
+    throw "Unable to validate legacy identity before final state migration."
+  }
+}
 
 $BinPath = (Quote-CitadelServiceArg $ServiceExe) +
   " --python " + (Quote-CitadelServiceArg $VenvPython) +
   " --agent " + (Quote-CitadelServiceArg $AgentScript) +
   " --config " + (Quote-CitadelServiceArg $ConfigPath) +
   " --stop-file " + (Quote-CitadelServiceArg $StopPath) +
-  " --lifecycle-stop-file " + (Quote-CitadelServiceArg $LifecycleStopPath)
+  " --lifecycle-stop-file " + (Quote-CitadelServiceArg $LifecycleStopPath) +
+  " --hold-file " + (Quote-CitadelServiceArg $HoldPath) +
+  " --ready-file " + (Quote-CitadelServiceArg $ReadyPath)
 
 try {
   if ($null -ne $ExistingService) {
@@ -376,9 +391,8 @@ try {
     Write-Host "[CITADEL] Explicit administrator repair cleared the persistent STOP marker."
   }
   Remove-Item -LiteralPath $LifecycleStopPath -Force -ErrorAction SilentlyContinue
-  if ($TemporaryCutoverPause) {
-    [System.IO.File]::WriteAllText($PausedPath, "temporary service cutover pause" + [Environment]::NewLine, $Utf8NoBom)
-  }
+  Remove-Item -LiteralPath $ReadyPath -Force -ErrorAction SilentlyContinue
+  [System.IO.File]::WriteAllText($HoldPath, "service cutover hold" + [Environment]::NewLine, $Utf8NoBom)
 
   $Configured = Set-CitadelServiceDefinition -Name $ServiceName -DisplayName $ServiceDisplayName -BinaryPathName $BinPath -StartName "NT AUTHORITY\LocalService" -DelayedAutoStart $true
   Set-CitadelServiceRecovery -Name $ServiceName
@@ -386,7 +400,7 @@ try {
   Start-Service -Name $ServiceName
   $Service = Get-Service -Name $ServiceName
   $Service.WaitForStatus("Running", [TimeSpan]::FromSeconds(30))
-  Start-Sleep -Seconds 2
+  Start-Sleep -Seconds 1
   $Service.Refresh()
   if ($Service.Status -ne "Running") { throw "CITADEL Windows Core Service did not remain running." }
 
@@ -394,7 +408,8 @@ try {
   if ($null -eq $ServiceCim -or [int]$ServiceCim.ProcessId -le 0) {
     throw "Windows SCM did not publish a running service process."
   }
-  $ChildDeadline = [DateTime]::UtcNow.AddSeconds(15)
+
+  $ChildDeadline = [DateTime]::UtcNow.AddSeconds(20)
   $ManagedChild = $null
   do {
     $ManagedChild = Get-CimInstance Win32_Process -Filter ("ParentProcessId=" + [int]$ServiceCim.ProcessId) -ErrorAction SilentlyContinue |
@@ -403,20 +418,73 @@ try {
     if ($null -eq $ManagedChild) { Start-Sleep -Milliseconds 500 }
   } while ($null -eq $ManagedChild -and [DateTime]::UtcNow -lt $ChildDeadline)
   if ($null -eq $ManagedChild) { throw "SCM service started but no managed Python Core Agent child was observed." }
+
+  # The LocalService child is held away from commands, assignments and result
+  # queues until it proves Controller connectivity with an SCM-mode heartbeat.
+  $ReadyDeadline = [DateTime]::UtcNow.AddSeconds(45)
+  $ReadyState = $null
+  do {
+    if (Test-Path -LiteralPath $ReadyPath) {
+      try {
+        $ReadyState = Get-Content -LiteralPath $ReadyPath -Raw | ConvertFrom-Json
+      } catch {
+        throw "Managed service readiness marker is invalid JSON."
+      }
+      if ([string]$ReadyState.node_id -ne $NodeId -or
+          [string]$ReadyState.agent_version -ne $ReleaseVersion -or
+          $ReadyState.windows_core_service -ne $true) {
+        throw "Managed service readiness marker does not match this node/release."
+      }
+      break
+    }
+    Start-Sleep -Milliseconds 500
+  } while ([DateTime]::UtcNow -lt $ReadyDeadline)
+  if ($null -eq $ReadyState) {
+    throw "LocalService Core Agent did not confirm a Controller heartbeat during cutover."
+  }
+
+  # From this point the replacement service has proven network/controller
+  # health. A later cleanup problem must not roll it back to an unverified or
+  # partially stopped legacy lifecycle. The HOLD file stays in place until the
+  # final legacy state snapshot is complete.
   $CutoverCommitted = $true
 
-  # Only after the new SCM service is demonstrably alive do we retire the
-  # original user's Startup lifecycle. Until this point a staging failure
-  # leaves the old agent untouched.
+  $LegacyCleanupFailed = $false
   foreach ($Process in $LegacyProcessesBeforeCutover) {
-    Stop-Process -Id $Process.ProcessId -Force -ErrorAction Stop
+    try {
+      Stop-Process -Id $Process.ProcessId -Force -ErrorAction Stop
+      Wait-Process -Id $Process.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
+    } catch {
+      Write-Warning ("[CITADEL] Could not stop legacy agent process " + $Process.ProcessId + ": " + $_.Exception.Message)
+      $LegacyCleanupFailed = $true
+    }
   }
+  if ($LegacyCleanupFailed) {
+    throw "Legacy agent cleanup is incomplete; new service remains safely held."
+  }
+
+  if ($LegacyStateMatchesNode) {
+    foreach ($StateName in @("pending-results.json", "network-recovery.json", "lmstudio-state.json")) {
+      $LegacyFile = Join-Path $LegacyStateRoot $StateName
+      $NewFile = Join-Path $StateRoot $StateName
+      if (Test-Path -LiteralPath $LegacyFile) {
+        Copy-Item -LiteralPath $LegacyFile -Destination $NewFile -Force
+      }
+    }
+    $LegacyPaused = Join-Path $LegacyStateRoot "PAUSED"
+    if (Test-Path -LiteralPath $LegacyPaused) {
+      Copy-Item -LiteralPath $LegacyPaused -Destination $PausedPath -Force
+    } elseif (Test-Path -LiteralPath $PausedPath) {
+      Remove-Item -LiteralPath $PausedPath -Force
+    }
+  }
+
   if ($LegacyShortcutExisted -and (Test-Path -LiteralPath $LegacyShortcutPath)) {
     Remove-Item -LiteralPath $LegacyShortcutPath -Force
   }
-  if ($TemporaryCutoverPause -and (Test-Path -LiteralPath $PausedPath)) {
-    Remove-Item -LiteralPath $PausedPath -Force
-  }
+
+  Remove-Item -LiteralPath $HoldPath -Force
+  Remove-Item -LiteralPath $ReadyPath -Force -ErrorAction SilentlyContinue
 
   $InstallState = @{
     node_id = $NodeId
@@ -459,9 +527,8 @@ try {
     if ($PersistentStopExisted -and -not (Test-Path -LiteralPath $StopPath)) {
       [System.IO.File]::WriteAllText($StopPath, $PersistentStopContent, $Utf8NoBom)
     }
-    if ($TemporaryCutoverPause -and (Test-Path -LiteralPath $PausedPath)) {
-      Remove-Item -LiteralPath $PausedPath -Force
-    }
+    Remove-Item -LiteralPath $HoldPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $ReadyPath -Force -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $ReleaseRoot) {
       Remove-Item -LiteralPath $ReleaseRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
