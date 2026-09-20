@@ -287,7 +287,7 @@ def write_extras() -> None:
         "- Core Agent устанавливается как Windows Service CitadelEWSNode под LocalService с Automatic (Delayed Start).\n"
         "- Старый Startup shortcut удаляется; существующая node identity мигрирует в ProgramData и сохраняется.\n"
         "- setup_windows.ps1 -Uninstall выполняет явное удаление; -PreserveState сохраняет node state по запросу.\n"
-        "- В архиве находятся сами agent-файлы и проверяемый CitadelNodeService.cs: установка не скачивает Python-код из GitHub.\n\n"
+        "- В архиве находятся agent-файлы, проверяемый CitadelNodeService.cs и windows_service.ps1: установка не скачивает Python-код из GitHub.\n\n"
         "Произвольный SSH shell в пакет не включён. Разрешены только подписанные allowlist-команды Controller, включая reboot/shutdown и ограниченный wake_peer без shell.\n"
     )
     (STAGE / "README_RU.txt").write_text(readme, encoding="utf-8", newline="\n")
@@ -324,6 +324,7 @@ def build() -> Path:
         "setup_windows.ps1",
         "Install Windows Node.cmd",
         "CitadelNodeService.cs",
+        "windows_service.ps1",
         "requirements.txt",
     ):
         shutil.copy2(ROOT / "agent" / name, STAGE / name)
@@ -339,6 +340,7 @@ def build() -> Path:
         raise RuntimeError("repository v2 source is not release 0.3.12")
     setup_text = setup_path.read_text(encoding="utf-8")
     service_source = STAGE / "CitadelNodeService.cs"
+    service_helper = STAGE / "windows_service.ps1"
     if f'$ExpectedV1Sha256 = "{v1_hash}"' not in setup_text:
         raise RuntimeError("setup_windows.ps1 v1 hash pin does not match repository source")
     if f'$ExpectedV2Sha256 = "{v2_hash}"' not in setup_text:
@@ -346,6 +348,9 @@ def build() -> Path:
     service_hash = sha256(service_source)
     if f'$ExpectedServiceHostSha256 = "{service_hash}"' not in setup_text:
         raise RuntimeError("setup_windows.ps1 service-host hash pin does not match repository source")
+    helper_hash = sha256(service_helper)
+    if f'$ExpectedServiceHelperSha256 = "{helper_hash}"' not in setup_text:
+        raise RuntimeError("setup_windows.ps1 service-helper hash pin does not match repository source")
     if 'agent_version = "0.3.12"' not in setup_text:
         raise RuntimeError("setup_windows.ps1 release version is not 0.3.12")
     write_extras()
