@@ -32,6 +32,7 @@ assert.equal(normalized.require_no_pending_reboot, true);
 assert.equal(normalizeEnterprisePolicy({ max_cpu_percent: 999 }).max_cpu_percent, DEFAULT_ENTERPRISE_POLICY.max_cpu_percent);
 
 const healthyWindowsInventory = {
+  disk_home_free_bytes: 50 * 1073741824,
   windows_core_service: true,
   windows_enterprise: {
     available: true,
