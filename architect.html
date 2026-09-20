@@ -51,12 +51,14 @@
       <label for="token" data-i18n="tokenLabel">Секрет архитектора</label>
       <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="citadel_arch_…">
       <button id="loginButton" type="button" data-i18n="loginButton">Войти</button>
-      <button id="lostTokenButton" class="secondary" type="button">Я потерял токен</button>
+      <button id="lostTokenButton" class="danger" type="button">Аварийное восстановление / сброс доступа</button>
       <div id="recoveryLoginPanel" class="login-recovery hidden">
+        <h3 style="margin:0 0 8px">Emergency Access Recovery</h3>
+        <p class="small">Этот сброс меняет только Architect token. Ноды, проекты, миссии, отчёты, модели и данные не удаляются.</p>
         <label for="recoveryCodeInput">Одноразовый recovery-код</label>
         <input id="recoveryCodeInput" type="password" autocomplete="off" spellcheck="false" placeholder="citadel_recovery_…">
-        <button id="recoverTokenButton" class="danger" type="button">Заменить потерянный токен</button>
-        <div id="recoveryLoginState" class="status">Recovery-код используется один раз. Старый токен после восстановления сразу перестанет работать.</div>
+        <button id="recoverTokenButton" class="danger" type="button">Выполнить аварийный сброс доступа</button>
+        <div id="recoveryLoginState" class="status">Recovery-код используется один раз. После сброса старый Architect token немедленно перестанет работать, новый будет показан один раз.</div>
       </div>
       <p class="small" data-i18n="loginHint">Секрет хранится только до закрытия этой вкладки.</p>
     </section>
@@ -1629,7 +1631,7 @@
 
     lostTokenButton.addEventListener("click", () => {
       recoveryLoginPanel.classList.toggle("hidden");
-      recoveryLoginState.textContent = "Введите сохранённый одноразовый recovery-код.";
+      recoveryLoginState.textContent = "Введите сохранённый одноразовый recovery-код. Сброс затронет только доступ Architect — данные проекта не удаляются.";
       recoveryLoginState.className = "status";
     });
 
@@ -1640,7 +1642,7 @@
         recoveryLoginState.className = "status bad";
         return;
       }
-      if (!confirm("Старый Architect token будет немедленно аннулирован. Продолжить?")) return;
+      if (!confirm("Аварийный сброс доступа: старый Architect token будет немедленно аннулирован. Ноды, проекты и отчёты не удаляются. Продолжить?")) return;
       recoverTokenButton.disabled = true;
       try {
         const data = await publicSecurityRequest("/api/v1/architect/security/recover-token", {
@@ -1652,7 +1654,7 @@
         recoveryCodeInput.value = "";
         await loadDashboard();
         showSecuritySecret("Новый Architect token", architectToken);
-        setStatus("Доступ восстановлен. Старый токен аннулирован, recovery-код использован и больше не действует.", "good");
+        setStatus("Аварийное восстановление завершено. Старый токен аннулирован, recovery-код использован и больше не действует. Сохраните новый Architect token сейчас.", "good");
       } catch (error) {
         recoveryLoginState.textContent = "Восстановление не выполнено: " + error.message;
         recoveryLoginState.className = "status bad";
