@@ -1938,7 +1938,7 @@
 
     async function loadDashboard() {
       setStatus("Загружаю Live Operations…");
-      const [data, reports, presence, release, projects, roles, experience, security] = await Promise.all([
+      const [data, reports, presence, release, projects, roles, experience, security, enterprise] = await Promise.all([
         api("/api/v1/architect/overview"),
         api("/api/v1/architect/reports?limit=50&offset=0"),
         api("/api/v1/architect/presence"),
@@ -1946,10 +1946,13 @@
         api("/api/v1/architect/projects"),
         api("/api/v1/architect/work-roles"),
         api("/api/v1/architect/experience"),
-        api("/api/v1/architect/security")
+        api("/api/v1/architect/security"),
+        api("/api/v1/architect/enterprise")
       ]);
       currentPresence = presence.presence || [];
       renderSecurityState(security.security || {});
+      renderEnterprise(enterprise);
+      if (currentArchitectRole === "owner") refreshRbacTokens().catch(() => {});
       currentReleaseVersion = release.release?.version || "";
       updateButton.textContent = currentReleaseVersion
         ? `Обновить агент → ${currentReleaseVersion}`
@@ -1977,14 +1980,16 @@
       if (!architectToken || liveRefreshBusy) return null;
       liveRefreshBusy = true;
       try {
-        const [data, reports, presence, release, projects] = await Promise.all([
+        const [data, reports, presence, release, projects, enterprise] = await Promise.all([
           api("/api/v1/architect/overview"),
           api("/api/v1/architect/reports?limit=50&offset=0"),
           api("/api/v1/architect/presence"),
           api("/api/v1/architect/release"),
-          api("/api/v1/architect/projects")
+          api("/api/v1/architect/projects"),
+          api("/api/v1/architect/enterprise")
         ]);
         currentPresence = presence.presence || [];
+        renderEnterprise(enterprise);
         currentReleaseVersion = release.release?.version || "";
         document.getElementById("missionCount").textContent = data.counts.active_missions ?? data.counts.missions ?? 0;
         document.getElementById("reportCount").textContent = data.counts.reports ?? 0;
