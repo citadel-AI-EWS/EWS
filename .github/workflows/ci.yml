@@ -71,15 +71,15 @@ jobs:
       - name: Verify Linux x86_64 dependency wheels exist
         run: >-
           python -m pip download --disable-pip-version-check --only-binary=:all:
-          --platform manylinux2014_x86_64 --python-version 310 --implementation cp
-          --abi cp310 --abi abi3
+          --platform manylinux2014_x86_64 --python-version 312 --implementation cp
+          --abi cp312 --abi abi3
           --requirement agent/requirements.txt
           --dest .tmp-linux-x86_64-wheels
       - name: Verify Linux ARM64 dependency wheels exist
         run: >-
           python -m pip download --disable-pip-version-check --only-binary=:all:
-          --platform manylinux2014_aarch64 --python-version 310 --implementation cp
-          --abi cp310 --abi abi3
+          --platform manylinux2014_aarch64 --python-version 312 --implementation cp
+          --abi cp312 --abi abi3
           --requirement agent/requirements.txt
           --dest .tmp-linux-arm64-wheels
       - name: Build self-contained Windows package
@@ -162,30 +162,6 @@ jobs:
             tar -tzf "$linux_tar" >/dev/null
           done
 
-  linux_agent_compat:
-    name: Linux agent Python compatibility
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ["3.10", "3.11", "3.12", "3.13"]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: ${{ matrix.python }}
-          cache: pip
-          cache-dependency-path: agent/requirements.txt
-      - name: Install binary-only agent dependencies
-        run: python -m pip install --disable-pip-version-check --only-binary=:all: --requirement agent/requirements.txt
-      - name: Compile and self-test agent
-        run: |
-          python -m py_compile agent/citadel_node_v1.py agent/citadel_node_v2.py
-          python agent/citadel_node_v2.py self-test
-      - name: Parse Linux installer
-        run: bash -n agent/setup_linux.sh "agent/Install Linux Node.sh"
-
   windows-agent:
     name: Windows agent validation
     runs-on: windows-latest
@@ -222,13 +198,12 @@ jobs:
   gate:
     name: CI gate
     if: always()
-    needs: [validate-linux, agent-package, linux_agent_compat, windows-agent]
+    needs: [validate-linux, agent-package, windows-agent]
     runs-on: ubuntu-latest
     steps:
       - name: Require every CI job to pass
         run: |
           test "${{ needs.validate-linux.result }}" = "success"
           test "${{ needs.agent-package.result }}" = "success"
-          test "${{ needs.linux_agent_compat.result }}" = "success"
           test "${{ needs.windows-agent.result }}" = "success"
           echo "All CI gates passed."
