@@ -4175,13 +4175,19 @@ async function architectRelease(request, env) {
 }
 
 async function architectCreateCommand(request, env, nodeId) {
-  await authenticateArchitect(request, env);
+  const actor = await authenticateArchitect(request, env);
   await ensureCommandStorage(env);
   const bodyText = await readBodyText(request, 8 * 1024);
   const body = parseJsonObject(bodyText);
   const commandType = requireString(body.command_type, "command_type", 32);
   if (!ALLOWED_ARCHITECT_COMMAND_TYPES.has(commandType)) {
     throw new ApiError(400, "command_type_not_allowed");
+  }
+  if (
+    ["uninstall", "system_reboot", "system_shutdown"].includes(commandType) &&
+    !roleHasPermission(actor.role, "admin")
+  ) {
+    throw new ApiError(403, "architect_admin_required");
   }
   const requiredPowerConfirmation = POWER_COMMAND_CONFIRMATIONS[commandType];
   if (requiredPowerConfirmation) {
@@ -4629,6 +4635,21 @@ async function handleApi(request, env, url) {
       : methodNotAllowed(["GET"]);
   }
 
+  if (url.pathname === "/api/v1/architect/security/access-tokens") {
+    if (request.method === "GET") return architectListAccessTokens(request, env);
+    if (request.method === "POST") return architectCreateAccessToken(request, env);
+    return methodNotAllowed(["GET", "POST"]);
+  }
+
+  const accessTokenMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/security\/access-tokens\/([^/]+)$/
+  );
+  if (accessTokenMatch) {
+    return request.method === "DELETE"
+      ? architectRevokeAccessToken(request, env, decodeURIComponent(accessTokenMatch[1]))
+      : methodNotAllowed(["DELETE"]);
+  }
+
   if (url.pathname === "/api/v1/architect/security/recovery-code") {
     return request.method === "POST"
       ? architectCreateRecoveryCode(request, env)
@@ -4645,6 +4666,49 @@ async function handleApi(request, env, url) {
     return request.method === "GET"
       ? architectOverview(request, env)
       : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/enterprise") {
+    return request.method === "GET"
+      ? architectEnterpriseOverview(request, env)
+      : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/enterprise/policy") {
+    return request.method === "POST"
+      ? architectSetEnterprisePolicy(request, env)
+      : methodNotAllowed(["POST"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/enterprise/sites") {
+    return request.method === "POST"
+      ? architectCreateEnterpriseSite(request, env)
+      : methodNotAllowed(["POST"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/enterprise/groups") {
+    return request.method === "POST"
+      ? architectCreateEnterpriseGroup(request, env)
+      : methodNotAllowed(["POST"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/enterprise/recovery-manifest") {
+    return request.method === "GET"
+      ? architectEnterpriseRecoveryManifest(request, env)
+      : methodNotAllowed(["GET"]);
+  }
+
+  const enterpriseScopeMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/enterprise\/nodes\/([^/]+)\/scope$/
+  );
+  if (enterpriseScopeMatch) {
+    return request.method === "POST"
+      ? architectSetNodeEnterpriseScope(
+          request,
+          env,
+          decodeURIComponent(enterpriseScopeMatch[1])
+        )
+      : methodNotAllowed(["POST"]);
   }
 
   if (url.pathname === "/api/v1/architect/release") {
