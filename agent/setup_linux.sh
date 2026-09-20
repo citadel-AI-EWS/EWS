@@ -6,8 +6,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_ROOT="${CITADEL_INSTALL_ROOT:-$HOME/.local/share/citadel-node}"
 STATE_ROOT="${CITADEL_STATE_ROOT:-$HOME/.local/state/citadel-node}"
 SERVICE_NAME="citadel-node.service"
-EXPECTED_V1_SHA256="2dab753c8e836663d215656682ac304b5f297a7c0d726936111013fa70dacc65"
-EXPECTED_V2_SHA256="0fc1f2a8daac47c5c504951e32a9e8110e9f583d8d185d45645408814c3cac52"
+EXPECTED_V1_SHA256="a39c41b4e5ae0cd8cbfe28b74cbadb4e3806c03ebe3a3fbfc1464dc01dcd68e6"
+EXPECTED_V2_SHA256="43d6d8492d43e3434c7ce90c946804c7cc1c05344ae3aaf27c7ed8220d34e803"
+EXPECTED_ENTERPRISE_PROBE_SHA256="0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
 CONTROLLER_PUBLIC_X="erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 
 log(){ printf '[CITADEL] %s\n' "$*"; }
@@ -23,7 +24,7 @@ import sys
 raise SystemExit(0 if sys.version_info >= (3, 12) else 1)
 PY
 
-for pair in   "citadel_node_v1.py:$EXPECTED_V1_SHA256"   "citadel_node_v2.py:$EXPECTED_V2_SHA256"; do
+for pair in   "citadel_node_v1.py:$EXPECTED_V1_SHA256"   "citadel_node_v2.py:$EXPECTED_V2_SHA256"   "windows_enterprise_probe.ps1:$EXPECTED_ENTERPRISE_PROBE_SHA256"; do
   name="${pair%%:*}"
   expected="${pair##*:}"
   source="$SCRIPT_DIR/$name"
@@ -48,6 +49,8 @@ copy_if_changed(){
 
 copy_if_changed "$SCRIPT_DIR/citadel_node_v1.py" "$INSTALL_ROOT/citadel_node_v1.py"
 copy_if_changed "$SCRIPT_DIR/citadel_node_v2.py" "$INSTALL_ROOT/citadel_node_v2.py"
+# Windows-only probe is installed as an inert, hash-pinned release asset so unified update/rollback remains complete.
+copy_if_changed "$SCRIPT_DIR/windows_enterprise_probe.ps1" "$INSTALL_ROOT/windows_enterprise_probe.ps1"
 copy_if_changed "$SCRIPT_DIR/requirements.txt" "$INSTALL_ROOT/requirements.txt"
 
 VENV="$INSTALL_ROOT/.venv"
