@@ -252,14 +252,21 @@ Write-Host "[CITADEL] Machine install/state ACLs rebuilt before migration."
 
 $NewIdentity = Join-Path $StateRoot "identity.json"
 $LegacyIdentity = Join-Path $LegacyStateRoot "identity.json"
-if (-not (Test-Path -LiteralPath $NewIdentity) -and (Test-Path -LiteralPath $LegacyIdentity)) {
+$InstallStatePath = Join-Path $InstallRoot "install-state.json"
+$LegacyMigrationCompletePath = Join-Path $StateRoot "LEGACY_MIGRATION_COMPLETE"
+# An install-state from an older 0.3.12 installation also proves that cutover
+# already completed. This keeps repairs of installations created before the
+# dedicated marker was introduced from importing stale user-profile state.
+$LegacyMigrationRequired = -not (Test-Path -LiteralPath $InstallStatePath) -and
+  -not (Test-Path -LiteralPath $LegacyMigrationCompletePath)
+if ($LegacyMigrationRequired -and -not (Test-Path -LiteralPath $NewIdentity) -and (Test-Path -LiteralPath $LegacyIdentity)) {
   Copy-Item -LiteralPath $LegacyIdentity -Destination $NewIdentity -Force
   Write-Host "[CITADEL] Migrated existing node identity from the original user profile."
 }
 foreach ($StateName in @("pending-results.json", "network-recovery.json", "lmstudio-state.json", "PAUSED")) {
   $LegacyFile = Join-Path $LegacyStateRoot $StateName
   $NewFile = Join-Path $StateRoot $StateName
-  if (-not (Test-Path -LiteralPath $NewFile) -and (Test-Path -LiteralPath $LegacyFile)) {
+  if ($LegacyMigrationRequired -and -not (Test-Path -LiteralPath $NewFile) -and (Test-Path -LiteralPath $LegacyFile)) {
     Copy-Item -LiteralPath $LegacyFile -Destination $NewFile -Force
   }
 }
@@ -272,7 +279,6 @@ $ReleaseBase = Join-Path $InstallRoot "releases"
 $ReleaseRoot = Join-Path $ReleaseBase $ReleaseId
 Set-CitadelDirectoryAcl -Path $ReleaseBase
 
-$InstallStatePath = Join-Path $InstallRoot "install-state.json"
 $PreviousReleaseRoot = $null
 if (Test-Path -LiteralPath $InstallStatePath) {
   try {
@@ -491,7 +497,7 @@ try {
     throw "Legacy agent cleanup is incomplete; new service remains safely held."
   }
 
-  if ($LegacyStateMatchesNode) {
+  if ($LegacyMigrationRequired -and $LegacyStateMatchesNode) {
     foreach ($StateName in @("pending-results.json", "network-recovery.json", "lmstudio-state.json")) {
       $LegacyFile = Join-Path $LegacyStateRoot $StateName
       $NewFile = Join-Path $StateRoot $StateName
@@ -505,6 +511,13 @@ try {
     } elseif (Test-Path -LiteralPath $PausedPath) {
       Remove-Item -LiteralPath $PausedPath -Force
     }
+  }
+
+  # Mark the one-time cutover before removing the hold. Legacy files remain in
+  # the user profile for uninstall compatibility, but repairs must never treat
+  # those now-stale snapshots as authoritative again.
+  if ($LegacyMigrationRequired) {
+    [System.IO.File]::WriteAllText($LegacyMigrationCompletePath, $NodeId + [Environment]::NewLine, $Utf8NoBom)
   }
 
   if ($LegacyShortcutExisted -and (Test-Path -LiteralPath $LegacyShortcutPath)) {
