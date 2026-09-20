@@ -1,0 +1,4 @@
+# Windows ARM64 wheels for the CITADEL agent.
+# Keep wheel-only: setup_windows.ps1 refuses source builds on Windows.
+cryptography==46.0.3
+psutil==7.2.2

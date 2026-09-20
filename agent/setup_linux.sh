@@ -9,19 +9,47 @@ SERVICE_NAME="citadel-node.service"
 EXPECTED_V1_SHA256="d3c310ab378666cdd477a51a881169970910900428cb4d2027ff58c1545c48df"
 EXPECTED_V2_SHA256="ab81b7cb431dc1e3e9ee7bf19cbdc875db52f33045da809430435276c5a958f5"
 CONTROLLER_PUBLIC_X="erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
+INSTALLER_RELEASE="0.3.11-linuxcompat.1"
 
 log(){ printf '[CITADEL] %s\n' "$*"; }
 fail(){ printf '[CITADEL] ERROR: %s\n' "$*" >&2; exit 1; }
 sha(){ sha256sum "$1" | awk '{print $1}'; }
 
-for command in python3 sha256sum; do
+for command in sha256sum uname; do
   command -v "$command" >/dev/null 2>&1 || fail "$command is required."
 done
 
-python3 - <<'PY' || fail "Python 3.12 or newer is required."
-import sys
-raise SystemExit(0 if sys.version_info >= (3, 12) else 1)
-PY
+normalize_arch(){
+  case "$(uname -m)" in
+    x86_64|amd64) printf '%s\n' "x86_64" ;;
+    aarch64|arm64) printf '%s\n' "arm64" ;;
+    *) return 1 ;;
+  esac
+}
+
+ARCH="$(normalize_arch)" || fail "Unsupported Linux architecture: $(uname -m). Supported: x86_64 and arm64/aarch64."
+if [[ -f "$SCRIPT_DIR/TARGET_ARCH" ]]; then
+  PACKAGE_ARCH="$(tr -d '[:space:]' < "$SCRIPT_DIR/TARGET_ARCH")"
+  [[ "$PACKAGE_ARCH" == "$ARCH" ]] || fail "This package targets $PACKAGE_ARCH but this computer is $ARCH."
+fi
+
+find_python(){
+  local candidate
+  for candidate in python3.14 python3.13 python3.12 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      if "$candidate" -c 'import struct,sys; raise SystemExit(0 if (3,12) <= sys.version_info[:2] < (4,0) and struct.calcsize("P")*8 == 64 else 1)' >/dev/null 2>&1; then
+        command -v "$candidate"
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+PYTHON_BIN="$(find_python)" || fail "Python 3.12-3.14 (64-bit) is required."
+PYTHON_INFO="$("$PYTHON_BIN" -c 'import platform,struct,sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro} / {struct.calcsize(chr(80))*8}-bit / {platform.machine()}")')"
+log "Architecture: $ARCH"
+log "Using Python: $PYTHON_INFO"
 
 for pair in   "citadel_node_v1.py:$EXPECTED_V1_SHA256"   "citadel_node_v2.py:$EXPECTED_V2_SHA256"; do
   name="${pair%%:*}"
@@ -54,14 +82,15 @@ VENV="$INSTALL_ROOT/.venv"
 VENV_PY="$VENV/bin/python"
 if [[ ! -x "$VENV_PY" ]]; then
   log "Creating Python virtual environment..."
-  python3 -m venv "$VENV" || fail "python3-venv is required."
+  "$PYTHON_BIN" -m venv "$VENV" || fail "A working Python venv module is required for $PYTHON_BIN."
 fi
 
+"$VENV_PY" -c 'import sys; raise SystemExit(0 if (3,12) <= sys.version_info[:2] < (4,0) else 1)' >/dev/null 2>&1 || fail "Existing virtual environment uses an unsupported Python version."
 "$VENV_PY" -m pip install --disable-pip-version-check --upgrade pip
-"$VENV_PY" -m pip install --disable-pip-version-check --upgrade --requirement "$INSTALL_ROOT/requirements.txt"
+"$VENV_PY" -m pip install --disable-pip-version-check --upgrade --only-binary=:all: --requirement "$INSTALL_ROOT/requirements.txt"
 
 CONFIG="$INSTALL_ROOT/config.json"
-python3 - "$CONFIG" "$CONTROLLER_URL" "$STATE_ROOT" "$CONTROLLER_PUBLIC_X" <<'PY'
+"$PYTHON_BIN" - "$CONFIG" "$CONTROLLER_URL" "$STATE_ROOT" "$CONTROLLER_PUBLIC_X" <<'PY'
 import json, pathlib, sys
 path, controller, state, public_x = sys.argv[1:]
 payload = {
@@ -146,14 +175,17 @@ else
   fail "systemd is required for persistent Linux service installation."
 fi
 
-python3 - "$INSTALL_ROOT/install-state.json" "$NODE_ID" "$CONTROLLER_URL" <<'PY'
+"$PYTHON_BIN" - "$INSTALL_ROOT/install-state.json" "$NODE_ID" "$CONTROLLER_URL" "$ARCH" "$PYTHON_INFO" "$INSTALLER_RELEASE" <<'PY'
 import json, pathlib, sys, datetime
-path, node_id, controller = sys.argv[1:]
+path, node_id, controller, arch, python_info, installer_release = sys.argv[1:]
 payload = {
     "node_id": node_id,
     "controller_url": controller.rstrip("/"),
     "agent_version": "0.3.11",
+    "installer_release": installer_release,
     "platform": "linux",
+    "architecture": arch,
+    "python": python_info,
     "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
 }
 pathlib.Path(path).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")

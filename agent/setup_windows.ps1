@@ -64,7 +64,16 @@ function Resolve-CompatiblePython([string]$Candidate) {
   & $Candidate -c "import sys; raise SystemExit(0 if (3, 12) <= sys.version_info[:2] < (4, 0) else 1)" *> $null
   if ($LASTEXITCODE -ne 0) { return $null }
   $Resolved = & $Candidate -c "import sys; print(sys.executable)" 2>$null
-  if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($Resolved)) {
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($Resolved)) {
+    return $null
+  }
+  if ((Get-WindowsArchitecture) -eq "arm64") {
+    $CandidateMachine = (& $Candidate -c "import platform; print(platform.machine().lower())" 2>$null).Trim().ToLowerInvariant()
+    if ($LASTEXITCODE -ne 0 -or @("arm64", "aarch64") -notcontains $CandidateMachine) {
+      return $null
+    }
+  }
+  if (-not [string]::IsNullOrWhiteSpace($Resolved)) {
     return $Resolved.Trim()
   }
   return $null
@@ -181,6 +190,7 @@ function Get-RunningCitadelAgents([string]$AgentScriptPath, [string]$ConfigPathV
   }
 }
 
+$WindowsArchitecture = Get-WindowsArchitecture
 $PythonPath = Find-CompatiblePython
 if ($null -eq $PythonPath) {
   $Winget = Get-Command winget -ErrorAction SilentlyContinue
@@ -197,7 +207,7 @@ if ($null -eq $PythonPath) {
   }
 }
 if ($null -eq $PythonPath) {
-  Install-PythonFallback (Get-WindowsArchitecture)
+  Install-PythonFallback $WindowsArchitecture
   $PythonPath = Find-CompatiblePython
 }
 if ($null -eq $PythonPath) {
@@ -222,15 +232,18 @@ $V2Changed = Copy-VerifiedAgentFile "citadel_node_v2.py" $ExpectedV2Sha256
 
 $Requirements64Source = Join-Path $SourceRoot "requirements.txt"
 $Requirements32Source = Join-Path $SourceRoot "requirements-win32.txt"
-foreach ($RequiredFile in @($Requirements64Source, $Requirements32Source)) {
+$RequirementsArm64Source = Join-Path $SourceRoot "requirements-winarm64.txt"
+foreach ($RequiredFile in @($Requirements64Source, $Requirements32Source, $RequirementsArm64Source)) {
   if (-not (Test-Path -LiteralPath $RequiredFile)) {
     throw "Required package file is missing: $([System.IO.Path]::GetFileName($RequiredFile))"
   }
 }
 $Requirements64Path = Join-Path $InstallRoot "requirements.txt"
 $Requirements32Path = Join-Path $InstallRoot "requirements-win32.txt"
+$RequirementsArm64Path = Join-Path $InstallRoot "requirements-winarm64.txt"
 Copy-Item -LiteralPath $Requirements64Source -Destination $Requirements64Path -Force
 Copy-Item -LiteralPath $Requirements32Source -Destination $Requirements32Path -Force
+Copy-Item -LiteralPath $RequirementsArm64Source -Destination $RequirementsArm64Path -Force
 
 $Venv = Join-Path $InstallRoot ".venv"
 $VenvPython = Join-Path $Venv "Scripts\python.exe"
@@ -250,7 +263,10 @@ if ($CreateVenv) {
 }
 
 $VenvBits = (& $VenvPython -c "import struct; print(struct.calcsize('P') * 8)").Trim()
-if ($VenvBits -eq "32") {
+if ($WindowsArchitecture -eq "arm64") {
+  $RequirementsPath = $RequirementsArm64Path
+  Write-Host "[CITADEL] Windows ARM64 detected; using the verified ARM64 dependency set."
+} elseif ($VenvBits -eq "32") {
   $RequirementsPath = $Requirements32Path
   Write-Host "[CITADEL] 32-bit Python detected; using the verified win32 dependency set."
 } else {
@@ -361,6 +377,7 @@ $InstallState = @{
   installer_release = $InstallerRelease
   python = $PythonInfo
   python_bits = [int]$VenvBits
+  architecture = $WindowsArchitecture
   v1_sha256 = $ExpectedV1Sha256
   v2_sha256 = $ExpectedV2Sha256
   updated_at = [DateTime]::UtcNow.ToString("o")

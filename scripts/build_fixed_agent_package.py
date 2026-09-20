@@ -281,6 +281,7 @@ def write_extras() -> None:
         "Исправлено в этом пакете:\n"
         "- winget больше не является обязательным: при его отсутствии/ошибке используется официальный Python 3.13.15 с проверкой SHA-256.\n"
         "- Поддержана 32-битная Windows 10: installer выбирает x86 Python и отдельный набор готовых win32 wheels.\n"
+        "- Windows ARM64 использует нативный ARM64 Python и отдельный проверенный набор ARM64 wheels.\n"
         "- На Windows зависимости ставятся только из бинарных wheels; локальная сборка C/Rust пакетов не запускается.\n"
         "- JSON с UTF-8 BOM больше не ломает загрузку конфигурации.\n"
         "- При каждом запуске агент один раз сверяет node_id с Controller по Ed25519 public key; старый локальный ID автоматически исправляется.\n"
@@ -325,6 +326,7 @@ def build() -> Path:
         "Install Windows Node.cmd",
         "requirements.txt",
         "requirements-win32.txt",
+        "requirements-winarm64.txt",
     ):
         shutil.copy2(ROOT / "agent" / name, STAGE / name)
 

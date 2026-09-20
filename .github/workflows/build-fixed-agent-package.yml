@@ -40,6 +40,30 @@ jobs:
           --requirement agent/requirements-win32.txt
           --dest .tmp-win32-wheels
 
+      - name: Verify Windows ARM64 dependency wheels exist
+        run: >-
+          python -m pip download --disable-pip-version-check --only-binary=:all:
+          --platform win_arm64 --python-version 313 --implementation cp
+          --abi cp313 --abi abi3
+          --requirement agent/requirements-winarm64.txt
+          --dest .tmp-win-arm64-wheels
+
+      - name: Verify Linux x86_64 dependency wheels exist
+        run: >-
+          python -m pip download --disable-pip-version-check --only-binary=:all:
+          --platform manylinux2014_x86_64 --python-version 312 --implementation cp
+          --abi cp312 --abi abi3
+          --requirement agent/requirements.txt
+          --dest .tmp-linux-x86_64-wheels
+
+      - name: Verify Linux ARM64 dependency wheels exist
+        run: >-
+          python -m pip download --disable-pip-version-check --only-binary=:all:
+          --platform manylinux2014_aarch64 --python-version 312 --implementation cp
+          --abi cp312 --abi abi3
+          --requirement agent/requirements.txt
+          --dest .tmp-linux-arm64-wheels
+
       - name: Build self-contained package
         run: python scripts/build_fixed_agent_package.py
 
@@ -59,7 +83,7 @@ jobs:
           root = Path(sys.argv[1])
           required = {
               "citadel_node_v1.py", "citadel_node_v2.py", "requirements.txt",
-              "requirements-win32.txt", "setup_windows.ps1", "Install Windows Node.cmd", "START_HERE.cmd",
+              "requirements-win32.txt", "requirements-winarm64.txt", "setup_windows.ps1", "Install Windows Node.cmd", "START_HERE.cmd",
               "README_RU.txt", "VERIFY_PACKAGE.ps1"
           }
           seen = set()
@@ -82,25 +106,30 @@ jobs:
       - name: Build Linux package
         run: python scripts/build_fixed_linux_agent_package.py
 
-      - name: Verify Linux package
+      - name: Verify Linux packages
         shell: bash
         run: |
           set -euo pipefail
-          linux_dir="$(find dist -mindepth 1 -maxdepth 1 -type d -name 'CITADEL_LINUX_AGENT_*' | head -n 1)"
-          linux_tar="${linux_dir}.tar.gz"
-          test -n "$linux_dir"
-          test -f "$linux_tar"
-          bash -n "$linux_dir/setup_linux.sh" "$linux_dir/Install Linux Node.sh" "$linux_dir/START_HERE.sh"
-          python -m py_compile "$linux_dir/citadel_node_v1.py" "$linux_dir/citadel_node_v2.py"
-          python "$linux_dir/citadel_node_v2.py" self-test
-          python - "$linux_dir" <<'PY'
+          for spec in             "CITADEL_LINUX_X86_64_AGENT_0.3.11_COMPAT1:x86_64"             "CITADEL_LINUX_ARM64_AGENT_0.3.11_COMPAT1:arm64"
+          do
+            package_name="${spec%%:*}"
+            expected_arch="${spec##*:}"
+            linux_dir="dist/$package_name"
+            linux_tar="$linux_dir.tar.gz"
+            test -d "$linux_dir"
+            test -f "$linux_tar"
+            test "$(tr -d '[:space:]' < "$linux_dir/TARGET_ARCH")" = "$expected_arch"
+            bash -n "$linux_dir/setup_linux.sh" "$linux_dir/Install Linux Node.sh" "$linux_dir/START_HERE.sh"
+            python -m py_compile "$linux_dir/citadel_node_v1.py" "$linux_dir/citadel_node_v2.py"
+            python "$linux_dir/citadel_node_v2.py" self-test
+            python - "$linux_dir" <<'PY'
           from pathlib import Path
           import hashlib, sys
           root = Path(sys.argv[1])
           required = {
               "citadel_node_v1.py", "citadel_node_v2.py", "requirements.txt",
               "setup_linux.sh", "Install Linux Node.sh", "START_HERE.sh",
-              "README_LINUX.md"
+              "README_LINUX.md", "TARGET_ARCH"
           }
           seen = set()
           for line in (root / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines():
@@ -114,30 +143,39 @@ jobs:
           assert "curl |" not in setup
           assert "wget |" not in setup
           assert "eval " not in setup
-          print("Linux package manifest and installer policy: OK")
+          assert "--only-binary=:all:" in setup
+          assert "x86_64|amd64" in setup
+          assert "aarch64|arm64" in setup
+          print("Linux package manifest and compatibility policy: OK")
           PY
-          tar -tzf "$linux_tar" >/dev/null
+            tar -tzf "$linux_tar" >/dev/null
+          done
 
-      - name: Publish verified Windows package in repository
+      - name: Publish verified agent packages in repository
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
-          package_zip="$(find dist -mindepth 1 -maxdepth 1 -type f -name 'CITADEL_FIXED_AGENT_*.zip' | head -n 1)"
-          test -n "$package_zip"
-          test -f "$package_zip"
           mkdir -p releases
-          package_name="$(basename "$package_zip")"
-          cp "$package_zip" "releases/$package_name"
-          sha256sum "releases/$package_name" > "releases/$package_name.sha256"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f "releases/$package_name" "releases/$package_name.sha256"
+          published=0
+          for package in dist/CITADEL_FIXED_AGENT_*.zip dist/CITADEL_LINUX_*_AGENT_*.tar.gz
+          do
+            test -f "$package" || continue
+            package_name="$(basename "$package")"
+            destination="releases/$package_name"
+            cp "$package" "$destination"
+            sha256sum "$destination" > "$destination.sha256"
+            git add -f "$destination" "$destination.sha256"
+            published=$((published + 1))
+          done
+          test "$published" -ge 3
           if git diff --cached --quiet; then
-            echo "Verified Windows package is already published."
+            echo "Verified agent packages are already published."
             exit 0
           fi
-          git commit -m "release(agent): publish $package_name"
+          git commit -m "release(agent): publish verified Windows and Linux packages"
           git push origin HEAD:main
 
       - name: Upload verified Windows package
