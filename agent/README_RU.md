@@ -1,5 +1,16 @@
 # CITADEL/EWS Python Node v1
 
+## v0.3.12 — Windows Core Service
+
+- Core Agent устанавливается как видимая Windows Service `CitadelEWSNode` под `NT AUTHORITY\LocalService`.
+- Тип запуска: `Automatic (Delayed Start)`; служба работает после загрузки Windows без входа пользователя.
+- Старый Startup shortcut удаляется; core-процесс больше не зависит от пользовательского логина.
+- Installer переносит существующую node identity из старого профиля в `%ProgramData%\CitadelEWS\state` и сохраняет `node_id`.
+- State/install ACL разрешают LocalService только необходимый Modify-доступ; SYSTEM и Administrators сохраняют полный контроль.
+- Подписанный `restart`/update перезапускает Python child внутри service-host; подписанный `stop` не вызывает recovery-loop.
+- `setup_windows.ps1 -Uninstall` удаляет службу и CITADEL-компоненты; `-PreserveState` оставляет node state по явному запросу.
+- LM Studio остаётся headless runtime: если он устанавливается из Core Service, он работает в профиле LocalService, без интерактивного desktop-сеанса.
+
 ## v0.3.11 — защищённая Windows identity
 
 - На Windows Ed25519 private key больше не сохраняется в `identity.json` как читаемый PKCS#8 PEM.
@@ -32,7 +43,7 @@
 powershell -File .\setup_windows.ps1
 ```
 
-После успешной проверки Setup создаёт обычный ярлык в папке Windows Startup и запускает один фоновый экземпляр через `pythonw.exe`. Повторный запуск Setup использует ту же Ed25519-идентичность и не должен создавать второй экземпляр агента.
+После успешной проверки Setup компилирует минимальный проверяемый service-host из `CitadelNodeService.cs`, регистрирует `CitadelEWSNode` как Automatic (Delayed Start) Windows Service и запускает Core Agent под LocalService. Повторный запуск Setup выполняет repair той же установки и сохраняет Ed25519-идентичность.
 
 Unattended/autostart предназначен только для компьютеров, принадлежащих оператору или находящихся под его администрированием.
 
