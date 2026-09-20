@@ -109,6 +109,8 @@ for required in (
     'id="createRecoveryCodeButton"',
     'id="rotateArchitectTokenButton"',
     'id="securitySecretPanel"',
+    "Аварийное восстановление / сброс доступа",
+    "Выполнить аварийный сброс доступа",
 ):
     if required not in architect:
         raise SystemExit(f"required Architect Live Operations capability missing: {required}")
