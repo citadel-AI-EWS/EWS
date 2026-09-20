@@ -3429,9 +3429,38 @@ async function authenticateArchitect(request, env) {
   }
 
   const actualHash = await sha256Hex(token);
-  if (!constantTimeHexEqual(actualHash, String(state.token_hash).toLowerCase())) {
-    throw new ApiError(401, "invalid_architect_token");
+  let actor = null;
+  if (constantTimeHexEqual(actualHash, String(state.token_hash).toLowerCase())) {
+    actor = { actor_id: "primary", role: "owner", token_id: null };
+  } else {
+    await ensureEnterpriseStorage(env);
+    const delegated = await env.DB.prepare(`
+      SELECT token_id, role
+      FROM architect_access_tokens
+      WHERE token_hash = ? AND enabled = 1 AND revoked_at IS NULL
+      LIMIT 1
+    `).bind(actualHash).first();
+    if (!delegated || !ARCHITECT_ROLE_PERMISSIONS[delegated.role]) {
+      throw new ApiError(401, "invalid_architect_token");
+    }
+    actor = {
+      actor_id: String(delegated.token_id),
+      token_id: String(delegated.token_id),
+      role: String(delegated.role)
+    };
+    await env.DB.prepare(`
+      UPDATE architect_access_tokens
+      SET last_used_at = CURRENT_TIMESTAMP
+      WHERE token_id = ?
+    `).bind(actor.token_id).run();
   }
+
+  const pathname = new URL(request.url).pathname;
+  const required = requiredArchitectPermission(request.method, pathname);
+  if (!roleHasPermission(actor.role, required)) {
+    throw new ApiError(403, "architect_permission_denied");
+  }
+  return actor;
 }
 
 function recoveryWindowKey(now = new Date()) {
