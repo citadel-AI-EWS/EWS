@@ -242,13 +242,23 @@ def startup_check(config_path: Path) -> int:
     return 0
 
 
+def controller_probe(config_path: Path) -> int:
+    """Verify enrollment and a signed heartbeat without consuming work."""
+    config = v1.AgentConfig.from_file(config_path)
+    agent = Agent(config, config_path)
+    node_id = agent.enroll()
+    agent.heartbeat()
+    print(json.dumps({"ok": True, "node_id": node_id, "agent_version": VERSION}))
+    return 0
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=f"CITADEL/EWS Cloudflare v1 node agent {VERSION}"
     )
     parser.add_argument(
         "command",
-        choices=["doctor", "enroll", "once", "run", "self-test", "startup-check"],
+        choices=["doctor", "enroll", "probe", "once", "run", "self-test", "startup-check"],
     )
     parser.add_argument("--config", default="agent/config.json")
     return parser.parse_args(argv)
@@ -260,6 +270,8 @@ def main(argv: list[str] | None = None) -> int:
         return self_test()
     if args.command == "startup-check":
         return startup_check(Path(args.config))
+    if args.command == "probe":
+        return controller_probe(Path(args.config))
     config = v1.AgentConfig.from_file(Path(args.config))
     if args.command == "doctor":
         return v1.doctor(config)
