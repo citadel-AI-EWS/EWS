@@ -46,12 +46,12 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.12"
+VERSION = "0.3.13"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}
-UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
+UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
 COMMAND_MAX_AGE_SECONDS = 15 * 60
 SERVICE_RESTART_EXIT_CODE = 75
@@ -63,6 +63,8 @@ HYBRID_MODES = {"python", "lmstudio", "both"}
 WINDOWS_DPAPI_PROTECTION = "windows-dpapi-local-machine-v1"
 CRYPTPROTECT_UI_FORBIDDEN = 0x1
 CRYPTPROTECT_LOCAL_MACHINE = 0x4
+WINDOWS_ENTERPRISE_PROBE_SHA256 = "0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
+WINDOWS_ENTERPRISE_PROBE_MAX_BYTES = 256 * 1024
 
 
 def now_iso() -> str:
@@ -516,6 +518,110 @@ def local_network_addresses() -> dict[str, Any]:
     }
 
 
+def _windows_enterprise_probe_path() -> Path:
+    return Path(__file__).resolve().with_name("windows_enterprise_probe.ps1")
+
+
+def _windows_enterprise_probe_file_valid() -> bool:
+    if os.name != "nt":
+        return False
+    path = _windows_enterprise_probe_path()
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return False
+    return (
+        0 < len(data) <= WINDOWS_ENTERPRISE_PROBE_MAX_BYTES
+        and hashlib.sha256(data).hexdigest() == WINDOWS_ENTERPRISE_PROBE_SHA256
+    )
+
+
+def windows_enterprise_probe() -> dict[str, Any]:
+    """Run the reviewed, hash-pinned read-only Microsoft/Windows probe."""
+    if os.name != "nt":
+        return {
+            "supported": False,
+            "available": False,
+            "reason": "windows_only",
+            "readonly": True,
+        }
+
+    script = _windows_enterprise_probe_path()
+    if not _windows_enterprise_probe_file_valid():
+        return {
+            "supported": True,
+            "available": False,
+            "reason": "probe_missing_or_integrity_failed",
+            "readonly": True,
+        }
+
+    system_root = Path(os.environ.get("SystemRoot") or r"C:\Windows")
+    powershell = system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    if not powershell.is_file():
+        fallback = shutil.which("powershell.exe")
+        if not fallback:
+            return {
+                "supported": True,
+                "available": False,
+                "reason": "windows_powershell_unavailable",
+                "readonly": True,
+            }
+        powershell = Path(fallback)
+
+    try:
+        result = subprocess.run(  # nosec B603
+            [
+                str(powershell),
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-File",
+                str(script),
+            ],
+            timeout=30,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {
+            "supported": True,
+            "available": False,
+            "reason": "probe_execution_failed",
+            "detail": str(exc)[:200],
+            "readonly": True,
+        }
+
+    if result.returncode != 0:
+        return {
+            "supported": True,
+            "available": False,
+            "reason": "probe_returned_error",
+            "detail": (result.stderr or result.stdout or "")[:300],
+            "readonly": True,
+        }
+
+    try:
+        payload = json.loads(result.stdout.strip())
+    except (json.JSONDecodeError, TypeError):
+        return {
+            "supported": True,
+            "available": False,
+            "reason": "probe_invalid_json",
+            "readonly": True,
+        }
+    if not isinstance(payload, dict) or payload.get("readonly") is not True:
+        return {
+            "supported": True,
+            "available": False,
+            "reason": "probe_invalid_schema",
+            "readonly": True,
+        }
+    payload["supported"] = True
+    payload["available"] = True
+    return payload
+
+
 def system_inventory(payload: dict[str, Any]) -> dict[str, Any]:
     disk = shutil.disk_usage(Path.home())
     memory = psutil.virtual_memory()
@@ -534,6 +640,7 @@ def system_inventory(payload: dict[str, Any]) -> dict[str, Any]:
         "disk_home_total_bytes": int(disk.total),
         "disk_home_free_bytes": int(disk.free),
         "network": local_network_addresses(),
+        "windows_enterprise": windows_enterprise_probe(),
     }
 
 
@@ -571,6 +678,8 @@ class Agent:
         capabilities = set(HANDLERS) | {"lmstudio_remote", "project_text"}
         if os.name == "nt" and os.environ.get("CITADEL_SERVICE_MANAGED") == "1":
             capabilities.add("windows_core_service")
+        if _windows_enterprise_probe_file_valid():
+            capabilities.add("windows_enterprise_readonly")
         return sorted(capabilities)
 
     def require_node_id(self) -> str:
