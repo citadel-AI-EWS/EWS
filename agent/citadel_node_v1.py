@@ -46,7 +46,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.11"
+VERSION = "0.3.12"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -54,6 +54,8 @@ SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback"
 UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
 COMMAND_MAX_AGE_SECONDS = 15 * 60
+SERVICE_RESTART_EXIT_CODE = 75
+SERVICE_STOP_EXIT_CODE = 76
 LMSTUDIO_INSTALL_FILE_NAMES = {"install_llmstudio_headless.ps1", "install_llmstudio_headless.sh"}
 LMSTUDIO_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,95})?(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,31})?$")
 LMSTUDIO_QUANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
@@ -526,6 +528,7 @@ def system_inventory(payload: dict[str, Any]) -> dict[str, Any]:
         "platform_release": platform.release(),
         "architecture": platform.machine(),
         "python_version": platform.python_version(),
+        "windows_core_service": os.name == "nt" and os.environ.get("CITADEL_SERVICE_MANAGED") == "1",
         "cpu_logical_count": psutil.cpu_count(logical=True),
         "memory_total_bytes": int(memory.total),
         "disk_home_total_bytes": int(disk.total),
@@ -549,6 +552,12 @@ class Agent:
         self.log = JsonlLogger(config.data_dir / "agent.jsonl")
         self.results = ResultQueue(config.data_dir / "pending-results.json")
         self.stop_path = config.data_dir / "STOP"
+        lifecycle_stop = os.environ.get("CITADEL_SERVICE_STOP_FILE", "").strip()
+        self.lifecycle_stop_path = Path(lifecycle_stop).resolve() if lifecycle_stop else None
+        service_hold = os.environ.get("CITADEL_SERVICE_HOLD_FILE", "").strip()
+        self.service_hold_path = Path(service_hold).resolve() if service_hold else None
+        service_ready = os.environ.get("CITADEL_SERVICE_READY_FILE", "").strip()
+        self.service_ready_path = Path(service_ready).resolve() if service_ready else None
         self.paused_path = config.data_dir / "PAUSED"
         self.lmstudio_state_path = config.data_dir / "lmstudio-state.json"
         self.network_recovery_path = config.data_dir / "network-recovery.json"
@@ -559,7 +568,10 @@ class Agent:
 
     @property
     def capabilities(self) -> list[str]:
-        return sorted(set(HANDLERS) | {"lmstudio_remote", "project_text"})
+        capabilities = set(HANDLERS) | {"lmstudio_remote", "project_text"}
+        if os.name == "nt" and os.environ.get("CITADEL_SERVICE_MANAGED") == "1":
+            capabilities.add("windows_core_service")
+        return sorted(capabilities)
 
     def require_node_id(self) -> str:
         if not self.identity.node_id:
@@ -1742,6 +1754,7 @@ class Agent:
                     restart_after = True
                 elif command_type == "uninstall":
                     atomic_write(self.stop_path, "controller stop " + now_iso() + "\n")
+                    stop_after = True
                 elif command_type in {"system_reboot", "system_shutdown"}:
                     self.schedule_system_power_action(command_type)
                 elif command_type == "wake_peer":
@@ -1763,9 +1776,14 @@ class Agent:
                     command_id=command_id,
                     command_type=command_type,
                 )
+                service_managed = os.environ.get("CITADEL_SERVICE_MANAGED") == "1"
                 if stop_after:
+                    if service_managed and command_type == "stop":
+                        raise SystemExit(SERVICE_STOP_EXIT_CODE)
                     raise SystemExit(0)
                 if restart_after:
+                    if service_managed:
+                        raise SystemExit(SERVICE_RESTART_EXIT_CODE)
                     entrypoint = Path(__file__).resolve().parent / "citadel_node_v2.py"
                     # The argv is fixed and the shell remains disabled.
                     subprocess.Popen(  # nosec B603
@@ -1883,10 +1901,48 @@ class Agent:
         except Exception as error:
             self.log.write("network_recovery_failed", error=str(error)[:300])
 
+    def lifecycle_stop_requested(self) -> bool:
+        return bool(self.lifecycle_stop_path and self.lifecycle_stop_path.exists())
+
+    def service_hold_requested(self) -> bool:
+        return bool(self.service_hold_path and self.service_hold_path.exists())
+
+    def mark_service_ready(self) -> None:
+        if not self.service_ready_path:
+            return
+        atomic_write(
+            self.service_ready_path,
+            json.dumps(
+                {
+                    "node_id": self.require_node_id(),
+                    "agent_version": VERSION,
+                    "windows_core_service": "windows_core_service" in self.capabilities,
+                    "heartbeat_at": now_iso(),
+                },
+                sort_keys=True,
+            )
+            + "\n",
+        )
+
+    def interruptible_sleep(self, seconds: float) -> None:
+        deadline = time.monotonic() + max(0.0, seconds)
+        while True:
+            if self.lifecycle_stop_requested():
+                raise SystemExit(0)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.5, remaining))
+
     def cycle(self) -> None:
         self.enroll()
-        if self.stop_path.exists():
+        if self.lifecycle_stop_requested() or self.stop_path.exists():
             raise SystemExit(0)
+        if self.service_hold_requested():
+            if time.monotonic() - self.last_heartbeat >= self.config.heartbeat_seconds:
+                self.heartbeat()
+                self.mark_service_ready()
+            return
         self.handle_commands()
         if time.monotonic() - self.last_heartbeat >= self.config.heartbeat_seconds:
             self.heartbeat()
@@ -1922,10 +1978,18 @@ class Agent:
                     backoff = 2
                     if once:
                         return 0
-                    time.sleep(self.config.poll_seconds)
-                except SystemExit:
-                    self.log.write("agent_stop", reason="STOP")
-                    return 0
+                    self.interruptible_sleep(self.config.poll_seconds)
+                except SystemExit as exit_request:
+                    code = exit_request.code if isinstance(exit_request.code, int) else 0
+                    reason = (
+                        "service_restart"
+                        if code == SERVICE_RESTART_EXIT_CODE
+                        else "service_stop"
+                        if code == SERVICE_STOP_EXIT_CODE
+                        else "STOP"
+                    )
+                    self.log.write("agent_stop", reason=reason, exit_code=code)
+                    return code
                 except KeyboardInterrupt:
                     self.log.write("agent_stop", reason="keyboard_interrupt")
                     return 0
@@ -1935,7 +1999,7 @@ class Agent:
                         self.recover_network()
                     if once:
                         raise
-                    time.sleep(backoff)
+                    self.interruptible_sleep(backoff)
                     backoff = min(60, backoff * 2)
         finally:
             if os.name == "nt" and keep_awake:
@@ -2123,6 +2187,88 @@ def self_test() -> int:
             }),
             "valid LM Studio settings rejected",
         )
+        service_hold_path = root / "SERVICE_HOLD"
+        service_ready_path = root / "SERVICE_READY"
+        previous_hold_file = os.environ.get("CITADEL_SERVICE_HOLD_FILE")
+        previous_ready_file = os.environ.get("CITADEL_SERVICE_READY_FILE")
+        try:
+            os.environ["CITADEL_SERVICE_HOLD_FILE"] = str(service_hold_path)
+            os.environ["CITADEL_SERVICE_READY_FILE"] = str(service_ready_path)
+            hold_agent = Agent(config)
+            require_test(
+                hold_agent.service_hold_path == service_hold_path.resolve()
+                and hold_agent.service_ready_path == service_ready_path.resolve(),
+                "service hold/readiness paths were not accepted",
+            )
+            service_hold_path.write_text("hold\n", encoding="utf-8")
+            require_test(
+                hold_agent.service_hold_requested(),
+                "service hold marker was not detected",
+            )
+        finally:
+            if previous_hold_file is None:
+                os.environ.pop("CITADEL_SERVICE_HOLD_FILE", None)
+            else:
+                os.environ["CITADEL_SERVICE_HOLD_FILE"] = previous_hold_file
+            if previous_ready_file is None:
+                os.environ.pop("CITADEL_SERVICE_READY_FILE", None)
+            else:
+                os.environ["CITADEL_SERVICE_READY_FILE"] = previous_ready_file
+
+        lifecycle_stop_path = root / "SERVICE_STOP"
+        previous_stop_file = os.environ.get("CITADEL_SERVICE_STOP_FILE")
+        try:
+            os.environ["CITADEL_SERVICE_STOP_FILE"] = str(lifecycle_stop_path)
+            lifecycle_agent = Agent(config)
+            require_test(
+                lifecycle_agent.lifecycle_stop_path == lifecycle_stop_path.resolve(),
+                "service lifecycle stop path was not accepted",
+            )
+            lifecycle_stop_path.write_text("stop\n", encoding="utf-8")
+            require_test(
+                lifecycle_agent.lifecycle_stop_requested(),
+                "service lifecycle stop marker was not detected",
+            )
+        finally:
+            if previous_stop_file is None:
+                os.environ.pop("CITADEL_SERVICE_STOP_FILE", None)
+            else:
+                os.environ["CITADEL_SERVICE_STOP_FILE"] = previous_stop_file
+
+        previous_service_flag = os.environ.get("CITADEL_SERVICE_MANAGED")
+        try:
+            os.environ["CITADEL_SERVICE_MANAGED"] = "1"
+            service_capability_agent = Agent(config)
+            if os.name == "nt":
+                require_test(
+                    "windows_core_service" in service_capability_agent.capabilities,
+                    "SCM-managed Windows agent did not advertise windows_core_service",
+                )
+                require_test(
+                    system_inventory({}).get("windows_core_service") is True,
+                    "Windows inventory did not report SCM service mode",
+                )
+        finally:
+            if previous_service_flag is None:
+                os.environ.pop("CITADEL_SERVICE_MANAGED", None)
+            else:
+                os.environ["CITADEL_SERVICE_MANAGED"] = previous_service_flag
+
+        class _ServiceExitAgent(Agent):
+            def cycle(self) -> None:
+                raise SystemExit(SERVICE_RESTART_EXIT_CODE)
+
+        service_exit_config = AgentConfig(
+            "https://example.test",
+            root / "service-exit",
+            controller_public_x=controller_x,
+        )
+        service_exit_agent = _ServiceExitAgent(service_exit_config)
+        require_test(
+            service_exit_agent.run(once=True) == SERVICE_RESTART_EXIT_CODE,
+            "service-managed restart exit code was swallowed",
+        )
+
         require_test(
             agent.validate_hybrid_payload({
                 "request_id": "query_12345678",

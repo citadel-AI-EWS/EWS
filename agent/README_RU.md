@@ -1,12 +1,23 @@
 # CITADEL/EWS Python Node v1
 
-## Windows compatibility release 0.3.11-wincompat.1
+## v0.3.12 — Windows Core Service
 
-- `winget` больше не обязателен для установки Python.
-- Setup сначала использует уже установленный совместимый Python 3.12–3.14, затем пробует `winget`, а при его отсутствии или ошибке скачивает официальный Python 3.13.15 с python.org и проверяет SHA-256 до запуска.
-- Для 32-битного Python на Windows используется отдельный `requirements-win32.txt` с готовыми win32 wheels.
-- Windows dependency install выполняется с `--only-binary=:all:`, поэтому installer не пытается собирать C/Rust зависимости на старом или необычно настроенном ПК.
-- Этот compatibility release не обходит Windows security policy и не требует скрытой установки; он рассчитан на компьютеры, где пользователь разрешил установку.
+- Core Agent устанавливается как видимая Windows Service `CitadelEWSNode` под `NT AUTHORITY\LocalService`.
+- Тип запуска: `Automatic (Delayed Start)`; служба работает после загрузки Windows без входа пользователя.
+- Старый Startup shortcut удаляется; core-процесс больше не зависит от пользовательского логина.
+- Installer переносит существующую node identity из старого профиля в `%ProgramData%\CitadelEWS\state` и сохраняет `node_id`.
+- State/install ACL разрешают LocalService только необходимый Modify-доступ; SYSTEM и Administrators сохраняют полный контроль.
+- Подписанный `restart`/update перезапускает Python child внутри service-host; подписанный `stop` не вызывает recovery-loop.
+- Узел сообщает capability `windows_core_service` только когда Python Core реально запущен через SCM-host; одна версия 0.3.12 сама по себе не считается доказательством миграции.
+- Обычный Windows Stop/Shutdown использует отдельный временный файл `SERVICE_STOP`; постоянный `STOP` зарезервирован только для подписанного uninstall и не может случайно пережить перезагрузку из-за остановки Windows.
+- Установка строит новый versioned release полностью до cutover: venv, зависимости, self-test, enrollment/live-cycle и компиляция service-host проходят, пока старый агент продолжает работать.
+- При замене уже существующей службы её SCM-конфигурация сохраняется и восстанавливается при ошибке запуска новой версии.
+- Профиль исходного пользователя определяется по SID, переданному через UAC; identity/PAUSED/queue переносятся именно из его профиля, а не из профиля введённого администратора.
+- ACL для ProgramData собирается с нуля до копирования identity или исполняемых файлов: SYSTEM/Administrators — FullControl, LocalService — Modify.
+- Новый service-agent во время cutover временно удерживается маркером `SERVICE_HOLD`, чтобы не было окна двойного выполнения заданий со старым Startup-agent. Durable-состояние `PAUSED` переносится отдельно.
+- Конфигурация службы записывается через Win32_Service API и после записи перечитывается и проверяется; хрупкий `sc.exe binPath=` не используется.
+- `setup_windows.ps1 -Uninstall` удаляет службу и CITADEL-компоненты; `-PreserveState` оставляет node state по явному запросу.
+- LM Studio остаётся headless runtime: если он устанавливается из Core Service, он работает в профиле LocalService, без интерактивного desktop-сеанса.
 
 ## v0.3.11 — защищённая Windows identity
 
@@ -34,13 +45,13 @@
 
 ## Windows setup
 
-Адрес контроллера уже встроен. Setup использует совместимый Python 3.12–3.14; если Python отсутствует, Windows Package Manager используется как первый вариант, но не является обязательным. При отсутствии/ошибке `winget` Setup использует официальный проверяемый Python 3.13.15 installer, выбирая x86/x64/ARM64 по архитектуре Windows. Затем создаётся отдельное `.venv`, ставится подходящий набор бинарных зависимостей, выполняются `doctor` и self-test, узел автоматически регистрируется и проверяет живой цикл с Controller.
+Адрес контроллера уже встроен. Setup при необходимости устанавливает Python 3.14 через Windows Package Manager, создаёт отдельное `.venv`, ставит зависимости, выполняет `doctor` и self-test, автоматически регистрирует узел и проверяет живой цикл с Controller. Узел получает постоянный номер; enrollment token, логин и код подтверждения не требуются.
 
 ```powershell
 powershell -File .\setup_windows.ps1
 ```
 
-После успешной проверки Setup создаёт обычный ярлык в папке Windows Startup и запускает один фоновый экземпляр через `pythonw.exe`. Повторный запуск Setup использует ту же Ed25519-идентичность и не должен создавать второй экземпляр агента.
+После успешной проверки Setup компилирует минимальный проверяемый service-host из `CitadelNodeService.cs`, регистрирует `CitadelEWSNode` как Automatic (Delayed Start) Windows Service и запускает Core Agent под LocalService. Повторный запуск Setup выполняет repair той же установки и сохраняет Ed25519-идентичность.
 
 Unattended/autostart предназначен только для компьютеров, принадлежащих оператору или находящихся под его администрированием.
 

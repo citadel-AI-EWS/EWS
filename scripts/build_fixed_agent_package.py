@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
-PACKAGE_NAME = "CITADEL_FIXED_AGENT_0.3.11_WINCOMPAT1_2026-09-20"
+PACKAGE_NAME = "CITADEL_FIXED_AGENT_0.3.12_2026-09-20"
 STAGE = DIST / PACKAGE_NAME
 ZIP_PATH = DIST / f"{PACKAGE_NAME}.zip"
 
@@ -40,7 +40,7 @@ def indented_block(value: str, spaces: int = 8) -> str:
 def patch_v1(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     text = must_replace(text, "import hashlib\n", "import hashlib\nimport ipaddress\n", "ipaddress import")
-    text = must_replace(text, 'VERSION = "0.3.0"', 'VERSION = "0.3.11"', "v1 version")
+    text = must_replace(text, 'VERSION = "0.3.0"', 'VERSION = "0.3.12"', "v1 version")
     text = must_replace(
         text,
         'return json.loads(path.read_text(encoding="utf-8"))',
@@ -252,7 +252,7 @@ def patch_v1(path: Path) -> None:
 
 def patch_v2(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
-    text = must_replace(text, 'VERSION = "0.3.0"', 'VERSION = "0.3.11"', "v2 version")
+    text = must_replace(text, 'VERSION = "0.3.0"', 'VERSION = "0.3.12"', "v2 version")
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
@@ -261,7 +261,7 @@ def patch_setup(path: Path, v1_hash: str, v2_hash: str) -> None:
     original = text
     text = re.sub(r'\$ExpectedV1Sha256 = "[0-9a-f]{64}"', f'$ExpectedV1Sha256 = "{v1_hash}"', text, count=1)
     text = re.sub(r'\$ExpectedV2Sha256 = "[0-9a-f]{64}"', f'$ExpectedV2Sha256 = "{v2_hash}"', text, count=1)
-    text = text.replace('agent_version = "0.3.0"', 'agent_version = "0.3.11"')
+    text = text.replace('agent_version = "0.3.0"', 'agent_version = "0.3.12"')
     if text == original:
         raise RuntimeError("setup_windows.ps1 was not patched")
     path.write_text(text, encoding="utf-8", newline="\n")
@@ -274,20 +274,20 @@ def write_extras() -> None:
         newline="",
     )
     readme = (
-        "CITADEL/EWS — Windows compatibility release 0.3.11-wincompat.1\n\n"
+        "CITADEL/EWS — исправленный самодостаточный пакет 0.3.12\n\n"
         "1. Распакуйте ZIP полностью.\n"
         "2. Запустите START_HERE.cmd.\n"
         "3. Агент использует HTTPS Controller: https://citadel-ai.init1.workers.dev\n\n"
         "Исправлено в этом пакете:\n"
-        "- winget больше не является обязательным: при его отсутствии/ошибке используется официальный Python 3.13.15 с проверкой SHA-256.\n"
-        "- Поддержана 32-битная Windows 10: installer выбирает x86 Python и отдельный набор готовых win32 wheels.\n"
-        "- На Windows зависимости ставятся только из бинарных wheels; локальная сборка C/Rust пакетов не запускается.\n"
         "- JSON с UTF-8 BOM больше не ломает загрузку конфигурации.\n"
         "- При каждом запуске агент один раз сверяет node_id с Controller по Ed25519 public key; старый локальный ID автоматически исправляется.\n"
         "- localhost / 127.0.0.1 / ::1 согласованы для локального HTTP-теста.\n"
-        "- Агент сам определяет текущий LAN IPv4 и Tailscale IPv4; адреса не зашиты в код и могут меняться по DHCP.\n"
-        "- LAN/Tailscale/MAC входят в system_inventory и heartbeat; Controller использует их для диагностики и ограниченного Wake-on-LAN.\n"
-        "- В архиве находятся сами agent-файлы: установка не скачивает Python-код из GitHub.\n\n"
+        "- Агент определяет текущий LAN/network IPv4; адреса не зашиты в код и могут меняться по DHCP.\n"
+        "- LAN/network/MAC входят в system_inventory и heartbeat; Controller использует их для диагностики и ограниченного Wake-on-LAN.\n"
+        "- Core Agent устанавливается как Windows Service CitadelEWSNode под LocalService с Automatic (Delayed Start).\n"
+        "- Старый Startup shortcut удаляется; существующая node identity мигрирует в ProgramData и сохраняется.\n"
+        "- setup_windows.ps1 -Uninstall выполняет явное удаление; -PreserveState сохраняет node state по запросу.\n"
+        "- В архиве находятся agent-файлы, проверяемый CitadelNodeService.cs и windows_service.ps1: установка не скачивает Python-код из GitHub.\n\n"
         "Произвольный SSH shell в пакет не включён. Разрешены только подписанные allowlist-команды Controller, включая reboot/shutdown и ограниченный wake_peer без shell.\n"
     )
     (STAGE / "README_RU.txt").write_text(readme, encoding="utf-8", newline="\n")
@@ -323,8 +323,9 @@ def build() -> Path:
         "citadel_node_v2.py",
         "setup_windows.ps1",
         "Install Windows Node.cmd",
+        "CitadelNodeService.cs",
+        "windows_service.ps1",
         "requirements.txt",
-        "requirements-win32.txt",
     ):
         shutil.copy2(ROOT / "agent" / name, STAGE / name)
 
@@ -333,17 +334,25 @@ def build() -> Path:
     setup_path = STAGE / "setup_windows.ps1"
     v1_hash = sha256(v1_path)
     v2_hash = sha256(v2_path)
-    if 'VERSION = "0.3.11"' not in v1_path.read_text(encoding="utf-8"):
-        raise RuntimeError("repository v1 source is not release 0.3.11")
-    if 'VERSION = "0.3.11"' not in v2_path.read_text(encoding="utf-8"):
-        raise RuntimeError("repository v2 source is not release 0.3.11")
+    if 'VERSION = "0.3.12"' not in v1_path.read_text(encoding="utf-8"):
+        raise RuntimeError("repository v1 source is not release 0.3.12")
+    if 'VERSION = "0.3.12"' not in v2_path.read_text(encoding="utf-8"):
+        raise RuntimeError("repository v2 source is not release 0.3.12")
     setup_text = setup_path.read_text(encoding="utf-8")
+    service_source = STAGE / "CitadelNodeService.cs"
+    service_helper = STAGE / "windows_service.ps1"
     if f'$ExpectedV1Sha256 = "{v1_hash}"' not in setup_text:
         raise RuntimeError("setup_windows.ps1 v1 hash pin does not match repository source")
     if f'$ExpectedV2Sha256 = "{v2_hash}"' not in setup_text:
         raise RuntimeError("setup_windows.ps1 v2 hash pin does not match repository source")
-    if 'agent_version = "0.3.11"' not in setup_text:
-        raise RuntimeError("setup_windows.ps1 release version is not 0.3.11")
+    service_hash = sha256(service_source)
+    if f'$ExpectedServiceHostSha256 = "{service_hash}"' not in setup_text:
+        raise RuntimeError("setup_windows.ps1 service-host hash pin does not match repository source")
+    helper_hash = sha256(service_helper)
+    if f'$ExpectedServiceHelperSha256 = "{helper_hash}"' not in setup_text:
+        raise RuntimeError("setup_windows.ps1 service-helper hash pin does not match repository source")
+    if '$ReleaseVersion = "0.3.12"' not in setup_text:
+        raise RuntimeError("setup_windows.ps1 release version is not 0.3.12")
     write_extras()
 
     manifest_names = sorted(
