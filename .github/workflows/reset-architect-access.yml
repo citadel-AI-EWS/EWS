@@ -21,6 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: cloudflare-test
     timeout-minutes: 10
+    env:
+      CITADEL_BASE_URL: https://citadel-ai.init1.workers.dev
 
     steps:
       - uses: actions/checkout@v7
@@ -43,48 +45,43 @@ jobs:
             exit 1
           fi
 
-      - name: Reset Architect verifier in remote D1
+      - name: Sync Architect verifier into Worker secret
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           ARCHITECT_TOKEN_HASH: ${{ secrets.ARCHITECT_TOKEN_HASH }}
         run: |
           set -euo pipefail
-          reset_sql="$RUNNER_TEMP/reset-architect-access.sql"
-          trap 'rm -f "$reset_sql"' EXIT
-          cat > "$reset_sql" <<SQL
-          UPDATE architect_auth_state
-          SET token_hash = '$ARCHITECT_TOKEN_HASH',
-              bootstrap_mode = 0,
-              recovery_hash = NULL,
-              recovery_used = 1,
-              token_rotated_at = CURRENT_TIMESTAMP,
-              updated_at = CURRENT_TIMESTAMP
-          WHERE singleton_id = 1;
+          printf '%s' "$ARCHITECT_TOKEN_HASH" | npx wrangler secret put ARCHITECT_TOKEN_HASH
 
-          INSERT INTO audit_events (
-            actor_type, actor_id, action, target_type, target_id, details_json
-          ) VALUES (
-            'github_actions', 'manual_reset', 'architect.token.reset',
-            'architect_auth', 'singleton', '{"method":"protected_github_environment"}'
-          );
-          SQL
-
-          npx wrangler d1 execute citadel-control --remote --file="$reset_sql"
-
-      - name: Verify Architect reset state
+      - name: Reset Architect verifier through Worker D1 binding
         shell: bash
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ARCHITECT_TOKEN_HASH: ${{ secrets.ARCHITECT_TOKEN_HASH }}
         run: |
           set -euo pipefail
-          npx wrangler d1 execute citadel-control --remote --command             "SELECT singleton_id, bootstrap_mode, recovery_used, token_rotated_at FROM architect_auth_state WHERE singleton_id = 1;"
+          for attempt in {1..10}; do
+            if curl --fail --silent --show-error               -X POST "$CITADEL_BASE_URL/api/v1/architect/security/sync-bootstrap-reset"               -H "content-type: application/json"               -H "x-citadel-bootstrap-hash: $ARCHITECT_TOKEN_HASH"               --data '{"confirm":"RESET_ARCHITECT_ACCESS"}'               --output "$RUNNER_TEMP/architect-reset-response.json"; then
+              node -e '
+                const fs=require("fs");
+                const p=process.env.RUNNER_TEMP+"/architect-reset-response.json";
+                const d=JSON.parse(fs.readFileSync(p,"utf8"));
+                if(!d.ok || !d.architect_verifier_synced) process.exit(1);
+              '
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Architect reset endpoint did not accept the synchronized Worker secret."
+          exit 1
 
       - name: Summary
         if: success()
         run: |
           echo "### Architect access reset" >> "$GITHUB_STEP_SUMMARY"
           echo "- Protected GitHub environment: cloudflare-test" >> "$GITHUB_STEP_SUMMARY"
-          echo "- D1 verifier: updated" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Worker secret: synchronized" >> "$GITHUB_STEP_SUMMARY"
+          echo "- D1 verifier: updated through the Worker's D1 binding" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Direct D1 API permission: not required" >> "$GITHUB_STEP_SUMMARY"
           echo "- Existing nodes, projects, missions, reports, and model data: unchanged" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Previous Architect token: invalidated" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Previous Architect token and recovery code: invalidated" >> "$GITHUB_STEP_SUMMARY"
