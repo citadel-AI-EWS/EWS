@@ -76,13 +76,22 @@ if ((Get-Sha256 $ServiceHelperSource) -ne $ExpectedServiceHelperSha256) {
 }
 . $ServiceHelperSource
 
-$ProgramDataRoot = [System.IO.Path]::GetFullPath($env:ProgramData).TrimEnd('\') + '\'
-$InstallRoot = [System.IO.Path]::GetFullPath($InstallRoot)
-$StateRoot = [System.IO.Path]::GetFullPath($StateRoot)
+$ProgramDataBase = [System.IO.Path]::GetFullPath($env:ProgramData).TrimEnd('\')
+$ProgramDataRoot = $ProgramDataBase + '\'
+$InstallRoot = [System.IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+$StateRoot = [System.IO.Path]::GetFullPath($StateRoot).TrimEnd('\')
 foreach ($MachinePath in @($InstallRoot, $StateRoot)) {
-  if (-not ($MachinePath + '\').StartsWith($ProgramDataRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "Windows Core Service files must remain under ProgramData."
+  if ([string]::Equals($MachinePath, $ProgramDataBase, [System.StringComparison]::OrdinalIgnoreCase) -or
+      -not ($MachinePath + '\').StartsWith($ProgramDataRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Windows Core Service roots must be strict descendants of ProgramData."
   }
+}
+$InstallPrefix = $InstallRoot + '\'
+$StatePrefix = $StateRoot + '\'
+if ([string]::Equals($InstallRoot, $StateRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+    $InstallPrefix.StartsWith($StatePrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+    $StatePrefix.StartsWith($InstallPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+  throw "InstallRoot and StateRoot must be separate, non-overlapping ProgramData directories."
 }
 
 $LegacyProfile = Get-CimInstance Win32_UserProfile -Filter ("SID='" + $LegacyUserSid + "'") -ErrorAction Stop |
@@ -307,13 +316,18 @@ if ($LASTEXITCODE -ne 0) { throw "Agent diagnostics failed." }
 & $VenvPython $AgentScript self-test
 if ($LASTEXITCODE -ne 0) { throw "Agent self-test failed." }
 
-$EnrollOutput = & $VenvPython $AgentScript enroll --config $ConfigPath
-if ($LASTEXITCODE -ne 0) { throw "Automatic enrollment failed." }
-$NodeId = (($EnrollOutput | Select-Object -Last 1) -as [string]).Trim()
-if (-not $NodeId.StartsWith("node_")) { throw "Controller did not return a valid node id." }
-& $VenvPython $AgentScript once --config $ConfigPath
-if ($LASTEXITCODE -ne 0) { throw "Live Controller cycle failed after enrollment." }
-Write-Host "[CITADEL] Staged release passed Controller enrollment/live-cycle checks: $NodeId"
+$ProbeOutput = & $VenvPython $AgentScript probe --config $ConfigPath
+if ($LASTEXITCODE -ne 0) { throw "Passive Controller probe failed." }
+try {
+  $ProbeState = (($ProbeOutput | Select-Object -Last 1) -as [string]) | ConvertFrom-Json
+} catch {
+  throw "Controller probe returned invalid JSON."
+}
+$NodeId = [string]$ProbeState.node_id
+if (-not $NodeId.StartsWith("node_") -or $ProbeState.ok -ne $true) {
+  throw "Controller probe did not return a valid node identity."
+}
+Write-Host "[CITADEL] Staged release passed passive enrollment/heartbeat probe: $NodeId"
 
 $ServiceSource = Join-Path $ReleaseRoot "CitadelNodeService.cs"
 $ServiceExe = Join-Path $ReleaseRoot "CitadelNodeService.exe"
