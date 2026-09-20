@@ -3452,6 +3452,47 @@ async function architectRotateToken(request, env) {
   });
 }
 
+async function architectSyncBootstrapReset(request, env) {
+  const expectedHash = bootstrapArchitectHash(env);
+  const suppliedHash = (request.headers.get("x-citadel-bootstrap-hash") || "")
+    .trim()
+    .toLowerCase();
+  if (!constantTimeHexEqual(suppliedHash, expectedHash)) {
+    throw new ApiError(401, "invalid_bootstrap_reset_secret");
+  }
+
+  const body = parseJsonObject(await readBodyText(request, 4096));
+  if (body.confirm !== "RESET_ARCHITECT_ACCESS") {
+    throw new ApiError(400, "bootstrap_reset_confirmation_required");
+  }
+
+  await ensureArchitectAuthStorage(env);
+  await env.DB.batch([
+    env.DB.prepare(`
+      UPDATE architect_auth_state
+      SET token_hash = ?, bootstrap_mode = 0,
+          recovery_hash = NULL, recovery_used = 1,
+          token_rotated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE singleton_id = 1
+    `).bind(expectedHash),
+    env.DB.prepare(`
+      INSERT INTO audit_events (
+        actor_type, actor_id, action, target_type, target_id, details_json
+      ) VALUES ('github_actions', 'protected_environment',
+        'architect.token.bootstrap_reset',
+        'architect_auth', 'singleton',
+        '{"method":"worker_binding","recovery_code_invalidated":true}')
+    `)
+  ]);
+
+  return json({
+    ok: true,
+    architect_verifier_synced: true,
+    old_token_invalidated: true,
+    recovery_code_invalidated: true
+  });
+}
+
 async function architectRecoverToken(request, env) {
   await consumeRecoveryAttempt(request, env);
   const body = parseJsonObject(await readBodyText(request, 4096));
@@ -4108,6 +4149,12 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/v1/architect/security/recover-token") {
     return request.method === "POST"
       ? architectRecoverToken(request, env)
+      : methodNotAllowed(["POST"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/security/sync-bootstrap-reset") {
+    return request.method === "POST"
+      ? architectSyncBootstrapReset(request, env)
       : methodNotAllowed(["POST"]);
   }
 
