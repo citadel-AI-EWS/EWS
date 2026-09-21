@@ -5,6 +5,11 @@ Set-StrictMode -Version Latest
 
 $OfficialInstaller = "https://lmstudio.ai/install.ps1"
 $TempFile = Join-Path $env:TEMP ("citadel-lmstudio-" + [guid]::NewGuid().ToString("N") + ".ps1")
+$RuntimeHome = if (-not [string]::IsNullOrWhiteSpace($env:CITADEL_LMSTUDIO_HOME)) { $env:CITADEL_LMSTUDIO_HOME } else { $HOME }
+if ([string]::IsNullOrWhiteSpace($RuntimeHome)) { throw "LM Studio runtime HOME is unavailable." }
+New-Item -ItemType Directory -Force -Path $RuntimeHome | Out-Null
+$env:HOME = $RuntimeHome
+$env:LMS_NO_MODIFY_PATH = "1"
 
 try {
   Write-Host "[CITADEL] Downloading official LM Studio llmster installer..."
@@ -20,8 +25,8 @@ try {
   }
 
   $Candidates = @(
-    (Join-Path $HOME ".lmstudio\bin\lms.exe"),
-    (Join-Path $HOME ".lmstudio\bin\lms")
+    (Join-Path $RuntimeHome ".lmstudio\bin\lms.exe"),
+    (Join-Path $RuntimeHome ".lmstudio\bin\lms")
   )
   $Lms = $null
   foreach ($Candidate in $Candidates) {
