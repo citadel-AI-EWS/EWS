@@ -1188,7 +1188,14 @@
         addText(item, "strong", `${project.title} — ${stage} · ${percent}%`);
         addText(item, "div", `Нод Hub: ${project.worker_count} · завершено: ${finished}/${total} · running: ${running} · assigned: ${assigned}`, "small");
         if (stage === "PLAN / WAITING") {
-          addText(item, "div", "Ожидание: откройте отчёт — Controller покажет READY-ноды и точный blocker (agent / LM Studio / model / offline).", "small");
+          addText(
+            item,
+            "div",
+            project.source_type === "architect_python"
+              ? "Ожидание: Python only · Controller покажет READY-ноды и blocker (agent / project_python / offline). LM Studio не требуется."
+              : "Ожидание: откройте отчёт — Controller покажет READY-ноды и точный blocker (agent / LM Studio / model / offline).",
+            "small"
+          );
         }
         addText(item, "div", `Project ID: ${project.project_id}`, "small");
         const open = addText(item, "button", "Перейти к отчёту", "secondary");
