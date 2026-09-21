@@ -75,6 +75,9 @@ payload = {
     "request_timeout_seconds": 30,
     "max_cpu_percent": 90,
     "max_memory_percent": 90,
+    "prevent_automatic_sleep": True,
+    "network_recovery_enabled": True,
+    "allowed_wifi_profiles": [],
     "controller_public_x": public_x,
 }
 pathlib.Path(path).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
