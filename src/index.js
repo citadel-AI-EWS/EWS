@@ -34,17 +34,17 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.14",
+  version: "0.3.15",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "f7176dfbecef7b43358c2f1adf0f712c1b6fc3d02d3ad8af4385c9e016c467ba"
+      sha256: "133c9b20f447352a60e3390273752794c93efbf4de13ceed2f04684c27f7943b"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "9136adbf00a332b55c3f74e17f350d160200c4c49fa81845c609054b0d583c49"
+      sha256: "0e684c59b3e2d908fe94b77a9b0c5c2900da2b8527266f7ac5198e94b64b8b98"
     }
   ]
 });
@@ -55,12 +55,12 @@ const LMSTUDIO_INTEGRATION = Object.freeze({
   windows_asset: Object.freeze({
     path: "install_llmstudio_headless.ps1",
     url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/install_llmstudio_headless.ps1",
-    sha256: "d9a96026bea2e7729f0b086d8d668c3f4f93b7725b5e0af3f2936b68f89475cf"
+    sha256: "0d24fb0ce1d7ba40539b98c30875f2244d93b328dc32358bcf880d4c8cfd78fc"
   }),
   linux_asset: Object.freeze({
     path: "install_llmstudio_headless.sh",
     url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/install_llmstudio_headless.sh",
-    sha256: "15dcfd76d3c929ec2ca459a19879d565a9ec6483c33fcf9b3d8ba5a8ef145d39"
+    sha256: "3d112dfa579562953919cfeccb6203d86333a99a473aaf4b76bdd2c39b70f67b"
   }),
   model_presets: Object.freeze([
     { id: "ibm/granite-4-micro", label: "IBM Granite 4 Micro" },
