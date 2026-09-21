@@ -16,6 +16,9 @@ const MAX_SESSION_BODY_BYTES = 24 * 1024;
 const MAX_SESSION_SNAPSHOT_BYTES = 16 * 1024;
 const SIGNATURE_WINDOW_SECONDS = 300;
 const COMMAND_MAX_AGE_SECONDS = 15 * 60;
+const NODE_LIVE_WINDOW_MINUTES = 5;
+const NODE_STALE_AFTER_MINUTES = 24 * 60;
+const NODE_ARCHIVE_AFTER_MINUTES = 7 * 24 * 60;
 const REPLAY_PROTECTED_AGENT_VERSION = "0.3.10";
 const AUTO_ENROLLMENT_DEFAULT_HOURLY_LIMIT = 120;
 const AUTO_ENROLLMENT_DEFAULT_NODE_CAP = 10000;
@@ -593,19 +596,29 @@ async function startUpdateAllRollout(request, env) {
       "VALUES ('architect', 'test-console', 'agent.rollout.started', 'rollout', ?, ?)"
     ).bind(rolloutId, JSON.stringify({ target_version: LATEST_NODE_RELEASE.version }))
   ]);
-  const counts = await env.DB.prepare(
-    "SELECT COUNT(*) AS total, " +
-    "SUM(CASE WHEN status != 'revoked' AND agent_version != ? THEN 1 ELSE 0 END) AS outdated " +
-    "FROM nodes"
-  ).bind(LATEST_NODE_RELEASE.version).first();
+  const nodeRows = await env.DB.prepare(
+    "SELECT node_id, hostname, agent_version, status, last_seen_at " +
+    "FROM nodes WHERE status != 'revoked'"
+  ).all();
+  const registered = nodeRows.results || [];
+  const productionNodes = registered.filter((node) => !isTestNodeRecord(node));
+  const outdatedNodes = productionNodes.filter(
+    (node) => node.agent_version !== LATEST_NODE_RELEASE.version
+  );
+  const updateableNow = outdatedNodes.filter(
+    (node) => operationalNodeState(node) === "live"
+  );
   return json({
     ok: true,
     rollout: {
       rollout_id: rolloutId,
       target_version: LATEST_NODE_RELEASE.version,
       status: "active",
-      registered_nodes: Number(counts?.total || 0),
-      nodes_waiting_for_update: Number(counts?.outdated || 0)
+      registered_nodes: productionNodes.length,
+      nodes_waiting_for_update: outdatedNodes.length,
+      nodes_updateable_now: updateableNow.length,
+      nodes_deferred: Math.max(0, outdatedNodes.length - updateableNow.length),
+      excluded_test_nodes: Math.max(0, registered.length - productionNodes.length)
     }
   }, 201);
 }
@@ -617,7 +630,7 @@ async function ensureRolloutCommandForNode(env, nodeId) {
       "SELECT rollout_id, target_version, release_json FROM agent_rollouts WHERE status = 'active' ORDER BY created_at DESC LIMIT 1"
     ).first(),
     env.DB.prepare(
-      "SELECT node_id, status, agent_version FROM nodes WHERE node_id = ?"
+      "SELECT node_id, hostname, status, agent_version, last_seen_at FROM nodes WHERE node_id = ?"
     ).bind(nodeId).first(),
     env.DB.prepare(
       "SELECT command_id FROM commands WHERE node_id = ? AND status IN ('pending', 'accepted') LIMIT 1"
@@ -629,7 +642,14 @@ async function ensureRolloutCommandForNode(env, nodeId) {
       "ORDER BY completed_at DESC LIMIT 1"
     ).bind(nodeId).first()
   ]);
-  if (!rollout || !node || pending || node.status === "revoked" || node.agent_version === rollout.target_version) {
+  if (
+    !rollout ||
+    !node ||
+    pending ||
+    node.status === "revoked" ||
+    isTestNodeRecord(node) ||
+    node.agent_version === rollout.target_version
+  ) {
     return;
   }
   const recentlyInstalled = recentCompletedUpdate
@@ -1213,13 +1233,13 @@ function projectAssignmentId(workItemId) {
 async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
   await Promise.all([ensureProjectStorage(env), ensureNodeAiStorage(env)]);
   const node = await env.DB.prepare(`
-    SELECT n.node_id, n.status, n.last_seen_at, n.capabilities_json,
+    SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
       ai.installed, ai.loaded_model, ai.server_running
     FROM nodes AS n
     LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
     WHERE n.node_id = ?
   `).bind(nodeId).first();
-  if (!node || node.status !== "online") return 0;
+  if (!node || operationalNodeState(node) !== "live" || isTestNodeRecord(node)) return 0;
   const capabilities = safeJson(node.capabilities_json, []);
   const ready =
     Array.isArray(capabilities) &&
@@ -1244,7 +1264,7 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
       LIMIT 32
     `).bind(projectId, projectId, nodeId).all(),
     env.DB.prepare(`
-      SELECT n.node_id, n.capabilities_json, ai.installed, ai.loaded_model, ai.server_running
+      SELECT n.node_id, n.hostname, n.last_seen_at, n.capabilities_json, ai.installed, ai.loaded_model, ai.server_running
       FROM nodes AS n
       LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
       WHERE n.status = 'online'
@@ -1255,7 +1275,9 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
     (readyNodesQuery.results || [])
       .filter((candidate) => {
         const candidateCapabilities = safeJson(candidate.capabilities_json, []);
-        return Array.isArray(candidateCapabilities) &&
+        return !isTestNodeRecord(candidate) &&
+          operationalNodeState({ ...candidate, status: "online" }) === "live" &&
+          Array.isArray(candidateCapabilities) &&
           candidateCapabilities.includes("project_text") &&
           Number(candidate.installed || 0) === 1 &&
           Number(candidate.server_running || 0) === 1 &&
@@ -1440,7 +1462,7 @@ async function architectCreateProject(request, env) {
     "WHERE n.status = 'online' AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes') " +
     "ORDER BY n.last_seen_at DESC, n.node_id ASC"
   ).all();
-  const onlineNodes = nodesQuery.results || [];
+  const onlineNodes = (nodesQuery.results || []).filter((node) => !isTestNodeRecord(node));
   if (!onlineNodes.length) throw new ApiError(409, "no_available_nodes");
   const nodes = onlineNodes.filter((node) => {
     const capabilities = safeJson(node.capabilities_json, []);
@@ -1585,10 +1607,12 @@ async function architectGetProject(request, env, projectId) {
     const capabilities = safeJson(node.capabilities_json, []);
     const hasProjectText = Array.isArray(capabilities) && capabilities.includes("project_text");
     const live = Number(node.recently_seen || 0) === 1;
+    const testNode = isTestNodeRecord(node);
     const installed = Number(node.lmstudio_installed || 0) === 1;
     const serverRunning = Number(node.lmstudio_server_running || 0) === 1;
     const loadedModel = typeof node.lmstudio_loaded_model === "string" && node.lmstudio_loaded_model.length > 0;
     const blockers = [];
+    if (testNode) blockers.push("test_node_excluded");
     if (!live) blockers.push("offline");
     if (!hasProjectText) blockers.push(
       node.agent_version !== LATEST_NODE_RELEASE.version ? "agent_outdated" : "project_text_missing"
@@ -1604,6 +1628,7 @@ async function architectGetProject(request, env, projectId) {
       hostname: node.hostname || null,
       agent_version: node.agent_version || null,
       live,
+      operational_state: testNode ? "test" : operationalNodeState(node),
       project_text: hasProjectText,
       lmstudio_installed: installed,
       lmstudio_server_running: serverRunning,
@@ -3074,17 +3099,55 @@ async function architectStorageUsage(request, env) {
   });
 }
 
-async function expireStaleNodeCommands(env, nodeId) {
+function parseControllerTimestamp(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const normalized = /[zZ]|[+-]\d\d:?\d\d$/.test(raw)
+    ? raw
+    : raw.replace(" ", "T") + "Z";
+  const parsed = Date.parse(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isTestNodeRecord(node) {
+  const identity = `${node?.hostname || ""} ${node?.node_id || ""}`;
+  return /(^|[^a-z0-9])(test|demo)([^a-z0-9]|$)/i.test(identity);
+}
+
+function operationalNodeState(node, now = Date.now()) {
+  if (!node || node.status === "revoked") return "revoked";
+  if (isTestNodeRecord(node)) return "test";
+  const seenAt = parseControllerTimestamp(node.last_seen_at);
+  if (seenAt === null) return "stale";
+  const ageMinutes = Math.max(0, (now - seenAt) / 60000);
+  if (ageMinutes >= NODE_ARCHIVE_AFTER_MINUTES) return "archived";
+  if (ageMinutes >= NODE_STALE_AFTER_MINUTES) return "stale";
+  if (node.status === "paused") return "paused";
+  if (node.status === "online" && ageMinutes <= NODE_LIVE_WINDOW_MINUTES) return "live";
+  return "offline";
+}
+
+async function expireStaleCommands(env, nodeId = null) {
   const cutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
-  const stale = await env.DB.prepare(`
-    SELECT command_id, command_type, status, created_at
-    FROM commands
-    WHERE node_id = ?
-      AND status IN ('pending', 'accepted')
-      AND datetime(created_at) < datetime(?)
-    ORDER BY created_at ASC
-    LIMIT 20
-  `).bind(nodeId, cutoff).all();
+  const stale = nodeId
+    ? await env.DB.prepare(`
+        SELECT command_id, node_id, command_type, status, created_at
+        FROM commands
+        WHERE node_id = ?
+          AND status IN ('pending', 'accepted')
+          AND datetime(created_at) < datetime(?)
+        ORDER BY created_at ASC
+        LIMIT 50
+      `).bind(nodeId, cutoff).all()
+    : await env.DB.prepare(`
+        SELECT command_id, node_id, command_type, status, created_at
+        FROM commands
+        WHERE status IN ('pending', 'accepted')
+          AND datetime(created_at) < datetime(?)
+        ORDER BY created_at ASC
+        LIMIT 250
+      `).bind(cutoff).all();
 
   const rows = stale.results || [];
   for (const row of rows) {
@@ -3092,10 +3155,9 @@ async function expireStaleNodeCommands(env, nodeId) {
       UPDATE commands
       SET status = 'failed', completed_at = CURRENT_TIMESTAMP
       WHERE command_id = ?
-        AND node_id = ?
         AND status IN ('pending', 'accepted')
         AND datetime(created_at) < datetime(?)
-    `).bind(row.command_id, nodeId, cutoff).run();
+    `).bind(row.command_id, cutoff).run();
     if ((update?.meta?.changes || 0) === 1) {
       await env.DB.prepare(`
         INSERT INTO audit_events (
@@ -3104,7 +3166,7 @@ async function expireStaleNodeCommands(env, nodeId) {
       `).bind(
         row.command_id,
         JSON.stringify({
-          node_id: nodeId,
+          node_id: row.node_id,
           command_type: row.command_type,
           previous_status: row.status,
           created_at: row.created_at,
@@ -3114,6 +3176,10 @@ async function expireStaleNodeCommands(env, nodeId) {
     }
   }
   return rows.length;
+}
+
+async function expireStaleNodeCommands(env, nodeId) {
+  return expireStaleCommands(env, nodeId);
 }
 
 async function listCommands(request, env, nodeId, url) {
@@ -3797,6 +3863,8 @@ async function architectEnterpriseOverview(request, env) {
 
   const nodes = [];
   let compliant = 0;
+  let complianceInScope = 0;
+  let excludedFromCompliance = 0;
   let enterpriseProbeReady = 0;
   let verifiedLatestInventories = 0;
   for (const node of nodesQuery.results || []) {
@@ -3811,13 +3879,20 @@ async function architectEnterpriseOverview(request, env) {
       );
       if (inventoryIntegrity) verifiedLatestInventories += 1;
     }
+    const operationalState = operationalNodeState(node);
+    const inComplianceScope = !["test", "stale", "archived"].includes(operationalState);
     const compliance = evaluateEnterpriseNode(
       node,
       inventory,
       policyState.policy,
       LATEST_NODE_RELEASE.version
     );
-    if (compliance.compliant) compliant += 1;
+    if (inComplianceScope) {
+      complianceInScope += 1;
+      if (compliance.compliant) compliant += 1;
+    } else {
+      excludedFromCompliance += 1;
+    }
     if (compliance.windows_enterprise?.available === true) enterpriseProbeReady += 1;
     const scope = scopes.get(node.node_id) || {};
     nodes.push({
@@ -3830,6 +3905,8 @@ async function architectEnterpriseOverview(request, env) {
       group_name: scope.group_name || null,
       latest_inventory_at: report?.created_at || null,
       latest_inventory_integrity: inventoryIntegrity,
+      operational_state: operationalState,
+      compliance_in_scope: inComplianceScope,
       compliance
     });
   }
@@ -3858,8 +3935,10 @@ async function architectEnterpriseOverview(request, env) {
     groups: groupsQuery.results || [],
     counts: {
       nodes: nodes.length,
+      active_nodes: complianceInScope,
+      excluded_nodes: excludedFromCompliance,
       compliant_nodes: compliant,
-      noncompliant_nodes: nodes.length - compliant,
+      noncompliant_nodes: Math.max(0, complianceInScope - compliant),
       windows_enterprise_probe_ready: enterpriseProbeReady
     },
     storage_integrity: {
@@ -4016,6 +4095,7 @@ async function architectOverview(request, env) {
     ensureNodeNetworkStorage(env),
     ensureNodeAiStorage(env)
   ]);
+  await expireStaleCommands(env);
 
   const [counts, nodesQuery, missionsQuery, commandsQuery] = await Promise.all([
     env.DB.prepare(
@@ -4082,12 +4162,15 @@ async function architectOverview(request, env) {
       "ORDER BY m.created_at DESC LIMIT 100"
     ).all(),
     env.DB.prepare(
-      "SELECT command_id, node_id, command_type, status, created_at, completed_at " +
-      "FROM commands WHERE status IN ('pending', 'accepted') " +
-      "OR command_id IN (" +
+      "SELECT c.command_id, c.node_id, c.command_type, c.status, c.created_at, c.completed_at, " +
+      "CASE WHEN EXISTS (SELECT 1 FROM audit_events AS ae " +
+      "WHERE ae.target_type = 'command' AND ae.target_id = c.command_id " +
+      "AND ae.action = 'command.expired') THEN 1 ELSE 0 END AS ttl_expired " +
+      "FROM commands AS c WHERE c.status IN ('pending', 'accepted') " +
+      "OR c.command_id IN (" +
       "SELECT command_id FROM commands WHERE status NOT IN ('pending', 'accepted') " +
       "ORDER BY created_at DESC LIMIT 50" +
-      ") ORDER BY created_at DESC"
+      ") ORDER BY c.created_at DESC"
     ).all()
   ]);
 
@@ -4116,8 +4199,11 @@ async function architectOverview(request, env) {
           candidate.node_id !== node.node_id && subnet24(candidate.lan_ipv4) === prefix
         )
       : null;
+    const operationalState = operationalNodeState(node);
     return {
       ...node,
+      operational_state: operationalState,
+      test_node: operationalState === "test",
       lmstudio_runtime: safeJson(node.lmstudio_runtime_json, {}),
       lmstudio_runtime_json: undefined,
       mac_addresses: Array.isArray(macAddresses) ? macAddresses : [],
@@ -4132,6 +4218,9 @@ async function architectOverview(request, env) {
     counts: {
       nodes: counts?.nodes || 0,
       online_nodes: counts?.online_nodes || 0,
+      operational_nodes: nodes.filter((node) => ["live","offline","paused"].includes(node.operational_state)).length,
+      stale_nodes: nodes.filter((node) => ["stale","archived"].includes(node.operational_state)).length,
+      test_nodes: nodes.filter((node) => node.operational_state === "test").length,
       missions: counts?.active_missions || 0,
       active_missions: counts?.active_missions || 0,
       reports: counts?.reports || 0,
@@ -4172,6 +4261,7 @@ async function architectRelease(request, env) {
 async function architectCreateCommand(request, env, nodeId) {
   const actor = await authenticateArchitect(request, env);
   await ensureCommandStorage(env);
+  await expireStaleNodeCommands(env, nodeId);
   const bodyText = await readBodyText(request, 8 * 1024);
   const body = parseJsonObject(bodyText);
   const commandType = requireString(body.command_type, "command_type", 32);
