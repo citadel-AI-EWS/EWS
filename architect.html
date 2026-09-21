@@ -388,6 +388,13 @@
   </div>
 
   <script>
+    async function openCitadelView(route){
+      const response=await fetch(route,{cache:"no-store"});
+      if(!response.ok)throw new Error("navigation_http_"+response.status);
+      const html=await response.text();
+      history.replaceState({citadelView:route},"","/");
+      document.open();document.write(html);document.close();
+    }
     if(location.pathname!=="/"||location.search||location.hash)history.replaceState({citadelView:"architect"},"","/");
     const I18N = {
       ru:{home:"Главная",pageTitle:"LIVE OPERATIONS",pageLead:"Живой центр управления · показываются только реальные данные Controller.",loginTitle:"Защищённый вход",tokenLabel:"Секрет архитектора",loginButton:"Войти",loginHint:"Секрет хранится только до закрытия этой вкладки.",refresh:"Обновить",logout:"Выйти",opsSub:"Реальные heartbeat, CPU/RAM, presence и состояние Controller. Демонстрационные значения запрещены.",registeredNodes:"зарегистрировано нод",liveNow:"живых сейчас",activeMissions:"активных миссий сейчас",fullReports:"полных отчётов",unhealthy:"нездоровых / недоступных",projects:"проектов",nodes:"Ноды",nodeControl:"Управление узлом",node:"Нода",showIp:"Показать IP",healthCheck:"Проверить здоровье",pause:"Поставить на паузу",resume:"Возобновить",restartAgent:"Перезапустить агент",stopAgent:"Остановить агент",rollback:"Откатить последнее обновление",reboot:"Перезагрузить ПК",shutdown:"Выключить ПК",disconnect:"Отозвать и удалить узел",sshTitle:"SSH / Zero Trust",projectTitleHead:"Python / Создать проект",projectName:"Название проекта",task:"Задание",checkText:"1. Проверить текст",createProject:"2. Создать проект",missionTitleHead:"Создать диагностическую миссию",missionType:"Тип задачи",systemInventory:"Проверка состояния компьютера",name:"Название",whatCheck:"Что проверить",expires:"Срок действия",createMission:"Создать и назначить миссию",commands:"Команды управления",missionsResults:"Действующие миссии",reports:"Отчёты узлов",reportContent:"Содержимое диагностического отчёта",close:"Закрыть",briefTitle:"Краткая оперативная сводка",briefSub:"Только проблемы, требующие внимания прямо сейчас.",briefClose:"Закрыть и перейти в Live Operations"},
@@ -1327,7 +1334,10 @@
           prepare.type = "button";
           prepare.style.marginTop = "8px";
           prepare.addEventListener("click", () => {
-            location.href = `/hub/?lmnode=${encodeURIComponent(worker.node_id)}`;
+            sessionStorage.setItem("citadel-lmnode-request", worker.node_id);
+            openCitadelView("/hub/").catch(() => {
+              location.href = `/hub/?lmnode=${encodeURIComponent(worker.node_id)}`;
+            });
           });
         }
         projectWorkerReadiness.appendChild(row);
