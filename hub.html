@@ -49,7 +49,7 @@
     .panelToggle{width:32px!important;min-width:32px;height:32px;margin:0!important;padding:0!important;border:1px solid var(--line2)!important;border-radius:8px!important;background:#0d1824!important;color:#c9e3ef!important;font-size:21px!important;line-height:1!important}.panelCollapsedChild{display:none!important}.panelHead h2{display:flex;align-items:center;gap:9px}
     .hidden,[hidden]{display:none!important}.lm-float{position:fixed;right:18px;bottom:58px;z-index:1200;width:min(460px,calc(100vw - 24px));padding:16px;border:1px solid #3a5684;border-radius:18px;background:linear-gradient(155deg,#111d32,#08111f);box-shadow:0 24px 70px #000b}.lm-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.lm-head button{width:34px!important;height:34px;margin:0!important;padding:0!important;border-radius:9px}.lm-status{margin-top:10px;padding:10px;border-radius:10px;background:#0a1425;font-size:12px;color:#a9bbd6;line-height:1.5;white-space:pre-wrap}.lm-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}.lm-row button{margin-top:9px}.lm-float input,.lm-float select,.lm-float textarea{width:100%;margin-top:7px;border:1px solid #263c5c;border-radius:10px;background:#07101d;color:#d7e6ed;padding:9px}.lm-float textarea{min-height:110px;resize:vertical}.lm-link{display:inline-block;margin-top:8px;color:#8ebdff;font-size:12px}.lm-node{font-weight:850;margin-top:5px}.lm-progress{margin-top:10px}.lm-progress-track{height:8px;background:#07101d;border:1px solid #1e3550;border-radius:999px;overflow:hidden}.lm-progress-track i{display:block;height:100%;width:0;background:linear-gradient(90deg,#36d399,#5fa8ff);transition:width .3s}.lm-progress-text{margin-top:5px;color:#8ea5c5;font-size:11px;white-space:pre-wrap}.hybrid-float{right:496px}.hybrid-modes{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}.hybrid-modes button.active{outline:2px solid #5aa7ff}.hybrid-answer{max-height:280px;overflow:auto;white-space:pre-wrap}.lm-loaded{color:#65e4a1}.lm-pending{color:#ffc56a}@media(max-width:980px){.hybrid-float{right:18px;bottom:590px}}@media(max-width:560px){.lm-float{right:12px;bottom:52px}.hybrid-float{right:12px;bottom:52px}.lm-row{grid-template-columns:1fr}}
     .site-clock{position:fixed;right:12px;bottom:10px;z-index:45;padding:7px 10px;border:1px solid var(--line2);border-radius:10px;background:#07141bea;color:#a9c3cc;font:12px/1.2 ui-monospace,SFMono-Regular,monospace;box-shadow:var(--shadow)}[dir="rtl"] .site-clock{right:auto;left:12px}.footer{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:20px;color:#5f7b86;font-size:11px}.footer a{color:#83dfff;text-decoration:none}.toast{position:fixed;right:22px;bottom:22px;z-index:50;min-width:260px;max-width:420px;border:1px solid var(--line2);background:#07141bea;border-radius:14px;padding:12px 14px;box-shadow:var(--shadow);transform:translateY(20px);opacity:0;pointer-events:none;transition:.2s ease}.toast.show{transform:none;opacity:1}.toast.ok{border-color:#27634c}.toast.bad{border-color:#6b3038}.toast strong{display:block;font-size:12px}.toast span{display:block;font-size:11px;color:var(--muted);margin-top:4px}
-    @media(max-width:1100px){.metrics{grid-template-columns:repeat(3,1fr)}.layout,.hero{grid-template-columns:1fr}.topbar{position:relative;top:0}}@media(max-width:720px){.shell{width:min(100% - 18px,1480px);padding-top:9px}.topbar{grid-template-columns:1fr}.toptools{justify-content:flex-start}.heroCard{padding:20px}.metrics{grid-template-columns:1fr 1fr}.toolbar{grid-template-columns:1fr}.actionsTop{justify-content:flex-start}.grid{grid-template-columns:1fr}.sshGrid{grid-template-columns:1fr}.sshGrid .field:first-child{grid-column:auto}.nodeMeta{grid-template-columns:86px 1fr}.footer{align-items:flex-start;flex-direction:column}}
+    @media(max-width:1100px){.metrics{grid-template-columns:repeat(3,1fr)}.layout,.hero{grid-template-columns:1fr}.topbar{position:relative;top:0}}@media(max-width:980px),(max-height:620px){.site-clock{position:static;margin:12px 12px 10px auto;width:max-content;max-width:calc(100% - 24px)}[dir="rtl"] .site-clock{margin-left:12px;margin-right:auto}.toast{bottom:14px}}@media(max-width:720px){.shell{width:min(100% - 18px,1480px);padding-top:9px}.topbar{grid-template-columns:1fr}.toptools{justify-content:flex-start}.heroCard{padding:20px}.metrics{grid-template-columns:1fr 1fr}.toolbar{grid-template-columns:1fr}.actionsTop{justify-content:flex-start}.grid{grid-template-columns:1fr}.sshGrid{grid-template-columns:1fr}.sshGrid .field:first-child{grid-column:auto}.nodeMeta{grid-template-columns:86px 1fr}.footer{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
 <body>
@@ -324,8 +324,11 @@
     function hybridNode(){
       return (lastOverview?.nodes||[]).find(n=>n.node_id===hybridNodeId)||null;
     }
+    function nodeHasPendingCommand(nodeId){
+      return (lastOverview?.commands||[]).some(c=>c.node_id===nodeId&&["pending","accepted"].includes(c.status));
+    }
     function lmstudioPending(nodeId){
-      return (lastOverview?.commands||[]).some(c=>c.node_id===nodeId&&["pending","accepted"].includes(c.status)&&["lmstudio_install","lmstudio_probe","lmstudio_model_get","lmstudio_model_load","hybrid_query"].includes(String(c.command_type||"")));
+      return nodeHasPendingCommand(nodeId);
     }
     function applyAiSnapshot(node,data){
       if(!node||!data?.ai)return;
@@ -408,6 +411,9 @@
       }
       const labels={lmstudio_install:"install",lmstudio_probe:"probe",lmstudio_model_get:"download model",lmstudio_model_load:"load model"};
       const label=labels[type]||type;
+      if(nodeHasPendingCommand(node.node_id)){
+        return toast("LM Studio","У этой ноды уже выполняется команда. Дождитесь её завершения и повторите.","bad");
+      }
       if(type!=="lmstudio_probe"&&!confirm("LM Studio "+label+" → "+(node.hostname||node.node_id)+"?"))return;
       await api("/api/v1/architect/nodes/"+encodeURIComponent(node.node_id)+"/commands",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
       toast("LM Studio",label+" queued → "+(node.hostname||node.node_id));
