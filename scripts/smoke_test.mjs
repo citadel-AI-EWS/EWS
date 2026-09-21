@@ -11,7 +11,10 @@ async function getJson(path, attempt) {
     headers: { accept: "application/json" },
     cache: "no-store"
   });
-  if (!response.ok) throw new Error(`${path} HTTP ${response.status}`);
+  if (!response.ok) {
+    const body = (await response.text()).slice(0, 500);
+    throw new Error(`${path} HTTP ${response.status} · ${body}`);
+  }
   return response.json();
 }
 
