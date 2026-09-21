@@ -232,7 +232,7 @@ assert.match(index, /mission_type, payload_json/);
 assert.match(index, /'project_text'/);
 assert.match(index, /waiting_for_lmstudio_project_worker/);
 assert.match(index, /architect_python/);
-assert.match(index, /projectExecutionMode/);
+assert.match(architect, /projectExecutionMode/);
 assert.match(index, /project_python/);
 assert.match(index, /waiting_for_python_project_worker/);
 assert.match(index, /not_applicable_python/);
