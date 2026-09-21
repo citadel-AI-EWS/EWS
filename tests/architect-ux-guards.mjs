@@ -307,6 +307,15 @@ assert.match(index, /hub_d1_daily_write_limit_exceeded/);
 assert.match(index, /hub_d1_database_size_exceeded/);
 assert.match(index, /hub_d1_overloaded/);
 assert.match(index, /function operationalNodeState/);
+{
+  const start = index.indexOf("async function architectOverview");
+  const end = index.indexOf("async function publicHubNodes", start);
+  assert.ok(start >= 0 && end > start, "architectOverview function missing");
+  const overviewBlock = index.slice(start, end);
+  assert.doesNotMatch(overviewBlock, /backfillLegacyReports\(env\)/);
+}
+assert.match(hub, /setInterval\(refresh,60000\)/);
+assert.match(architect, /\}, 60000\);/);
 assert.match(index, /function isTestNodeRecord/);
 assert.match(index, /async function expireStaleCommands/);
 assert.match(index, /await expireStaleCommands\(env\)/);
