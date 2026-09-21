@@ -60,7 +60,7 @@ assert.equal(captured.body.tool_choice, "required");
 assert.deepEqual(captured.body.plugins, [{ id: "fusion", preset: "general-high" }]);
 assert.equal(captured.body.provider.zdr, true);
 assert.equal(captured.body.provider.data_collection, "deny");
-assert.equal(captured.options.headers.authorization, "Bearer test-key");
+assert.equal(captured.options.headers.authorization, "Bearer test-key-1234567890");
 
 const index = fs.readFileSync("src/index.js", "utf8");
 assert.ok(index.includes("finalizeProjectAnswer"), "Controller quality-gate finalizer missing");
