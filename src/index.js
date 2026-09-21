@@ -4288,23 +4288,41 @@ async function architectOverview(request, env) {
   });
 }
 
+function publicHubQueryErrorCode(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  if (message.includes("no such table") && message.includes("nodes")) return "hub_nodes_table_missing";
+  if (message.includes("no such column")) return "hub_nodes_schema_mismatch";
+  if (message.includes("d1")) return "hub_nodes_d1_error";
+  return "hub_nodes_query_failed";
+}
+
 async function publicHubNodes(env) {
-  // Keep the public Hub on the oldest stable schema surface: the core nodes table only.
-  // Numbering is presentation-only here; no optional tables, schema inspection or writes.
-  const query = await env.DB.prepare(
-    "SELECT node_id, agent_version, status, enrolled_at, last_seen_at " +
-    "FROM nodes WHERE status != 'revoked' ORDER BY enrolled_at ASC, node_id ASC LIMIT 500"
-  ).all();
+  // Read the complete row so the public Hub does not depend on a particular
+  // historical column projection. Only explicitly allowlisted fields are returned.
+  let query;
+  try {
+    query = await env.DB.prepare("SELECT * FROM nodes LIMIT 500").all();
+  } catch (error) {
+    console.error("Public Hub nodes query failed", error);
+    throw new ApiError(503, publicHubQueryErrorCode(error));
+  }
+  const rows = (query.results || [])
+    .filter((node) => String(node?.status || "").toLowerCase() !== "revoked")
+    .sort((left, right) => {
+      const a = String(left?.enrolled_at || "") + "\n" + String(left?.node_id || "");
+      const b = String(right?.enrolled_at || "") + "\n" + String(right?.node_id || "");
+      return a.localeCompare(b);
+    });
   return json({
     ok: true,
     refreshed_at: new Date().toISOString(),
-    nodes: (query.results || []).map((node, index) => ({
+    nodes: rows.map((node, index) => ({
       node_number: index + 1,
       display_name: `CITADEL Node ${index + 1}`,
-      agent_version: node.agent_version,
-      status: node.status,
-      enrolled_at: node.enrolled_at,
-      last_seen_at: node.last_seen_at
+      agent_version: typeof node.agent_version === "string" ? node.agent_version : null,
+      status: typeof node.status === "string" ? node.status : "unknown",
+      enrolled_at: typeof node.enrolled_at === "string" ? node.enrolled_at : null,
+      last_seen_at: typeof node.last_seen_at === "string" ? node.last_seen_at : null
     }))
   });
 }
