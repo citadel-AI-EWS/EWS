@@ -49,7 +49,7 @@ const healthyWindowsInventory = {
 };
 const healthyNode = {
   os_name: "Windows",
-  agent_version: "0.3.14",
+  agent_version: "0.3.15",
   cpu_percent: 21,
   memory_percent: 44,
   last_seen_at: new Date().toISOString()
@@ -58,7 +58,7 @@ const healthy = evaluateEnterpriseNode(
   healthyNode,
   healthyWindowsInventory,
   { ...DEFAULT_ENTERPRISE_POLICY, require_no_pending_reboot: true },
-  "0.3.14"
+  "0.3.15"
 );
 assert.equal(healthy.compliant, true);
 assert.equal(healthy.failed_count, 0);
@@ -81,7 +81,7 @@ const unhealthy = evaluateEnterpriseNode(
     }
   },
   { ...DEFAULT_ENTERPRISE_POLICY, require_no_pending_reboot: true },
-  "0.3.14"
+  "0.3.15"
 );
 assert.equal(unhealthy.compliant, false);
 assert.ok(unhealthy.failed_count >= 5);
@@ -113,7 +113,7 @@ const microsoftPolicy = evaluateEnterpriseNode(
     require_hyperv: true,
     require_managed_service_account: true
   },
-  "0.3.14"
+  "0.3.15"
 );
 for (const key of ["domain_join", "group_policy", "intune_extension", "hyper_v", "managed_service_account"]) {
   assert.ok(microsoftPolicy.checks.some((check) => check.key === key && !check.ok), key);
