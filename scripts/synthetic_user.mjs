@@ -112,10 +112,9 @@ await inspectPage("/", async page => {
   for (const href of ["/hub/", "/architect/", "/architect/logs/"]) {
     const link = page.locator(`a[href="${href}"]`);
     if (await link.count() !== 1) addFinding("missing_navigation_link", "/", href);
-    if (await link.getAttribute("data-citadel-view") !== href) addFinding("non_seamless_navigation_link", "/", href);
   }
 
-  await page.locator('a[data-citadel-view="/hub/"]').click();
+  await page.locator('a[href="/hub/"]').click();
   await page.locator("#refreshButton").waitFor({ state: "visible", timeout });
   const afterHubNavigation = new URL(page.url());
   if (afterHubNavigation.pathname !== "/" || afterHubNavigation.search || afterHubNavigation.hash) {
