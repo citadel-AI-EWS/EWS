@@ -292,7 +292,7 @@ assert.match(architect, /history\.replaceState\(\{citadelView:"architect"\},"","
 assert.match(logs, /history\.replaceState\(\{citadelView:"logs"\},"","\/"\)/);
 assert.match(home, /href="\/hub\/" /);
 assert.match(home, /href="\/architect\/" /);
-assert.match(home, /href="\/architect\/logs\/" /);
+assert.doesNotMatch(home, /href="\/architect\/logs\/" /);
 assert.doesNotMatch(home, /document\.write\(/);
 assert.doesNotMatch(hub, /document\.write\(/);
 assert.doesNotMatch(architect, /document\.write\(/);
@@ -307,13 +307,26 @@ assert.match(architect, /sessionStorage\.setItem\("citadel-lmnode-request"/);
     /ensureAutoEnrollmentStorage/,
     "public Hub GET path must remain read-only and must not run schema DDL"
   );
-  assert.match(publicHubBlock, /FROM node_numbers AS nn JOIN nodes AS n/);
+  assert.match(publicHubBlock, /SELECT \* FROM nodes LIMIT 500/);
+  assert.doesNotMatch(publicHubBlock, /node_numbers/);
+  assert.doesNotMatch(publicHubBlock, /sqlite_master/);
 }
 assert.match(autoEnrollmentMigration, /CREATE TABLE IF NOT EXISTS node_numbers/);
 assert.match(autoEnrollmentMigration, /CREATE TABLE IF NOT EXISTS auto_enrollment_windows/);
 assert.doesNotMatch(deployWorkflow, /wrangler d1 execute/);
-assert.match(index, /sqlite_master WHERE type = 'table' AND name = 'node_numbers'/);
-assert.match(index, /numbering_ready/);
+assert.match(index, /function publicHubQueryErrorCode/);
+assert.match(index, /hub_d1_daily_read_limit_exceeded/);
+assert.match(index, /hub_d1_daily_write_limit_exceeded/);
+assert.match(index, /hub_d1_overloaded/);
+{
+  const start = index.indexOf("async function architectOverview");
+  const end = index.indexOf("function publicHubQueryErrorCode", start);
+  assert.ok(start >= 0 && end > start, "architectOverview function missing");
+  const overviewBlock = index.slice(start, end);
+  assert.doesNotMatch(overviewBlock, /backfillLegacyReports\(env\)/);
+}
+assert.match(hub, /setInterval\(refresh,60000\)/);
+assert.match(architect, /\}, 60000\);/);
 assert.match(index, /function operationalNodeState/);
 assert.match(index, /function isTestNodeRecord/);
 assert.match(index, /async function expireStaleCommands/);
