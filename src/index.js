@@ -39,12 +39,12 @@ const LATEST_NODE_RELEASE = Object.freeze({
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "4461906dc1c1c4cd47c60a22c0fd2904ed1c6f8303ac0e88fdd9f9578701eb5a"
+      sha256: "f7176dfbecef7b43358c2f1adf0f712c1b6fc3d02d3ad8af4385c9e016c467ba"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "43d6d8492d43e3434c7ce90c946804c7cc1c05344ae3aaf27c7ed8220d34e803"
+      sha256: "9136adbf00a332b55c3f74e17f350d160200c4c49fa81845c609054b0d583c49"
     }
   ]
 });
