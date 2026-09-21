@@ -65,6 +65,8 @@ for required in (
     "panelToggle",
     'sessionStorage.getItem("citadel-architect-token")',
     'new URLSearchParams(location.search).get("lmnode")',
+    "nodeHasPendingCommand",
+    "@media(max-width:980px),(max-height:620px)",
 ):
     if required not in hub:
         raise SystemExit(f"required real Hub capability missing: {required}")
