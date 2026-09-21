@@ -267,6 +267,23 @@ assert.match(hub, /id="lmstudioPurgeData"/);
 assert.match(hub, /REMOVE_LMSTUDIO/);
 assert.match(hub, /Python \/ AI executor/);
 assert.match(hub, /data-hybrid-mode="python"/);
+assert.match(architect, /\.section-collapsed-child\{display:none!important\}/);
+assert.match(architect, /id="projectPreflight"/);
+assert.match(architect, /id="projectTaskLogs"/);
+assert.match(architect, /Логи этого задания/);
+assert.doesNotMatch(home, /href="\/architect\/logs\/" /);
+assert.doesNotMatch(hub, /href="\/architect\/logs\/" /);
+assert.match(index, /function projectTextPreflight/);
+assert.match(index, /text_preflight/);
+assert.match(index, /task_logs: taskLogs/);
+assert.match(agent, /python_mini_agent_tasks/);
+assert.match(agent, /ThreadPoolExecutor/);
+assert.match(agent, /mini_agent_count/);
+assert.match(agent, /current_hash == item\["sha256"\]/);
+assert.match(agent, /agent_update_noop/);
+assert.match(agent, /CITADEL_LMSTUDIO_HOME/);
+assert.match(index, /openrouter:/);
+
 for (const [name, page] of [["home", home], ["hub", hub], ["architect", architect], ["logs", logs]]) {
   assert.match(page, /id="homeButton"/, `${name} view must expose a Home button`);
 }
@@ -275,7 +292,7 @@ assert.match(architect, /history\.replaceState\(\{citadelView:"architect"\},"","
 assert.match(logs, /history\.replaceState\(\{citadelView:"logs"\},"","\/"\)/);
 assert.match(home, /href="\/hub\/" /);
 assert.match(home, /href="\/architect\/" /);
-assert.match(home, /href="\/architect\/logs\/" /);
+assert.doesNotMatch(home, /href="\/architect\/logs\/" /);
 assert.doesNotMatch(home, /document\.write\(/);
 assert.doesNotMatch(hub, /document\.write\(/);
 assert.doesNotMatch(architect, /document\.write\(/);
@@ -298,24 +315,19 @@ assert.match(autoEnrollmentMigration, /CREATE TABLE IF NOT EXISTS node_numbers/)
 assert.match(autoEnrollmentMigration, /CREATE TABLE IF NOT EXISTS auto_enrollment_windows/);
 assert.doesNotMatch(deployWorkflow, /wrangler d1 execute/);
 assert.match(index, /function publicHubQueryErrorCode/);
-assert.match(index, /hub_nodes_table_missing/);
-assert.match(index, /hub_nodes_schema_mismatch/);
-assert.match(index, /hub_nodes_d1_error/);
-assert.match(index, /hub_nodes_query_failed/);
 assert.match(index, /hub_d1_daily_read_limit_exceeded/);
 assert.match(index, /hub_d1_daily_write_limit_exceeded/);
-assert.match(index, /hub_d1_database_size_exceeded/);
 assert.match(index, /hub_d1_overloaded/);
-assert.match(index, /function operationalNodeState/);
 {
   const start = index.indexOf("async function architectOverview");
-  const end = index.indexOf("async function publicHubNodes", start);
+  const end = index.indexOf("function publicHubQueryErrorCode", start);
   assert.ok(start >= 0 && end > start, "architectOverview function missing");
   const overviewBlock = index.slice(start, end);
   assert.doesNotMatch(overviewBlock, /backfillLegacyReports\(env\)/);
 }
 assert.match(hub, /setInterval\(refresh,60000\)/);
 assert.match(architect, /\}, 60000\);/);
+assert.match(index, /function operationalNodeState/);
 assert.match(index, /function isTestNodeRecord/);
 assert.match(index, /async function expireStaleCommands/);
 assert.match(index, /await expireStaleCommands\(env\)/);

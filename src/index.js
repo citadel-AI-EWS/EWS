@@ -34,17 +34,17 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.14",
+  version: "0.3.15",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "f7176dfbecef7b43358c2f1adf0f712c1b6fc3d02d3ad8af4385c9e016c467ba"
+      sha256: "a2e2b59aac7cde207cfc58ecee6b109150e3a2d49bf52003f3ceb5df710f631a"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "9136adbf00a332b55c3f74e17f350d160200c4c49fa81845c609054b0d583c49"
+      sha256: "3b35861efd6912225d2da9e422f668ddc577d62314208c0e80465e3a170375f9"
     }
   ]
 });
@@ -55,12 +55,12 @@ const LMSTUDIO_INTEGRATION = Object.freeze({
   windows_asset: Object.freeze({
     path: "install_llmstudio_headless.ps1",
     url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/install_llmstudio_headless.ps1",
-    sha256: "d9a96026bea2e7729f0b086d8d668c3f4f93b7725b5e0af3f2936b68f89475cf"
+    sha256: "0d24fb0ce1d7ba40539b98c30875f2244d93b328dc32358bcf880d4c8cfd78fc"
   }),
   linux_asset: Object.freeze({
     path: "install_llmstudio_headless.sh",
     url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/install_llmstudio_headless.sh",
-    sha256: "15dcfd76d3c929ec2ca459a19879d565a9ec6483c33fcf9b3d8ba5a8ef145d39"
+    sha256: "3d112dfa579562953919cfeccb6203d86333a99a473aaf4b76bdd2c39b70f67b"
   }),
   model_presets: Object.freeze([
     { id: "ibm/granite-4-micro", label: "IBM Granite 4 Micro" },
@@ -1379,6 +1379,42 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
   return created;
 }
 
+function projectTextPreflight(taskText) {
+  const text = String(taskText || "");
+  const spellingWarnings = [];
+  const logicWarnings = [];
+  const repeatedWord = /\b([\p{L}\p{N}_-]{2,})\s+\1\b/giu.exec(text);
+  if (repeatedWord) spellingWarnings.push("repeated_word:" + repeatedWord[1].slice(0, 40));
+  if (/\s{3,}/u.test(text)) spellingWarnings.push("excessive_whitespace");
+  if (/[!?.,]{4,}/u.test(text)) spellingWarnings.push("repeated_punctuation");
+  if (/([\p{L}])\1{5,}/giu.test(text)) spellingWarnings.push("repeated_character_sequence");
+  const pairs = [["(", ")"], ["[", "]"], ["{", "}"]];
+  for (const [open, close] of pairs) {
+    const opens = [...text].filter((ch) => ch === open).length;
+    const closes = [...text].filter((ch) => ch === close).length;
+    if (opens !== closes) spellingWarnings.push("unbalanced_delimiter:" + open + close);
+  }
+  const lowered = text.toLocaleLowerCase();
+  const aiRequired = /(используй|включи|use|enable)\s+(ии|ai|lm\s*studio|llm)/iu.test(lowered);
+  const aiForbidden = /(без|не\s+используй|no|without|disable)\s+(ии|ai|lm\s*studio|llm)/iu.test(lowered);
+  if (aiRequired && aiForbidden) logicWarnings.push("conflicting_ai_mode_instructions");
+  const pythonRequired = /(только\s+python|python\s+only|без\s+ии)/iu.test(lowered);
+  const lmRequired = /(обязательно\s+lm|use\s+lm\s*studio|используй\s+lm)/iu.test(lowered);
+  if (pythonRequired && lmRequired) logicWarnings.push("conflicting_python_and_lmstudio_modes");
+  const nonEmptyLines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (nonEmptyLines.length > 1 && new Set(nonEmptyLines.map((line) => line.toLocaleLowerCase())).size < nonEmptyLines.length) {
+    logicWarnings.push("duplicate_instruction_lines");
+  }
+  return {
+    passed: true,
+    engine: "deterministic_preflight",
+    spelling_warnings: spellingWarnings.slice(0, 12),
+    logic_warnings: logicWarnings.slice(0, 12),
+    warning_count: Math.min(24, spellingWarnings.length + logicWarnings.length),
+    detail: spellingWarnings.length || logicWarnings.length ? "review_warnings_before_execution" : "no_structural_text_warnings"
+  };
+}
+
 async function evaluateProjectChecks(env, sourceType, title, taskText) {
   await ensureProjectStorage(env);
   const sourceAllowed = ["architect_manual", "architect_python"].includes(sourceType);
@@ -1390,8 +1426,10 @@ async function evaluateProjectChecks(env, sourceType, title, taskText) {
     "WHERE task_sha256 = ? AND source_type = ? AND status IN ('planned','running') ORDER BY created_at DESC LIMIT 1"
   ).bind(taskSha256, sourceType).first();
   const safety = projectSafetyClassification(taskText);
+  const textPreflight = projectTextPreflight(taskText);
   return {
     task_sha256: taskSha256,
+    text_preflight: textPreflight,
     checks: {
       source_allowlisting: {
         passed: sourceAllowed,
@@ -1680,7 +1718,7 @@ async function architectGetProject(request, env, projectId) {
     }
   }
 
-  const [workQuery, specializationQuery] = await Promise.all([
+  const [workQuery, specializationQuery, taskLogQuery] = await Promise.all([
     env.DB.prepare(`
       SELECT
         w.work_item_id, w.sequence_no, w.role_name, w.task_text, w.status,
@@ -1711,8 +1749,25 @@ async function architectGetProject(request, env, projectId) {
       FROM project_specializations
       WHERE project_id = ?
       ORDER BY created_at ASC, role_name ASC
-    `).bind(projectId).all()
+    `).bind(projectId).all(),
+    env.DB.prepare(`
+      SELECT event_id, actor_type, action, target_type, target_id, details_json, created_at
+      FROM audit_events
+      WHERE target_id = ? OR instr(details_json, ?) > 0
+      ORDER BY event_id ASC
+      LIMIT 250
+    `).bind(projectId, projectId).all()
   ]);
+
+  const taskLogs = (taskLogQuery.results || []).map((event) => ({
+    event_id: event.event_id,
+    actor_type: event.actor_type,
+    action: event.action,
+    target_type: event.target_type,
+    target_id: event.target_id,
+    details: safeJson(event.details_json, {}),
+    created_at: event.created_at
+  }));
 
   const workItems = (workQuery.results || []).map((item) => ({
     ...item,
@@ -1821,6 +1876,8 @@ async function architectGetProject(request, env, projectId) {
                   ? "all_project_work_items_completed"
                   : executionState
       },
+      text_preflight: projectTextPreflight(project.task_text),
+      task_logs: taskLogs,
       final_report: {
         ready: finalReportReady,
         sections: finalSections,
@@ -4300,8 +4357,6 @@ function publicHubQueryErrorCode(error) {
 }
 
 async function publicHubNodes(env) {
-  // Read the complete row so the public Hub does not depend on a particular
-  // historical column projection. Only explicitly allowlisted fields are returned.
   let query;
   try {
     query = await env.DB.prepare("SELECT * FROM nodes LIMIT 500").all();
@@ -4332,7 +4387,18 @@ async function publicHubNodes(env) {
 
 async function architectRelease(request, env) {
   await authenticateArchitect(request, env);
-  return json({ ok: true, release: LATEST_NODE_RELEASE, lmstudio: LMSTUDIO_INTEGRATION });
+  const quality = openRouterQualityConfig(env);
+  return json({
+    ok: true,
+    release: LATEST_NODE_RELEASE,
+    lmstudio: LMSTUDIO_INTEGRATION,
+    openrouter: {
+      configured: quality.configured,
+      model: quality.model,
+      fusion_preset: quality.fusionPreset,
+      timeout_ms: quality.timeoutMs
+    }
+  });
 }
 
 async function architectCreateCommand(request, env, nodeId) {

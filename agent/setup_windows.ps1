@@ -14,9 +14,9 @@ Set-StrictMode -Version Latest
 $ServiceName = "CitadelEWSNode"
 $ServiceDisplayName = "CITADEL EWS Node"
 $PythonWingetId = "Python.Python.3.14"
-$ReleaseVersion = "0.3.14"
-$ExpectedV1Sha256 = "f7176dfbecef7b43358c2f1adf0f712c1b6fc3d02d3ad8af4385c9e016c467ba"
-$ExpectedV2Sha256 = "9136adbf00a332b55c3f74e17f350d160200c4c49fa81845c609054b0d583c49"
+$ReleaseVersion = "0.3.15"
+$ExpectedV1Sha256 = "a2e2b59aac7cde207cfc58ecee6b109150e3a2d49bf52003f3ceb5df710f631a"
+$ExpectedV2Sha256 = "3b35861efd6912225d2da9e422f668ddc577d62314208c0e80465e3a170375f9"
 $ExpectedServiceHostSha256 = "892c5f388f9b54c0bcbb2956381dd601dfa8065b0e9258ba673e9505c2f81cad"
 $ExpectedServiceHelperSha256 = "e0e66f5a27018a283c65d42e6ead93e382706a163da682e6bd49f2b1fb9b0f99"
 $ExpectedEnterpriseProbeSha256 = "0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
@@ -328,6 +328,9 @@ $ConfigJson = @{
   request_timeout_seconds = 30
   max_cpu_percent = 90
   max_memory_percent = 90
+  prevent_automatic_sleep = $true
+  network_recovery_enabled = $true
+  allowed_wifi_profiles = @()
   controller_public_x = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 } | ConvertTo-Json
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
