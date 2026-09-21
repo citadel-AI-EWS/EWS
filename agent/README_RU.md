@@ -1,5 +1,14 @@
 # CITADEL/EWS Python Node v1
 
+## v0.3.15 — mini-workers, delta update и стабильный llmster HOME
+
+- Python-only проект координирует до 8 локальных mini-workers (до 4 одновременно) и не вызывает LLM.
+- Mini-workers выполняют только bounded/deterministic операции существующего Python-only режима; произвольный remote Python/exec по-прежнему запрещён.
+- Обновление агента сравнивает локальный SHA-256 с release manifest и скачивает/заменяет только изменившиеся файлы.
+- Перед delta-update сохраняется полный core backup для health-check/rollback.
+- LM Studio/llmster получает стабильный CITADEL-managed HOME в state-каталоге, поэтому Windows LocalService и последующие команды видят один и тот же runtime/models.
+- Официальный llmster installer по-прежнему проверяется CITADEL helper hash и запускается без shell.
+
 ## v0.3.14 — Python-only execution и управление LM Studio
 
 - Architect и Hub могут отправлять задачи в режим `Python only`: агент выполняет только детерминированные операции и не вызывает LM Studio, LLM или OpenRouter.
