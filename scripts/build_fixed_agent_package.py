@@ -327,6 +327,7 @@ def build() -> Path:
         "windows_service.ps1",
         "windows_enterprise_probe.ps1",
         "requirements.txt",
+        "requirements-win32.txt",
     ):
         shutil.copy2(ROOT / "agent" / name, STAGE / name)
 
