@@ -379,11 +379,58 @@ async function ensureSessionStorage(env) {
 
 async function ensureCommandStorage(env) {
   if (!commandIndexPromise) {
-    commandIndexPromise = env.DB.prepare(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_one_active_per_node
-      ON commands(node_id)
-      WHERE status IN ('pending', 'accepted')
-    `).run().catch((error) => {
+    commandIndexPromise = (async () => {
+      const createIndex = () => env.DB.prepare(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_one_active_per_node
+        ON commands(node_id)
+        WHERE status IN ('pending', 'accepted')
+      `).run();
+
+      try {
+        await createIndex();
+      } catch (error) {
+        const message = String(error).toLowerCase();
+        if (!message.includes("unique") && !message.includes("commands.node_id")) {
+          throw error;
+        }
+
+        // Older deployments could contain more than one active command for the
+        // same node before this invariant existed. Keep the newest active
+        // command and mark older duplicates failed so the queue can recover
+        // automatically instead of returning an opaque internal_error forever.
+        await env.DB.prepare(`
+          UPDATE commands
+          SET status = 'failed',
+              completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)
+          WHERE status IN ('pending', 'accepted')
+            AND EXISTS (
+              SELECT 1
+              FROM commands AS newer
+              WHERE newer.node_id = commands.node_id
+                AND newer.status IN ('pending', 'accepted')
+                AND (
+                  datetime(newer.created_at) > datetime(commands.created_at)
+                  OR (
+                    newer.created_at = commands.created_at
+                    AND newer.command_id > commands.command_id
+                  )
+                )
+            )
+        `).run();
+
+        await createIndex();
+        await env.DB.prepare(`
+          INSERT INTO audit_events (
+            actor_type, actor_id, action, target_type, target_id, details_json
+          ) VALUES (
+            'controller', 'command-storage-repair',
+            'commands.active_duplicates_repaired',
+            'commands', 'active',
+            '{"policy":"keep_newest_active_per_node"}'
+          )
+        `).run();
+      }
+    })().catch((error) => {
       commandIndexPromise = undefined;
       throw error;
     });
