@@ -2941,7 +2941,7 @@
     setInterval(updateSiteClock, 15000);
     setInterval(() => {
       if (architectToken && !document.hidden) refreshOperationalData().catch(() => {});
-    }, 10000);
+    }, 60000);
 
     if (architectToken) {
       loadDashboard().catch(() => logout("Сохранённый сеанс недействителен. Войдите снова."));
