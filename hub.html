@@ -148,6 +148,11 @@
       <button id="lmstudioInstall" class="btn cyan" type="button">Установить runtime</button>
       <button id="lmstudioProbe" class="btn" type="button">Проверить состояние</button>
     </div>
+    <label class="micro" style="display:flex;gap:8px;align-items:flex-start;margin-top:10px">
+      <input id="lmstudioPurgeData" type="checkbox" style="width:auto;margin-top:2px">
+      <span>При удалении стереть также CITADEL-managed модели и данные LM Studio</span>
+    </label>
+    <button id="lmstudioUninstall" class="btn danger" type="button" style="width:100%;margin-top:8px">Удалить LM Studio runtime</button>
     <label for="lmstudioModel" class="micro" style="display:block;margin-top:10px">Языковая модель</label>
     <input id="lmstudioModel" list="lmstudioModelOptions" placeholder="например: ibm/granite-4-micro">
     <datalist id="lmstudioModelOptions"></datalist>
@@ -166,7 +171,7 @@
     </div>
   </div>
   <div id="hybridPanel" class="lm-float hybrid-float hidden" role="dialog" aria-label="Hybrid query">
-    <div class="lm-head"><div><b>Hybrid Python + LM Studio</b><div id="hybridNode" class="lm-node">—</div></div><button id="hybridClose" class="btn" type="button">×</button></div>
+    <div class="lm-head"><div><b>Python / AI executor</b><div id="hybridNode" class="lm-node">—</div><div class="micro">Python выполняется без LLM; AI использует LM Studio.</div></div><button id="hybridClose" class="btn" type="button">×</button></div>
     <div class="hybrid-modes">
       <button class="btn" type="button" data-hybrid-mode="python">Python</button>
       <button class="btn" type="button" data-hybrid-mode="lmstudio">LM Studio</button>
@@ -325,7 +330,7 @@
       return (lastOverview?.nodes||[]).find(n=>n.node_id===hybridNodeId)||null;
     }
     function lmstudioPending(nodeId){
-      return (lastOverview?.commands||[]).some(c=>c.node_id===nodeId&&["pending","accepted"].includes(c.status)&&["lmstudio_install","lmstudio_probe","lmstudio_model_get","lmstudio_model_load","hybrid_query"].includes(String(c.command_type||"")));
+      return (lastOverview?.commands||[]).some(c=>c.node_id===nodeId&&["pending","accepted"].includes(c.status)&&["lmstudio_install","lmstudio_uninstall","lmstudio_probe","lmstudio_model_get","lmstudio_model_load","hybrid_query"].includes(String(c.command_type||"")));
     }
     function applyAiSnapshot(node,data){
       if(!node||!data?.ai)return;
@@ -366,6 +371,7 @@
         :(currentAgent?"Runtime ещё не установлен.":"Сначала обновите агент этой ноды до "+(releaseVersion||"текущей версии")+".");
       if(pending)$("lmstudioStatus").textContent+=" · команда выполняется";
       $("lmstudioInstall").disabled=!currentAgent||installed||pending||freshness(node)!=="online";
+      $("lmstudioUninstall").disabled=!currentAgent||!installed||pending||freshness(node)!=="online";
       $("lmstudioProbe").disabled=!currentAgent||pending||freshness(node)!=="online";
       $("lmstudioGet").disabled=!installed||pending||freshness(node)!=="online";
       $("lmstudioLoad").disabled=!installed||pending||freshness(node)!=="online";
@@ -397,7 +403,16 @@
     async function sendLmstudio(type){
       const node=lmstudioNode();if(!node)return;
       const body={command_type:type};
-      if(type==="lmstudio_model_get"||type==="lmstudio_model_load"){
+      if(type==="lmstudio_uninstall"){
+        const purge=$("lmstudioPurgeData").checked;
+        const warning=purge
+          ?"Удалить LM Studio runtime И CITADEL-managed модели/данные?"
+          :"Удалить только LM Studio runtime? Модели/данные будут сохранены.";
+        const confirmation=prompt(warning+"\nВведите REMOVE_LMSTUDIO для подтверждения.")||"";
+        if(confirmation.trim()!=="REMOVE_LMSTUDIO")return;
+        body.confirmation="REMOVE_LMSTUDIO";
+        body.purge_data=purge;
+      }else if(type==="lmstudio_model_get"||type==="lmstudio_model_load"){
         const model=$("lmstudioModel").value.trim();
         if(!model)return toast("LM Studio","Введите или выберите модель","bad");
         body.model=model;
@@ -406,17 +421,31 @@
         const context=Number($("lmstudioContext").value||0);
         if(type==="lmstudio_model_load"&&Number.isInteger(context)&&context>=256)body.settings={context_length:context};
       }
-      const labels={lmstudio_install:"install",lmstudio_probe:"probe",lmstudio_model_get:"download model",lmstudio_model_load:"load model"};
+      const labels={lmstudio_install:"install",lmstudio_uninstall:"uninstall",lmstudio_probe:"probe",lmstudio_model_get:"download model",lmstudio_model_load:"load model"};
       const label=labels[type]||type;
-      if(type!=="lmstudio_probe"&&!confirm("LM Studio "+label+" → "+(node.hostname||node.node_id)+"?"))return;
+      if(type!=="lmstudio_probe"&&type!=="lmstudio_uninstall"&&!confirm("LM Studio "+label+" → "+(node.hostname||node.node_id)+"?"))return;
       await api("/api/v1/architect/nodes/"+encodeURIComponent(node.node_id)+"/commands",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
       toast("LM Studio",label+" queued → "+(node.hostname||node.node_id));
       await refresh();syncLmstudioPanel();
+    }
+    function syncHybridModes(node){
+      const aiReady=Number(node?.lmstudio_installed||0)===1&&Number(node?.lmstudio_server_running||0)===1&&Boolean(node?.lmstudio_loaded_model);
+      document.querySelectorAll("[data-hybrid-mode]").forEach(button=>{
+        const needsAi=button.dataset.hybridMode!=="python";
+        button.disabled=needsAi&&!aiReady;
+      });
+      if(!aiReady&&hybridMode!=="python")hybridMode="python";
+      document.querySelectorAll("[data-hybrid-mode]").forEach(button=>button.classList.toggle("active",button.dataset.hybridMode===hybridMode));
+      const pythonOnly=hybridMode==="python";
+      $("hybridTemperature").disabled=pythonOnly;
+      $("hybridMaxTokens").disabled=pythonOnly;
+      if(pythonOnly)$("hybridStatus").textContent="Python only · без AI/LLM. Поддерживаются расчёты, text:/json: и диагностика системы.";
     }
     function openHybrid(node){
       hybridNodeId=node.node_id;$("hybridNode").textContent=node.hostname||node.node_id;$("hybridPanel").classList.remove("hidden");
       $("hybridAnswer").textContent=(node.lmstudio_runtime||{}).query_answer||"";
       $("hybridStatus").textContent=(node.lmstudio_runtime||{}).query_status||"Готово к запросу.";
+      syncHybridModes(node);
     }
     function closeHybrid(){clearInterval(hybridPollTimer);hybridPollTimer=null;hybridNodeId="";$("hybridPanel").classList.add("hidden")}
     async function sendHybrid(){
@@ -424,9 +453,11 @@
       const prompt=$("hybridPrompt").value.trim();if(!prompt)return toast("Hybrid","Введите вопрос или задачу","bad");
       const temperature=Number($("hybridTemperature").value),maxTokens=Number($("hybridMaxTokens").value);
       const settings={};
-      if(Number.isFinite(temperature)&&temperature>=0&&temperature<=1)settings.temperature=temperature;
-      if(Number.isInteger(maxTokens)&&maxTokens>=1&&maxTokens<=32768)settings.max_output_tokens=maxTokens;
-      $("hybridSend").disabled=true;$("hybridStatus").textContent="Запрос поставлен в очередь…";$("hybridAnswer").textContent="";
+      if(hybridMode!=="python"){
+        if(Number.isFinite(temperature)&&temperature>=0&&temperature<=1)settings.temperature=temperature;
+        if(Number.isInteger(maxTokens)&&maxTokens>=1&&maxTokens<=32768)settings.max_output_tokens=maxTokens;
+      }
+      $("hybridSend").disabled=true;$("hybridStatus").textContent=hybridMode==="python"?"Python выполняет задачу без AI/LLM…":"Запрос поставлен в очередь…";$("hybridAnswer").textContent="";
       try{
         await api("/api/v1/architect/nodes/"+encodeURIComponent(node.node_id)+"/commands",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({command_type:"hybrid_query",mode:hybridMode,prompt,settings})});
         clearInterval(hybridPollTimer);
@@ -470,7 +501,7 @@
       const add=(label,cls,fn,disabled=false)=>{const b=document.createElement("button");b.type="button";b.className=`btn ${cls||""}`;b.textContent=label;b.disabled=disabled;b.addEventListener("click",fn);actions.append(b);return b};
       add(lang==="he"?"אבחון":lang==="en"?"Diagnostics":"Диагностика","cyan",()=>sendDiagnostic(node.node_id),!live);
       add("LM Studio","cyan",()=>openLmstudio(node),!live||pending);
-      if(aiReady)add("Hybrid","good",()=>openHybrid(node),!live||pending);
+      if(current)add("Python / AI","good",()=>openHybrid(node),!live||pending);
       add(current?(lang==="he"?"מעודכן":lang==="en"?"Up to date":"Актуально"):(lang==="he"?"עדכון":lang==="en"?"Update":"Обновить"),"good",()=>sendCommand(node.node_id,"update"),!live||pending||current);
       if(node.status==="paused")add(lang==="he"?"המשך":lang==="en"?"Resume":"Продолжить","",()=>sendCommand(node.node_id,"resume"),!live||pending);
       else add(lang==="he"?"השהה":lang==="en"?"Pause":"Пауза","warn",()=>sendCommand(node.node_id,"pause"),!live||pending);
@@ -605,12 +636,13 @@
 
     $("lmstudioClose").addEventListener("click",()=>{clearInterval(lmstudioPollTimer);lmstudioPollTimer=null;$("lmstudioPanel").classList.add("hidden");lmstudioNodeId=""});
     $("lmstudioInstall").addEventListener("click",()=>sendLmstudio("lmstudio_install").catch(e=>toast("LM Studio",e.message,"bad")));
+    $("lmstudioUninstall").addEventListener("click",()=>sendLmstudio("lmstudio_uninstall").catch(e=>toast("LM Studio",e.message,"bad")));
     $("lmstudioProbe").addEventListener("click",()=>sendLmstudio("lmstudio_probe").catch(e=>toast("LM Studio",e.message,"bad")));
     $("lmstudioGet").addEventListener("click",()=>sendLmstudio("lmstudio_model_get").catch(e=>toast("LM Studio",e.message,"bad")));
     $("lmstudioLoad").addEventListener("click",()=>sendLmstudio("lmstudio_model_load").catch(e=>toast("LM Studio",e.message,"bad")));
     $("lmstudioModel").addEventListener("input",()=>{syncLmstudioPanel();clearTimeout(lmstudioModelSearchTimer);lmstudioModelSearchTimer=setTimeout(searchModelsForLmstudio,400);});
     $("hybridClose").addEventListener("click",closeHybrid);
-    document.querySelectorAll("[data-hybrid-mode]").forEach(button=>button.addEventListener("click",()=>{hybridMode=button.dataset.hybridMode;document.querySelectorAll("[data-hybrid-mode]").forEach(b=>b.classList.toggle("active",b===button))}));
+    document.querySelectorAll("[data-hybrid-mode]").forEach(button=>button.addEventListener("click",()=>{if(button.disabled)return;hybridMode=button.dataset.hybridMode;syncHybridModes(hybridNode())}));
     $("hybridSend").addEventListener("click",sendHybrid);
 
     async function waitForRefreshIdle(){
