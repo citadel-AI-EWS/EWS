@@ -3103,26 +3103,28 @@ function parseControllerTimestamp(value) {
   if (!value) return null;
   const raw = String(value).trim();
   if (!raw) return null;
-  const normalized = raw.includes("T") ? raw : raw.replace(" ", "T") + "Z";
+  const normalized = /[zZ]|[+-]\d\d:?\d\d$/.test(raw)
+    ? raw
+    : raw.replace(" ", "T") + "Z";
   const parsed = Date.parse(normalized);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
 function isTestNodeRecord(node) {
   const identity = `${node?.hostname || ""} ${node?.node_id || ""}`;
-  return /(^|[^a-z0-9])(test|demo|browser)([^a-z0-9]|$)/i.test(identity);
+  return /(^|[^a-z0-9])(test|demo)([^a-z0-9]|$)/i.test(identity);
 }
 
 function operationalNodeState(node, now = Date.now()) {
   if (!node || node.status === "revoked") return "revoked";
   if (isTestNodeRecord(node)) return "test";
-  if (node.status === "paused") return "paused";
   const seenAt = parseControllerTimestamp(node.last_seen_at);
   if (seenAt === null) return "stale";
   const ageMinutes = Math.max(0, (now - seenAt) / 60000);
-  if (node.status === "online" && ageMinutes <= NODE_LIVE_WINDOW_MINUTES) return "live";
   if (ageMinutes >= NODE_ARCHIVE_AFTER_MINUTES) return "archived";
   if (ageMinutes >= NODE_STALE_AFTER_MINUTES) return "stale";
+  if (node.status === "paused") return "paused";
+  if (node.status === "online" && ageMinutes <= NODE_LIVE_WINDOW_MINUTES) return "live";
   return "offline";
 }
 
