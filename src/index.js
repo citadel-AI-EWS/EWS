@@ -4394,6 +4394,7 @@ async function architectRelease(request, env) {
     lmstudio: LMSTUDIO_INTEGRATION,
     openrouter: {
       configured: quality.configured,
+      key_status: quality.keyStatus,
       model: quality.model,
       fusion_preset: quality.fusionPreset,
       timeout_ms: quality.timeoutMs
