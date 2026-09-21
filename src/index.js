@@ -4144,7 +4144,6 @@ async function architectEnterpriseRecoveryManifest(request, env) {
 async function architectOverview(request, env) {
   await authenticateArchitect(request, env);
   await Promise.all([
-    backfillLegacyReports(env),
     ensureSessionStorage(env),
     ensureAutoEnrollmentStorage(env),
     ensureProjectStorage(env),
