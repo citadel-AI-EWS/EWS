@@ -1379,6 +1379,42 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
   return created;
 }
 
+function projectTextPreflight(taskText) {
+  const text = String(taskText || "");
+  const spellingWarnings = [];
+  const logicWarnings = [];
+  const repeatedWord = /\b([\p{L}\p{N}_-]{2,})\s+\1\b/giu.exec(text);
+  if (repeatedWord) spellingWarnings.push("repeated_word:" + repeatedWord[1].slice(0, 40));
+  if (/\s{3,}/u.test(text)) spellingWarnings.push("excessive_whitespace");
+  if (/[!?.,]{4,}/u.test(text)) spellingWarnings.push("repeated_punctuation");
+  if (/([\p{L}])\1{5,}/giu.test(text)) spellingWarnings.push("repeated_character_sequence");
+  const pairs = [["(", ")"], ["[", "]"], ["{", "}"]];
+  for (const [open, close] of pairs) {
+    const opens = [...text].filter((ch) => ch === open).length;
+    const closes = [...text].filter((ch) => ch === close).length;
+    if (opens !== closes) spellingWarnings.push("unbalanced_delimiter:" + open + close);
+  }
+  const lowered = text.toLocaleLowerCase();
+  const aiRequired = /(используй|включи|use|enable)\s+(ии|ai|lm\s*studio|llm)/iu.test(lowered);
+  const aiForbidden = /(без|не\s+используй|no|without|disable)\s+(ии|ai|lm\s*studio|llm)/iu.test(lowered);
+  if (aiRequired && aiForbidden) logicWarnings.push("conflicting_ai_mode_instructions");
+  const pythonRequired = /(только\s+python|python\s+only|без\s+ии)/iu.test(lowered);
+  const lmRequired = /(обязательно\s+lm|use\s+lm\s*studio|используй\s+lm)/iu.test(lowered);
+  if (pythonRequired && lmRequired) logicWarnings.push("conflicting_python_and_lmstudio_modes");
+  const nonEmptyLines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (nonEmptyLines.length > 1 && new Set(nonEmptyLines.map((line) => line.toLocaleLowerCase())).size < nonEmptyLines.length) {
+    logicWarnings.push("duplicate_instruction_lines");
+  }
+  return {
+    passed: true,
+    engine: "deterministic_preflight",
+    spelling_warnings: spellingWarnings.slice(0, 12),
+    logic_warnings: logicWarnings.slice(0, 12),
+    warning_count: Math.min(24, spellingWarnings.length + logicWarnings.length),
+    detail: spellingWarnings.length || logicWarnings.length ? "review_warnings_before_execution" : "no_structural_text_warnings"
+  };
+}
+
 async function evaluateProjectChecks(env, sourceType, title, taskText) {
   await ensureProjectStorage(env);
   const sourceAllowed = ["architect_manual", "architect_python"].includes(sourceType);
@@ -1390,8 +1426,10 @@ async function evaluateProjectChecks(env, sourceType, title, taskText) {
     "WHERE task_sha256 = ? AND source_type = ? AND status IN ('planned','running') ORDER BY created_at DESC LIMIT 1"
   ).bind(taskSha256, sourceType).first();
   const safety = projectSafetyClassification(taskText);
+  const textPreflight = projectTextPreflight(taskText);
   return {
     task_sha256: taskSha256,
+    text_preflight: textPreflight,
     checks: {
       source_allowlisting: {
         passed: sourceAllowed,
@@ -1680,7 +1718,7 @@ async function architectGetProject(request, env, projectId) {
     }
   }
 
-  const [workQuery, specializationQuery] = await Promise.all([
+  const [workQuery, specializationQuery, taskLogQuery] = await Promise.all([
     env.DB.prepare(`
       SELECT
         w.work_item_id, w.sequence_no, w.role_name, w.task_text, w.status,
@@ -1711,8 +1749,25 @@ async function architectGetProject(request, env, projectId) {
       FROM project_specializations
       WHERE project_id = ?
       ORDER BY created_at ASC, role_name ASC
-    `).bind(projectId).all()
+    `).bind(projectId).all(),
+    env.DB.prepare(`
+      SELECT event_id, actor_type, action, target_type, target_id, details_json, created_at
+      FROM audit_events
+      WHERE target_id = ? OR instr(details_json, ?) > 0
+      ORDER BY event_id ASC
+      LIMIT 250
+    `).bind(projectId, projectId).all()
   ]);
+
+  const taskLogs = (taskLogQuery.results || []).map((event) => ({
+    event_id: event.event_id,
+    actor_type: event.actor_type,
+    action: event.action,
+    target_type: event.target_type,
+    target_id: event.target_id,
+    details: safeJson(event.details_json, {}),
+    created_at: event.created_at
+  }));
 
   const workItems = (workQuery.results || []).map((item) => ({
     ...item,
@@ -1821,6 +1876,8 @@ async function architectGetProject(request, env, projectId) {
                   ? "all_project_work_items_completed"
                   : executionState
       },
+      text_preflight: projectTextPreflight(project.task_text),
+      task_logs: taskLogs,
       final_report: {
         ready: finalReportReady,
         sections: finalSections,
