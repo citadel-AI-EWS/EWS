@@ -23,8 +23,8 @@ need(index.includes("LEFT JOIN node_numbers AS nn"), "Architect node number join
 need(!readme.includes("-EnrollmentToken"), "README still documents EnrollmentToken");
 need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_token");
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
-need(agentV1.includes('VERSION = "0.3.14"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.14"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.15"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.15"'), "v2 release not bumped");
 need(setup.includes('ServiceName = "CitadelEWSNode"'), "Windows Core Service name missing");
 need(setup.includes('LegacyUserSid'), "original user SID preservation missing");
 need(setup.includes('Set-CitadelDirectoryAcl'), "Windows clean ACL reconstruction missing");
@@ -59,6 +59,7 @@ need(agentV1.includes("CryptUnprotectData"), "Windows DPAPI unprotect call missi
 need(agentV1.includes("private_key_dpapi"), "protected Windows identity field missing");
 need(setup.includes("DirectorySecurity"), "Windows state ACL reconstruction missing");
 need(agentV2.includes('"windows_sleep_hibernate_inhibit"'), "agent drops sleep/hibernate event");
+need(agentV2.includes('"network_recovery_not_needed"'), "agent drops network recovery no-op event");
 for (const eventType of [
   "windows_sleep_hibernate_inhibit",
   "agent_updated",
@@ -101,6 +102,13 @@ need(index.includes("await expireStaleNodeCommands(env, nodeId);\n  await ensure
 need(index.includes("expireStaleNodeCommands"), "stale command expiry missing");
 need(agentV1.includes("x-node-request-id"), "agent request nonce header missing");
 need(agentV1.includes("recover_network"), "bounded network recovery missing");
+need(agentV1.includes('"always_on_guard"'), "always-on capability missing");
+need(agentV1.includes('"known_network_recovery"'), "known-network recovery capability missing");
+need(agentV1.includes("prevent_automatic_sleep"), "automatic sleep guard config missing");
+need(agentV1.includes("allowed_wifi_profiles"), "Wi-Fi recovery allowlist missing");
+need(agentV1.includes("controller_reachable"), "network recovery reachability verification missing");
+need(agentV1.includes("wifi_saved_profile:"), "saved Wi-Fi profile recovery loop missing");
+need(agentV1.includes("SetThreadExecutionState"), "Windows power execution-state guard missing");
 need(agentV1.includes("stream_lmstudio_answer"), "streaming Hybrid answer missing");
 need(agentV1.includes("/api/v1/models/download/status/"), "LM Studio download progress polling missing");
 need(index.includes("node_ai_runtime_state"), "extended AI runtime state missing");
@@ -127,5 +135,5 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.14"'), "Controller release not bumped");
+need(index.includes('version: "0.3.15"'), "Controller release not bumped");
 console.log("Review backlog guards: PASS");
