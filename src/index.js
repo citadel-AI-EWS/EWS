@@ -31,10 +31,10 @@ const ALLOWED_REPORT_SENSITIVITIES = new Set([
 ]);
 const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
-const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
-const POWER_COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN" });
+const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
+const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.13",
+  version: "0.3.14",
   files: [
     {
       path: "citadel_node_v1.py",
@@ -1230,6 +1230,26 @@ function projectAssignmentId(workItemId) {
   return "assignment_" + workItemId;
 }
 
+function projectExecutionMode(sourceType) {
+  return sourceType === "architect_python" ? "python" : "ai";
+}
+
+function projectNodeReady(node, sourceType) {
+  if (!node || operationalNodeState({ ...node, status: node.status || "online" }) !== "live" || isTestNodeRecord(node)) {
+    return false;
+  }
+  const capabilities = safeJson(node.capabilities_json, []);
+  if (!Array.isArray(capabilities)) return false;
+  if (projectExecutionMode(sourceType) === "python") {
+    return capabilities.includes("project_python");
+  }
+  return capabilities.includes("project_text") &&
+    Number(node.installed || node.lmstudio_installed || 0) === 1 &&
+    Number(node.server_running || node.lmstudio_server_running || 0) === 1 &&
+    typeof (node.loaded_model || node.lmstudio_loaded_model) === "string" &&
+    (node.loaded_model || node.lmstudio_loaded_model).length > 0;
+}
+
 async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
   await Promise.all([ensureProjectStorage(env), ensureNodeAiStorage(env)]);
   const node = await env.DB.prepare(`
@@ -1240,20 +1260,11 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
     WHERE n.node_id = ?
   `).bind(nodeId).first();
   if (!node || operationalNodeState(node) !== "live" || isTestNodeRecord(node)) return 0;
-  const capabilities = safeJson(node.capabilities_json, []);
-  const ready =
-    Array.isArray(capabilities) &&
-    capabilities.includes("project_text") &&
-    Number(node.installed || 0) === 1 &&
-    Number(node.server_running || 0) === 1 &&
-    typeof node.loaded_model === "string" &&
-    node.loaded_model.length > 0;
-  if (!ready) return 0;
 
   const [planned, readyNodesQuery] = await Promise.all([
     env.DB.prepare(`
       SELECT w.work_item_id, w.project_id, w.sequence_no, w.role_name, w.task_text,
-        w.node_id AS preferred_node_id, p.title AS project_title
+        w.node_id AS preferred_node_id, p.title AS project_title, p.source_type
       FROM project_work_items AS w
       JOIN architect_projects AS p ON p.project_id = w.project_id
       WHERE w.status = 'planned'
@@ -1264,43 +1275,36 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
       LIMIT 32
     `).bind(projectId, projectId, nodeId).all(),
     env.DB.prepare(`
-      SELECT n.node_id, n.hostname, n.last_seen_at, n.capabilities_json, ai.installed, ai.loaded_model, ai.server_running
+      SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
+        ai.installed, ai.loaded_model, ai.server_running
       FROM nodes AS n
       LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
       WHERE n.status = 'online'
         AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes')
     `).all()
   ]);
-  const readyNodeIds = new Set(
-    (readyNodesQuery.results || [])
-      .filter((candidate) => {
-        const candidateCapabilities = safeJson(candidate.capabilities_json, []);
-        return !isTestNodeRecord(candidate) &&
-          operationalNodeState({ ...candidate, status: "online" }) === "live" &&
-          Array.isArray(candidateCapabilities) &&
-          candidateCapabilities.includes("project_text") &&
-          Number(candidate.installed || 0) === 1 &&
-          Number(candidate.server_running || 0) === 1 &&
-          typeof candidate.loaded_model === "string" &&
-          candidate.loaded_model.length > 0;
-      })
-      .map((candidate) => candidate.node_id)
-  );
+  const readyNodes = new Map((readyNodesQuery.results || []).map((candidate) => [candidate.node_id, candidate]));
 
   let created = 0;
-  const candidates = (planned.results || []).filter((work) =>
-    !work.preferred_node_id ||
-    work.preferred_node_id === nodeId ||
-    !readyNodeIds.has(work.preferred_node_id)
-  ).slice(0, 2);
+  const candidates = (planned.results || []).filter((work) => {
+    if (!projectNodeReady(node, work.source_type)) return false;
+    const preferred = work.preferred_node_id ? readyNodes.get(work.preferred_node_id) : null;
+    return !work.preferred_node_id ||
+      work.preferred_node_id === nodeId ||
+      !projectNodeReady(preferred, work.source_type);
+  }).slice(0, 2);
+
   for (const work of candidates) {
     const missionId = projectMissionId(work.work_item_id);
     const assignmentId = projectAssignmentId(work.work_item_id);
+    const executionMode = projectExecutionMode(work.source_type);
+    const missionType = executionMode === "python" ? "project_python" : "project_text";
     const payloadJson = JSON.stringify({
       project_id: work.project_id,
       work_item_id: work.work_item_id,
       role_name: work.role_name,
-      task_text: work.task_text
+      task_text: work.task_text,
+      execution_mode: executionMode
     });
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     const results = await env.DB.batch([
@@ -1314,7 +1318,7 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
           mission_id, title, role_name, mission_type, payload_json,
           priority, status, expires_at
         )
-        SELECT ?, ?, ?, 'project_text', ?, 40, 'assigned', ?
+        SELECT ?, ?, ?, ?, ?, 40, 'assigned', ?
         WHERE EXISTS (
           SELECT 1 FROM project_work_items
           WHERE work_item_id = ? AND node_id = ? AND status = 'assigned'
@@ -1323,6 +1327,7 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
         missionId,
         `Project: ${work.project_title} · block ${work.sequence_no}`,
         work.role_name,
+        missionType,
         payloadJson,
         expiresAt,
         work.work_item_id,
@@ -1359,7 +1364,12 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
         )
       `).bind(
         work.work_item_id,
-        JSON.stringify({ project_id: work.project_id, node_id: nodeId, role_name: work.role_name }),
+        JSON.stringify({
+          project_id: work.project_id,
+          node_id: nodeId,
+          role_name: work.role_name,
+          execution_mode: executionMode
+        }),
         assignmentId,
         nodeId
       )
@@ -1371,21 +1381,21 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
 
 async function evaluateProjectChecks(env, sourceType, title, taskText) {
   await ensureProjectStorage(env);
-  const sourceAllowed = sourceType === "architect_manual";
+  const sourceAllowed = ["architect_manual", "architect_python"].includes(sourceType);
   const validationPass = title.length >= 1 && title.length <= 160 &&
     taskText.length >= 1 && taskText.length <= 20000;
   const taskSha256 = await sha256Hex(taskText);
   const duplicate = await env.DB.prepare(
     "SELECT project_id, status FROM architect_projects " +
-    "WHERE task_sha256 = ? AND status IN ('planned','running') ORDER BY created_at DESC LIMIT 1"
-  ).bind(taskSha256).first();
+    "WHERE task_sha256 = ? AND source_type = ? AND status IN ('planned','running') ORDER BY created_at DESC LIMIT 1"
+  ).bind(taskSha256, sourceType).first();
   const safety = projectSafetyClassification(taskText);
   return {
     task_sha256: taskSha256,
     checks: {
       source_allowlisting: {
         passed: sourceAllowed,
-        detail: sourceAllowed ? "architect_manual_allowed" : "source_not_allowed"
+        detail: sourceAllowed ? sourceType + "_allowed" : "source_not_allowed"
       },
       validation: {
         passed: validationPass,
