@@ -1426,19 +1426,28 @@ async function architectCheckProject(request, env) {
   const title = requireString(body.title, "title", 160);
   const taskText = requireString(body.task_text, "task_text", 20000);
   const requestedRoles = normalizeRequestedProjectRoles(body.requested_roles);
+  const executionMode = projectExecutionMode(sourceType);
+  const effectiveRequestedRoles = executionMode === "python" ? [] : requestedRoles;
   const result = await evaluateProjectChecks(env, sourceType, title, taskText);
-  const recommendedWork = planProjectWork(taskText);
-  const plannedWork = planProjectWork(taskText, requestedRoles);
+  const recommendedWork = executionMode === "python"
+    ? [{ sequence_no: 1, role_name: "programmer", task_text: taskText, role_source: "hub_recommended" }]
+    : planProjectWork(taskText);
+  const plannedWork = executionMode === "python"
+    ? recommendedWork
+    : planProjectWork(taskText, effectiveRequestedRoles);
   const recommendedRolePlan = rolePlanSummary(recommendedWork);
   const selectedRolePlan = rolePlanSummary(plannedWork);
   return json({
     ok: true,
+    execution_mode: executionMode,
     ready_for_architect_approval: projectChecksPassed(result.checks),
     recommended_role_plan: recommendedRolePlan,
     recommended_roles: Object.keys(recommendedRolePlan),
-    requested_roles: requestedRoles,
+    requested_roles: effectiveRequestedRoles,
     selected_roles: Object.keys(selectedRolePlan),
-    desired_workers: projectWorkerProfile(taskText, requestedRoles).desired_workers,
+    desired_workers: executionMode === "python"
+      ? 1
+      : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers,
     role_plan: selectedRolePlan,
     work_preview: plannedWork.map(({ sequence_no, role_name, role_source }) => ({
       sequence_no,
@@ -1456,6 +1465,8 @@ async function architectCreateProject(request, env) {
   const title = requireString(body.title, "title", 160);
   const taskText = requireString(body.task_text, "task_text", 20000);
   const requestedRoles = normalizeRequestedProjectRoles(body.requested_roles);
+  const executionMode = projectExecutionMode(sourceType);
+  const effectiveRequestedRoles = executionMode === "python" ? [] : requestedRoles;
   const evaluated = await evaluateProjectChecks(env, sourceType, title, taskText);
   if (!projectChecksPassed(evaluated.checks)) {
     throw new ApiError(409, "project_checks_failed");
@@ -1463,7 +1474,7 @@ async function architectCreateProject(request, env) {
 
   await ensureNodeAiStorage(env);
   const nodesQuery = await env.DB.prepare(
-    "SELECT n.node_id, n.hostname, n.agent_version, n.capabilities_json, nn.node_number, " +
+    "SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.agent_version, n.capabilities_json, nn.node_number, " +
     "ai.installed AS lmstudio_installed, ai.loaded_model AS lmstudio_loaded_model, " +
     "ai.server_running AS lmstudio_server_running " +
     "FROM nodes AS n " +
@@ -1474,19 +1485,15 @@ async function architectCreateProject(request, env) {
   ).all();
   const onlineNodes = (nodesQuery.results || []).filter((node) => !isTestNodeRecord(node));
   if (!onlineNodes.length) throw new ApiError(409, "no_available_nodes");
-  const nodes = onlineNodes.filter((node) => {
-    const capabilities = safeJson(node.capabilities_json, []);
-    return Array.isArray(capabilities) &&
-      capabilities.includes("project_text") &&
-      Number(node.lmstudio_installed || 0) === 1 &&
-      Number(node.lmstudio_server_running || 0) === 1 &&
-      typeof node.lmstudio_loaded_model === "string" &&
-      node.lmstudio_loaded_model.length > 0;
-  });
+  const nodes = onlineNodes.filter((node) => projectNodeReady(node, sourceType));
 
-  const recommendedWork = planProjectWork(taskText);
+  const recommendedWork = executionMode === "python"
+    ? [{ sequence_no: 1, role_name: "programmer", task_text: taskText, role_source: "hub_recommended" }]
+    : planProjectWork(taskText);
   const recommendedRoles = new Set(recommendedWork.map((item) => item.role_name));
-  const plannedWork = planProjectWork(taskText, requestedRoles);
+  const plannedWork = executionMode === "python"
+    ? recommendedWork
+    : planProjectWork(taskText, effectiveRequestedRoles);
   const workerCount = Math.min(nodes.length, plannedWork.length);
   const projectId = "project_" + crypto.randomUUID();
   const checksJson = JSON.stringify(evaluated.checks);
@@ -1508,7 +1515,8 @@ async function architectCreateProject(request, env) {
       worker_count: workerCount,
       work_items: plannedWork.length,
       roles: rolePlanSummary(plannedWork),
-      requested_roles: requestedRoles
+      requested_roles: effectiveRequestedRoles,
+      execution_mode: executionMode
     }))
   ];
   for (const specialization of specializationSummary) {
@@ -1546,24 +1554,31 @@ async function architectCreateProject(request, env) {
     project: {
       project_id: projectId,
       title,
+      source_type: sourceType,
+      execution_mode: executionMode,
       status: "planned",
       architect_approved: true,
       worker_count: workerCount,
-      desired_workers: projectWorkerProfile(taskText, requestedRoles).desired_workers,
+      desired_workers: executionMode === "python"
+        ? 1
+        : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers,
       work_item_count: plannedWork.length,
       role_plan: rolePlanSummary(plannedWork),
       recommended_roles: [...recommendedRoles],
-      requested_roles: requestedRoles,
+      requested_roles: effectiveRequestedRoles,
       specializations: specializationSummary,
       checks: evaluated.checks,
       work_items: workItems
     },
     execution: {
       state: "planned",
+      execution_mode: executionMode,
       completed_work_items: 0,
       total_work_items: plannedWork.length,
       final_report_ready: false,
-      detail: "hub_plan_created_waiting_for_project_worker_execution"
+      detail: executionMode === "python"
+        ? "hub_plan_created_waiting_for_python_worker_execution"
+        : "hub_plan_created_waiting_for_project_worker_execution"
     }
   }, 201);
 }
@@ -1572,7 +1587,7 @@ async function architectListProjects(request, env) {
   await authenticateArchitect(request, env);
   await ensureProjectStorage(env);
   const rows = await env.DB.prepare(
-    "SELECT p.project_id, p.title, p.status, p.worker_count, p.created_at, p.updated_at, " +
+    "SELECT p.project_id, p.title, p.source_type, p.status, p.worker_count, p.created_at, p.updated_at, " +
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id) AS work_item_count, " +
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'completed') AS completed_work_items, " +
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'failed') AS failed_work_items, " +
@@ -1613,9 +1628,11 @@ async function architectGetProject(request, env, projectId) {
     LIMIT 100
   `).all();
 
+  const executionMode = projectExecutionMode(project.source_type);
   const workerReadiness = (readinessQuery.results || []).map((node) => {
     const capabilities = safeJson(node.capabilities_json, []);
     const hasProjectText = Array.isArray(capabilities) && capabilities.includes("project_text");
+    const hasProjectPython = Array.isArray(capabilities) && capabilities.includes("project_python");
     const live = Number(node.recently_seen || 0) === 1;
     const testNode = isTestNodeRecord(node);
     const installed = Number(node.lmstudio_installed || 0) === 1;
@@ -1624,13 +1641,19 @@ async function architectGetProject(request, env, projectId) {
     const blockers = [];
     if (testNode) blockers.push("test_node_excluded");
     if (!live) blockers.push("offline");
-    if (!hasProjectText) blockers.push(
-      node.agent_version !== LATEST_NODE_RELEASE.version ? "agent_outdated" : "project_text_missing"
-    );
-    if (!installed) blockers.push("lmstudio_not_installed");
-    else {
-      if (!serverRunning) blockers.push("lmstudio_server_stopped");
-      if (!loadedModel) blockers.push("lmstudio_model_not_loaded");
+    if (executionMode === "python") {
+      if (!hasProjectPython) blockers.push(
+        node.agent_version !== LATEST_NODE_RELEASE.version ? "agent_outdated" : "project_python_missing"
+      );
+    } else {
+      if (!hasProjectText) blockers.push(
+        node.agent_version !== LATEST_NODE_RELEASE.version ? "agent_outdated" : "project_text_missing"
+      );
+      if (!installed) blockers.push("lmstudio_not_installed");
+      else {
+        if (!serverRunning) blockers.push("lmstudio_server_stopped");
+        if (!loadedModel) blockers.push("lmstudio_model_not_loaded");
+      }
     }
     return {
       node_id: node.node_id,
@@ -1639,7 +1662,9 @@ async function architectGetProject(request, env, projectId) {
       agent_version: node.agent_version || null,
       live,
       operational_state: testNode ? "test" : operationalNodeState(node),
+      execution_mode: executionMode,
       project_text: hasProjectText,
+      project_python: hasProjectPython,
       lmstudio_installed: installed,
       lmstudio_server_running: serverRunning,
       lmstudio_loaded_model: node.lmstudio_loaded_model || null,
@@ -1740,16 +1765,25 @@ async function architectGetProject(request, env, projectId) {
     }));
   const workComplete = total > 0 && finished === total;
   const rawResultText = workComplete ? projectFinalText(finalSections) : null;
-  const qualityGate = workComplete
-    ? await finalizeProjectAnswer(env, project.project_id, project.task_text, rawResultText)
-    : {
-        ready: false,
-        status: "waiting_for_workers",
-        content: null,
+  const qualityGate = workComplete && executionMode === "python"
+    ? {
+        ready: true,
+        status: "not_applicable_python",
+        content: rawResultText,
         reviewed: false,
         model: null,
         error_code: null
-      };
+      }
+    : workComplete
+      ? await finalizeProjectAnswer(env, project.project_id, project.task_text, rawResultText)
+      : {
+          ready: false,
+          status: "waiting_for_workers",
+          content: null,
+          reviewed: false,
+          model: null,
+          error_code: null
+        };
   const finalReportReady = workComplete && qualityGate.ready;
   const finalResultText = finalReportReady ? qualityGate.content : null;
   return json({
@@ -1764,7 +1798,10 @@ async function architectGetProject(request, env, projectId) {
       execution: {
         state: executionState,
         counts,
-        desired_workers: projectWorkerProfile(project.task_text, specializations.filter((item) => item.source === "architect_added").map((item) => item.id)).desired_workers,
+        execution_mode: executionMode,
+        desired_workers: executionMode === "python"
+          ? 1
+          : projectWorkerProfile(project.task_text, specializations.filter((item) => item.source === "architect_added").map((item) => item.id)).desired_workers,
         ready_workers_at_creation: Number(project.worker_count || 0),
         ready_workers_now: readyWorkers.length,
         worker_readiness: workerReadiness,
@@ -1779,7 +1816,7 @@ async function architectGetProject(request, env, projectId) {
             : finalReportReady && qualityGate.status === "degraded"
               ? "final_quality_gate_degraded"
               : executionState === "planned"
-                ? "waiting_for_lmstudio_project_worker"
+                ? (executionMode === "python" ? "waiting_for_python_project_worker" : "waiting_for_lmstudio_project_worker")
                 : executionState === "completed"
                   ? "all_project_work_items_completed"
                   : executionState
@@ -3282,6 +3319,15 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
         ON CONFLICT(node_id) DO UPDATE SET
           installed = 1, server_running = 1, last_action = 'installed', updated_at = CURRENT_TIMESTAMP
       `).bind(nodeId));
+    } else if (current.command_type === "lmstudio_uninstall") {
+      statements.push(env.DB.prepare(`
+        INSERT INTO node_ai_state (
+          node_id, installed, selected_model, loaded_model, server_running, last_action, updated_at
+        ) VALUES (?, 0, NULL, NULL, 0, 'uninstalled', CURRENT_TIMESTAMP)
+        ON CONFLICT(node_id) DO UPDATE SET
+          installed = 0, selected_model = NULL, loaded_model = NULL,
+          server_running = 0, last_action = 'uninstalled', updated_at = CURRENT_TIMESTAMP
+      `).bind(nodeId));
     } else if (current.command_type === "lmstudio_model_get") {
       statements.push(env.DB.prepare(`
         INSERT INTO node_ai_state (node_id, installed, selected_model, last_action, updated_at)
@@ -4279,16 +4325,16 @@ async function architectCreateCommand(request, env, nodeId) {
     throw new ApiError(400, "command_type_not_allowed");
   }
   if (
-    ["uninstall", "system_reboot", "system_shutdown"].includes(commandType) &&
+    ["uninstall", "system_reboot", "system_shutdown", "lmstudio_uninstall"].includes(commandType) &&
     !roleHasPermission(actor.role, "admin")
   ) {
     throw new ApiError(403, "architect_admin_required");
   }
-  const requiredPowerConfirmation = POWER_COMMAND_CONFIRMATIONS[commandType];
-  if (requiredPowerConfirmation) {
+  const requiredConfirmation = COMMAND_CONFIRMATIONS[commandType];
+  if (requiredConfirmation) {
     const confirmation = typeof body.confirmation === "string" ? body.confirmation.trim() : "";
-    if (confirmation !== requiredPowerConfirmation) {
-      throw new ApiError(400, "power_confirmation_required");
+    if (confirmation !== requiredConfirmation) {
+      throw new ApiError(400, "command_confirmation_required");
     }
   }
 
@@ -4334,6 +4380,8 @@ async function architectCreateCommand(request, env, nodeId) {
     payload = LATEST_NODE_RELEASE;
   } else if (commandType === "lmstudio_install") {
     payload = { asset: lmstudioInstallAssetForNode(node) };
+  } else if (commandType === "lmstudio_uninstall") {
+    payload = { purge_data: body.purge_data === true };
   } else if (commandType === "lmstudio_probe") {
     payload = {};
   } else if (commandType === "lmstudio_model_get" || commandType === "lmstudio_model_load") {
