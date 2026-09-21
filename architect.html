@@ -624,11 +624,26 @@
       return timestamp === null ? Infinity : Math.max(0, (Date.now() - timestamp) / 60000);
     }
 
+    function nodeOperationalState(node) {
+      if (!node) return "unknown";
+      if (node.operational_state) return node.operational_state;
+      if (node.status === "revoked") return "revoked";
+      const identity = `${node.hostname || ""} ${node.node_id || ""}`;
+      if (/(^|[^a-z0-9])(test|demo|browser)([^a-z0-9]|$)/i.test(identity)) return "test";
+      if (node.status === "paused") return "paused";
+      const age = nodeAgeMinutes(node);
+      if (node.status === "online" && age <= 5) return "live";
+      if (age >= 7 * 24 * 60) return "archived";
+      if (age >= 24 * 60) return "stale";
+      return "offline";
+    }
+
+    function nodeInOperationalScope(node) {
+      return ["live", "offline", "paused"].includes(nodeOperationalState(node));
+    }
+
     function isNodeLive(node) {
-      return Boolean(node) &&
-        node.status !== "revoked" &&
-        node.status !== "offline" &&
-        nodeAgeMinutes(node) <= 5;
+      return nodeOperationalState(node) === "live";
     }
 
     function nodeHealth(node) {
@@ -861,7 +876,7 @@
       operationsAlertList.replaceChildren();
       const problems = [];
       for (const node of nodes) {
-        if (node.status === "revoked") continue;
+        if (!nodeInOperationalScope(node)) continue;
         const health = nodeHealth(node);
         if (!health.live) {
           problems.push(`${nodeDisplayName(node)} · ${lt("не отвечает","not responding","לא מגיב")} · ${lt("последняя связь","last seen","קשר אחרון")}: ${node.last_seen_at || lt("нет данных","no data","אין נתונים")}`);
@@ -1235,7 +1250,8 @@
         project_text_missing: ["нет capability project_text","project_text capability missing","חסרה יכולת project_text"],
         lmstudio_not_installed: ["LM Studio не установлен","LM Studio is not installed","LM Studio אינו מותקן"],
         lmstudio_server_stopped: ["LM Studio server не запущен","LM Studio server is stopped","שרת LM Studio אינו פועל"],
-        lmstudio_model_not_loaded: ["языковая модель не загружена","no language model loaded","לא נטענה מודל שפה"]
+        lmstudio_model_not_loaded: ["языковая модель не загружена","no language model loaded","לא נטענה מודל שפה"],
+        test_node_excluded: ["тестовая нода исключена из production scheduler","test node excluded from the production scheduler","node בדיקה הוחרג מתזמון production"]
       };
       const value = map[code] || [code,code,code];
       return lang === "he" ? value[2] : lang === "en" ? value[1] : value[0];
@@ -1417,16 +1433,23 @@
     }
 
     function syncUpdateAllStatus() {
-      const eligible = currentNodes.filter((node) => node.status !== "revoked");
-      const outdated = currentReleaseVersion
-        ? eligible.filter((node) => node.agent_version !== currentReleaseVersion).length
-        : 0;
-      updateAllAgentsButton.disabled = !currentReleaseVersion || outdated === 0;
-      updateAllAgentsButton.textContent = outdated
-        ? `Обновить ${outdated} агентов → ${currentReleaseVersion}`
-        : "Все агенты актуальны";
-      if (!outdated && currentReleaseVersion) {
-        updateAllStatus.textContent = `Все зарегистрированные агенты уже на версии ${currentReleaseVersion}.`;
+      const production = currentNodes.filter((node) =>
+        node.status !== "revoked" && nodeOperationalState(node) !== "test"
+      );
+      const outdatedNodes = currentReleaseVersion
+        ? production.filter((node) => node.agent_version !== currentReleaseVersion)
+        : [];
+      const updateableNow = outdatedNodes.filter((node) => nodeOperationalState(node) === "live");
+      const deferred = Math.max(0, outdatedNodes.length - updateableNow.length);
+      updateAllAgentsButton.disabled = !currentReleaseVersion || outdatedNodes.length === 0;
+      updateAllAgentsButton.textContent = outdatedNodes.length
+        ? `Обновить ${updateableNow.length} сейчас → ${currentReleaseVersion}`
+        : "Все production-агенты актуальны";
+      if (outdatedNodes.length && currentReleaseVersion) {
+        updateAllStatus.textContent = `Устаревших production-агентов: ${outdatedNodes.length}. Доступно сейчас: ${updateableNow.length}; offline/stale: ${deferred}. Тестовые ноды не участвуют.`;
+        updateAllStatus.className = "status";
+      } else if (currentReleaseVersion) {
+        updateAllStatus.textContent = `Все production-агенты уже на версии ${currentReleaseVersion}. Тестовые и исторические записи не считаются аварией.`;
         updateAllStatus.className = "status good";
       }
     }
@@ -1444,19 +1467,21 @@
 
       for (const node of currentNodes) {
         const health = nodeHealth(node);
+        const operationalState = nodeOperationalState(node);
+        const inScope = nodeInOperationalScope(node);
         if (health.live) liveCount += 1;
-        if (!health.healthy && node.status !== "revoked") unhealthyCount += 1;
+        if (inScope && !health.healthy && node.status !== "revoked") unhealthyCount += 1;
 
         const option = document.createElement("option");
         option.value = node.node_id;
-        option.textContent = `${nodeDisplayName(node)} — ${node.status}`;
-        option.disabled = node.status === "revoked";
+        option.textContent = `${nodeDisplayName(node)} — ${operationalState.toUpperCase()}`;
+        option.disabled = ["revoked", "test", "archived"].includes(operationalState);
         nodeSelect.appendChild(option);
         controlNodeSelect.appendChild(option.cloneNode(true));
 
         const presence = currentPresence.find((item) => item.node_id === node.node_id);
         const card = document.createElement("div");
-        card.className = `node-card ${health.live ? "" : "dead"} ${health.healthy ? "" : "unhealthy"}`.trim();
+        card.className = `node-card ${health.live ? "" : "dead"} ${inScope && !health.healthy ? "unhealthy" : ""}`.trim();
 
         const top = document.createElement("div");
         top.className = "node-top";
@@ -1464,7 +1489,11 @@
         addText(identity, "div", nodeDisplayName(node), "node-name");
         addText(identity, "div", `${lt("Агент","Agent","Agent")} ${agentDisplayName(node)} · v${node.agent_version || "—"} · ${lt("Роль","Role","תפקיד")}: ${node.planned_role || lt("не назначена","not assigned","לא הוקצה")}`, "node-agent");
         top.appendChild(identity);
-        const livePill = addText(top, "span", health.live ? "LIVE" : "OFFLINE", health.live ? "state-live" : "state-dead");
+        const stateLabel = {
+          live:"LIVE", offline:"OFFLINE", paused:"PAUSED", stale:"STALE",
+          archived:"HISTORY", test:"TEST", revoked:"REVOKED"
+        }[operationalState] || operationalState.toUpperCase();
+        const livePill = addText(top, "span", stateLabel, health.live ? "state-live" : "state-dead");
         livePill.style.fontWeight = "900";
         card.appendChild(top);
 
@@ -1474,7 +1503,10 @@
         addText(lines, "div", `${lt("Живой","Live","חי")}: ${health.live ? lt("ДА","YES","כן") : lt("НЕТ","NO","לא")}`, health.live ? "state-live" : "state-dead");
         const healthLine = document.createElement("div");
         healthLine.className = "health-line";
-        addText(healthLine, "span", `${lt("Здоровье","Health","בריאות")}: ${health.healthy ? lt("ЗДОРОВ","HEALTHY","תקין") : lt("НЕЗДОРОВ","UNHEALTHY","לא תקין")}`, health.healthy ? "state-live" : "state-dead");
+        const healthLabel = inScope
+          ? (health.healthy ? lt("ЗДОРОВ","HEALTHY","תקין") : lt("НЕЗДОРОВ","UNHEALTHY","לא תקין"))
+          : lt("ВНЕ ACTIVE SCOPE","OUT OF ACTIVE SCOPE","מחוץ לטווח הפעיל");
+        addText(healthLine, "span", `${lt("Здоровье","Health","בריאות")}: ${healthLabel}`, health.healthy ? "state-live" : "state-dead");
         const toggle = addText(healthLine, "button", "+", "detail-toggle");
         toggle.type = "button";
         toggle.setAttribute("aria-label", `Показать полную информацию о ${nodeDisplayName(node)}`);
@@ -1492,7 +1524,7 @@
         [
           `Hostname: ${node.hostname || "—"}`,
           `Node ID: ${node.node_id}`,
-          `${lt("Статус Controller","Controller status","מצב Controller")}: ${node.status}`,
+          `${lt("Статус Controller","Controller status","מצב Controller")}: ${node.status} · operational: ${operationalState}`,
           `OS: ${[node.os_name, node.os_version].filter(Boolean).join(" ") || "—"} · ${node.architecture || "—"}`,
           `CPU: ${health.cpu === null ? "—" : health.cpu.toFixed(1) + "%"} · RAM: ${health.memory === null ? "—" : health.memory.toFixed(1) + "%"}`,
           `Public IP: ${presence?.public_ip || "—"}`,
@@ -1501,7 +1533,11 @@
           `${lt("Версия агента","Agent version","גרסת agent")}: ${node.agent_version || "—"} · ${lt("Плановая роль","Planned role","תפקיד מתוכנן")}: ${node.planned_role || lt("не назначена","not assigned","לא הוקצה")}`,
           `LAN IP: ${node.lan_ipv4 || "—"}`,
           warningParts.length ? `Внимание: ${warningParts.join(" · ")}` : lt("Предупреждения: нет","Warnings: none","אזהרות: אין"),
-          !health.live ? offlineExplanation(node) : ""
+          operationalState === "test"
+            ? lt("Тестовая нода: исключена из production scheduler, compliance и массовых обновлений.","Test node: excluded from production scheduling, compliance, and bulk updates.","node בדיקה: הוחרג מתזמון production, compliance ועדכונים מרוכזים.")
+            : ["stale","archived"].includes(operationalState)
+              ? lt("Историческая/устаревшая запись: не считается текущей аварией.","Historical/stale record: not counted as a current incident.","רשומה היסטורית/מיושנת: אינה נספרת כאירוע נוכחי.")
+              : (!health.live ? offlineExplanation(node) : "")
         ].filter(Boolean).forEach((line) => addText(details, "div", line));
         toggle.addEventListener("click", () => {
           const open = details.classList.toggle("open");
@@ -1564,7 +1600,8 @@
       for (const command of commands) {
         const item = document.createElement("div");
         item.className = `item ${command.status === "completed" ? "ok" : "warn"}`;
-        addText(item, "strong", `${labels[command.command_type] || command.command_type} — ${command.status}`);
+        const statusLabel = command.ttl_expired ? "expired (TTL)" : command.status;
+        addText(item, "strong", `${labels[command.command_type] || command.command_type} — ${statusLabel}`);
         addText(item, "div", `Node ID: ${command.node_id}`, "small");
         addText(item, "div", command.created_at, "small");
         list.appendChild(item);
@@ -1888,13 +1925,14 @@
       const counts = data.counts || {};
       const storage = data.storage_integrity || {};
       enterpriseSummary.textContent = [
-        `Compliance: ${counts.compliant_nodes || 0}/${counts.nodes || 0}`,
+        `Compliance active: ${counts.compliant_nodes || 0}/${counts.active_nodes ?? counts.nodes ?? 0}`,
+        `Excluded stale/test/history: ${counts.excluded_nodes || 0}`,
         `Enterprise Probe: ${counts.windows_enterprise_probe_ready || 0}`,
         `Отчёты с integrity metadata: ${storage.reports_with_integrity_metadata || 0}/${storage.total_reports || 0}`,
         `Проверенных последних inventory: ${storage.verified_latest_system_inventories || 0}`
       ].join("\n");
       enterpriseSummary.className = "status " +
-        ((counts.nodes || 0) > 0 && counts.noncompliant_nodes === 0 ? "good" : "");
+        ((counts.active_nodes ?? counts.nodes ?? 0) > 0 && counts.noncompliant_nodes === 0 ? "good" : "");
 
       enterpriseServiceCatalog.replaceChildren();
       for (const [key, status] of Object.entries(data.service_catalog || {})) {
@@ -1939,16 +1977,22 @@
       enterpriseNodeCompliance.replaceChildren();
       for (const node of data.nodes || []) {
         const row = document.createElement("div");
-        row.className = "enterprise-node-row " + (node.compliance?.compliant ? "good" : "bad");
-        addText(row, "strong", `${node.hostname || node.node_id} · ${node.compliance?.compliant ? "COMPLIANT" : "ACTION NEEDED"}`);
+        const inScope = node.compliance_in_scope !== false;
+        row.className = "enterprise-node-row " + (!inScope ? "" : (node.compliance?.compliant ? "good" : "bad"));
+        const complianceLabel = !inScope
+          ? `${String(node.operational_state || "excluded").toUpperCase()} / HISTORY`
+          : (node.compliance?.compliant ? "COMPLIANT" : "ACTION NEEDED");
+        addText(row, "strong", `${node.hostname || node.node_id} · ${complianceLabel}`);
         addText(row, "div", `Site: ${node.site_name || "—"} · Group: ${node.group_name || "—"} · Agent: ${node.agent_version || "—"}`, "small");
         const failed = (node.compliance?.checks || []).filter((check) => !check.ok);
         addText(
           row,
           "div",
-          failed.length
-            ? "Нарушения: " + failed.map((check) => `${check.key}: ${check.detail}`).join(" · ")
-            : "Все активные правила Desired State выполнены.",
+          !inScope
+            ? "Исключено из active compliance: stale/test/history запись не считается текущей аварией."
+            : failed.length
+              ? "Нарушения: " + failed.map((check) => `${check.key}: ${check.detail}`).join(" · ")
+              : "Все активные правила Desired State выполнены.",
           "small"
         );
         const enterprise = node.compliance?.windows_enterprise;
@@ -2502,7 +2546,7 @@
       try {
         const data = await api("/api/v1/architect/update-all", { method: "POST" });
         const rollout = data.rollout;
-        updateAllStatus.textContent = `Rollout запущен → ${rollout.target_version}. Зарегистрировано: ${rollout.registered_nodes}; ожидают обновление: ${rollout.nodes_waiting_for_update}. Агенты получат команду автоматически при следующем poll.`;
+        updateAllStatus.textContent = `Rollout → ${rollout.target_version}. Production-нод: ${rollout.registered_nodes}; устаревших: ${rollout.nodes_waiting_for_update}; доступны сейчас: ${rollout.nodes_updateable_now ?? 0}; отложены offline/stale: ${rollout.nodes_deferred ?? 0}; тестовых исключено: ${rollout.excluded_test_nodes ?? 0}.`;
         updateAllStatus.className = "status good";
       } catch (error) {
         updateAllStatus.textContent = `Массовое обновление не запущено: ${error.message}`;
