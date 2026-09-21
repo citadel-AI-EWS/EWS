@@ -4369,7 +4369,18 @@ async function publicHubNodes(env) {
 
 async function architectRelease(request, env) {
   await authenticateArchitect(request, env);
-  return json({ ok: true, release: LATEST_NODE_RELEASE, lmstudio: LMSTUDIO_INTEGRATION });
+  const quality = openRouterQualityConfig(env);
+  return json({
+    ok: true,
+    release: LATEST_NODE_RELEASE,
+    lmstudio: LMSTUDIO_INTEGRATION,
+    openrouter: {
+      configured: quality.configured,
+      model: quality.model,
+      fusion_preset: quality.fusionPreset,
+      timeout_ms: quality.timeoutMs
+    }
+  });
 }
 
 async function architectCreateCommand(request, env, nodeId) {
