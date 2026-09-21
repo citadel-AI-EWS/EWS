@@ -1,5 +1,14 @@
 # CITADEL/EWS Python Node v1
 
+## v0.3.14 — Python-only execution и управление LM Studio
+
+- Architect и Hub могут отправлять задачи в режим `Python only`: агент выполняет только детерминированные операции и не вызывает LM Studio, LLM или OpenRouter.
+- Для проектов добавлена capability `project_python`; Python-only проект не требует установленной или загруженной языковой модели.
+- Python-only executor поддерживает ограниченные вычисления, анализ `text:`, проверку/разбор `json:` и диагностику CPU/RAM/диска/сети. Свободный вопрос, который Python не может достоверно вывести, завершается явным сообщением вместо скрытого перехода к ИИ.
+- Добавлена подписанная команда `lmstudio_uninstall` с отдельным подтверждением Architect. По умолчанию удаляется только runtime; модели и данные сохраняются.
+- Полное удаление CITADEL-managed LM Studio data/model storage доступно только по отдельному `purge_data` и тому же явному подтверждению.
+- Удаление LM Studio не удаляет CITADEL Agent, node identity или Controller enrollment.
+
 ## v0.3.13 — Windows Enterprise Services
 
 - Агент включает hash-pinned read-only probe `windows_enterprise_probe.ps1`; он запускается только из локального allowlist-кода Agent с `shell=False`.
