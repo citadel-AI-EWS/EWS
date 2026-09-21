@@ -13,6 +13,7 @@ import ast
 import base64
 import binascii
 import contextlib
+import concurrent.futures
 import ctypes
 import dataclasses
 import datetime as dt
@@ -47,7 +48,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.14"
+VERSION = "0.3.15"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -941,8 +942,23 @@ class Agent:
             "completed_at": now_iso(),
         }
 
+    def python_mini_agent_tasks(self, task_text: str) -> list[str]:
+        """Split a Python-only project into a bounded set of local deterministic workers."""
+        raw_parts = [
+            re.sub(r"^\\s*(?:[-*•]|\\d+[.)])\\s*", "", part).strip()
+            for part in re.split(r"\\r?\\n|(?<=;)\\s+", task_text)
+            if part.strip()
+        ]
+        supported_prefix = ("calc:", "calculate:", "посчитай:", "вычисли:", "text:", "текст:", "json:", "json ")
+        parts = [part for part in raw_parts if part]
+        if len(parts) <= 1 and task_text.lower().startswith(supported_prefix):
+            return [task_text.strip()]
+        if len(parts) <= 1:
+            return [task_text.strip()]
+        return parts[:8]
+
     def execute_project_python(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Execute a bounded deterministic project task without any LLM call."""
+        """Coordinate bounded local Python mini-workers without calling any LLM."""
         task_text = str(payload.get("task_text") or "").strip()
         role_name = str(payload.get("role_name") or "programmer").strip()
         project_id = str(payload.get("project_id") or "").strip()
@@ -951,13 +967,40 @@ class Agent:
             raise RuntimeError("invalid project task")
         if not role_name or len(role_name) > 64:
             raise RuntimeError("invalid project role")
-        content = self.python_mode_answer(task_text)
+        tasks = self.python_mini_agent_tasks(task_text)
+        max_workers = min(4, len(tasks))
+        def run_worker(index_and_task: tuple[int, str]) -> dict[str, Any]:
+            index, subtask = index_and_task
+            answer = self.python_mode_answer(subtask)
+            return {
+                "mini_agent_id": f"py-mini-{index + 1}",
+                "task": subtask,
+                "status": "completed",
+                "content": answer,
+            }
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix="citadel-python-mini",
+        ) as pool:
+            mini_agents = list(pool.map(run_worker, enumerate(tasks)))
+        content = "\\n\\n".join(
+            f"[{worker['mini_agent_id']}]\\n{worker['content']}"
+            for worker in mini_agents
+        )
+        self.log.write(
+            "python_mini_agents_completed",
+            project_id=project_id or None,
+            work_item_id=work_item_id or None,
+            mini_agent_count=len(mini_agents),
+        )
         return {
             "project_id": project_id or None,
             "work_item_id": work_item_id or None,
             "role_name": role_name,
             "engine": "python",
             "model": None,
+            "mini_agent_count": len(mini_agents),
+            "mini_agents": mini_agents,
             "content": content,
             "completed_at": now_iso(),
         }
@@ -1956,11 +1999,21 @@ class Agent:
         replaced: list[str] = []
         existed_before: dict[str, bool] = {}
         try:
+            changed_items: list[dict[str, Any]] = []
             for item in payload["files"]:
+                current = install_root / item["path"]
+                if current.is_file():
+                    current_hash = hashlib.sha256(current.read_bytes()).hexdigest()
+                    if current_hash == item["sha256"]:
+                        continue
                 data = self.download_update_file(item["url"])
                 if hashlib.sha256(data).hexdigest() != item["sha256"]:
                     raise RuntimeError(f"update hash mismatch: {item['path']}")
                 (staging / item["path"]).write_bytes(data)
+                changed_items.append(item)
+            if not changed_items:
+                self.log.write("agent_update_noop", version=payload["version"], files=[])
+                return
             entrypoint = staging / "citadel_node_v2.py"
             if entrypoint.exists():
                 # The argv is fixed and the shell remains disabled.
@@ -1975,11 +2028,15 @@ class Agent:
                 if result.returncode != 0:
                     raise RuntimeError("updated agent self-test failed")
             backup.mkdir(parents=True, exist_ok=True)
-            for item in payload["files"]:
+            for core_name in sorted(CORE_UPDATE_FILE_NAMES):
+                current_core = install_root / core_name
+                if current_core.is_file():
+                    shutil.copy2(current_core, backup / core_name)
+            for item in changed_items:
                 name = item["path"]
                 current = install_root / name
                 existed_before[name] = current.exists()
-                if current.exists():
+                if current.exists() and name not in CORE_UPDATE_FILE_NAMES:
                     shutil.copy2(current, backup / name)
                 os.replace(staging / name, current)
                 replaced.append(name)
