@@ -278,6 +278,18 @@ assert.doesNotMatch(home, /document\.write\(/);
 assert.doesNotMatch(hub, /document\.write\(/);
 assert.doesNotMatch(architect, /document\.write\(/);
 assert.match(architect, /sessionStorage\.setItem\("citadel-lmnode-request"/);
+{
+  const start = index.indexOf("async function publicHubNodes");
+  const end = index.indexOf("async function architectRelease", start);
+  assert.ok(start >= 0 && end > start, "publicHubNodes function missing");
+  const publicHubBlock = index.slice(start, end);
+  assert.doesNotMatch(
+    publicHubBlock,
+    /ensureAutoEnrollmentStorage/,
+    "public Hub GET path must remain read-only and must not run schema DDL"
+  );
+  assert.match(publicHubBlock, /FROM node_numbers AS nn JOIN nodes AS n/);
+}
 assert.match(index, /function operationalNodeState/);
 assert.match(index, /function isTestNodeRecord/);
 assert.match(index, /async function expireStaleCommands/);
