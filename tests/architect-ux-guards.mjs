@@ -229,7 +229,7 @@ assert.match(index, /materializeProjectWorkForNode/);
 assert.match(index, /current\.command_type === "lmstudio_model_load"/);
 assert.match(index, /project_assignments_created/);
 assert.match(index, /mission_type, payload_json/);
-assert.match(index, /'project_text'/);
+assert.match(index, /missionType = executionMode === "python" \? "project_python" : "project_text"/);
 assert.match(index, /waiting_for_lmstudio_project_worker/);
 assert.match(index, /architect_python/);
 assert.match(architect, /projectExecutionMode/);
