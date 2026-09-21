@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 
 const architect = fs.readFileSync("architect.html", "utf8");
 const hub = fs.readFileSync("hub.html", "utf8");
+const logs = fs.readFileSync("architect-logs.html", "utf8");
+const home = fs.readFileSync("live-index.html", "utf8");
 const index = fs.readFileSync("src/index.js", "utf8");
 const agent = fs.readFileSync("agent/citadel_node_v1.py", "utf8");
 
@@ -218,7 +220,8 @@ assert.match(architect, /projectWorkerReadiness/);
 assert.match(architect, /PLAN/);
 assert.match(architect, /WAITING MODEL/);
 assert.match(architect, /Подготовить ноду в Hub/);
-assert.match(architect, /\/hub\/\?lmnode=/);
+assert.match(architect, /sessionStorage\.setItem\("citadel-lmnode-request"/);
+assert.match(architect, /location\.href = "\/hub\/"|location\.href="\/hub\/"|location\.href = '\/hub\/'/);
 assert.match(architect, /ASSIGNED/);
 assert.match(architect, /RUNNING/);
 assert.match(architect, /COMPLETED/);
@@ -262,6 +265,19 @@ assert.match(hub, /id="lmstudioPurgeData"/);
 assert.match(hub, /REMOVE_LMSTUDIO/);
 assert.match(hub, /Python \/ AI executor/);
 assert.match(hub, /data-hybrid-mode="python"/);
+for (const [name, page] of [["home", home], ["hub", hub], ["architect", architect], ["logs", logs]]) {
+  assert.match(page, /id="homeButton"/, `${name} view must expose a Home button`);
+}
+assert.match(hub, /history\.replaceState\(\{citadelView:"hub"\},"","\/"\)/);
+assert.match(architect, /history\.replaceState\(\{citadelView:"architect"\},"","\/"\)/);
+assert.match(logs, /history\.replaceState\(\{citadelView:"logs"\},"","\/"\)/);
+assert.match(home, /href="\/hub\/" /);
+assert.match(home, /href="\/architect\/" /);
+assert.match(home, /href="\/architect\/logs\/" /);
+assert.doesNotMatch(home, /document\.write\(/);
+assert.doesNotMatch(hub, /document\.write\(/);
+assert.doesNotMatch(architect, /document\.write\(/);
+assert.match(architect, /sessionStorage\.setItem\("citadel-lmnode-request"/);
 assert.match(index, /function operationalNodeState/);
 assert.match(index, /function isTestNodeRecord/);
 assert.match(index, /async function expireStaleCommands/);

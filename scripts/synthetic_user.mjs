@@ -74,6 +74,14 @@ async function inspectPage(route, interact) {
     const bodyText = (await page.locator("body").innerText()).trim();
     if (bodyText.length < 20) addFinding("empty_page", route, "Visible page text is unexpectedly short");
 
+    const visibleUrl = new URL(page.url());
+    if (visibleUrl.pathname !== "/" || visibleUrl.search || visibleUrl.hash) {
+      addFinding("non_root_browser_url", route, `visible URL must stay at root, got ${visibleUrl.pathname}${visibleUrl.search}${visibleUrl.hash}`);
+    }
+    if (await page.locator("#homeButton").count() !== 1) {
+      addFinding("missing_home_button", route, "every user-facing view must expose one Home button");
+    }
+
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     if (overflow > 40) addFinding("desktop_horizontal_overflow", route, `horizontal overflow ${overflow}px`);
 
@@ -104,6 +112,13 @@ await inspectPage("/", async page => {
   for (const href of ["/hub/", "/architect/", "/architect/logs/"]) {
     const link = page.locator(`a[href="${href}"]`);
     if (await link.count() !== 1) addFinding("missing_navigation_link", "/", href);
+  }
+
+  await page.locator('a[href="/hub/"]').click();
+  await page.locator("#refreshButton").waitFor({ state: "visible", timeout });
+  const afterHubNavigation = new URL(page.url());
+  if (afterHubNavigation.pathname !== "/" || afterHubNavigation.search || afterHubNavigation.hash) {
+    addFinding("root_navigation_exposed_subpath", "/", page.url());
   }
 });
 
