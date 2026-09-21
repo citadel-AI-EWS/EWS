@@ -60,6 +60,16 @@ jobs:
             echo "OPENROUTER_API_KEY is not configured; final quality gate will remain bypassed."
           fi
 
+      - name: Verify configured OpenRouter API key
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "OPENROUTER_API_KEY is not configured; probe skipped."
+          else
+            node -e 'const r=await fetch("https://openrouter.ai/api/v1/key",{headers:{authorization:"Bearer "+process.env.OPENROUTER_API_KEY}});if(!r.ok){console.error("OpenRouter key probe failed with HTTP "+r.status);process.exit(1)}const d=await r.json();console.log("OpenRouter key probe: authenticated");console.log("OpenRouter key limit configured: "+(d?.data?.limit!=null?"yes":"no"));'
+          fi
+
       - name: Deploy TEST site and Worker
         uses: cloudflare/wrangler-action@v4
         with:
