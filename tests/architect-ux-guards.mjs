@@ -290,13 +290,13 @@ assert.match(architect, /sessionStorage\.setItem\("citadel-lmnode-request"/);
     /ensureAutoEnrollmentStorage/,
     "public Hub GET path must remain read-only and must not run schema DDL"
   );
-  assert.match(publicHubBlock, /FROM node_numbers AS nn JOIN nodes AS n/);
+  assert.match(publicHubBlock, /FROM nodes WHERE status != 'revoked'/);
+  assert.doesNotMatch(publicHubBlock, /node_numbers/);
+  assert.doesNotMatch(publicHubBlock, /sqlite_master/);
 }
 assert.match(autoEnrollmentMigration, /CREATE TABLE IF NOT EXISTS node_numbers/);
 assert.match(autoEnrollmentMigration, /CREATE TABLE IF NOT EXISTS auto_enrollment_windows/);
 assert.doesNotMatch(deployWorkflow, /wrangler d1 execute/);
-assert.match(index, /sqlite_master WHERE type = 'table' AND name = 'node_numbers'/);
-assert.match(index, /numbering_ready/);
 assert.match(index, /function operationalNodeState/);
 assert.match(index, /function isTestNodeRecord/);
 assert.match(index, /async function expireStaleCommands/);
