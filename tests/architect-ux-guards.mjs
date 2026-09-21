@@ -267,6 +267,23 @@ assert.match(hub, /id="lmstudioPurgeData"/);
 assert.match(hub, /REMOVE_LMSTUDIO/);
 assert.match(hub, /Python \/ AI executor/);
 assert.match(hub, /data-hybrid-mode="python"/);
+assert.match(architect, /\.section-collapsed-child\{display:none!important\}/);
+assert.match(architect, /id="projectPreflight"/);
+assert.match(architect, /id="projectTaskLogs"/);
+assert.match(architect, /Логи этого задания/);
+assert.doesNotMatch(home, /href="\/architect\/logs\/" /);
+assert.doesNotMatch(hub, /href="\/architect\/logs\/" /);
+assert.match(index, /function projectTextPreflight/);
+assert.match(index, /text_preflight/);
+assert.match(index, /task_logs: taskLogs/);
+assert.match(agent, /python_mini_agent_tasks/);
+assert.match(agent, /ThreadPoolExecutor/);
+assert.match(agent, /mini_agent_count/);
+assert.match(agent, /current_hash == item\["sha256"\]/);
+assert.match(agent, /agent_update_noop/);
+assert.match(agent, /CITADEL_LMSTUDIO_HOME/);
+assert.match(index, /openrouter:/);
+
 for (const [name, page] of [["home", home], ["hub", hub], ["architect", architect], ["logs", logs]]) {
   assert.match(page, /id="homeButton"/, `${name} view must expose a Home button`);
 }
