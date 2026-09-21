@@ -2677,6 +2677,23 @@ def self_test() -> int:
             "no AI/LLM was called" in agent.python_mode_answer("Who wrote Hamlet?"),
             "Python-only unsupported prompt did not fail closed",
         )
+        mini_report = agent.execute_project_python({
+            "project_id": "project_test",
+            "work_item_id": "work_test",
+            "role_name": "programmer",
+            "task_text": "calc: 2 + 2\ncalc: 5 * 6",
+        })
+        require_test(
+            mini_report.get("mini_agent_count") == 2
+            and len(mini_report.get("mini_agents") or []) == 2
+            and "Python calculation: 4" in mini_report.get("content", "")
+            and "Python calculation: 30" in mini_report.get("content", ""),
+            "Python mini-agent coordinator failed deterministic subtask execution",
+        )
+        require_test(
+            str(agent.lmstudio_runtime_home()).startswith(str(root.resolve())),
+            "LM Studio managed HOME escaped the agent data directory",
+        )
         require_test(
             agent.validate_lmstudio_model_payload({"model": "openai/gpt-oss-20b"}),
             "valid LM Studio model id rejected",
