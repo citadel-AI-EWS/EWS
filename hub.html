@@ -139,7 +139,7 @@
       </aside>
     </div>
 
-    <footer class="footer"><span id="footerState">Auto-refresh every 10 seconds · real controller data only</span><span><a href="/" data-i18n="home">Домой</a> · <a href="/architect/" data-citadel-view="/architect/" data-i18n="architectPanel">Architect panel</a> · <a href="/architect/logs/" data-citadel-view="/architect/logs/" data-i18n="logs">Logs</a></span></footer>
+    <footer class="footer"><span id="footerState">Auto-refresh every 10 seconds · real controller data only</span><span><a href="/" data-i18n="home">Домой</a> · <a href="/architect/" data-i18n="architectPanel">Architect panel</a> · <a href="/architect/logs/" data-i18n="logs">Logs</a></span></footer>
   </main>
   <div id="lmstudioPanel" class="lm-float hidden" role="dialog" aria-label="LM Studio node control">
     <div class="lm-head"><div><b>LM Studio / llmster</b><div id="lmstudioNode" class="lm-node">—</div></div><button id="lmstudioClose" class="btn" type="button">×</button></div>
@@ -191,17 +191,6 @@
   <div id="toast" class="toast"><strong id="toastTitle"></strong><span id="toastText"></span></div>
 
   <script>
-    async function openCitadelView(route){
-      const response=await fetch(route,{cache:"no-store"});
-      if(!response.ok)throw new Error("navigation_http_"+response.status);
-      const html=await response.text();
-      history.replaceState({citadelView:route},"","/");
-      document.open();document.write(html);document.close();
-    }
-    document.querySelectorAll("[data-citadel-view]").forEach(link=>link.addEventListener("click",event=>{
-      event.preventDefault();
-      openCitadelView(link.dataset.citadelView).catch(()=>{location.href=link.dataset.citadelView});
-    }));
     const $ = (id) => document.getElementById(id);
     const nodesEl = $("nodes"), tokenInput = $("architectToken"), loginButton = $("loginButton"), logoutButton = $("logoutButton");
     const searchInput = $("nodeSearch"), nodePicker = $("nodePicker"), updateAllButton = $("updateAllButton"), pauseAllButton = $("pauseAllButton"), exportButton = $("exportButton");
