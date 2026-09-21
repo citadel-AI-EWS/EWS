@@ -4289,27 +4289,18 @@ async function architectOverview(request, env) {
 }
 
 async function publicHubNodes(env) {
-  // Public reads must stay read-only and must not depend on optional numbering storage.
-  const numbering = await env.DB.prepare(
-    "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'node_numbers' LIMIT 1"
-  ).first();
-  const query = numbering?.ok === 1
-    ? await env.DB.prepare(
-        "SELECT nn.node_number, n.agent_version, n.status, n.enrolled_at, n.last_seen_at " +
-        "FROM node_numbers AS nn JOIN nodes AS n ON n.node_id = nn.node_id " +
-        "WHERE n.status != 'revoked' ORDER BY nn.node_number ASC LIMIT 500"
-      ).all()
-    : await env.DB.prepare(
-        "SELECT NULL AS node_number, agent_version, status, enrolled_at, last_seen_at " +
-        "FROM nodes WHERE status != 'revoked' ORDER BY enrolled_at ASC LIMIT 500"
-      ).all();
+  // Keep the public Hub on the oldest stable schema surface: the core nodes table only.
+  // Numbering is presentation-only here; no optional tables, schema inspection or writes.
+  const query = await env.DB.prepare(
+    "SELECT node_id, agent_version, status, enrolled_at, last_seen_at " +
+    "FROM nodes WHERE status != 'revoked' ORDER BY enrolled_at ASC, node_id ASC LIMIT 500"
+  ).all();
   return json({
     ok: true,
     refreshed_at: new Date().toISOString(),
-    numbering_ready: numbering?.ok === 1,
     nodes: (query.results || []).map((node, index) => ({
-      node_number: node.node_number,
-      display_name: node.node_number ? `CITADEL Node ${node.node_number}` : `CITADEL Node ${index + 1}`,
+      node_number: index + 1,
+      display_name: `CITADEL Node ${index + 1}`,
       agent_version: node.agent_version,
       status: node.status,
       enrolled_at: node.enrolled_at,
