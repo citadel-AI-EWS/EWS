@@ -1262,6 +1262,20 @@ class Agent:
                 return str(Path(candidate))
         return None
 
+    def lmstudio_runtime_home(self) -> Path:
+        """Return the stable CITADEL-managed HOME used by llmster."""
+        home = (self.config.data_dir / "lmstudio-runtime-home").resolve()
+        home.mkdir(parents=True, exist_ok=True)
+        return home
+
+    def lmstudio_process_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        runtime_home = str(self.lmstudio_runtime_home())
+        env["CITADEL_LMSTUDIO_HOME"] = runtime_home
+        env["HOME"] = runtime_home
+        env["LMS_NO_MODIFY_PATH"] = "1"
+        return env
+
     def run_lms(self, args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
         executable = self.find_lms()
         if not executable:
@@ -1272,6 +1286,7 @@ class Agent:
             capture_output=True,
             text=True,
             shell=False,
+            env=self.lmstudio_process_env(),
         )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "lms command failed").strip()
@@ -1513,6 +1528,7 @@ class Agent:
                 capture_output=True,
                 text=True,
                 shell=False,
+                env=self.lmstudio_process_env(),
             )
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout or "LM Studio installation failed").strip()
@@ -1540,29 +1556,36 @@ class Agent:
                 helper.unlink()
 
     def lmstudio_managed_roots(self) -> list[Path]:
-        """Return only LM Studio locations inside the current user's home directory."""
-        home = Path.home().resolve()
-        candidates: list[Path] = []
-        pointer = home / ".lmstudio-home-pointer"
-        if pointer.is_file():
-            try:
-                value = pointer.read_text(encoding="utf-8").strip()
-                if value:
-                    candidates.append(Path(value).expanduser().resolve())
-            except OSError:
-                pass
-        candidates.extend([
-            (home / ".lmstudio").resolve(),
-            (home / ".cache" / "lm-studio").resolve(),
-        ])
+        """Return only allowlisted LM Studio roots under CITADEL or the legacy user home."""
+        legacy_home = Path.home().resolve()
+        runtime_home = self.lmstudio_runtime_home()
+        candidates: list[Path] = [
+            (runtime_home / ".lmstudio").resolve(),
+            (runtime_home / ".cache" / "lm-studio").resolve(),
+            (legacy_home / ".lmstudio").resolve(),
+            (legacy_home / ".cache" / "lm-studio").resolve(),
+        ]
+        for home in (runtime_home, legacy_home):
+            pointer = home / ".lmstudio-home-pointer"
+            if pointer.is_file():
+                try:
+                    value = pointer.read_text(encoding="utf-8").strip()
+                    if value:
+                        candidates.append(Path(value).expanduser().resolve())
+                except OSError:
+                    pass
         allowed_names = {".lmstudio", "lm-studio"}
         safe: list[Path] = []
         for path in candidates:
-            try:
-                path.relative_to(home)
-            except ValueError:
-                continue
-            if path == home or path.name not in allowed_names:
+            allowed_parent = None
+            for parent in (runtime_home, legacy_home):
+                try:
+                    path.relative_to(parent)
+                    allowed_parent = parent
+                    break
+                except ValueError:
+                    continue
+            if allowed_parent is None or path == allowed_parent or path.name not in allowed_names:
                 continue
             if path not in safe:
                 safe.append(path)
@@ -1604,10 +1627,11 @@ class Agent:
                 continue
             shutil.rmtree(target)
             removed.append(str(target))
-        pointer = Path.home().resolve() / ".lmstudio-home-pointer"
         if purge_data:
-            with contextlib.suppress(FileNotFoundError):
-                pointer.unlink()
+            for pointer_home in (self.lmstudio_runtime_home(), Path.home().resolve()):
+                pointer = pointer_home / ".lmstudio-home-pointer"
+                with contextlib.suppress(FileNotFoundError):
+                    pointer.unlink()
         if self.find_lms():
             raise RuntimeError("lmstudio_runtime_still_detected")
         self.report_ai_state(
