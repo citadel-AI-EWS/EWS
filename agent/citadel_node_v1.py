@@ -967,8 +967,8 @@ class Agent:
     def python_mini_agent_tasks(self, task_text: str) -> list[str]:
         """Split a Python-only project into a bounded set of local deterministic workers."""
         raw_parts = [
-            re.sub(r"^\\s*(?:[-*•]|\\d+[.)])\\s*", "", part).strip()
-            for part in re.split(r"\\r?\\n|(?<=;)\\s+", task_text)
+            re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", part).strip()
+            for part in re.split(r"\r?\n|(?<=;)\s+", task_text)
             if part.strip()
         ]
         supported_prefix = ("calc:", "calculate:", "посчитай:", "вычисли:", "text:", "текст:", "json:", "json ")
@@ -1005,8 +1005,8 @@ class Agent:
             thread_name_prefix="citadel-python-mini",
         ) as pool:
             mini_agents = list(pool.map(run_worker, enumerate(tasks)))
-        content = "\\n\\n".join(
-            f"[{worker['mini_agent_id']}]\\n{worker['content']}"
+        content = "\n\n".join(
+            f"[{worker['mini_agent_id']}]\n{worker['content']}"
             for worker in mini_agents
         )
         self.log.write(
