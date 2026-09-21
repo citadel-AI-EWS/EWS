@@ -47,11 +47,11 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.13"
+VERSION = "0.3.14"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}
+SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}
 CORE_UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
 UPDATE_FILE_NAMES = CORE_UPDATE_FILE_NAMES | {"windows_enterprise_probe.ps1"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -787,7 +787,7 @@ class Agent:
 
     @property
     def capabilities(self) -> list[str]:
-        capabilities = set(HANDLERS) | {"lmstudio_remote", "project_text"}
+        capabilities = set(HANDLERS) | {"lmstudio_remote", "project_text", "project_python"}
         if os.name == "nt" and os.environ.get("CITADEL_SERVICE_MANAGED") == "1":
             capabilities.add("windows_core_service")
         if _windows_enterprise_probe_file_valid():
@@ -941,13 +941,35 @@ class Agent:
             "completed_at": now_iso(),
         }
 
+    def execute_project_python(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Execute a bounded deterministic project task without any LLM call."""
+        task_text = str(payload.get("task_text") or "").strip()
+        role_name = str(payload.get("role_name") or "programmer").strip()
+        project_id = str(payload.get("project_id") or "").strip()
+        work_item_id = str(payload.get("work_item_id") or "").strip()
+        if not task_text or len(task_text) > 20000:
+            raise RuntimeError("invalid project task")
+        if not role_name or len(role_name) > 64:
+            raise RuntimeError("invalid project role")
+        content = self.python_mode_answer(task_text)
+        return {
+            "project_id": project_id or None,
+            "work_item_id": work_item_id or None,
+            "role_name": role_name,
+            "engine": "python",
+            "model": None,
+            "content": content,
+            "completed_at": now_iso(),
+        }
+
     def execute_assignment(self, assignment: dict[str, Any]) -> None:
         node_id = self.require_node_id()
         assignment_id = str(assignment.get("assignment_id") or "")
         mission_type = str(assignment.get("mission_type") or "")
         handler = HANDLERS.get(mission_type)
         is_project_text = mission_type == "project_text"
-        if not assignment_id or (handler is None and not is_project_text):
+        is_project_python = mission_type == "project_python"
+        if not assignment_id or (handler is None and not is_project_text and not is_project_python):
             self.log.write(
                 "assignment_rejected_local",
                 assignment_id=assignment_id,
@@ -966,11 +988,12 @@ class Agent:
         )
         started = time.monotonic()
         try:
-            report = (
-                self.execute_project_text(assignment.get("payload") or {})
-                if is_project_text
-                else handler(assignment.get("payload") or {})
-            )
+            if is_project_python:
+                report = self.execute_project_python(assignment.get("payload") or {})
+            elif is_project_text:
+                report = self.execute_project_text(assignment.get("payload") or {})
+            else:
+                report = handler(assignment.get("payload") or {})
             result = {
                 "assignment_id": assignment_id,
                 "outcome": "success",
@@ -1040,6 +1063,9 @@ class Agent:
                 return False
         elif command_type == "lmstudio_install":
             if not self.validate_lmstudio_install_payload(payload):
+                return False
+        elif command_type == "lmstudio_uninstall":
+            if not self.validate_lmstudio_uninstall_payload(payload):
                 return False
         elif command_type in {"lmstudio_model_get", "lmstudio_model_load"}:
             if not self.validate_lmstudio_model_payload(payload):
@@ -1179,14 +1205,15 @@ class Agent:
 
     def find_lms(self) -> str | None:
         candidates: list[str | None] = [shutil.which("lms")]
-        home = Path.home()
-        if os.name == "nt":
-            candidates.extend([
-                str(home / ".lmstudio" / "bin" / "lms.exe"),
-                str(home / ".lmstudio" / "bin" / "lms.cmd"),
-            ])
-        else:
-            candidates.append(str(home / ".lmstudio" / "bin" / "lms"))
+        for root in self.lmstudio_managed_roots():
+            if os.name == "nt":
+                candidates.extend([
+                    str(root / "bin" / "lms.exe"),
+                    str(root / "bin" / "lms.cmd"),
+                    str(root / "bin" / "lms"),
+                ])
+            else:
+                candidates.append(str(root / "bin" / "lms"))
         for candidate in candidates:
             if candidate and Path(candidate).is_file():
                 return str(Path(candidate))
@@ -1326,6 +1353,14 @@ class Agent:
         return name == expected
 
     @staticmethod
+    def validate_lmstudio_uninstall_payload(payload: dict[str, Any]) -> bool:
+        return (
+            isinstance(payload, dict)
+            and set(payload).issubset({"purge_data"})
+            and isinstance(payload.get("purge_data", False), bool)
+        )
+
+    @staticmethod
     def validate_lmstudio_model_payload(payload: dict[str, Any]) -> bool:
         model = payload.get("model")
         if not isinstance(model, str) or not LMSTUDIO_MODEL_RE.fullmatch(model):
@@ -1461,6 +1496,99 @@ class Agent:
             with contextlib.suppress(FileNotFoundError):
                 helper.unlink()
 
+    def lmstudio_managed_roots(self) -> list[Path]:
+        """Return only LM Studio locations inside the current user's home directory."""
+        home = Path.home().resolve()
+        candidates: list[Path] = []
+        pointer = home / ".lmstudio-home-pointer"
+        if pointer.is_file():
+            try:
+                value = pointer.read_text(encoding="utf-8").strip()
+                if value:
+                    candidates.append(Path(value).expanduser().resolve())
+            except OSError:
+                pass
+        candidates.extend([
+            (home / ".lmstudio").resolve(),
+            (home / ".cache" / "lm-studio").resolve(),
+        ])
+        allowed_names = {".lmstudio", "lm-studio"}
+        safe: list[Path] = []
+        for path in candidates:
+            try:
+                path.relative_to(home)
+            except ValueError:
+                continue
+            if path == home or path.name not in allowed_names:
+                continue
+            if path not in safe:
+                safe.append(path)
+        return safe
+
+    def uninstall_lmstudio(self, payload: dict[str, Any]) -> None:
+        """Remove the CITADEL-managed LM Studio runtime without touching the agent."""
+        if not self.validate_lmstudio_uninstall_payload(payload):
+            raise RuntimeError("invalid lmstudio uninstall payload")
+        purge_data = bool(payload.get("purge_data", False))
+        self.report_ai_state(
+            last_action="uninstalling",
+            progress_phase="runtime_uninstall",
+            progress_current=0,
+            progress_total=3,
+            progress_detail="Stopping LM Studio runtime",
+        )
+        if self.find_lms():
+            for args in (["unload", "--all"], ["server", "stop"], ["daemon", "down"]):
+                try:
+                    self.run_lms(args, timeout=120)
+                except Exception as error:
+                    self.log.write(
+                        "lmstudio_uninstall_stop_warning",
+                        argv=args[:2],
+                        error=str(error)[:200],
+                    )
+        roots = self.lmstudio_managed_roots()
+        self.report_ai_state(
+            progress_phase="runtime_remove",
+            progress_current=1,
+            progress_total=3,
+            progress_detail="Removing CITADEL-managed LM Studio runtime files",
+        )
+        removed: list[str] = []
+        for root in roots:
+            target = root if purge_data else root / "bin"
+            if not target.exists():
+                continue
+            shutil.rmtree(target)
+            removed.append(str(target))
+        pointer = Path.home().resolve() / ".lmstudio-home-pointer"
+        if purge_data:
+            with contextlib.suppress(FileNotFoundError):
+                pointer.unlink()
+        if self.find_lms():
+            raise RuntimeError("lmstudio_runtime_still_detected")
+        self.report_ai_state(
+            installed=False,
+            selected_model=None,
+            loaded_model=None,
+            server_running=False,
+            last_action="uninstalled",
+            progress_phase="complete",
+            progress_current=3,
+            progress_total=3,
+            progress_detail=(
+                "LM Studio runtime and managed data removed"
+                if purge_data else
+                "LM Studio runtime removed; models/data preserved"
+            ),
+            load_config=None,
+        )
+        self.log.write(
+            "lmstudio_uninstalled",
+            purge_data=purge_data,
+            removed=removed[:4],
+        )
+
     def resolve_lmstudio_model_key(self, model: str, quantization: str | None = None) -> str:
         try:
             result = self.run_lms(["ls", "--json"], timeout=30)
@@ -1570,8 +1698,14 @@ class Agent:
         self.log.write("lmstudio_model_loaded", model=loaded_model)
 
     def python_mode_answer(self, prompt: str) -> str:
+        """Answer only operations Python can determine without inference or an LLM."""
         stripped = prompt.strip()
-        expression = stripped[5:].strip() if stripped.lower().startswith("calc:") else stripped
+        lowered = stripped.lower()
+        expression = stripped
+        for prefix in ("calc:", "calculate:", "посчитай:", "вычисли:"):
+            if lowered.startswith(prefix):
+                expression = stripped[len(prefix):].strip()
+                break
         if re.fullmatch(r"[0-9eE+\-*/%().\s]{1,300}", expression):
             try:
                 tree = ast.parse(expression, mode="eval")
@@ -1603,16 +1737,66 @@ class Agent:
                 return "Python calculation: " + str(calc(tree))
             except Exception as error:
                 self.log.write("python_mode_calculation_fallback", error=str(error)[:300])
-        inv = system_inventory({"task_text": prompt})
+
+        text_prefix = next((p for p in ("text:", "текст:") if lowered.startswith(p)), None)
+        if text_prefix:
+            source = stripped[len(text_prefix):].strip()
+            words = re.findall(r"[\w'-]+", source, flags=re.UNICODE)
+            lines = source.splitlines() or ([source] if source else [])
+            frequencies: dict[str, int] = {}
+            for word in words:
+                key = word.casefold()
+                frequencies[key] = frequencies.get(key, 0) + 1
+            common = sorted(frequencies.items(), key=lambda item: (-item[1], item[0]))[:10]
+            return (
+                "Python text analysis (no AI/LLM):\n"
+                f"characters={len(source)}\n"
+                f"words={len(words)}\n"
+                f"lines={len(lines)}\n"
+                f"sha256={hashlib.sha256(source.encode('utf-8')).hexdigest()}\n"
+                "top_words=" + json.dumps(common, ensure_ascii=False)
+            )
+
+        json_prefix = next((p for p in ("json:", "json ") if lowered.startswith(p)), None)
+        if json_prefix:
+            source = stripped[len(json_prefix):].strip()
+            try:
+                value = json.loads(source)
+            except json.JSONDecodeError as error:
+                return f"Python JSON validation: invalid JSON at line {error.lineno}, column {error.colno}."
+            if isinstance(value, dict):
+                shape = f"object keys={len(value)} names={list(value)[:30]}"
+            elif isinstance(value, list):
+                shape = f"array items={len(value)}"
+            else:
+                shape = f"type={type(value).__name__}"
+            preview = json.dumps(value, ensure_ascii=False, indent=2)
+            if len(preview) > 12000:
+                preview = preview[:12000] + "\n[truncated]"
+            return "Python JSON analysis (no AI/LLM):\n" + shape + "\n" + preview
+
+        system_terms = (
+            "system", "computer", "cpu", "ram", "memory", "disk", "network",
+            "система", "компьютер", "процессор", "памят", "диск", "сеть",
+        )
+        if any(term in lowered for term in system_terms):
+            inv = system_inventory({"task_text": prompt})
+            return (
+                "Python agent deterministic node context (no AI/LLM):\n"
+                f"hostname={inv['hostname']}\n"
+                f"platform={inv['platform']} {inv['platform_release']}\n"
+                f"architecture={inv['architecture']}\n"
+                f"cpu_logical_count={inv['cpu_logical_count']}\n"
+                f"memory_total_bytes={inv['memory_total_bytes']}\n"
+                f"disk_free_bytes={inv['disk_home_free_bytes']}\n"
+                f"network={json_text(inv['network'])}"
+            )
+
         return (
-            "Python agent deterministic node context:\n"
-            f"hostname={inv['hostname']}\n"
-            f"platform={inv['platform']} {inv['platform_release']}\n"
-            f"architecture={inv['architecture']}\n"
-            f"cpu_logical_count={inv['cpu_logical_count']}\n"
-            f"memory_total_bytes={inv['memory_total_bytes']}\n"
-            f"disk_free_bytes={inv['disk_home_free_bytes']}\n"
-            f"network={json_text(inv['network'])}"
+            "Python-only mode: no AI/LLM was called. "
+            "This prompt does not contain a deterministic operation Python can safely derive by itself. "
+            "Supported forms: calc:/вычисли:, text:/текст:, json:, or a system/CPU/RAM/disk/network diagnostic question. "
+            "For a free-form knowledge answer, use LM Studio/AI or provide structured data for Python to analyze."
         )
 
     def stream_lmstudio_answer(
@@ -1987,6 +2171,8 @@ class Agent:
                     self.send_wake_packet(command.get("payload") or {})
                 elif command_type == "lmstudio_install":
                     self.install_lmstudio(command.get("payload") or {})
+                elif command_type == "lmstudio_uninstall":
+                    self.uninstall_lmstudio(command.get("payload") or {})
                 elif command_type == "lmstudio_probe":
                     snapshot = self.probe_lmstudio()
                     self.report_ai_state(**{key: value for key, value in snapshot.items() if key != "loaded_models"})
@@ -2381,7 +2567,7 @@ def self_test() -> int:
             "unapproved command accepted",
         )
         require_test(
-            {"system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}.issubset(SUPPORTED_COMMANDS),
+            {"system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}.issubset(SUPPORTED_COMMANDS),
             "restricted power/wake/LM Studio commands missing",
         )
         require_test(
@@ -2393,8 +2579,22 @@ def self_test() -> int:
             "unexpected handler registered",
         )
         require_test(
-            "project_text" in agent.capabilities,
-            "project text capability missing",
+            "project_text" in agent.capabilities and "project_python" in agent.capabilities,
+            "project execution capabilities missing",
+        )
+        require_test(
+            agent.validate_lmstudio_uninstall_payload({"purge_data": False})
+            and agent.validate_lmstudio_uninstall_payload({"purge_data": True})
+            and not agent.validate_lmstudio_uninstall_payload({"purge_data": "yes"}),
+            "LM Studio uninstall payload validation failed",
+        )
+        require_test(
+            agent.python_mode_answer("calc: 2 + 3 * 4") == "Python calculation: 14",
+            "Python-only deterministic calculation failed",
+        )
+        require_test(
+            "no AI/LLM was called" in agent.python_mode_answer("Who wrote Hamlet?"),
+            "Python-only unsupported prompt did not fail closed",
         )
         require_test(
             agent.validate_lmstudio_model_payload({"model": "openai/gpt-oss-20b"}),

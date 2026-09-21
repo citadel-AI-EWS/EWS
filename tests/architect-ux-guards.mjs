@@ -2,6 +2,7 @@ import fs from "node:fs";
 import assert from "node:assert/strict";
 
 const architect = fs.readFileSync("architect.html", "utf8");
+const hub = fs.readFileSync("hub.html", "utf8");
 const index = fs.readFileSync("src/index.js", "utf8");
 const agent = fs.readFileSync("agent/citadel_node_v1.py", "utf8");
 
@@ -23,6 +24,8 @@ for (const id of [
   "updateAllAgentsButton",
   "updateAllStatus",
   "projectTitle",
+  "projectExecutionMode",
+  "projectExecutionHint",
   "projectTaskText",
   "checkProjectButton",
   "createProjectButton",
@@ -226,8 +229,29 @@ assert.match(index, /materializeProjectWorkForNode/);
 assert.match(index, /current\.command_type === "lmstudio_model_load"/);
 assert.match(index, /project_assignments_created/);
 assert.match(index, /mission_type, payload_json/);
-assert.match(index, /'project_text'/);
+assert.match(index, /missionType = executionMode === "python" \? "project_python" : "project_text"/);
 assert.match(index, /waiting_for_lmstudio_project_worker/);
+assert.match(index, /architect_python/);
+assert.match(architect, /projectExecutionMode/);
+assert.match(index, /project_python/);
+assert.match(index, /waiting_for_python_project_worker/);
+assert.match(index, /not_applicable_python/);
+assert.match(index, /executionMode === "python"/);
+assert.match(architect, /Python only · без ИИ/);
+assert.match(architect, /WAITING PYTHON/);
+assert.match(architect, /project_python/);
+assert.match(agent, /execute_project_python/);
+assert.match(agent, /"project_python" in agent\.capabilities/);
+assert.match(agent, /Python-only mode: no AI\/LLM was called/);
+assert.match(index, /lmstudio_uninstall/);
+assert.match(index, /REMOVE_LMSTUDIO/);
+assert.match(agent, /def uninstall_lmstudio/);
+assert.match(agent, /def validate_lmstudio_uninstall_payload/);
+assert.match(hub, /id="lmstudioUninstall"/);
+assert.match(hub, /id="lmstudioPurgeData"/);
+assert.match(hub, /REMOVE_LMSTUDIO/);
+assert.match(hub, /Python \/ AI executor/);
+assert.match(hub, /data-hybrid-mode="python"/);
 assert.match(index, /function operationalNodeState/);
 assert.match(index, /function isTestNodeRecord/);
 assert.match(index, /async function expireStaleCommands/);
