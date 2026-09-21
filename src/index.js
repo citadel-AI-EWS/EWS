@@ -4201,7 +4201,6 @@ async function architectEnterpriseRecoveryManifest(request, env) {
 async function architectOverview(request, env) {
   await authenticateArchitect(request, env);
   await Promise.all([
-    backfillLegacyReports(env),
     ensureSessionStorage(env),
     ensureAutoEnrollmentStorage(env),
     ensureProjectStorage(env),
@@ -4345,32 +4344,43 @@ async function architectOverview(request, env) {
   });
 }
 
+function publicHubQueryErrorCode(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  if (message.includes("daily row read limit")) return "hub_d1_daily_read_limit_exceeded";
+  if (message.includes("daily row write limit")) return "hub_d1_daily_write_limit_exceeded";
+  if (message.includes("exceeded maximum db size")) return "hub_d1_database_size_exceeded";
+  if (message.includes("overloaded")) return "hub_d1_overloaded";
+  if (message.includes("no such table") && message.includes("nodes")) return "hub_nodes_table_missing";
+  if (message.includes("no such column")) return "hub_nodes_schema_mismatch";
+  if (message.includes("d1")) return "hub_nodes_d1_error";
+  return "hub_nodes_query_failed";
+}
+
 async function publicHubNodes(env) {
-  // Public reads must stay read-only and must not depend on optional numbering storage.
-  const numbering = await env.DB.prepare(
-    "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'node_numbers' LIMIT 1"
-  ).first();
-  const query = numbering?.ok === 1
-    ? await env.DB.prepare(
-        "SELECT nn.node_number, n.agent_version, n.status, n.enrolled_at, n.last_seen_at " +
-        "FROM node_numbers AS nn JOIN nodes AS n ON n.node_id = nn.node_id " +
-        "WHERE n.status != 'revoked' ORDER BY nn.node_number ASC LIMIT 500"
-      ).all()
-    : await env.DB.prepare(
-        "SELECT NULL AS node_number, agent_version, status, enrolled_at, last_seen_at " +
-        "FROM nodes WHERE status != 'revoked' ORDER BY enrolled_at ASC LIMIT 500"
-      ).all();
+  let query;
+  try {
+    query = await env.DB.prepare("SELECT * FROM nodes LIMIT 500").all();
+  } catch (error) {
+    console.error("Public Hub nodes query failed", error);
+    throw new ApiError(503, publicHubQueryErrorCode(error));
+  }
+  const rows = (query.results || [])
+    .filter((node) => String(node?.status || "").toLowerCase() !== "revoked")
+    .sort((left, right) => {
+      const a = String(left?.enrolled_at || "") + "\n" + String(left?.node_id || "");
+      const b = String(right?.enrolled_at || "") + "\n" + String(right?.node_id || "");
+      return a.localeCompare(b);
+    });
   return json({
     ok: true,
     refreshed_at: new Date().toISOString(),
-    numbering_ready: numbering?.ok === 1,
-    nodes: (query.results || []).map((node, index) => ({
-      node_number: node.node_number,
-      display_name: node.node_number ? `CITADEL Node ${node.node_number}` : `CITADEL Node ${index + 1}`,
-      agent_version: node.agent_version,
-      status: node.status,
-      enrolled_at: node.enrolled_at,
-      last_seen_at: node.last_seen_at
+    nodes: rows.map((node, index) => ({
+      node_number: index + 1,
+      display_name: `CITADEL Node ${index + 1}`,
+      agent_version: typeof node.agent_version === "string" ? node.agent_version : null,
+      status: typeof node.status === "string" ? node.status : "unknown",
+      enrolled_at: typeof node.enrolled_at === "string" ? node.enrolled_at : null,
+      last_seen_at: typeof node.last_seen_at === "string" ? node.last_seen_at : null
     }))
   });
 }
