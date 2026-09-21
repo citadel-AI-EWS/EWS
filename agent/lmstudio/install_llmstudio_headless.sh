@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+runtime_home="${CITADEL_LMSTUDIO_HOME:-$HOME}"
+if [ -z "$runtime_home" ]; then
+  echo "LM Studio runtime HOME is unavailable." >&2
+  exit 1
+fi
+mkdir -p "$runtime_home"
+export HOME="$runtime_home"
+export LMS_NO_MODIFY_PATH=1
+
 official_installer="https://lmstudio.ai/install.sh"
 tmp="$(mktemp -t citadel-lmstudio.XXXXXX.sh)"
 cleanup(){ rm -f "$tmp"; }
