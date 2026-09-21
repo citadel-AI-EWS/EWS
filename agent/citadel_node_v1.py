@@ -293,6 +293,9 @@ class AgentConfig:
     max_cpu_percent: float = 90.0
     max_memory_percent: float = 90.0
     controller_public_x: str = DEFAULT_CONTROLLER_PUBLIC_X
+    prevent_automatic_sleep: bool = True
+    network_recovery_enabled: bool = True
+    allowed_wifi_profiles: tuple[str, ...] = ()
 
     @classmethod
     def from_file(cls, path: Path) -> "AgentConfig":
@@ -303,6 +306,16 @@ class AgentConfig:
         local_test = parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
         if not (secure or local_test):
             raise ValueError("controller_url must use HTTPS; loopback HTTP is test-only")
+        raw_profiles = raw.get("allowed_wifi_profiles") or []
+        if not isinstance(raw_profiles, list):
+            raise ValueError("allowed_wifi_profiles must be a JSON array")
+        profiles: list[str] = []
+        for value in raw_profiles:
+            if not isinstance(value, str):
+                raise ValueError("allowed_wifi_profiles entries must be strings")
+            name = value.strip()
+            if name and len(name) <= 120 and name not in profiles:
+                profiles.append(name)
         return cls(
             controller_url=controller_url,
             data_dir=Path(raw.get("data_dir") or default_data_dir()).expanduser().resolve(),
@@ -312,6 +325,9 @@ class AgentConfig:
             max_cpu_percent=max(10.0, min(100.0, float(raw.get("max_cpu_percent", 90)))),
             max_memory_percent=max(10.0, min(100.0, float(raw.get("max_memory_percent", 90)))),
             controller_public_x=str(raw.get("controller_public_x") or DEFAULT_CONTROLLER_PUBLIC_X),
+            prevent_automatic_sleep=raw.get("prevent_automatic_sleep", True) is not False,
+            network_recovery_enabled=raw.get("network_recovery_enabled", True) is not False,
+            allowed_wifi_profiles=tuple(profiles[:16]),
         )
 
 
@@ -783,12 +799,18 @@ class Agent:
         self.network_recovery_path = config.data_dir / "network-recovery.json"
         self.last_network_recovery = 0.0
         self.last_network_remember = 0.0
+        self.last_power_guard = 0.0
+        self.power_guard_active = False
         self.last_heartbeat = 0.0
         self.enrollment_confirmed = False
 
     @property
     def capabilities(self) -> list[str]:
         capabilities = set(HANDLERS) | {"lmstudio_remote", "project_text", "project_python"}
+        if self.config.prevent_automatic_sleep:
+            capabilities.add("always_on_guard")
+        if self.config.network_recovery_enabled:
+            capabilities.add("known_network_recovery")
         if os.name == "nt" and os.environ.get("CITADEL_SERVICE_MANAGED") == "1":
             capabilities.add("windows_core_service")
         if _windows_enterprise_probe_file_valid():
@@ -2305,6 +2327,43 @@ class Agent:
     def is_network_error(error: Exception) -> bool:
         return isinstance(error, (OSError, TimeoutError, ConnectionError, http.client.HTTPException))
 
+    def controller_reachable(self, timeout: float = 5.0) -> bool:
+        parsed = urllib.parse.urlsplit(self.config.controller_url)
+        host = parsed.hostname
+        if not host:
+            return False
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except OSError:
+            return False
+
+    def enforce_power_guard(self) -> bool:
+        if not self.config.prevent_automatic_sleep or os.name != "nt":
+            return False
+        if time.monotonic() - self.last_power_guard < 60 and self.power_guard_active:
+            return True
+        self.last_power_guard = time.monotonic()
+        es_continuous = 0x80000000
+        es_system_required = 0x00000001
+        result = ctypes.windll.kernel32.SetThreadExecutionState(
+            es_continuous | es_system_required
+        )
+        self.power_guard_active = bool(result)
+        self.log.write(
+            "windows_sleep_hibernate_inhibit",
+            enabled=self.power_guard_active,
+            mode="automatic_sleep_guard",
+        )
+        return self.power_guard_active
+
+    def clear_power_guard(self) -> None:
+        if os.name == "nt" and self.power_guard_active:
+            with contextlib.suppress(Exception):
+                ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+        self.power_guard_active = False
+
     def remember_network_profile(self) -> None:
         state = load_json(self.network_recovery_path, {}) or {}
         try:
@@ -2325,8 +2384,12 @@ class Agent:
                         rows = decoded if isinstance(decoded, list) else [decoded]
                         names = [str(item.get("Name") or "").strip() for item in rows if isinstance(item, dict)]
                         names = [name for name in names if name]
-                        if names:
-                            state["windows_profiles"] = names[:8]
+                        remembered = list(state.get("windows_profiles") or [])
+                        for name in [*names, *self.config.allowed_wifi_profiles]:
+                            if name and name not in remembered:
+                                remembered.append(name)
+                        if remembered:
+                            state["windows_profiles"] = remembered[:16]
             elif os.name == "posix":
                 nmcli = shutil.which("nmcli")
                 if nmcli:
@@ -2350,12 +2413,18 @@ class Agent:
             self.log.write("network_profile_remember_failed", error=str(error)[:300])
 
     def recover_network(self) -> None:
+        if not self.config.network_recovery_enabled:
+            return
         now = time.monotonic()
         if now - self.last_network_recovery < 60:
             return
         self.last_network_recovery = now
+        if self.controller_reachable():
+            self.log.write("network_recovery_not_needed", reachable=True)
+            return
         state = load_json(self.network_recovery_path, {}) or {}
         attempts: list[str] = []
+        recovered = False
         try:
             if os.name == "nt":
                 ipconfig = shutil.which("ipconfig.exe") or shutil.which("ipconfig")
@@ -2364,17 +2433,26 @@ class Agent:
                         [ipconfig, "/renew"], timeout=60, capture_output=True, text=True, shell=False,
                     )
                     attempts.append("dhcp_renew")
+                    recovered = self.controller_reachable()
                 netsh = shutil.which("netsh.exe") or shutil.which("netsh")
-                if netsh:
-                    for profile in state.get("windows_profiles") or []:
-                        if not isinstance(profile, str) or not profile or len(profile) > 120:
-                            continue
-                        subprocess.run(  # nosec B603
+                if netsh and not recovered:
+                    profiles: list[str] = []
+                    for profile in [*(state.get("windows_profiles") or []), *self.config.allowed_wifi_profiles]:
+                        if isinstance(profile, str):
+                            name = profile.strip()
+                            if name and len(name) <= 120 and name not in profiles:
+                                profiles.append(name)
+                    for profile in profiles[:16]:
+                        result = subprocess.run(  # nosec B603
                             [netsh, "wlan", "connect", f"name={profile}"],
                             timeout=30, capture_output=True, text=True, shell=False,
                         )
-                        attempts.append("wifi_saved_profile")
-                        break
+                        attempts.append("wifi_saved_profile:" + profile[:64])
+                        if result.returncode == 0:
+                            time.sleep(3)
+                            if self.controller_reachable():
+                                recovered = True
+                                break
             elif os.name == "posix":
                 nmcli = shutil.which("nmcli")
                 if nmcli:
@@ -2384,13 +2462,19 @@ class Agent:
                     for item in state.get("linux_profiles") or []:
                         name = item.get("name") if isinstance(item, dict) else None
                         if isinstance(name, str) and name and len(name) <= 120:
-                            subprocess.run(  # nosec B603
+                            result = subprocess.run(  # nosec B603
                                 [nmcli, "connection", "up", name],
                                 timeout=60, capture_output=True, text=True, shell=False,
                             )
-                            attempts.append("saved_connection")
-                            break
-            self.log.write("network_recovery_attempted", attempts=attempts)
+                            attempts.append("saved_connection:" + name[:64])
+                            if result.returncode == 0:
+                                time.sleep(3)
+                                if self.controller_reachable():
+                                    recovered = True
+                                    break
+            if recovered:
+                self.remember_network_profile()
+            self.log.write("network_recovery_attempted", attempts=attempts, recovered=recovered)
         except Exception as error:
             self.log.write("network_recovery_failed", error=str(error)[:300])
 
@@ -2428,6 +2512,7 @@ class Agent:
             time.sleep(min(0.5, remaining))
 
     def cycle(self) -> None:
+        self.enforce_power_guard()
         self.enroll()
         if self.lifecycle_stop_requested() or self.stop_path.exists():
             raise SystemExit(0)
@@ -2451,18 +2536,8 @@ class Agent:
 
     def run(self, once: bool = False) -> int:
         self.log.write("agent_start", version=VERSION, once=once)
-        keep_awake = False
-        if os.name == "nt" and not once:
-            import ctypes
-
-            es_continuous = 0x80000000
-            es_system_required = 0x00000001
-            keep_awake = bool(
-                ctypes.windll.kernel32.SetThreadExecutionState(
-                    es_continuous | es_system_required
-                )
-            )
-            self.log.write("windows_sleep_hibernate_inhibit", enabled=keep_awake)
+        if not once:
+            self.enforce_power_guard()
         backoff = 2
         try:
             while True:
@@ -2495,10 +2570,7 @@ class Agent:
                     self.interruptible_sleep(backoff)
                     backoff = min(60, backoff * 2)
         finally:
-            if os.name == "nt" and keep_awake:
-                import ctypes
-
-                ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+            self.clear_power_guard()
 
 
 def doctor(config: AgentConfig) -> int:
