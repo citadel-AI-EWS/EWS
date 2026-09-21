@@ -1205,14 +1205,15 @@ class Agent:
 
     def find_lms(self) -> str | None:
         candidates: list[str | None] = [shutil.which("lms")]
-        home = Path.home()
-        if os.name == "nt":
-            candidates.extend([
-                str(home / ".lmstudio" / "bin" / "lms.exe"),
-                str(home / ".lmstudio" / "bin" / "lms.cmd"),
-            ])
-        else:
-            candidates.append(str(home / ".lmstudio" / "bin" / "lms"))
+        for root in self.lmstudio_managed_roots():
+            if os.name == "nt":
+                candidates.extend([
+                    str(root / "bin" / "lms.exe"),
+                    str(root / "bin" / "lms.cmd"),
+                    str(root / "bin" / "lms"),
+                ])
+            else:
+                candidates.append(str(root / "bin" / "lms"))
         for candidate in candidates:
             if candidate and Path(candidate).is_file():
                 return str(Path(candidate))
