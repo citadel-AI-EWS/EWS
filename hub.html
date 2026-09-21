@@ -139,7 +139,7 @@
       </aside>
     </div>
 
-    <footer class="footer"><span id="footerState">Auto-refresh every 10 seconds · real controller data only</span><span><a href="/" data-i18n="home">Домой</a> · <a href="/architect/" data-i18n="architectPanel">Architect panel</a> · <a href="/architect/logs/" data-i18n="logs">Logs</a></span></footer>
+    <footer class="footer"><span id="footerState">Auto-refresh every 60 seconds · real controller data only</span><span><a href="/" data-i18n="home">Домой</a> · <a href="/architect/" data-i18n="architectPanel">Architect panel</a> · <a href="/architect/logs/" data-i18n="logs">Logs</a></span></footer>
   </main>
   <div id="lmstudioPanel" class="lm-float hidden" role="dialog" aria-label="LM Studio node control">
     <div class="lm-head"><div><b>LM Studio / llmster</b><div id="lmstudioNode" class="lm-node">—</div></div><button id="lmstudioClose" class="btn" type="button">×</button></div>
@@ -678,7 +678,7 @@
       $("clock").textContent=now.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",hour12:false});
       updateSiteClock();
     }
-    installHubCollapsers();updateClocks();setInterval(updateClocks,15000);applyLanguage(lang);updateSsh();refresh();setInterval(refresh,10000);
+    installHubCollapsers();updateClocks();setInterval(updateClocks,15000);applyLanguage(lang);updateSsh();refresh();setInterval(refresh,60000);
   </script>
 </body>
 </html>
