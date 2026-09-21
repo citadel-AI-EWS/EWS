@@ -109,9 +109,12 @@ await inspectPage("/", async page => {
     return el && !el.textContent.includes("בודק");
   }, { timeout });
 
-  for (const href of ["/hub/", "/architect/", "/architect/logs/"]) {
+  for (const href of ["/hub/", "/architect/"]) {
     const link = page.locator(`a[href="${href}"]`);
     if (await link.count() !== 1) addFinding("missing_navigation_link", "/", href);
+  }
+  if (await page.locator('a[href="/architect/logs/"]').count()) {
+    addFinding("global_logs_link_visible", "/", "global logs should stay hidden from normal navigation");
   }
 
   await page.locator('a[href="/hub/"]').click();
@@ -125,6 +128,16 @@ await inspectPage("/", async page => {
 await inspectPage("/hub/", async (page, entry) => {
   await page.locator("#refreshButton").click();
   await page.waitForTimeout(700);
+
+  const firstToggle = page.locator(".panelToggle").first();
+  if (await firstToggle.count()) {
+    await firstToggle.click();
+    const collapsed = await firstToggle.getAttribute("aria-expanded");
+    if (collapsed !== "false") addFinding("hub_collapse_broken", "/hub/", "panel toggle did not collapse");
+    await firstToggle.click();
+    const expanded = await firstToggle.getAttribute("aria-expanded");
+    if (expanded !== "true") addFinding("hub_expand_broken", "/hub/", "panel toggle did not expand");
+  }
 
   const search = page.locator("#nodeSearch");
   await search.fill("synthetic-no-such-node");
