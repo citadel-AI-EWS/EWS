@@ -629,12 +629,12 @@
       if (node.operational_state) return node.operational_state;
       if (node.status === "revoked") return "revoked";
       const identity = `${node.hostname || ""} ${node.node_id || ""}`;
-      if (/(^|[^a-z0-9])(test|demo|browser)([^a-z0-9]|$)/i.test(identity)) return "test";
-      if (node.status === "paused") return "paused";
+      if (/(^|[^a-z0-9])(test|demo)([^a-z0-9]|$)/i.test(identity)) return "test";
       const age = nodeAgeMinutes(node);
-      if (node.status === "online" && age <= 5) return "live";
       if (age >= 7 * 24 * 60) return "archived";
       if (age >= 24 * 60) return "stale";
+      if (node.status === "paused") return "paused";
+      if (node.status === "online" && age <= 5) return "live";
       return "offline";
     }
 
