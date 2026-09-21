@@ -4334,7 +4334,12 @@ async function architectCreateCommand(request, env, nodeId) {
   if (requiredConfirmation) {
     const confirmation = typeof body.confirmation === "string" ? body.confirmation.trim() : "";
     if (confirmation !== requiredConfirmation) {
-      throw new ApiError(400, "command_confirmation_required");
+      throw new ApiError(
+        400,
+        commandType === "lmstudio_uninstall"
+          ? "command_confirmation_required"
+          : "power_confirmation_required"
+      );
     }
   }
 
