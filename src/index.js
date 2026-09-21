@@ -39,7 +39,7 @@ const LATEST_NODE_RELEASE = Object.freeze({
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "a2e2b59aac7cde207cfc58ecee6b109150e3a2d49bf52003f3ceb5df710f631a"
+      sha256: "a3f32d5eea4e2742c306f26ee8517695892176f7b862d1463fdbde8bf2eba030"
     },
     {
       path: "citadel_node_v2.py",
@@ -4394,7 +4394,6 @@ async function architectRelease(request, env) {
     lmstudio: LMSTUDIO_INTEGRATION,
     openrouter: {
       configured: quality.configured,
-      key_status: quality.keyStatus,
       model: quality.model,
       fusion_preset: quality.fusionPreset,
       timeout_ms: quality.timeoutMs

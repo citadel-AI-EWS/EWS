@@ -54,12 +54,10 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          if [ -z "$OPENROUTER_API_KEY" ]; then
-            echo "OPENROUTER_API_KEY is not configured; final quality gate will remain bypassed."
-          elif node -e 'const k=process.env.OPENROUTER_API_KEY||"";process.exit(/^[\\x21-\\x7E]{16,512}$/.test(k)?0:1)'; then
+          if [ -n "$OPENROUTER_API_KEY" ]; then
             printf '%s' "$OPENROUTER_API_KEY" | npx wrangler secret put OPENROUTER_API_KEY
           else
-            echo "::warning::OPENROUTER_API_KEY has invalid format; skipping secret sync so core deployment can continue."
+            echo "OPENROUTER_API_KEY is not configured; final quality gate will remain bypassed."
           fi
 
       - name: Verify configured OpenRouter API key
@@ -68,10 +66,8 @@ jobs:
         run: |
           if [ -z "$OPENROUTER_API_KEY" ]; then
             echo "OPENROUTER_API_KEY is not configured; probe skipped."
-          elif ! node -e 'const k=process.env.OPENROUTER_API_KEY||"";process.exit(/^[\\x21-\\x7E]{16,512}$/.test(k)?0:1)'; then
-            echo "::warning::OpenRouter key probe skipped: invalid key format."
           else
-            node -e 'const r=await fetch("https://openrouter.ai/api/v1/key",{headers:{authorization:"Bearer "+process.env.OPENROUTER_API_KEY}});if(!r.ok){console.warn("OpenRouter key probe returned HTTP "+r.status);process.exit(0)}console.log("OpenRouter key probe: authenticated");'
+            node -e 'const r=await fetch("https://openrouter.ai/api/v1/key",{headers:{authorization:"Bearer "+process.env.OPENROUTER_API_KEY}});if(!r.ok){console.error("OpenRouter key probe failed with HTTP "+r.status);process.exit(1)}const d=await r.json();console.log("OpenRouter key probe: authenticated");console.log("OpenRouter key limit configured: "+(d?.data?.limit!=null?"yes":"no"));'
           fi
 
       - name: Deploy TEST site and Worker
