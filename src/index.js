@@ -4406,13 +4406,15 @@ async function architectCreateCommand(request, env, nodeId) {
       settings: normalizeLmLoadSettings(body.settings)
     };
   } else if (commandType === "hybrid_query") {
-    await ensureNodeAiStorage(env);
-    const ai = await nodeAiStateResponse(env, nodeId);
-    if (body.mode !== "python" && (Number(ai.installed || 0) !== 1 || Number(ai.server_running || 0) !== 1 || !ai.loaded_model)) {
-      throw new ApiError(409, "lmstudio_model_not_ready");
-    }
     const mode = requireString(body.mode, "hybrid_mode", 16);
     if (!["python","lmstudio","both"].includes(mode)) throw new ApiError(400, "invalid_hybrid_mode");
+    if (mode !== "python") {
+      await ensureNodeAiStorage(env);
+      const ai = await nodeAiStateResponse(env, nodeId);
+      if (Number(ai.installed || 0) !== 1 || Number(ai.server_running || 0) !== 1 || !ai.loaded_model) {
+        throw new ApiError(409, "lmstudio_model_not_ready");
+      }
+    }
     const prompt = requireString(body.prompt, "hybrid_prompt", 8000);
     payload = {
       request_id: "query_" + crypto.randomUUID().replaceAll("-", ""),
