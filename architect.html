@@ -239,6 +239,12 @@
         <p class="small">Вставьте сюда настоящее задание. Hub сначала прогонит текст через четыре обязательные проверки, после чего ваше нажатие «Создать проект» является подтверждением Architect. Затем Hub строит рабочие блоки и сам выбирает доступные Python-узлы.</p>
         <label for="projectTitle" data-i18n="projectName">Название проекта</label>
         <input id="projectTitle" maxlength="160" value="Новый проект">
+        <label for="projectExecutionMode">Режим выполнения</label>
+        <select id="projectExecutionMode">
+          <option value="ai">AI · LM Studio</option>
+          <option value="python">Python only · без ИИ</option>
+        </select>
+        <div id="projectExecutionHint" class="small">AI-режим использует локальную модель LM Studio. Python only выполняет только детерминированные операции и не вызывает LLM/OpenRouter.</div>
         <label for="projectTaskText" data-i18n="task">Задание</label>
         <textarea id="projectTaskText" maxlength="20000" placeholder="Опишите, что должен сделать проект..."></textarea>
         <div class="voice-row">
@@ -495,6 +501,8 @@
     const shutdownButton = document.getElementById("shutdownButton");
     const disconnectButton = document.getElementById("disconnectButton");
     const projectTitle = document.getElementById("projectTitle");
+    const projectExecutionMode = document.getElementById("projectExecutionMode");
+    const projectExecutionHint = document.getElementById("projectExecutionHint");
     const projectTaskText = document.getElementById("projectTaskText");
     const checkProjectButton = document.getElementById("checkProjectButton");
     const createProjectButton = document.getElementById("createProjectButton");
@@ -813,10 +821,30 @@
     }
 
     function selectedProjectRoleIds() {
-      return [...new Set([...currentRecommendedProjectRoles, ...architectAddedProjectRoles])];
+      return projectExecutionMode.value === "python"
+        ? []
+        : [...new Set([...currentRecommendedProjectRoles, ...architectAddedProjectRoles])];
+    }
+
+    function projectSourceType() {
+      return projectExecutionMode.value === "python" ? "architect_python" : "architect_manual";
+    }
+
+    function syncProjectExecutionMode() {
+      const pythonOnly = projectExecutionMode.value === "python";
+      projectExecutionHint.textContent = pythonOnly
+        ? "Python only: никакой LLM, LM Studio или OpenRouter не вызывается. Поддерживаются расчёты, text:/json: и диагностика CPU/RAM/диска/сети."
+        : "AI: рабочие блоки выполняются локальной моделью LM Studio; после завершения действует обычный quality gate.";
+      if (pythonOnly) architectAddedProjectRoles.clear();
+      renderWorkRoles(currentWorkRoles);
+      if (!currentProjectCheck) renderRolePlanSummary();
     }
 
     function renderRolePlanSummary(rolePlan = null) {
+      if (projectExecutionMode.value === "python") {
+        projectRolePlan.textContent = "Python only: один deterministic Python worker · без LM Studio и без AI quality gate.";
+        return;
+      }
       const effective = rolePlan || {};
       const lines = [];
       for (const [role, count] of Object.entries(effective)) {
@@ -835,6 +863,10 @@
     function renderWorkRoles(roles) {
       currentWorkRoles = roles || [];
       workRoles.replaceChildren();
+      if (projectExecutionMode.value === "python") {
+        addText(workRoles, "div", "Python only · специализации LLM не используются.", "role-chip");
+        return;
+      }
       for (const role of currentWorkRoles) {
         if (role.kind === "human_gate") {
           const chip = document.createElement("div");
@@ -1227,7 +1259,7 @@
     function renderProjectStages(execution) {
       const waitingForWorker = execution?.state === "planned" && Number(execution?.ready_workers_now || 0) === 0;
       const stages = waitingForWorker
-        ? ["WAITING MODEL","ASSIGNED","RUNNING","COMPLETED","REPORT"]
+        ? [execution?.execution_mode === "python" ? "WAITING PYTHON" : "WAITING MODEL","ASSIGNED","RUNNING","COMPLETED","REPORT"]
         : ["PLAN","ASSIGNED","RUNNING","COMPLETED","REPORT"];
       const current = projectStageIndex(execution?.state, execution?.final_report_ready);
       projectStageTrack.replaceChildren();
@@ -1248,6 +1280,7 @@
           "agent מיושן: " + (worker.agent_version || "—") + " → " + (currentReleaseVersion || "current")
         ],
         project_text_missing: ["нет capability project_text","project_text capability missing","חסרה יכולת project_text"],
+        project_python_missing: ["нет capability project_python","project_python capability missing","חסרה יכולת project_python"],
         lmstudio_not_installed: ["LM Studio не установлен","LM Studio is not installed","LM Studio אינו מותקן"],
         lmstudio_server_stopped: ["LM Studio server не запущен","LM Studio server is stopped","שרת LM Studio אינו פועל"],
         lmstudio_model_not_loaded: ["языковая модель не загружена","no language model loaded","לא נטענה מודל שפה"],
@@ -1272,7 +1305,14 @@
           : (worker.hostname || worker.node_id);
         addText(row, "b", (worker.ready ? "✓ READY · " : "◷ WAITING · ") + name);
         if (worker.ready) {
-          addText(row, "div", `project_text · LM Studio · model: ${worker.lmstudio_loaded_model || "—"}`, "small");
+          addText(
+            row,
+            "div",
+            execution?.execution_mode === "python"
+              ? "project_python · Python only · no LLM"
+              : `project_text · LM Studio · model: ${worker.lmstudio_loaded_model || "—"}`,
+            "small"
+          );
         } else {
           addText(row, "div", (worker.blockers || []).map((code) => workerBlockerText(code, worker)).join(" · "), "small");
           const prepare = addText(row, "button", "Подготовить ноду в Hub", "secondary");
@@ -1289,7 +1329,8 @@
     function renderProjectReport(project) {
       activeProjectId = project.project_id;
       projectReportTitle.textContent = `Отчёт проекта · ${project.title}`;
-      projectReportMeta.textContent = `Project ID: ${project.project_id} · создан: ${project.created_at || "—"}`;
+      const execution = project.execution || {};
+      projectReportMeta.textContent = `Project ID: ${project.project_id} · режим: ${execution.execution_mode === "python" ? "PYTHON ONLY" : "AI / LM Studio"} · создан: ${project.created_at || "—"}`;
       projectReportTask.textContent = project.task_text || "—";
       projectReportSpecializations.replaceChildren();
       for (const role of project.specializations || []) {
@@ -1298,7 +1339,6 @@
       }
       if (!(project.specializations || []).length) addText(projectReportSpecializations, "span", "Нет данных", "small");
 
-      const execution = project.execution || {};
       const counts = execution.counts || {};
       const done = Number(execution.completed_work_items || 0);
       const total = Number(execution.total_work_items || 0);
@@ -1311,7 +1351,9 @@
         const readyNow = Number(execution.ready_workers_now || 0);
         projectReportStatus.textContent = readyNow > 0
           ? "PLAN принят. READY-нода найдена: Controller автоматически создаёт assignment. Следующая стадия — ASSIGNED/RUNNING."
-          : `WAITING FOR MODEL — проект сохранён, но сейчас нет ни одной READY-ноды. Нужны: агент ${currentReleaseVersion || "current"}, LM Studio/llmster и загруженная языковая модель. Нажмите «Подготовить ноду в Hub» ниже. После загрузки модели этот проект запустится автоматически — создавать его заново не нужно.`;
+          : execution.execution_mode === "python"
+            ? `WAITING FOR PYTHON — проект сохранён, но нет LIVE-ноды с агентом ${currentReleaseVersion || "current"} и capability project_python. LM Studio для этого режима не требуется.`
+            : `WAITING FOR MODEL — проект сохранён, но сейчас нет ни одной READY-ноды. Нужны: агент ${currentReleaseVersion || "current"}, LM Studio/llmster и загруженная языковая модель. Нажмите «Подготовить ноду в Hub» ниже. После загрузки модели этот проект запустится автоматически — создавать его заново не нужно.`;
         projectReportStatus.className = `status ${readyNow > 0 ? "good" : "bad"}`;
       } else if (execution.state === "assigned") {
         projectReportStatus.textContent = "Рабочие блоки назначены нодам и ожидают принятия агентом.";
@@ -1399,8 +1441,16 @@
       addText(projectCreatedSummary, "div", `Hub выбрал ноды: ${nodes.join("; ") || "нет"}`, "project-created-line");
       const roles = (project.specializations || []).map((role) => roleDisplayName(role.id || role.role_name, role.label));
       addText(projectCreatedSummary, "div", `Специализации: ${roles.join(", ") || "нет"}`, "project-created-line");
+      addText(projectCreatedSummary, "div", `Режим: ${project.execution_mode === "python" ? "PYTHON ONLY · без ИИ" : "AI · LM Studio"}`, "project-created-line");
       addText(projectCreatedSummary, "div", `Hub решил: ${project.desired_workers || project.work_item_count} workers · реально готовы: ${project.worker_count} · рабочих блоков: ${project.work_item_count} · состояние: ${project.status}`, "project-created-line");
-      const note = addText(projectCreatedSummary, "div", "План создан. Когда нода с загруженной LM Studio-моделью опросит Controller, блоки автоматически перейдут в Assigned → Running → Completed, а результаты появятся в живом отчёте.", "execution-note");
+      const note = addText(
+        projectCreatedSummary,
+        "div",
+        project.execution_mode === "python"
+          ? "План создан. LIVE-нода с project_python выполнит задачу без LM Studio, LLM и OpenRouter."
+          : "План создан. Когда нода с загруженной LM Studio-моделью опросит Controller, блоки автоматически перейдут в Assigned → Running → Completed, а результаты появятся в живом отчёте.",
+        "execution-note"
+      );
       note.setAttribute("role", "status");
       projectCreatedOverlay.classList.remove("hidden");
     }
@@ -2569,6 +2619,10 @@
 
     projectTitle.addEventListener("input", invalidateProjectCheck);
     projectTaskText.addEventListener("input", invalidateProjectCheck);
+    projectExecutionMode.addEventListener("change", () => {
+      invalidateProjectCheck();
+      syncProjectExecutionMode();
+    });
 
     function speechLanguage() {
       return lang === "he" ? "he-IL" : lang === "en" ? "en-US" : "ru-RU";
@@ -2656,8 +2710,8 @@
           body: JSON.stringify({
             title,
             task_text: taskText,
-            source_type: "architect_manual",
-            requested_roles: [...architectAddedProjectRoles]
+            source_type: projectSourceType(),
+            requested_roles: selectedProjectRoleIds()
           })
         });
         renderProjectCheckResult(data);
@@ -2688,8 +2742,8 @@
           body: JSON.stringify({
             title,
             task_text: taskText,
-            source_type: "architect_manual",
-            requested_roles: [...architectAddedProjectRoles]
+            source_type: projectSourceType(),
+            requested_roles: selectedProjectRoleIds()
           })
         });
         const p = data.project;
@@ -2841,6 +2895,7 @@
       if (host) window.open(`https://${host}`, "_blank", "noopener,noreferrer");
     });
     updateSshPanel();
+    syncProjectExecutionMode();
     installSectionCollapsers();
     applyLanguage(lang);
     updateSiteClock();
