@@ -13,8 +13,10 @@
     h1{font-size:29px;line-height:1.15;margin:11px 0}h2{font-size:20px;margin:0 0 15px}p{color:#aeb9d2;line-height:1.45}
     .card{margin-top:17px;padding:19px;border:1px solid #2b3757;border-radius:18px;background:#11182a;box-shadow:0 18px 55px #0007}
     label{display:block;margin:12px 0 7px;font-weight:750}input,select,textarea{width:100%;padding:13px;border:1px solid #3a496f;border-radius:11px;background:#090e1b;color:#fff;font-size:16px}textarea{min-height:110px;resize:vertical;font-family:inherit}
-    button{width:100%;margin-top:13px;padding:14px;border:0;border-radius:11px;background:#3478f6;color:#fff;font-size:16px;font-weight:850}
-    button.secondary{background:#273451}button.danger{background:#703542}button:disabled{opacity:.55}.hidden{display:none!important}
+    button{width:auto;min-height:34px;margin-top:8px;padding:7px 11px;border:1px solid #3d65a1;border-radius:9px;background:#245fbf;color:#fff;font-size:13px;font-weight:850;cursor:pointer;transition:.16s transform,.16s border-color,.16s background,.16s box-shadow}
+    button:hover:not(:disabled){transform:translateY(-1px);border-color:#6ba0ee;box-shadow:0 8px 24px #0005}button.secondary{background:#202f4a;border-color:#334d72}button.danger{background:#542933;border-color:#7c3b49}button:disabled{opacity:.55;cursor:not-allowed}.hidden{display:none!important}
+    .section-collapsed-child{display:none!important}.section-toggle-button{width:28px!important;min-width:28px!important;height:28px!important;min-height:28px!important;margin:0!important;padding:0!important;border-radius:8px!important;background:#15233a!important;border:1px solid #36527e!important;color:#bcd3f8!important;font-size:18px!important;line-height:1!important}.section-toggle-title{display:flex;align-items:center;gap:8px}.section-collapsed{padding-bottom:12px!important}
+    .task-log-list{display:grid;gap:6px;margin-top:9px}.task-log-line{padding:7px 9px;border:1px solid #263a59;border-radius:9px;background:#091120;font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;color:#a9bfdc;overflow-wrap:anywhere}.preflight-chip{display:inline-flex;margin:4px 6px 0 0;padding:4px 7px;border:1px solid #445d85;border-radius:999px;background:#121d31;color:#bcd0ed;font-size:11px}
     .toolbar{display:flex;gap:10px;flex-wrap:wrap}.toolbar button{width:auto;flex:1}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:17px}
     .stat{padding:14px;border:1px solid #2b3757;border-radius:15px;background:#11182a}.stat b{display:block;font-size:25px}.stat span,.small{font-size:13px;color:#93a0ba}
     .item{margin-top:10px;padding:13px;border-radius:13px;background:#0b1222;border-left:4px solid #5b8fff;overflow-wrap:anywhere}.item.ok{border-left-color:#35d07f}.item.warn{border-left-color:#ffb44f}
@@ -255,6 +257,7 @@
           <button id="checkProjectButton" class="secondary" type="button" data-i18n="checkText">1. Проверить текст</button>
           <button id="createProjectButton" type="button" disabled data-i18n="createProject">2. Создать проект</button>
         </div>
+        <div id="projectPreflight" class="status">Preflight текста ещё не выполнялся. Он покажет структурные/опечаточные признаки и возможные логические противоречия до запуска.</div>
         <div id="projectChecks" class="status">Ожидаю текст проекта.
 1. Source allowlisting
 2. Validation
@@ -286,6 +289,10 @@
         </div>
         <div class="section-head" style="margin-top:16px"><h3 style="margin:0">Рабочие блоки и ноды</h3><span id="projectReportProgress" class="small"></span></div>
         <div id="projectReportWorkItems" class="project-work-list"></div>
+        <details id="projectTaskLogsBox" class="project-report-box" style="margin-top:12px">
+          <summary><b>Логи этого задания</b></summary>
+          <div id="projectTaskLogs" class="task-log-list"></div>
+        </details>
         <div id="projectFinalResultBox" class="project-report-box hidden" style="margin-top:16px">
           <b>Конечный результат проекта</b>
           <pre id="projectFinalResult" class="report-body" style="margin-top:10px"></pre>
@@ -507,6 +514,7 @@
     const projectTaskText = document.getElementById("projectTaskText");
     const checkProjectButton = document.getElementById("checkProjectButton");
     const createProjectButton = document.getElementById("createProjectButton");
+    const projectPreflight = document.getElementById("projectPreflight");
     const projectChecks = document.getElementById("projectChecks");
     const projectRolePlan = document.getElementById("projectRolePlan");
     const workRoles = document.getElementById("workRoles");
@@ -526,6 +534,8 @@
     const projectReportSpecializations = document.getElementById("projectReportSpecializations");
     const projectReportProgress = document.getElementById("projectReportProgress");
     const projectReportWorkItems = document.getElementById("projectReportWorkItems");
+    const projectTaskLogs = document.getElementById("projectTaskLogs");
+    const projectTaskLogsBox = document.getElementById("projectTaskLogsBox");
     const projectFinalResultBox = document.getElementById("projectFinalResultBox");
     const projectFinalResult = document.getElementById("projectFinalResult");
     const closeProjectReportButton = document.getElementById("closeProjectReportButton");
@@ -1156,6 +1166,17 @@
         ["deduplication", "3. Deduplication"],
         ["safety_classification", "4. Safety classification"]
       ];
+      const preflight = data?.text_preflight || {};
+      const spelling = Array.isArray(preflight.spelling_warnings) ? preflight.spelling_warnings : [];
+      const logic = Array.isArray(preflight.logic_warnings) ? preflight.logic_warnings : [];
+      projectPreflight.replaceChildren();
+      addText(projectPreflight, "b", `Preflight текста: ${Number(preflight.warning_count || 0) ? "есть предупреждения" : "OK"}`);
+      if (!spelling.length && !logic.length) {
+        addText(projectPreflight, "div", "Структурных признаков опечаток и явных логических конфликтов не найдено.", "small");
+      } else {
+        for (const warning of spelling) addText(projectPreflight, "span", "Текст · " + warning, "preflight-chip");
+        for (const warning of logic) addText(projectPreflight, "span", "Логика · " + warning, "preflight-chip");
+      }
       projectChecks.textContent = order.map(([key, label]) => {
         const item = checks[key] || {};
         const mark = item.passed ? "PASS" : "STOP";
@@ -1416,6 +1437,13 @@
         projectReportWorkItems.appendChild(box);
       }
       if (!(project.work_items || []).length) addText(projectReportWorkItems, "p", "Рабочих блоков нет.", "muted");
+      projectTaskLogs.replaceChildren();
+      for (const event of project.task_logs || []) {
+        const detail = event.details && Object.keys(event.details).length ? " · " + JSON.stringify(event.details) : "";
+        addText(projectTaskLogs, "div", `${event.created_at || "—"} · ${event.action || "event"} · ${event.target_type || "—"}${detail}`, "task-log-line");
+      }
+      if (!(project.task_logs || []).length) addText(projectTaskLogs, "div", "Для этого задания событий пока нет.", "small");
+      projectTaskLogsBox.open = false;
       projectReportCard.classList.remove("hidden");
       expandSection(projectReportCard);
     }
@@ -2620,6 +2648,8 @@
       currentProjectCheck = null;
       currentRecommendedProjectRoles = new Set();
       createProjectButton.disabled = true;
+      projectPreflight.textContent = "Текст изменён. Preflight будет выполнен заново перед четырьмя проверками.";
+      projectPreflight.className = "status";
       projectChecks.textContent = "Текст проекта изменён. Запустите четыре проверки снова.";
       projectChecks.className = "status";
       renderWorkRoles(currentWorkRoles);
