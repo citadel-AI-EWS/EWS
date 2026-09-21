@@ -236,6 +236,16 @@ assert.match(architect, /projectExecutionMode/);
 assert.match(index, /project_python/);
 assert.match(index, /waiting_for_python_project_worker/);
 assert.match(index, /not_applicable_python/);
+{
+  const hybridStart = index.indexOf('} else if (commandType === "hybrid_query") {');
+  assert.ok(hybridStart >= 0, "hybrid_query Controller branch missing");
+  const hybridBlock = index.slice(hybridStart, hybridStart + 1800);
+  assert.match(hybridBlock, /if \(mode !== "python"\)/);
+  assert.ok(
+    hybridBlock.indexOf('if (mode !== "python")') < hybridBlock.indexOf('ensureNodeAiStorage(env)'),
+    "Python-only hybrid query must not require LM Studio AI-state storage"
+  );
+}
 assert.match(index, /executionMode === "python"/);
 assert.match(architect, /Python only · без ИИ/);
 assert.match(architect, /WAITING PYTHON/);
