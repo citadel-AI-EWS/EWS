@@ -4290,6 +4290,10 @@ async function architectOverview(request, env) {
 
 function publicHubQueryErrorCode(error) {
   const message = String(error?.message || error || "").toLowerCase();
+  if (message.includes("daily row read limit")) return "hub_d1_daily_read_limit_exceeded";
+  if (message.includes("daily row write limit")) return "hub_d1_daily_write_limit_exceeded";
+  if (message.includes("exceeded maximum db size")) return "hub_d1_database_size_exceeded";
+  if (message.includes("overloaded")) return "hub_d1_overloaded";
   if (message.includes("no such table") && message.includes("nodes")) return "hub_nodes_table_missing";
   if (message.includes("no such column")) return "hub_nodes_schema_mismatch";
   if (message.includes("d1")) return "hub_nodes_d1_error";
