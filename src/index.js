@@ -4289,7 +4289,8 @@ async function architectOverview(request, env) {
 }
 
 async function publicHubNodes(env) {
-  await ensureAutoEnrollmentStorage(env);
+  // Public reads must not perform schema DDL. Enrollment owns node-number storage.
+  // Keeping this path read-only avoids D1 schema-lock failures during deploy/smoke traffic.
   const query = await env.DB.prepare(
     "SELECT nn.node_number, n.agent_version, n.status, n.enrolled_at, n.last_seen_at " +
     "FROM node_numbers AS nn JOIN nodes AS n ON n.node_id = nn.node_id " +

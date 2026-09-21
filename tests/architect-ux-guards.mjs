@@ -7,6 +7,8 @@ const logs = fs.readFileSync("architect-logs.html", "utf8");
 const home = fs.readFileSync("live-index.html", "utf8");
 const index = fs.readFileSync("src/index.js", "utf8");
 const agent = fs.readFileSync("agent/citadel_node_v1.py", "utf8");
+const deployWorkflow = fs.readFileSync(".github/workflows/deploy-cloudflare.yml", "utf8");
+const autoEnrollmentMigration = fs.readFileSync("migrations/0013_auto_enrollment_storage.sql", "utf8");
 
 assert.doesNotMatch(architect, /Контрольные точки/, "checkpoint UI must not be published");
 assert.doesNotMatch(architect, /\/api\/v1\/architect\/sessions/, "Architect UI must not load checkpoint sessions");
@@ -278,6 +280,21 @@ assert.doesNotMatch(home, /document\.write\(/);
 assert.doesNotMatch(hub, /document\.write\(/);
 assert.doesNotMatch(architect, /document\.write\(/);
 assert.match(architect, /sessionStorage\.setItem\("citadel-lmnode-request"/);
+{
+  const start = index.indexOf("async function publicHubNodes");
+  const end = index.indexOf("async function architectRelease", start);
+  assert.ok(start >= 0 && end > start, "publicHubNodes function missing");
+  const publicHubBlock = index.slice(start, end);
+  assert.doesNotMatch(
+    publicHubBlock,
+    /ensureAutoEnrollmentStorage/,
+    "public Hub GET path must remain read-only and must not run schema DDL"
+  );
+  assert.match(publicHubBlock, /FROM node_numbers AS nn JOIN nodes AS n/);
+}
+assert.match(autoEnrollmentMigration, /CREATE TABLE IF NOT EXISTS node_numbers/);
+assert.match(autoEnrollmentMigration, /CREATE TABLE IF NOT EXISTS auto_enrollment_windows/);
+assert.match(deployWorkflow, /d1 execute citadel-control --remote --file=migrations\/0013_auto_enrollment_storage\.sql/);
 assert.match(index, /function operationalNodeState/);
 assert.match(index, /function isTestNodeRecord/);
 assert.match(index, /async function expireStaleCommands/);
