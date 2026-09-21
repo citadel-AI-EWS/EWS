@@ -312,6 +312,7 @@ node tests/legacy-experience.mjs
 node tests/experience-registry.mjs
 node tests/architect-ux-guards.mjs
 node tests/enterprise-policy.mjs
+node tests/lmstudio-hub.mjs
 node tests/hub-five-questions.mjs
 node tests/openrouter-quality-gate.mjs
 

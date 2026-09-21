@@ -524,12 +524,13 @@ async function nodeAiStateResponse(env, nodeId) {
   if (!row) {
     return {
       node_id: nodeId, runtime: "lmstudio", installed: 0, server_running: 0,
-      selected_model: null, loaded_model: null
+      selected_model: null, loaded_model: null, observed: false
     };
   }
   const detail = safeJson(row.runtime_state_json, {});
   return {
     ...detail,
+    observed: true,
     node_id: row.node_id,
     runtime: row.runtime,
     installed: row.installed,
@@ -4943,8 +4944,9 @@ export default {
         return json({ ok: false, error: error.code }, error.status);
       }
 
-      console.error("Unhandled API error", error);
-      return json({ ok: false, error: "internal_error" }, 500);
+      const requestId = crypto.randomUUID();
+      console.error("Unhandled API error", { request_id: requestId, method: request.method, pathname: url.pathname }, error);
+      return json({ ok: false, error: "internal_error", request_id: requestId }, 500);
     }
   }
 };

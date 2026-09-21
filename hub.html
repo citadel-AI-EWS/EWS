@@ -144,6 +144,7 @@
     <div class="lm-head"><div><b>LM Studio / llmster</b><div id="lmstudioNode" class="lm-node">—</div></div><button id="lmstudioClose" class="btn" type="button">×</button></div>
     <a id="lmstudioGithub" class="lm-link" href="https://github.com/citadel-AI-EWS/EWS/tree/main/agent/lmstudio" target="_blank" rel="noopener noreferrer">Installer в GitHub</a>
     <div id="lmstudioStatus" class="lm-status">Выберите ноду.</div>
+    <div id="lmstudioError" class="lm-status" role="alert" hidden></div>
     <div class="lm-row">
       <button id="lmstudioInstall" class="btn cyan" type="button">Установить runtime</button>
       <button id="lmstudioProbe" class="btn" type="button">Проверить состояние</button>
@@ -208,7 +209,7 @@
     function safeHost(value){const host=String(value||"").trim().toLowerCase();return /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(host)&&host.includes(".")?host:""}
     function safeUser(value){const u=String(value||"").trim();return /^[a-zA-Z0-9._-]{1,64}$/.test(u)?u:""}
 
-    async function api(path,options={}){const headers=new Headers(options.headers||{});if(architectToken)headers.set("authorization",`Bearer ${architectToken}`);const response=await fetch(path,{...options,headers,cache:"no-store"});let data={};try{data=await response.json()}catch{}if(!response.ok)throw new Error(data.error||`HTTP ${response.status}`);return data}
+    async function api(path,options={}){const headers=new Headers(options.headers||{});if(architectToken)headers.set("authorization",`Bearer ${architectToken}`);const response=await fetch(path,{...options,headers,cache:"no-store"});let data={};try{data=await response.json()}catch{}if(!response.ok){const error=new Error(data.error||`HTTP ${response.status}`);error.status=response.status;error.requestId=typeof data.request_id==="string"&&/^[\w-]{1,80}$/.test(data.request_id)?data.request_id:"";throw error}return data}
 
     function publicCard(node){const el=document.createElement("article");const state=freshness(node);el.className=`node ${state}`;el.dataset.search=`${node.display_name||""} ${node.agent_version||""} ${node.status||""}`.toLowerCase();el.innerHTML=`<div class="nodeTop"><div><div class="nodeName"></div><div class="nodeId"></div></div><span class="badge ${state}"></span></div><dl class="nodeMeta"><dt>AGENT</dt><dd></dd><dt>LAST SEEN</dt><dd></dd></dl>`;el.querySelector(".nodeName").textContent=node.display_name||`Node ${node.node_number}`;el.querySelector(".nodeId").textContent=`#${esc(node.node_number)}`;el.querySelector(".badge").textContent=state;const dds=el.querySelectorAll("dd");dds[0].textContent=esc(node.agent_version);dds[1].textContent=`${relativeTime(node.last_seen_at)} · ${esc(node.last_seen_at)}`;return el}
 
@@ -318,6 +319,36 @@
       });
     }
 
+    const lmstudioErrors=new Map(),lmstudioSending=new Set();
+    function lmText(ru,en,he){return lang==="en"?en:lang==="he"?he:ru}
+    function lmstudioStatusText(node){
+      if(freshness(node)!=="online")return lmText("Узел не на связи или на паузе; готовность LM Studio не подтверждена.","Node is offline or paused; LM Studio readiness is unconfirmed.","הצומת לא מקוון או מושהה; מוכנות LM Studio לא אושרה.");
+      if(node.lmstudio_installed==null)return lmText("Состояние LM Studio ещё не получено. Нажмите «Проверить состояние».","LM Studio state has not been received. Check its status.","מצב LM Studio טרם התקבל. יש לבדוק את המצב.");
+      if(Number(node.lmstudio_installed)!==1)return lmText("LM Studio не установлен.","LM Studio is not installed.","LM Studio אינו מותקן.");
+      if(Number(node.lmstudio_server_running)!==1)return lmText("Сервер LM Studio остановлен; выполнение задач недоступно.","LM Studio server is stopped; tasks cannot run.","שרת LM Studio אינו פועל; לא ניתן להריץ משימות.");
+      if(!node.lmstudio_loaded_model)return lmText("Модель не загружена; выберите и загрузите модель.","No model is loaded; select and load a model.","לא נטען מודל; יש לבחור ולטעון מודל.");
+      return lmText("LM Studio готов · ","LM Studio ready · ","LM Studio מוכן · ")+node.lmstudio_loaded_model;
+    }
+    function lmstudioErrorText(error,kind){
+      const step=kind==="state"?lmText("Получение состояния","Reading state","קריאת מצב"):lmText("Отправка команды","Sending command","שליחת פקודה");
+      const detail=error.message==="internal_error"
+        ?lmText("внутренняя ошибка Controller; причина требует проверки журнала сервера","internal Controller error; server logs are needed to identify the cause","שגיאה פנימית ב-Controller; יש לבדוק את יומן השרת")
+        :error.message;
+      return step+": "+detail+(error.requestId?" · "+lmText("Код ошибки: ","Error reference: ","מזהה שגיאה: ")+error.requestId:"");
+    }
+    function setLmstudioError(nodeId,kind,error){
+      const errors=lmstudioErrors.get(nodeId)||{};
+      if(error)errors[kind]=lmstudioErrorText(error,kind);else delete errors[kind];
+      if(Object.keys(errors).length)lmstudioErrors.set(nodeId,errors);else lmstudioErrors.delete(nodeId);
+      if(nodeId===lmstudioNodeId)syncLmstudioPanel();
+    }
+    async function refreshLmstudioState(nodeId){
+      try{
+        await pollAiState(nodeId);
+        setLmstudioError(nodeId,"state",null);
+      }catch(error){setLmstudioError(nodeId,"state",error)}
+      if(nodeId===lmstudioNodeId){syncLmstudioPanel();renderCurrent()}
+    }
     function lmstudioNode(){
       return (lastOverview?.nodes||[]).find(n=>n.node_id===lmstudioNodeId)||null;
     }
@@ -325,12 +356,12 @@
       return (lastOverview?.nodes||[]).find(n=>n.node_id===hybridNodeId)||null;
     }
     function lmstudioPending(nodeId){
-      return (lastOverview?.commands||[]).some(c=>c.node_id===nodeId&&["pending","accepted"].includes(c.status)&&["lmstudio_install","lmstudio_probe","lmstudio_model_get","lmstudio_model_load","hybrid_query"].includes(String(c.command_type||"")));
+      return lmstudioSending.has(nodeId)||(lastOverview?.commands||[]).some(c=>c.node_id===nodeId&&["pending","accepted"].includes(c.status));
     }
     function applyAiSnapshot(node,data){
       if(!node||!data?.ai)return;
       const ai=data.ai;
-      node.lmstudio_installed=ai.installed;
+      node.lmstudio_installed=ai.observed===false?null:ai.installed;
       node.lmstudio_selected_model=ai.selected_model;
       node.lmstudio_loaded_model=ai.loaded_model;
       node.lmstudio_server_running=ai.server_running;
@@ -353,7 +384,7 @@
       const pending=lmstudioPending(node.node_id),runtime=node.lmstudio_runtime||{};
       const installed=Number(node.lmstudio_installed||0)===1;
       const currentAgent=Boolean(releaseVersion&&node.agent_version===releaseVersion);
-      const selected=node.lmstudio_selected_model||"",loaded=node.lmstudio_loaded_model||"";
+      const selected=node.lmstudio_selected_model||"";
       if(selected&&!$("lmstudioModel").value)$("lmstudioModel").value=selected;
       const phase=runtime.progress_phase||"",detail=runtime.progress_detail||"";
       let percent=0;
@@ -361,10 +392,11 @@
       else if(Number(runtime.progress_total)>0)percent=Math.round(100*Number(runtime.progress_current||0)/Number(runtime.progress_total));
       $("lmstudioProgressBar").style.width=Math.max(0,Math.min(100,percent))+"%";
       $("lmstudioProgressText").textContent=(phase?phase+" · ":"")+(detail||"Прогресс пока не получен.")+(percent?" · "+percent+"%":"");
-      $("lmstudioStatus").textContent=installed
-        ?(loaded?"LM Studio установлен · активная модель: "+loaded+" · PROJECT WORKER READY":"LM Studio установлен · модель ещё не загружена")
-        :(currentAgent?"Runtime ещё не установлен.":"Сначала обновите агент этой ноды до "+(releaseVersion||"текущей версии")+".");
+      $("lmstudioStatus").textContent=lmstudioStatusText(node);
+      if(!currentAgent)$("lmstudioStatus").textContent+=" · "+lmText("Обновите агент до ","Update agent to ","יש לעדכן את הסוכן לגרסה ")+(releaseVersion||"current");
       if(pending)$("lmstudioStatus").textContent+=" · команда выполняется";
+      const errorText=Object.values(lmstudioErrors.get(node.node_id)||{}).join("\n");
+      $("lmstudioError").textContent=errorText;$("lmstudioError").hidden=!errorText;
       $("lmstudioInstall").disabled=!currentAgent||installed||pending||freshness(node)!=="online";
       $("lmstudioProbe").disabled=!currentAgent||pending||freshness(node)!=="online";
       $("lmstudioGet").disabled=!installed||pending||freshness(node)!=="online";
@@ -376,8 +408,8 @@
       $("lmstudioPanel").classList.remove("hidden");
       $("lmstudioModel").value=node.lmstudio_selected_model||"";
       syncLmstudioPanel();
-      pollAiState(node.node_id).then(()=>syncLmstudioPanel()).catch(()=>{});
-      lmstudioPollTimer=setInterval(()=>pollAiState(node.node_id).then(()=>{syncLmstudioPanel();renderCurrent()}).catch(()=>{}),2000);
+      refreshLmstudioState(node.node_id);
+      lmstudioPollTimer=setInterval(()=>refreshLmstudioState(node.node_id),2000);
     }
     let lmstudioModelSearchTimer=null;
     async function searchModelsForLmstudio(){
@@ -395,7 +427,7 @@
       }catch{}
     }
     async function sendLmstudio(type){
-      const node=lmstudioNode();if(!node)return;
+      const node=lmstudioNode();if(!node||lmstudioPending(node.node_id))return;
       const body={command_type:type};
       if(type==="lmstudio_model_get"||type==="lmstudio_model_load"){
         const model=$("lmstudioModel").value.trim();
@@ -409,8 +441,13 @@
       const labels={lmstudio_install:"install",lmstudio_probe:"probe",lmstudio_model_get:"download model",lmstudio_model_load:"load model"};
       const label=labels[type]||type;
       if(type!=="lmstudio_probe"&&!confirm("LM Studio "+label+" → "+(node.hostname||node.node_id)+"?"))return;
-      await api("/api/v1/architect/nodes/"+encodeURIComponent(node.node_id)+"/commands",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
-      toast("LM Studio",label+" queued → "+(node.hostname||node.node_id));
+      lmstudioSending.add(node.node_id);setLmstudioError(node.node_id,"command",null);syncLmstudioPanel();
+      try{
+        const data=await api("/api/v1/architect/nodes/"+encodeURIComponent(node.node_id)+"/commands",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+        if(data.command&&lastOverview)lastOverview.commands=[...(lastOverview.commands||[]),data.command];
+        toast("LM Studio",label+" queued → "+(node.hostname||node.node_id));
+      }catch(error){setLmstudioError(node.node_id,"command",error);throw error}
+      finally{lmstudioSending.delete(node.node_id);syncLmstudioPanel()}
       await refresh();syncLmstudioPanel();
     }
     function openHybrid(node){
@@ -458,8 +495,7 @@
       el.querySelector(".os").textContent=`${esc(node.os_name)} ${esc(node.os_version)}`;
       el.querySelector(".arch").textContent=esc(node.architecture);
       el.querySelector(".agent").textContent=`${current?"✓":"✕"} ${esc(node.agent_version)}${releaseVersion?current?" · CURRENT":` · target ${releaseVersion}`:""}`;
-      const aiReady=Number(node.lmstudio_installed||0)===1&&Number(node.lmstudio_server_running||0)===1&&Boolean(node.lmstudio_loaded_model);
-      el.querySelector(".ai").textContent=aiReady?`✓ LM Studio · ${node.lmstudio_loaded_model}`:"—";
+      el.querySelector(".ai").textContent=lmstudioStatusText(node);
       el.querySelector(".seen").textContent=`${relativeTime(node.last_seen_at)} · ${esc(node.last_seen_at)}`;
       const reason=el.querySelector(".offlineReason");
       reason.textContent=offlineReason(node);
