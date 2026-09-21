@@ -6,10 +6,15 @@ import {
   reviewWithOpenRouter
 } from "../src/quality/openrouter.js";
 
-const config = openRouterQualityConfig({ OPENROUTER_API_KEY: "test-key" });
+const config = openRouterQualityConfig({ OPENROUTER_API_KEY: "test-key-1234567890" });
 assert.equal(config.configured, true);
 assert.equal(config.model, "openrouter/fusion");
 assert.equal(config.fusionPreset, "general-high");
+assert.equal(config.keyStatus, "valid_format");
+const invalidConfig = openRouterQualityConfig({ OPENROUTER_API_KEY: "masked-key-••••••••" });
+assert.equal(invalidConfig.configured, false);
+assert.equal(invalidConfig.keyStatus, "invalid_format");
+assert.equal(invalidConfig.apiKey, "");
 
 const messages = buildQualityGateMessages(
   "Ответь по-русски и кратко.",
@@ -42,7 +47,7 @@ const fetchImpl = async (url, options) => {
 };
 
 const reviewed = await reviewWithOpenRouter({
-  env: { OPENROUTER_API_KEY: "test-key" },
+  env: { OPENROUTER_API_KEY: "test-key-1234567890" },
   originalTask: "Проверь ответ.",
   draftAnswer: "Черновой ответ.",
   fetchImpl
@@ -55,7 +60,7 @@ assert.equal(captured.body.tool_choice, "required");
 assert.deepEqual(captured.body.plugins, [{ id: "fusion", preset: "general-high" }]);
 assert.equal(captured.body.provider.zdr, true);
 assert.equal(captured.body.provider.data_collection, "deny");
-assert.equal(captured.options.headers.authorization, "Bearer test-key");
+assert.equal(captured.options.headers.authorization, "Bearer test-key-1234567890");
 
 const index = fs.readFileSync("src/index.js", "utf8");
 assert.ok(index.includes("finalizeProjectAnswer"), "Controller quality-gate finalizer missing");
