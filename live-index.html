@@ -32,12 +32,23 @@ main{max-width:1180px;margin:auto}.topbar{display:flex;justify-content:space-bet
 <div class="card"><div class="label">Presence</div><div id="presenceState" class="value">—</div><div class="small" data-i18n="presenceSub">сетевые данные защищены Architect-доступом</div></div>
 </section>
 <section class="section"><h2 data-i18n="nodesTitle">Зарегистрированные компьютеры</h2><div id="nodes" class="nodes"><div class="empty" data-i18n="loading">Загружаю данные…</div></div></section>
-<div class="actions"><a class="btn good" href="/hub/" data-i18n="openHub">Открыть Live Hub</a><a class="btn" href="/architect/" data-i18n="openArchitect">Открыть Architect</a><a class="btn" href="/architect/logs/" data-i18n="openLogs">Открыть журнал</a></div>
+<div class="actions"><a class="btn good" href="/hub/" data-citadel-view="/hub/" data-i18n="openHub">Открыть Live Hub</a><a class="btn" href="/architect/" data-citadel-view="/architect/" data-i18n="openArchitect">Открыть Architect</a><a class="btn" href="/architect/logs/" data-citadel-view="/architect/logs/" data-i18n="openLogs">Открыть журнал</a></div>
 <div class="notice" data-i18n="notice">Обновление агентов выполняется только подписанными командами Controller с проверкой SHA-256. SSH показывается как доступный только после локальной настройки Cloudflare Access/Tunnel; сайт не открывает порт 22 автоматически.</div>
 <footer id="updatedAt" data-i18n="waiting">Ожидаю первое обновление…</footer>
 </main>
 <div id="siteClock" class="site-clock" aria-label="Current date and time">—</div>
 <script>
+async function openCitadelView(route){
+  const response=await fetch(route,{cache:"no-store"});
+  if(!response.ok)throw new Error("navigation_http_"+response.status);
+  const html=await response.text();
+  history.replaceState({citadelView:route},"","/");
+  document.open();document.write(html);document.close();
+}
+document.querySelectorAll("[data-citadel-view]").forEach(link=>link.addEventListener("click",event=>{
+  event.preventDefault();
+  openCitadelView(link.dataset.citadelView).catch(()=>{location.href=link.dataset.citadelView});
+}));
 const I18N={
 ru:{home:"Домой",eyebrow:"LIVE CONTROL PLANE",title:"Только реальные данные.",lead:"Главная страница показывает состояние Controller и зарегистрированных компьютеров. Здесь нет демонстрационных графиков, фиктивных проектов или симулированных показателей.",checking:"Проверяю Controller…",online:"Живые ноды",onlineSub:"по реальному heartbeat",registered:"Зарегистрировано",registeredSub:"по базе Controller",telemetrySub:"серверное хранилище операционных событий",presenceSub:"сетевые данные защищены Architect-доступом",nodesTitle:"Зарегистрированные компьютеры",loading:"Загружаю данные…",openHub:"Открыть Live Hub",openArchitect:"Открыть Architect",openLogs:"Открыть журнал",notice:"Обновление агентов выполняется только подписанными командами Controller с проверкой SHA-256. SSH показывается как доступный только после локальной настройки Cloudflare Access/Tunnel; сайт не открывает порт 22 автоматически.",waiting:"Ожидаю первое обновление…",none:"Сейчас в Controller нет зарегистрированных компьютеров.",ready:"Controller готов",degraded:"Controller работает с ограничениями",noLink:"Нет связи",updated:"Обновлено",agent:"Агент",last:"Последняя связь"},
 en:{home:"Home",eyebrow:"LIVE CONTROL PLANE",title:"Real data only.",lead:"The home page shows the actual Controller and registered-computer state. There are no demo charts, fictitious projects, or simulated metrics.",checking:"Checking Controller…",online:"Live nodes",onlineSub:"from real heartbeats",registered:"Registered",registeredSub:"from the Controller database",telemetrySub:"server-side operational event storage",presenceSub:"network data is protected by Architect access",nodesTitle:"Registered computers",loading:"Loading data…",openHub:"Open Live Hub",openArchitect:"Open Architect",openLogs:"Open logs",notice:"Agent updates use only signed Controller commands with SHA-256 verification. SSH is shown as available only after Cloudflare Access/Tunnel is configured; the site never opens port 22 automatically.",waiting:"Waiting for first refresh…",none:"No computers are currently registered in the Controller.",ready:"Controller ready",degraded:"Controller degraded",noLink:"No connection",updated:"Updated",agent:"Agent",last:"Last seen"},
