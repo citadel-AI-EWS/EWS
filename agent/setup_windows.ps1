@@ -328,6 +328,9 @@ $ConfigJson = @{
   request_timeout_seconds = 30
   max_cpu_percent = 90
   max_memory_percent = 90
+  prevent_automatic_sleep = $true
+  network_recovery_enabled = $true
+  allowed_wifi_profiles = @()
   controller_public_x = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 } | ConvertTo-Json
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
