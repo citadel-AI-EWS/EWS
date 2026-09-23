@@ -45,7 +45,7 @@ jobs:
   agent-package:
     name: Agent packages integrity
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -80,12 +80,21 @@ jobs:
               seen.add(name)
           required = {
               "citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1", "requirements.txt",
-              "setup_windows.ps1", "Install Windows Node.cmd", "START_HERE.cmd",
-              "CitadelNodeService.cs", "windows_service.ps1", "README_RU.txt", "VERIFY_PACKAGE.ps1"
+              "setup_windows.ps1", "setup_windows_local.py", "Install Windows Node.cmd",
+              "Install Windows Service.cmd", "START_HERE.cmd", "Uninstall Local Agent.cmd",
+              "CitadelNodeService.cs", "windows_service.ps1", "README_RU.txt", "VERIFY_PACKAGE.ps1",
+              "python-runtime-amd64/python.exe", "python-runtime-win32/python.exe",
+              "python-runtime-arm64/python.exe"
           }
           assert required <= seen, sorted(required - seen)
           installer = (root / "Install Windows Node.cmd").read_text(encoding="utf-8").lower()
           assert "executionpolicy bypass" not in installer
+          assert "powershell" not in installer
+          assert "winget" not in installer
+          assert "setup_windows_local.py" in installer
+          local_setup = (root / "setup_windows_local.py").read_text(encoding="utf-8").lower()
+          assert "powershell" not in local_setup
+          assert "winget" not in local_setup
           print("Agent package integrity: OK")
           PY
           unzip -t "$package_zip"
@@ -130,7 +139,7 @@ jobs:
   windows-agent:
     name: Windows agent validation
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -147,6 +156,32 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python agent/citadel_node_v2.py self-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build and exercise bundled Local Agent runtime
+        shell: pwsh
+        run: |
+          python scripts/build_fixed_agent_package.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $pkg = Get-ChildItem -LiteralPath "dist" -Directory | Where-Object { $_.Name -like "CITADEL_FIXED_AGENT_0.3.16_*" } | Select-Object -First 1
+          if (-not $pkg) { throw "0.3.16 Windows package directory not found" }
+          $runtime = Join-Path $pkg.FullName "python-runtime-amd64\python.exe"
+          if (-not (Test-Path -LiteralPath $runtime)) { throw "bundled AMD64 Python runtime missing" }
+          & $runtime (Join-Path $pkg.FullName "citadel_node_v2.py") self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $installRoot = Join-Path $env:RUNNER_TEMP "Citadel Local Agent"
+          $stateRoot = Join-Path $env:RUNNER_TEMP "Citadel Local State"
+          & $runtime (Join-Path $pkg.FullName "setup_windows_local.py") --install-root $installRoot --state-root $stateRoot --no-start --no-autostart --skip-probe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $installedPython = Join-Path $installRoot "python-runtime\python.exe"
+          $installedAgent = Join-Path $installRoot "citadel_node_v2.py"
+          if (-not (Test-Path -LiteralPath $installedPython)) { throw "installed local runtime missing" }
+          & $installedPython $installedAgent self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $runtime (Join-Path $pkg.FullName "setup_windows_local.py") --install-root $installRoot --state-root $stateRoot --uninstall --purge-state
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Test-Path -LiteralPath $installRoot) { throw "local uninstall left install root" }
+          if (Test-Path -LiteralPath $stateRoot) { throw "local uninstall left state root" }
+          Write-Host "Bundled Local Agent install/self-test/uninstall: OK"
+
       - name: Validate Windows Enterprise Probe and legacy-upgrade bootstrap
         shell: pwsh
         run: |
