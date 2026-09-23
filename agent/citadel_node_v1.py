@@ -1517,7 +1517,7 @@ class Agent:
     @staticmethod
     def parse_lmstudio_windows_installer_metadata(script: str) -> dict[str, str]:
         def take(name: str) -> str:
-            pattern = r"^\\$" + re.escape(name) + r"\\s*=\\s*'([^']+)'\\s*$"
+            pattern = r"^\$" + re.escape(name) + r"\s*=\s*'([^']+)'\s*$"
             match = re.search(pattern, script, re.MULTILINE)
             if not match:
                 raise RuntimeError(f"lmstudio_installer_metadata_missing:{name}")
