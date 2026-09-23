@@ -209,7 +209,17 @@ def install(args: argparse.Namespace) -> int:
     run_checked([str(python), str(agent), "self-test"], install_root, "agent self-test failed")
     run_checked([str(python), str(agent), "doctor", "--config", str(config_path)], install_root, "agent doctor failed")
     if not args.skip_probe:
-        run_checked([str(python), str(agent), "probe", "--config", str(config_path)], install_root, "Controller probe failed")
+        probe = subprocess.run(
+            [str(python), str(agent), "probe", "--config", str(config_path)],
+            cwd=install_root,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if probe.returncode != 0:
+            detail = (probe.stderr or probe.stdout or "Controller unavailable").strip()
+            print(f"WARNING: Controller probe is not ready yet: {detail[:500]}")
+            print("The Local Agent is installed and will retry automatically when network/Controller access returns.")
 
     if not args.no_autostart:
         write_startup(startup_dir(), install_root)
