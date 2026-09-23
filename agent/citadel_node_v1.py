@@ -1637,8 +1637,14 @@ class Agent:
                     continue
             if checksum is None:
                 raise RuntimeError("lmstudio_sha512_checksum_unavailable")
-            actual = hashlib.sha512(archive.read_bytes()).hexdigest()
-            if actual != checksum:
+            digest = hashlib.sha512()
+            with archive.open("rb") as stream:
+                while True:
+                    chunk = stream.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+            if digest.hexdigest() != checksum:
                 raise RuntimeError("lmstudio_sha512_mismatch")
             self.report_ai_state(
                 progress_phase="runtime_verified",
@@ -2930,6 +2936,19 @@ def self_test() -> int:
         require_test(
             "no AI/LLM was called" in agent.python_mode_answer("Who wrote Hamlet?"),
             "Python-only unsupported prompt did not fail closed",
+        )
+        lm_meta = agent.parse_lmstudio_windows_installer_metadata(
+            "$APP_VERSION = '0.0.20-1'\n"
+            "$APP_VARIANT = 'full'\n"
+            "$ARTIFACT_DOWNLOAD_URL = 'llmster.lmstudio.ai/download'\n"
+        )
+        require_test(
+            lm_meta == {
+                "version": "0.0.20-1",
+                "variant": "full",
+                "artifact_base": "llmster.lmstudio.ai/download",
+            },
+            "LM Studio official installer metadata parser failed",
         )
         mini_report = agent.execute_project_python({
             "project_id": "project_test",
