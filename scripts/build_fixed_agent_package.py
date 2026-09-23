@@ -30,12 +30,13 @@ RUNTIMES = {
         "sha256": "c784a4596d706d647d430286e2db1d1e3dcc1acb8bc6993fabf147fc00606e18",
         "platform": "win32",
         "requirements": "requirements-win32.txt",
+    "requirements-win-arm64.txt",
     },
     "arm64": {
         "url": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-embeddable-arm64.zip",
         "sha256": "b777fa08b68a177e350f8730c3e97a2b216d81e3eb5d183b039c65d43a6a2b3e",
         "platform": "win_arm64",
-        "requirements": "requirements.txt",
+        "requirements": "requirements-win-arm64.txt",
     },
 }
 
