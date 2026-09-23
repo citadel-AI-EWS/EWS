@@ -1005,8 +1005,8 @@ class Agent:
             thread_name_prefix="citadel-python-mini",
         ) as pool:
             mini_agents = list(pool.map(run_worker, enumerate(tasks)))
-        content = "\\n\\n".join(
-            f"[{worker['mini_agent_id']}]\\n{worker['content']}"
+        content = "\n\n".join(
+            f"[{worker['mini_agent_id']}]\n{worker['content']}"
             for worker in mini_agents
         )
         self.log.write(
