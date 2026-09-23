@@ -1633,8 +1633,12 @@ class Agent:
                     if re.fullmatch(r"[0-9a-f]{128}", token):
                         checksum = token
                         break
-                except Exception:
-                    continue
+                except Exception as error:
+                    self.log.write(
+                        "lmstudio_checksum_candidate_failed",
+                        url=checksum_url,
+                        error=str(error)[:200],
+                    )
             if checksum is None:
                 raise RuntimeError("lmstudio_sha512_checksum_unavailable")
             digest = hashlib.sha512()
