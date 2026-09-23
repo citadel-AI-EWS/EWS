@@ -110,6 +110,7 @@ def configure_embedded_runtime(runtime: Path) -> None:
     pth_files[0].write_text(
         "python314.zip\n"
         ".\n"
+        "..\n"
         "Lib\\site-packages\n"
         "import site\n",
         encoding="utf-8",
