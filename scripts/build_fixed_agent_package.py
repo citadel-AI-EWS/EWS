@@ -42,7 +42,6 @@ RUNTIMES = {
 PACKAGE_FILES = (
     "citadel_node_v1.py",
     "citadel_node_v2.py",
-    "setup_windows.py",
     "setup_windows_local.py",
     "setup_windows.ps1",
     "Install Windows Node.cmd",
