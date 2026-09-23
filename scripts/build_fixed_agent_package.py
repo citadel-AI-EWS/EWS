@@ -51,6 +51,7 @@ PACKAGE_FILES = (
     "windows_enterprise_probe.ps1",
     "requirements.txt",
     "requirements-win32.txt",
+    "requirements-win-arm64.txt",
 )
 
 
