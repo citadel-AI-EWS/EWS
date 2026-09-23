@@ -83,6 +83,7 @@ jobs:
               "setup_windows.ps1", "setup_windows_local.py", "Install Windows Node.cmd",
               "Install Windows Service.cmd", "START_HERE.cmd", "Uninstall Local Agent.cmd",
               "CitadelNodeService.cs", "windows_service.ps1", "README_RU.txt", "VERIFY_PACKAGE.ps1",
+              "requirements-win-arm64.txt",
               "python-runtime-amd64/python.exe", "python-runtime-win32/python.exe",
               "python-runtime-arm64/python.exe"
           }
