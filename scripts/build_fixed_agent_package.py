@@ -382,7 +382,7 @@ def build() -> Path:
 
     manifest_paths = sorted(
         path for path in STAGE.rglob("*")
-        if path.is_file() and path.name != "SHA256SUMS.txt"
+        if path.is_file() and path != (STAGE / "SHA256SUMS.txt")
     )
     manifest = "".join(
         f"{sha256(path)}  {path.relative_to(STAGE).as_posix()}\n"
