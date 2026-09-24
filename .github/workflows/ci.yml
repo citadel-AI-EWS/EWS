@@ -54,6 +54,8 @@ jobs:
           cache: pip
           cache-dependency-path: agent/requirements.txt
       - run: python -m pip install --disable-pip-version-check --requirement agent/requirements.txt
+      - name: Build verified portable Windows Python runtimes
+        run: python scripts/build_windows_portable_runtime.py
       - name: Build self-contained Windows package
         run: python scripts/build_fixed_agent_package.py
       - name: Verify generated package
@@ -79,14 +81,28 @@ jobs:
               assert actual == digest, (name, actual, digest)
               seen.add(name)
           required = {
-              "citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1", "requirements.txt",
-              "setup_windows.ps1", "Install Windows Node.cmd", "START_HERE.cmd",
-              "CitadelNodeService.cs", "windows_service.ps1", "README_RU.txt", "VERIFY_PACKAGE.ps1"
+              "citadel_node_v1.py", "citadel_node_v2.py", "windows_bootstrap.py",
+              "windows_enterprise_probe.ps1", "requirements.txt", "requirements-win32.txt",
+              "setup_windows.ps1", "Install Windows Node.cmd", "Install Windows Core Service.cmd", "START_HERE.cmd",
+              "CitadelNodeService.cs", "windows_service.ps1", "README_RU.txt", "VERIFY_PACKAGE.ps1",
+              "python_runtime/amd64/python.exe", "python_runtime/amd64/pythonw.exe",
+              "python_runtime/amd64/CITADEL_RUNTIME.json", "python_runtime/amd64/SHA256SUMS.txt",
+              "python_runtime/win32/python.exe", "python_runtime/win32/pythonw.exe",
+              "python_runtime/win32/CITADEL_RUNTIME.json", "python_runtime/win32/SHA256SUMS.txt"
           }
           assert required <= seen, sorted(required - seen)
           installer = (root / "Install Windows Node.cmd").read_text(encoding="utf-8").lower()
+          setup = (root / "setup_windows.ps1").read_text(encoding="utf-8").lower()
+          bootstrap = (root / "windows_bootstrap.py").read_text(encoding="utf-8").lower()
+          assert "powershell" not in installer
+          assert "winget" not in installer
+          assert "pip " not in installer
           assert "executionpolicy bypass" not in installer
-          print("Agent package integrity: OK")
+          assert "winget.source" not in setup
+          assert "-m pip" not in setup
+          assert "subprocess.run" in bootstrap
+          assert "python_runtime" in bootstrap
+          print("Agent package integrity and offline install policy: OK")
           PY
           unzip -t "$package_zip"
 
@@ -140,6 +156,36 @@ jobs:
           cache-dependency-path: agent/requirements.txt
       - name: Install agent dependencies
         run: python -m pip install --disable-pip-version-check --requirement agent/requirements.txt
+      - name: Build portable Windows runtime package
+        shell: pwsh
+        run: |
+          python scripts/build_windows_portable_runtime.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/build_fixed_agent_package.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Execute bundled Python runtimes and bootstrap self-tests
+        shell: pwsh
+        run: |
+          $package = Get-ChildItem -LiteralPath dist -Directory -Filter "CITADEL_FIXED_AGENT_*" | Select-Object -First 1
+          if ($null -eq $package) { throw "Windows package directory not found" }
+          $amd64 = Join-Path $package.FullName "python_runtime\amd64\python.exe"
+          $win32 = Join-Path $package.FullName "python_runtime\win32\python.exe"
+          $agent = Join-Path $package.FullName "citadel_node_v2.py"
+          $bootstrap = Join-Path $package.FullName "windows_bootstrap.py"
+          foreach ($python in @($amd64, $win32)) {
+            if (-not (Test-Path -LiteralPath $python)) { throw "Bundled runtime missing: $python" }
+            & $python -c "import cryptography, psutil, sys; print(sys.version); print(cryptography.__version__); print(psutil.__version__)"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          & $amd64 $agent self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $amd64 $bootstrap --self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $amd64 $bootstrap --verify-package-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $defaultInstaller = Get-Content -LiteralPath (Join-Path $package.FullName "Install Windows Node.cmd") -Raw
+          if ($defaultInstaller -match "(?i)powershell|winget|pip\s") { throw "Default installer depends on PowerShell/winget/pip" }
+          Write-Host "Bundled Windows runtimes and no-PowerShell bootstrap: PASS"
       - name: Compile and self-test agent
         shell: pwsh
         run: |
