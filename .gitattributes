@@ -1,0 +1,27 @@
+# Reproducible release bytes across Linux and Windows runners.
+* text=auto
+
+*.py text eol=lf
+*.sh text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.jsonc text eol=lf
+*.html text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.ps1 text eol=lf
+*.cs text eol=lf
+*.txt text eol=lf
+*.md text eol=lf
+*.sql text eol=lf
+
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+*.zip binary
+*.gz binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
