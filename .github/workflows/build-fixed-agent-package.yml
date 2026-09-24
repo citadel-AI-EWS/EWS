@@ -32,13 +32,8 @@ jobs:
       - name: Install agent dependencies
         run: python -m pip install --disable-pip-version-check --requirement agent/requirements.txt
 
-      - name: Verify Windows x86 dependency wheels exist
-        run: >-
-          python -m pip download --disable-pip-version-check --only-binary=:all:
-          --platform win32 --python-version 313 --implementation cp
-          --abi cp313 --abi abi3
-          --requirement agent/requirements-win32.txt
-          --dest .tmp-win32-wheels
+      - name: Build verified portable Windows Python runtimes
+        run: python scripts/build_windows_portable_runtime.py
 
       - name: Build self-contained package
         run: python scripts/build_fixed_agent_package.py
@@ -58,9 +53,14 @@ jobs:
           import hashlib, sys
           root = Path(sys.argv[1])
           required = {
-              "citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1", "requirements.txt",
-              "requirements-win32.txt", "setup_windows.ps1", "Install Windows Node.cmd", "START_HERE.cmd",
-              "README_RU.txt", "VERIFY_PACKAGE.ps1"
+              "citadel_node_v1.py", "citadel_node_v2.py", "windows_bootstrap.py",
+              "windows_enterprise_probe.ps1", "requirements.txt", "requirements-win32.txt",
+              "setup_windows.ps1", "Install Windows Node.cmd", "Install Windows Core Service.cmd", "START_HERE.cmd",
+              "README_RU.txt", "VERIFY_PACKAGE.ps1",
+              "python_runtime/amd64/python.exe", "python_runtime/amd64/pythonw.exe",
+              "python_runtime/amd64/CITADEL_RUNTIME.json", "python_runtime/amd64/SHA256SUMS.txt",
+              "python_runtime/win32/python.exe", "python_runtime/win32/pythonw.exe",
+              "python_runtime/win32/CITADEL_RUNTIME.json", "python_runtime/win32/SHA256SUMS.txt"
           }
           seen = set()
           for line in (root / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines():
@@ -72,10 +72,17 @@ jobs:
           assert required <= seen, sorted(required - seen)
           installer = (root / "Install Windows Node.cmd").read_text(encoding="utf-8").lower()
           setup = (root / "setup_windows.ps1").read_text(encoding="utf-8").lower()
+          bootstrap = (root / "windows_bootstrap.py").read_text(encoding="utf-8").lower()
+          assert "powershell" not in installer
+          assert "winget" not in installer
+          assert "pip " not in installer
           assert "executionpolicy bypass" not in installer
           assert "executionpolicy bypass" not in setup
           assert "invoke-webrequest" not in setup
-          print("Package manifest, offline source and installer policy: OK")
+          assert "winget.source" not in setup
+          assert "-m pip" not in setup
+          assert "python_runtime" in bootstrap
+          print("Package manifest, bundled runtime and installer policy: OK")
           PY
           unzip -t "$package_zip"
 
@@ -118,33 +125,11 @@ jobs:
           PY
           tar -tzf "$linux_tar" >/dev/null
 
-      - name: Publish verified Windows package in repository
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        shell: bash
-        run: |
-          set -euo pipefail
-          package_zip="$(find dist -mindepth 1 -maxdepth 1 -type f -name 'CITADEL_FIXED_AGENT_*.zip' | head -n 1)"
-          test -n "$package_zip"
-          test -f "$package_zip"
-          mkdir -p releases
-          package_name="$(basename "$package_zip")"
-          cp "$package_zip" "releases/$package_name"
-          sha256sum "releases/$package_name" > "releases/$package_name.sha256"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f "releases/$package_name" "releases/$package_name.sha256"
-          if git diff --cached --quiet; then
-            echo "Verified Windows package is already published."
-            exit 0
-          fi
-          git commit -m "release(agent): publish $package_name"
-          git push origin HEAD:main
-
-      - name: Upload verified Windows package
+      - name: Upload Windows package candidate
         uses: actions/upload-artifact@v4
         with:
           name: CITADEL-Windows-Agent-${{ github.sha }}
-          path: dist/*.zip
+          path: dist/CITADEL_FIXED_AGENT_*.zip
           if-no-files-found: error
           retention-days: 14
 
@@ -155,3 +140,73 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
           retention-days: 14
+
+  windows-runtime-verify:
+    name: Bundled Windows runtime validation
+    needs: build-and-verify
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: CITADEL-Windows-Agent-${{ github.sha }}
+          path: candidate
+      - name: Execute bundled runtimes from published ZIP candidate
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -LiteralPath candidate -File -Filter "CITADEL_FIXED_AGENT_*.zip" | Select-Object -First 1
+          if ($null -eq $zip) { throw "Windows ZIP candidate missing" }
+          $extract = Join-Path $env:RUNNER_TEMP "citadel-offline-package"
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $extract -Force
+          $root = Get-ChildItem -LiteralPath $extract -Directory -Filter "CITADEL_FIXED_AGENT_*" | Select-Object -First 1
+          if ($null -eq $root) { throw "Extracted package root missing" }
+          $amd64 = Join-Path $root.FullName "python_runtime\amd64\python.exe"
+          $win32 = Join-Path $root.FullName "python_runtime\win32\python.exe"
+          $agent = Join-Path $root.FullName "citadel_node_v2.py"
+          $bootstrap = Join-Path $root.FullName "windows_bootstrap.py"
+          foreach ($python in @($amd64, $win32)) {
+            & $python -c "import cryptography, psutil, sys; print(sys.version); print(cryptography.__version__); print(psutil.__version__)"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          & $amd64 $agent self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $amd64 $bootstrap --self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $amd64 $bootstrap --verify-package-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $defaultInstaller = Get-Content -LiteralPath (Join-Path $root.FullName "Install Windows Node.cmd") -Raw
+          if ($defaultInstaller -match "(?i)powershell|winget|pip\s") {
+            throw "Default installer unexpectedly depends on PowerShell, winget or pip"
+          }
+          Write-Host "CITADEL offline Windows ZIP runtime validation: PASS"
+
+  publish-windows-package:
+    name: Publish verified Windows package
+    needs: windows-runtime-verify
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          name: CITADEL-Windows-Agent-${{ github.sha }}
+          path: candidate
+      - name: Publish verified Windows package in repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_zip="$(find candidate -maxdepth 1 -type f -name 'CITADEL_FIXED_AGENT_*.zip' | head -n 1)"
+          test -n "$package_zip"
+          mkdir -p releases
+          package_name="$(basename "$package_zip")"
+          cp "$package_zip" "releases/$package_name"
+          sha256sum "releases/$package_name" > "releases/$package_name.sha256"
+          git config user.name "github-actions[bot]"
+          git config user.email "4189826+github-actions[bot]@users.noreply.github.com"
+          git add -f "releases/$package_name" "releases/$package_name.sha256"
+          if git diff --cached --quiet; then
+            echo "Verified Windows package is already published."
+            exit 0
+          fi
+          git commit -m "release(agent): publish $package_name"
+          git push origin HEAD:main
