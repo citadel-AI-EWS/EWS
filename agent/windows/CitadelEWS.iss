@@ -48,7 +48,7 @@ Type: filesandordirs; Name: "{app}"
 
 [Code]
 const
-  ControllerUrl = 'https://citadel-ai.init1.workers.dev';
+  DefaultControllerUrl = 'https://citadel-ai.init1.workers.dev';
   ControllerPublicX = 'erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0';
 
 function JsonEscape(Value: string): string;
@@ -93,9 +93,10 @@ end;
 
 procedure WriteDefaultConfig;
 var
-  StateRoot, ConfigPath, ConfigText: string;
+  StateRoot, ConfigPath, ConfigText, ControllerUrl: string;
 begin
   StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\state');
+  ControllerUrl := ExpandConstant('{param:CONTROLLERURL|' + DefaultControllerUrl + '}');
   ConfigPath := StateRoot + '\config.json';
   ForceDirectories(StateRoot);
 
