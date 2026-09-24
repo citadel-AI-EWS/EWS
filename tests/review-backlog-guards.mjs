@@ -2,6 +2,9 @@ import fs from "node:fs";
 function need(value, message) { if (!value) throw new Error(message); }
 const index = fs.readFileSync("src/index.js", "utf8");
 const setup = fs.readFileSync("agent/setup_windows.ps1", "utf8");
+const defaultWindowsInstaller = fs.readFileSync("agent/Install Windows Node.cmd", "utf8");
+const windowsBootstrap = fs.readFileSync("agent/windows_bootstrap.py", "utf8");
+const portableRuntimeBuilder = fs.readFileSync("scripts/build_windows_portable_runtime.py", "utf8");
 const serviceHost = fs.readFileSync("agent/CitadelNodeService.cs", "utf8");
 const enterpriseProbe = fs.readFileSync("agent/windows_enterprise_probe.ps1", "utf8");
 const serviceHelper = fs.readFileSync("agent/windows_service.ps1", "utf8");
@@ -25,6 +28,18 @@ need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_tok
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
 need(agentV1.includes('VERSION = "0.3.16"'), "v1 release not bumped");
 need(agentV2.includes('VERSION = "0.3.16"'), "v2 release not bumped");
+need(!/powershell/i.test(defaultWindowsInstaller), "default Windows installer still depends on PowerShell");
+need(!/winget/i.test(defaultWindowsInstaller), "default Windows installer still depends on winget");
+need(!/pip\s/i.test(defaultWindowsInstaller), "default Windows installer still depends on pip");
+need(defaultWindowsInstaller.includes("python_runtime"), "default Windows installer does not launch bundled runtime");
+need(windowsBootstrap.includes('RELEASE_VERSION = "0.3.16"'), "Windows bootstrap release not bumped");
+need(windowsBootstrap.includes("controller_probe_ok_at_install"), "offline install/reconnect state missing");
+need(windowsBootstrap.includes("Startup"), "user-mode autostart bootstrap missing");
+need(portableRuntimeBuilder.includes('PYTHON_VERSION = "3.13.15"'), "portable Python version pin missing");
+need(portableRuntimeBuilder.includes("python-3.13.15-embed-amd64.zip"), "x64 embedded Python pin missing");
+need(portableRuntimeBuilder.includes("python-3.13.15-embed-win32.zip"), "win32 embedded Python pin missing");
+need(!setup.includes("winget.source"), "Core Service setup still invokes winget");
+need(!setup.includes("-m pip"), "Core Service setup still installs dependencies with pip");
 need(setup.includes('ServiceName = "CitadelEWSNode"'), "Windows Core Service name missing");
 need(setup.includes('LegacyUserSid'), "original user SID preservation missing");
 need(setup.includes('Set-CitadelDirectoryAcl'), "Windows clean ACL reconstruction missing");
