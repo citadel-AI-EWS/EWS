@@ -6,6 +6,7 @@ on:
     paths:
       - "agent/**"
       - "scripts/build_fixed_agent_package.py"
+      - "scripts/build_windows_portable_runtime.py"
       - "scripts/build_fixed_linux_agent_package.py"
       - ".github/workflows/build-fixed-agent-package.yml"
   workflow_dispatch:
