@@ -1,0 +1,174 @@
+name: Build Windows one-click installer
+
+on:
+  pull_request:
+    paths:
+      - "agent/**"
+      - "scripts/build_windows_oneclick.ps1"
+      - "tests/lmstudio-local-protocol.py"
+      - "src/quality/openrouter.js"
+      - "tests/openrouter-quality-gate.mjs"
+      - ".github/workflows/build-windows-oneclick.yml"
+  push:
+    branches: [main]
+    paths:
+      - "agent/**"
+      - "scripts/build_windows_oneclick.ps1"
+      - "tests/lmstudio-local-protocol.py"
+      - ".github/workflows/build-windows-oneclick.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-oneclick-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-smoke-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          architecture: x64
+          cache: pip
+          cache-dependency-path: agent/requirements.txt
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --requirement agent/requirements.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          choco install innosetup -y --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify agent, LM Studio protocol, and OpenRouter quality gate
+        shell: pwsh
+        run: |
+          python agent/citadel_node_v2.py self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/lmstudio-local-protocol.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/openrouter-quality-gate.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Guard target-PC installation against network bootstrap dependencies
+        shell: pwsh
+        run: |
+          $iss = Get-Content -LiteralPath agent/windows/CitadelEWS.iss -Raw
+          $service = Get-Content -LiteralPath agent/windows/CitadelPortableService.cs -Raw
+          foreach ($forbidden in @(
+            "winget",
+            "pip install",
+            "invoke-webrequest",
+            "downloadstring",
+            "executionpolicy bypass",
+            "netsh advfirewall"
+          )) {
+            if ($iss.ToLowerInvariant().Contains($forbidden)) {
+              throw "Installer contains forbidden target-PC bootstrap dependency: $forbidden"
+            }
+          }
+          if ($service.ToLowerInvariant().Contains("powershell.exe")) {
+            throw "Portable service must not require PowerShell."
+          }
+          Write-Host "Target-PC bootstrap is offline and PowerShell-independent: PASS"
+
+      - name: Build one-click installer
+        shell: pwsh
+        run: |
+          ./scripts/build_windows_oneclick.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Silent install smoke test
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -LiteralPath dist -Filter "CITADEL_EWS_Node_Setup_*_x64.exe" | Select-Object -First 1
+          if (-not $installer) { throw "Installer artifact not found." }
+
+          $log = Join-Path $env:RUNNER_TEMP "citadel-oneclick-install.log"
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/SP-",
+            "/LOG=$log"
+          ) -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log }
+            throw "Silent installer failed with exit code $($process.ExitCode)."
+          }
+
+          $service = Get-Service -Name CitadelEWSNode -ErrorAction Stop
+          if ($service.Status -ne "Running") {
+            throw "CITADEL service is not running after installation."
+          }
+
+          $agentRoot = Join-Path $env:ProgramData "CitadelEWS\agent"
+          $stateRoot = Join-Path $env:ProgramData "CitadelEWS\state"
+          $runtimePython = Join-Path $agentRoot "runtime\python.exe"
+          $agent = Join-Path $agentRoot "citadel_node_v2.py"
+          $config = Join-Path $stateRoot "config.json"
+
+          if (-not (Test-Path -LiteralPath $runtimePython)) { throw "Bundled Python runtime missing." }
+          if (-not (Test-Path -LiteralPath $config)) { throw "Agent config missing." }
+
+          $oldHome = $env:PYTHONHOME
+          try {
+            $env:PYTHONHOME = Join-Path $agentRoot "runtime"
+            & $runtimePython $agent self-test
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & $runtimePython -c "import cryptography, psutil; print('Bundled dependencies: PASS')"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            $env:PYTHONHOME = $oldHome
+          }
+
+          $cfg = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
+          if ($cfg.controller_url -ne "https://citadel-ai.init1.workers.dev") {
+            throw "Unexpected controller URL in installed config."
+          }
+
+          $svc = Get-CimInstance Win32_Service -Filter "Name='CitadelEWSNode'"
+          if (-not $svc) { throw "SCM service record missing." }
+          if ($svc.StartName -ne "NT AUTHORITY\LocalService") { throw "Unexpected service account." }
+          if ($svc.StartMode -ne "Auto") { throw "Service is not automatic." }
+
+          Write-Host "Windows one-click silent installation: PASS"
+
+      - name: Uninstall smoke test
+        if: always()
+        shell: pwsh
+        run: |
+          $uninstaller = Join-Path $env:ProgramData "CitadelEWS\uninstall\unins000.exe"
+          if (Test-Path -LiteralPath $uninstaller) {
+            $p = Start-Process -FilePath $uninstaller -ArgumentList @(
+              "/VERYSILENT",
+              "/SUPPRESSMSGBOXES",
+              "/NORESTART"
+            ) -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "Uninstaller failed with exit code $($p.ExitCode)." }
+          }
+          if (Get-Service -Name CitadelEWSNode -ErrorAction SilentlyContinue) {
+            throw "CITADEL service remained registered after uninstall."
+          }
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: CITADEL-Windows-OneClick-${{ github.sha }}
+          path: |
+            dist/CITADEL_EWS_Node_Setup_*_x64.exe
+            dist/CITADEL_EWS_Node_Setup_*_x64.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
