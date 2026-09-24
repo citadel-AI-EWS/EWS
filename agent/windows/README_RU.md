@@ -1,70 +1,70 @@
-# Windows One-Click installer
+# Windows One-Click Installer
 
-This is the preferred Windows deployment path for CITADEL/EWS nodes.
+Это рекомендуемый способ установки CITADEL/EWS Node на Windows.
 
-## What changes
+## Что изменилось
 
-The target computer no longer needs to install or discover Python before CITADEL can start. The installer contains:
+На целевом компьютере больше не нужно заранее искать или устанавливать Python. В установщик заранее входят:
 
-- a private x64 Python runtime used only by CITADEL;
-- the pinned Python dependencies required by the agent;
-- `citadel_node_v1.py` and `citadel_node_v2.py`;
-- a precompiled Windows Service host;
-- the reviewed LM Studio integration helper.
+- отдельный x64 Python runtime только для CITADEL;
+- необходимые Python-зависимости агента;
+- `citadel_node_v1.py` и `citadel_node_v2.py`;
+- заранее скомпилированный Windows Service host;
+- проверенный helper интеграции с LM Studio.
 
-The private runtime is assembled and tested in CI. The target machine does **not** run `winget`, `pip install`, download Python, compile C#, or modify the system PATH.
+Runtime собирается и тестируется в CI. На компьютере пользователя установщик **не запускает** `winget`, `pip install`, загрузку Python, компиляцию C# и не меняет системный PATH.
 
-## Normal installation
+## Обычная установка
 
-Run:
+Запустить:
 
 `CITADEL_EWS_Node_Setup_<version>_x64.exe`
 
-Windows may show the normal administrator/UAC approval because CITADEL is installed as a machine service. After that approval there are no Python, dependency, directory, or firewall setup questions.
+Windows покажет стандартное UAC-подтверждение администратора, потому что CITADEL устанавливается как системная служба. После этого не должно быть отдельных вопросов про Python, зависимости, папки или firewall.
 
-The installer registers `CitadelEWSNode` as an Automatic (Delayed Start) Windows Service under `NT AUTHORITY\LocalService`.
+Установщик регистрирует `CitadelEWSNode` как Windows Service с типом запуска Automatic (Delayed Start) под `NT AUTHORITY\LocalService`.
 
-## Quiet managed installation
+## Тихая управляемая установка
 
-For PCs that you own or administer:
+Для компьютеров, которые принадлежат оператору или находятся под его администрированием:
 
 ```cmd
 CITADEL_EWS_Node_Setup_<version>_x64.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
 ```
 
-This is an unattended installer mode, not a security bypass. Administrator authorization is still required by Windows.
+Это unattended-режим установщика, а не обход защиты Windows. Разрешение администратора всё равно требуется.
 
-## Offline behavior
+## Работа без интернета
 
-Installation itself does not require Internet access. If the Controller is unreachable, the service remains installed and running and the existing agent retry/backoff loop keeps trying later.
+Сама установка не требует доступа к интернету. Если Controller в этот момент недоступен, служба остаётся установленной и запущенной, а существующий retry/backoff агента продолжает попытки связи позже.
 
-When Internet access becomes available, the agent enrolls/reconciles its node identity and begins normal heartbeats. No inbound firewall port is required for the CITADEL Controller connection; it is outbound HTTPS.
+После появления интернета агент регистрируется/сверяет node identity и начинает heartbeat. Входящий порт для связи CITADEL с Controller не открывается: соединение идёт наружу по HTTPS.
 
 ## LM Studio
 
-CITADEL supports both LM Studio local interfaces used by the agent:
+Агент поддерживает оба локальных интерфейса LM Studio, которые использует CITADEL:
 
-- LM Studio REST streaming endpoint on `127.0.0.1:1234/api/v1/chat`;
-- OpenAI-compatible `127.0.0.1:1234/v1/chat/completions`.
+- REST streaming: `127.0.0.1:1234/api/v1/chat`;
+- OpenAI-compatible: `127.0.0.1:1234/v1/chat/completions`.
 
-CI exercises both contracts with a local test server so a protocol regression fails the build.
+CI проверяет оба протокола через локальный тестовый сервер, поэтому несовместимое изменение API должно остановить сборку.
 
-The CITADEL core installer does not silently weaken PowerShell policy in order to install LM Studio. If `llmster` is already installed, CITADEL can discover and use `lms`. The current official LM Studio Windows headless installer is PowerShell-based, so machines whose organization blocks that installer need LM Studio to be deployed by an approved administrator/software-distribution method.
+Основной установщик CITADEL не ослабляет PowerShell policy ради установки LM Studio. Если `llmster` уже установлен, CITADEL обнаруживает и использует `lms`. Официальный Windows-установщик headless LM Studio сейчас PowerShell-based, поэтому на компьютерах, где организация запрещает такой запуск, LM Studio должен быть установлен разрешённым администратором способом.
 
 ## OpenRouter
 
-OpenRouter remains a Controller/Hub quality gate, not a dependency installed on every node. Its automated test verifies the chat-completions endpoint, Bearer authorization, configured Fusion model/preset, and privacy flags without exposing the real API key.
+OpenRouter остаётся финальным quality gate на стороне Controller/Hub и не устанавливается отдельно на каждый node. Автоматический тест проверяет endpoint chat completions, Bearer authorization, Fusion model/preset и privacy-настройки, не раскрывая реальный API key.
 
-## Security properties
+## Безопасность
 
-- no `ExecutionPolicy Bypass`;
-- no firewall-disable or firewall-bypass commands;
-- no arbitrary remote shell;
-- Windows service runs as `LocalService`, not as Administrator;
-- program/state ACLs are narrowed after installation;
-- state is preserved when the application is uninstalled, so node identity can be retained for an approved repair/reinstall;
-- SHA-256 is emitted for every built installer.
+- нет `ExecutionPolicy Bypass`;
+- нет команд отключения или обхода firewall;
+- нет произвольного remote shell;
+- служба работает как `LocalService`, а не Administrator;
+- ACL каталогов программы и state ограничиваются после установки;
+- state сохраняется при удалении приложения, чтобы approved repair/reinstall мог сохранить node identity;
+- для каждого собранного installer создаётся SHA-256.
 
-## Remaining production requirement: code signing
+## Что ещё нужно перед публичным production-релизом
 
-A public production installer should be Authenticode-signed with the project's Windows code-signing certificate. SHA-256 proves package identity once the hash is known, but signing is what gives Windows a publisher identity and materially reduces SmartScreen friction. CI intentionally does not fabricate or embed a private signing key.
+Публичный Windows installer желательно Authenticode-подписать сертификатом проекта. SHA-256 позволяет проверить конкретный пакет, но именно цифровая подпись даёт Windows подтверждённого издателя и заметно уменьшает предупреждения SmartScreen. CI намеренно не создаёт фиктивный сертификат и не хранит приватный signing key в репозитории.
