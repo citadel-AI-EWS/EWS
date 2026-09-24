@@ -76,7 +76,19 @@ def patch_pth(runtime_root: Path) -> None:
         raise RuntimeError(f"embedded Python path file missing: {pth.name}")
     lines = [line.rstrip("\r\n") for line in pth.read_text(encoding="utf-8").splitlines()]
     out = [line for line in lines if line.strip() and line.strip() != "#import site"]
-    for line in (f"python{PYTHON_TAG}.zip", ".", r"Lib\site-packages", "import site"):
+    # The runtime is used both directly inside the release ZIP
+    # (python_runtime/<arch>/python.exe) and after installation
+    # (release/python_runtime/python.exe). These two package-owned parent paths
+    # let the isolated runtime import the hash-verified agent modules without
+    # consulting a system Python or arbitrary PYTHONPATH.
+    for line in (
+        f"python{PYTHON_TAG}.zip",
+        ".",
+        r"Lib\site-packages",
+        "..",
+        r"..\..",
+        "import site",
+    ):
         if line not in out:
             out.append(line)
     pth.write_text("\n".join(out) + "\n", encoding="utf-8", newline="\n")
