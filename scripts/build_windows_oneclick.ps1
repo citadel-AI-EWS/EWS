@@ -8,7 +8,10 @@ Set-StrictMode -Version Latest
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 if ([string]::IsNullOrWhiteSpace($Version)) {
-  $Version = (Get-Content -LiteralPath (Join-Path $RepoRoot "VERSION") -Raw).Trim()
+  $AgentSource = Get-Content -LiteralPath (Join-Path $RepoRoot "agent\citadel_node_v2.py") -Raw
+  $VersionMatch = [regex]::Match($AgentSource, '(?m)^VERSION\s*=\s*"([^"]+)"')
+  if (-not $VersionMatch.Success) { throw "Unable to determine CITADEL agent version." }
+  $Version = $VersionMatch.Groups[1].Value
 }
 if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$') {
   throw "Invalid CITADEL version: $Version"
