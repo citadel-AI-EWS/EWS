@@ -144,20 +144,27 @@ end;
 
 procedure InstallService;
 var
-  Sc, ServiceExe: string;
+  Sc, ServiceExe, ServiceArgs: string;
+  ResultCode: Integer;
 begin
   Sc := ExpandConstant('{sys}\sc.exe');
   ServiceExe := ExpandConstant('{app}\CitadelNodeService.exe');
+  ServiceArgs :=
+    'binPath= "' + ServiceExe +
+    '" start= delayed-auto obj= "NT AUTHORITY\LocalService" DisplayName= "{#ProductName}"';
 
-  TryExec(Sc, 'delete {#ServiceName}');
-  Sleep(500);
+  { Repair/upgrade in place when the service already exists. }
+  if not Exec(Sc, 'config {#ServiceName} ' + ServiceArgs, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    RaiseException('Unable to inspect/update the CITADEL Windows service');
 
-  RequireExec(
-    Sc,
-    'create {#ServiceName} binPath= "' + ServiceExe +
-    '" start= delayed-auto obj= "NT AUTHORITY\LocalService" DisplayName= "{#ProductName}"',
-    'Unable to register the CITADEL Windows service'
-  );
+  if ResultCode <> 0 then
+  begin
+    RequireExec(
+      Sc,
+      'create {#ServiceName} ' + ServiceArgs,
+      'Unable to register the CITADEL Windows service'
+    );
+  end;
 
   RequireExec(
     Sc,
