@@ -174,6 +174,8 @@ for page_name, page in (("hub", hub), ("architect", architect)):
 
 setup = Path("agent/setup_windows.ps1").read_text(encoding="utf-8").lower()
 installer = Path("agent/Install Windows Node.cmd").read_text(encoding="utf-8").lower()
+bootstrap = Path("agent/windows_bootstrap.py").read_text(encoding="utf-8").lower()
+runtime_builder = Path("scripts/build_windows_portable_runtime.py").read_text(encoding="utf-8").lower()
 service_helper = Path("agent/windows_service.ps1").read_text(encoding="utf-8")
 service_host = Path("agent/CitadelNodeService.cs").read_text(encoding="utf-8")
 agent_v1 = Path("agent/citadel_node_v1.py").read_text(encoding="utf-8")
@@ -188,6 +190,20 @@ for forbidden in (
 ):
     if forbidden in setup or forbidden in installer:
         raise SystemExit(f"unsafe Windows installer pattern detected: {forbidden}")
+
+for forbidden in ("powershell", "winget", "pip "):
+    if forbidden in installer:
+        raise SystemExit(f"default Windows installer must not depend on {forbidden.strip()}")
+if "python_runtime" not in installer or "windows_bootstrap.py" not in installer:
+    raise SystemExit("default Windows installer is not using the bundled runtime bootstrap")
+if "winget.source" in setup or "-m pip" in setup:
+    raise SystemExit("Windows Core Service setup still installs Python/dependencies from the network")
+for required in ("python_runtime", "controller_probe_ok_at_install", "startup"):
+    if required not in bootstrap:
+        raise SystemExit(f"Windows offline bootstrap capability missing: {required}")
+for required in ("python-3.13.15-embed-amd64.zip", "python-3.13.15-embed-win32.zip", "sha256"):
+    if required not in runtime_builder:
+        raise SystemExit(f"portable Python build pin missing: {required}")
 
 if "https://citadel-ai.init1.workers.dev" not in setup:
     raise SystemExit("Windows installer Controller URL is missing")
