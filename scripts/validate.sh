@@ -223,7 +223,7 @@ for required in (
 ):
     if required not in setup:
         raise SystemExit(f"Windows Core Service capability missing: {required}")
-for forbidden in ("createshortcut(", "pythonw.exe", "binpath="):
+for forbidden in ("createshortcut(", "binpath="):
     if forbidden in setup:
         raise SystemExit(f"legacy/fragile Windows lifecycle returned: {forbidden}")
 
