@@ -1,5 +1,14 @@
 # CITADEL/EWS Python Node v1
 
+## v0.3.16 — автономная Windows-установка
+
+- Обычная установка запускается через `START_HERE.cmd` / `Install Windows Node.cmd` и **не вызывает PowerShell**.
+- Windows ZIP содержит локальный Python 3.13.15 для x64 и 32-bit Windows вместе с `cryptography` и `psutil`; на целевом компьютере не нужны системный Python, winget, pip или доступ в интернет для установки файлов.
+- По умолчанию агент ставится в профиль текущего пользователя, создаёт автозапуск и работает без прав администратора. Если Controller временно недоступен, локальная установка всё равно завершается, а агент продолжает переподключаться после появления сети.
+- `Install Windows Core Service.cmd` — отдельный корпоративный вариант. Он создаёт Windows Service, поэтому Windows штатно запросит одно административное подтверждение; этот режим тоже использует только встроенный Python и не устанавливает Python через сеть.
+- CI собирает runtime из официального Python embeddable package, проверяет SHA-256 и затем на `windows-latest` реально запускает оба bundled `python.exe`, импортирует зависимости и выполняет self-test/bootstrap verification до публикации ZIP.
+- Core Agent использует только исходящие соединения к HTTPS Controller; установка Python больше не запускает App Installer/winget, поэтому связанное с ним окно установки Python устранено из штатного пути.
+
 ## v0.3.15 — mini-workers, delta update и стабильный llmster HOME
 
 - Python-only проект координирует до 8 локальных mini-workers (до 4 одновременно) и не вызывает LLM.
@@ -76,13 +85,9 @@
 
 ## Windows setup
 
-Адрес контроллера уже встроен. Setup при необходимости устанавливает Python 3.14 через Windows Package Manager, создаёт отдельное `.venv`, ставит зависимости, выполняет `doctor` и self-test, автоматически регистрирует узел и проверяет живой цикл с Controller. Узел получает постоянный номер; enrollment token, логин и код подтверждения не требуются.
+Адрес Controller уже встроен. Для обычной установки распакуйте ZIP и запустите `START_HERE.cmd`. Этот путь использует только bundled Python и не требует PowerShell, winget, pip или предварительно установленного Python.
 
-```powershell
-powershell -File .\setup_windows.ps1
-```
-
-После успешной проверки Setup компилирует минимальный проверяемый service-host из `CitadelNodeService.cs`, регистрирует `CitadelEWSNode` как Automatic (Delayed Start) Windows Service и запускает Core Agent под LocalService. Повторный запуск Setup выполняет repair той же установки и сохраняет Ed25519-идентичность.
+Для машин, где агент должен работать как системная служба ещё до входа пользователя, используйте `Install Windows Core Service.cmd`. Windows запросит административное подтверждение для создания/обновления службы; после этого Core Service использует тот же bundled Python runtime и не скачивает Python-зависимости.
 
 Unattended/autostart предназначен только для компьютеров, принадлежащих оператору или находящихся под его администрированием.
 
