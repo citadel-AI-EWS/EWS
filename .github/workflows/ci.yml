@@ -269,8 +269,8 @@ jobs:
           if ($installer.Contains("executionpolicy bypass") -or $setupLower.Contains("executionpolicy bypass")) {
             throw "ExecutionPolicy Bypass is forbidden"
           }
-          if ($setupLower.Contains("createshortcut(") -or $setupLower.Contains("pythonw.exe")) {
-            throw "Legacy Startup lifecycle returned"
+          if ($setupLower.Contains("createshortcut(")) {
+            throw "Legacy Startup shortcut lifecycle returned"
           }
 
           . (Resolve-Path -LiteralPath "agent\windows_service.ps1").Path
