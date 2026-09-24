@@ -236,7 +236,7 @@ $BundledPython = Join-Path $BundledRuntimeSource "python.exe"
 if ($LASTEXITCODE -ne 0) {
   throw "Bundled Python runtime is present but its agent dependencies are not importable."
 }
-Write-Host "[CITADEL] Using bundled offline Python runtime; winget/pip are not required."
+Write-Host "[CITADEL] Using bundled offline Python runtime; no external Python installer is required."
 
 # Harden the machine destinations before any identity, queue, or executable is
 # copied into them. The DACL is rebuilt from scratch; unexpected explicit ACEs
