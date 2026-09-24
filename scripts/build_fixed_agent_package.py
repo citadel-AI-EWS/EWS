@@ -19,7 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
 PACKAGE_NAME = "CITADEL_FIXED_AGENT_0.3.16_2026-09-24"
 STAGE = DIST / PACKAGE_NAME
-ZIP_PATH = DIST / f"{PACKAGE_NAME}.zip"\nPORTABLE_WINDOWS = ROOT / ".portable" / "windows"
+ZIP_PATH = DIST / f"{PACKAGE_NAME}.zip"
+PORTABLE_WINDOWS = ROOT / ".portable" / "windows"
 
 
 def must_replace(text: str, old: str, new: str, label: str) -> str:
