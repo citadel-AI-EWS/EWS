@@ -1,15 +1,14 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 title CITADEL EWS Node Installer
-powershell.exe -NoLogo -NoProfile -File "%~dp0setup_windows.ps1" %*
-if errorlevel 1 (
-  echo.
-  echo Installation or repair failed. See the message above.
-  echo If Windows blocks local PowerShell scripts, use your organization's approved execution policy instead of bypassing it.
-  pause
-  exit /b 1
+set "ROOT=%~dp0"
+set "RUNTIME=%ROOT%python_runtime\amd64\python.exe"
+if /I "%PROCESSOR_ARCHITECTURE%"=="x86" if "%PROCESSOR_ARCHITEW6432%"=="" set "RUNTIME=%ROOT%python_runtime\win32\python.exe"
+if not exist "%RUNTIME%" (
+  echo [CITADEL] Bundled Python runtime is missing.
+  exit /b 2
 )
-echo.
-echo CITADEL installation/repair completed successfully.
-pause
-exit /b 0
+"%RUNTIME%" "%ROOT%windows_bootstrap.py" %*
+set "RC=%ERRORLEVEL%"
+if not "%RC%"=="0" echo [CITADEL] Installation failed with code %RC%.
+exit /b %RC%
