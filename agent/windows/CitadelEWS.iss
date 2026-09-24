@@ -20,6 +20,9 @@ AppPublisher={#PublisherName}
 DefaultDirName={commonappdata}\CitadelEWS\agent
 DisableDirPage=yes
 DisableProgramGroupPage=yes
+DisableReadyPage=yes
+DisableFinishedPage=yes
+ShowLanguageDialog=no
 UninstallFilesDir={commonappdata}\CitadelEWS\uninstall
 OutputDir={#OutputDir}
 OutputBaseFilename=CITADEL_EWS_Node_Setup_{#MyVersion}_x64
@@ -70,6 +73,22 @@ var
   ResultCode: Integer;
 begin
   Exec(FileName, Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+procedure StopExistingService;
+var
+  Sc: string;
+begin
+  Sc := ExpandConstant('{sys}\sc.exe');
+  TryExec(Sc, 'stop {#ServiceName}');
+  Sleep(1500);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  { Stop an existing service before [Files] replaces the bundled runtime or host. }
+  StopExistingService;
+  Result := '';
 end;
 
 procedure WriteDefaultConfig;
@@ -130,8 +149,6 @@ begin
   Sc := ExpandConstant('{sys}\sc.exe');
   ServiceExe := ExpandConstant('{app}\CitadelNodeService.exe');
 
-  TryExec(Sc, 'stop {#ServiceName}');
-  Sleep(1200);
   TryExec(Sc, 'delete {#ServiceName}');
   Sleep(500);
 
