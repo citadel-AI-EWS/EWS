@@ -102,6 +102,7 @@ jobs:
             "/SUPPRESSMSGBOXES",
             "/NORESTART",
             "/SP-",
+            "/CONTROLLERURL=https://127.0.0.1:9",
             "/LOG=$log"
           ) -Wait -PassThru
           if ($process.ExitCode -ne 0) {
@@ -135,8 +136,8 @@ jobs:
           }
 
           $cfg = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
-          if ($cfg.controller_url -ne "https://citadel-ai.init1.workers.dev") {
-            throw "Unexpected controller URL in installed config."
+          if ($cfg.controller_url -ne "https://127.0.0.1:9") {
+            throw "Smoke-test Controller override was not written to installed config."
           }
 
           $svc = Get-CimInstance Win32_Service -Filter "Name='CitadelEWSNode'"
