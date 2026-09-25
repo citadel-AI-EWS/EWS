@@ -6,5 +6,8 @@
   "request_timeout_seconds": 30,
   "max_cpu_percent": 90,
   "max_memory_percent": 90,
-  "controller_public_x": "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
+  "controller_public_x": "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0",
+  "ssh_gate_enabled": false,
+  "ssh_gate_listen_port": 2222,
+  "ssh_gate_target_port": 22
 }
