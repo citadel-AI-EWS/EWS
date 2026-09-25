@@ -37,7 +37,7 @@ const SSH_GATE_MIN_TTL_SECONDS = 60;
 const SSH_GATE_MAX_TTL_SECONDS = 15 * 60;
 const SSH_GATE_DEFAULT_TTL_SECONDS = 10 * 60;
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.16",
+  version: "0.3.17",
   files: [
     {
       path: "citadel_node_v1.py",
