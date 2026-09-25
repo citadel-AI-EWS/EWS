@@ -45,7 +45,7 @@ he:{home:"בית",eyebrow:"LIVE CONTROL PLANE",title:"נתונים אמיתיי�
 };
 let lang=localStorage.getItem("citadelLang")||"ru";
 const statusEl=document.getElementById("controllerStatus"),nodesEl=document.getElementById("nodes");
-let healthState=null,healthFetchedAt=0,d1BlockedUntil=0,refreshTimer=null;
+let healthState=null,healthFetchedAt=0,d1BlockedUntil=0,refreshTimer=null,refreshInFlight=null;
 function tr(k){return I18N[lang]?.[k]||I18N.ru[k]||k}
 function applyLanguage(next){lang=I18N[next]?next:"ru";localStorage.setItem("citadelLang",lang);document.documentElement.lang=lang;document.documentElement.dir=lang==="he"?"rtl":"ltr";document.querySelectorAll("[data-lang]").forEach(b=>b.classList.toggle("active",b.dataset.lang===lang));document.querySelectorAll("[data-i18n]").forEach(el=>{const k=el.dataset.i18n;if(tr(k))el.textContent=tr(k)});refresh()}
 document.querySelectorAll("[data-lang]").forEach(b=>b.addEventListener("click",()=>applyLanguage(b.dataset.lang)));
@@ -57,27 +57,32 @@ function nextUtcReset(){const now=new Date();return Date.UTC(now.getUTCFullYear(
 function scheduleRefresh(delay=60000){if(refreshTimer)clearTimeout(refreshTimer);refreshTimer=setTimeout(refresh,Math.max(1000,delay))}
 async function refreshHealth(){if(!healthState||Date.now()-healthFetchedAt>=300000){healthState=await loadJson("/api/health");healthFetchedAt=Date.now()}return healthState}
 async function refresh(){
+  if(refreshInFlight)return refreshInFlight;
   if(Date.now()<d1BlockedUntil){scheduleRefresh(d1BlockedUntil-Date.now()+1000);return}
-  try{
-    const hub=await loadJson("/api/v1/hub/nodes");
-    const health=await refreshHealth();
-    const list=Array.isArray(hub.nodes)?hub.nodes:[];
-    const live=list.filter(n=>n.status==="online"&&Date.now()-parseTime(n.last_seen_at)<=300000).length;
-    document.getElementById("onlineCount").textContent=live;
-    document.getElementById("totalCount").textContent=list.length;
-    document.getElementById("telemetryState").textContent=health.telemetry_storage||"—";
-    document.getElementById("presenceState").textContent=health.presence_storage||"—";
-    nodesEl.replaceChildren(...list.map(nodeCard));
-    if(!list.length){const e=document.createElement("div");e.className="empty";e.textContent=tr("none");nodesEl.append(e)}
-    setStatus(Boolean(health.ok),health.ok?tr("ready"):tr("degraded"));
-    document.getElementById("updatedAt").textContent=`${tr("updated")}: ${new Date().toLocaleString(lang==="he"?"he-IL":lang==="en"?"en-GB":"ru-RU")}`;
-  }catch(e){
-    if(String(e.message)==="hub_d1_daily_read_limit_exceeded")d1BlockedUntil=nextUtcReset();
-    setStatus(false,`${tr("noLink")}: ${e.message}`);
-  }finally{
-    const delay=d1BlockedUntil>Date.now()?d1BlockedUntil-Date.now()+1000:60000;
-    scheduleRefresh(delay);
-  }
+  refreshInFlight=(async()=>{
+    try{
+      const hub=await loadJson("/api/v1/hub/nodes");
+      const health=await refreshHealth();
+      const list=Array.isArray(hub.nodes)?hub.nodes:[];
+      const live=list.filter(n=>n.status==="online"&&Date.now()-parseTime(n.last_seen_at)<=300000).length;
+      document.getElementById("onlineCount").textContent=live;
+      document.getElementById("totalCount").textContent=list.length;
+      document.getElementById("telemetryState").textContent=health.telemetry_storage||"—";
+      document.getElementById("presenceState").textContent=health.presence_storage||"—";
+      nodesEl.replaceChildren(...list.map(nodeCard));
+      if(!list.length){const e=document.createElement("div");e.className="empty";e.textContent=tr("none");nodesEl.append(e)}
+      setStatus(Boolean(health.ok),health.ok?tr("ready"):tr("degraded"));
+      document.getElementById("updatedAt").textContent=`${tr("updated")}: ${new Date().toLocaleString(lang==="he"?"he-IL":lang==="en"?"en-GB":"ru-RU")}`;
+    }catch(e){
+      if(String(e.message)==="hub_d1_daily_read_limit_exceeded")d1BlockedUntil=nextUtcReset();
+      setStatus(false,`${tr("noLink")}: ${e.message}`);
+    }finally{
+      refreshInFlight=null;
+      const delay=d1BlockedUntil>Date.now()?d1BlockedUntil-Date.now()+1000:60000;
+      scheduleRefresh(delay);
+    }
+  })();
+  return refreshInFlight;
 }
 function updateSiteClock(){const locale=lang==="he"?"he-IL":lang==="en"?"en-GB":"ru-RU";document.getElementById("siteClock").textContent=new Intl.DateTimeFormat(locale,{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}).format(new Date())}
 applyLanguage(lang);updateSiteClock();setInterval(updateSiteClock,15000);
