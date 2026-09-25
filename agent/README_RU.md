@@ -1,5 +1,15 @@
 # CITADEL/EWS Python Node v1
 
+## v0.3.16 — Local Windows Agent без admin и системного Python
+
+- `START_HERE.cmd` устанавливает Local Agent по умолчанию: без UAC, без `RunAs`, без Winget и без системной установки Python.
+- Windows ZIP содержит собственный официальный Python 3.14.7 embeddable runtime; Local Agent хранится в `%LOCALAPPDATA%\CitadelEWS\local-agent`.
+- Local Agent запускается через собственный hidden watchdog при входе пользователя и поддерживает restart/update exit-codes агента.
+- Корпоративная Windows Service остаётся отдельным режимом через `Install Windows Service.cmd`; только этот режим требует Administrator, потому что создаёт системную службу.
+- Windows LM Studio/llmster больше не запускает PowerShell installer. Agent читает из официального `install.ps1` только allowlisted metadata, скачивает официальный llmster ZIP, требует SHA-512 checksum и запускает фиксированный `llmster.exe bootstrap` без shell.
+- Local Agent и встроенный runtime проходят отдельный Windows CI: self-test, doctor, временная no-admin установка и uninstall.
+- x64, x86 и ARM64 получают отдельные bundled Python runtimes; неподдерживаемая архитектура завершается явной ошибкой, без попытки ставить что-либо в систему.
+
 ## v0.3.15 — mini-workers, delta update и стабильный llmster HOME
 
 - Python-only проект координирует до 8 локальных mini-workers (до 4 одновременно) и не вызывает LLM.
@@ -76,13 +86,15 @@
 
 ## Windows setup
 
-Адрес контроллера уже встроен. Setup при необходимости устанавливает Python 3.14 через Windows Package Manager, создаёт отдельное `.venv`, ставит зависимости, выполняет `doctor` и self-test, автоматически регистрирует узел и проверяет живой цикл с Controller. Узел получает постоянный номер; enrollment token, логин и код подтверждения не требуются.
+Рекомендуемый путь для обычного/чужого компьютера без административных прав:
 
-```powershell
-powershell -File .\setup_windows.ps1
+```text
+START_HERE.cmd
 ```
 
-После успешной проверки Setup компилирует минимальный проверяемый service-host из `CitadelNodeService.cs`, регистрирует `CitadelEWSNode` как Automatic (Delayed Start) Windows Service и запускает Core Agent под LocalService. Повторный запуск Setup выполняет repair той же установки и сохраняет Ed25519-идентичность.
+Этот путь использует Python runtime из самого ZIP и устанавливает Local Agent в профиль текущего пользователя. PowerShell, Winget и системный Python для Local Agent не нужны. Автозапуск создаётся только для текущего пользователя.
+
+Если компьютер находится под администрированием и нужен machine-wide Core Service до входа пользователя, используйте отдельный `Install Windows Service.cmd`. Этот режим законно требует UAC/Administrator, потому что регистрирует Windows Service `CitadelEWSNode` под LocalService.
 
 Unattended/autostart предназначен только для компьютеров, принадлежащих оператору или находящихся под его администрированием.
 

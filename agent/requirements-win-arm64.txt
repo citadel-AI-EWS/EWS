@@ -1,0 +1,4 @@
+# Windows ARM64 wheels for the CITADEL embedded Python 3.14 runtime.
+# Keep this wheel-only: the package builder refuses source builds.
+cryptography==46.0.3
+psutil==7.2.2

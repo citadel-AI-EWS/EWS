@@ -32,6 +32,8 @@ import sys
 import tempfile
 import time
 import urllib.parse
+import urllib.request
+import zipfile
 import uuid
 from pathlib import Path
 from typing import Any, Callable
@@ -48,7 +50,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.15"
+VERSION = "0.3.16"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -60,6 +62,10 @@ COMMAND_MAX_AGE_SECONDS = 15 * 60
 SERVICE_RESTART_EXIT_CODE = 75
 SERVICE_STOP_EXIT_CODE = 76
 LMSTUDIO_INSTALL_FILE_NAMES = {"install_llmstudio_headless.ps1", "install_llmstudio_headless.sh"}
+LMSTUDIO_WINDOWS_INSTALLER_URL = "https://lmstudio.ai/install.ps1"
+LMSTUDIO_WINDOWS_ARTIFACT_HOST = "llmster.lmstudio.ai"
+LMSTUDIO_WINDOWS_MAX_INSTALLER_BYTES = 2 * 1024 * 1024
+LMSTUDIO_WINDOWS_MAX_ARCHIVE_BYTES = 768 * 1024 * 1024
 LMSTUDIO_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,95})?(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,31})?$")
 LMSTUDIO_QUANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
 HYBRID_MODES = {"python", "lmstudio", "both"}
@@ -1508,10 +1514,196 @@ class Agent:
             return False
         return True
 
+    @staticmethod
+    def parse_lmstudio_windows_installer_metadata(script: str) -> dict[str, str]:
+        def take(name: str) -> str:
+            pattern = r"^\$" + re.escape(name) + r"\s*=\s*'([^']+)'\s*$"
+            match = re.search(pattern, script, re.MULTILINE)
+            if not match:
+                raise RuntimeError(f"lmstudio_installer_metadata_missing:{name}")
+            value = match.group(1).strip()
+            if not re.fullmatch(r"[A-Za-z0-9._/-]{1,96}", value):
+                raise RuntimeError(f"lmstudio_installer_metadata_invalid:{name}")
+            return value
+
+        version = take("APP_VERSION")
+        variant = take("APP_VARIANT")
+        artifact_base = take("ARTIFACT_DOWNLOAD_URL")
+        if artifact_base != "llmster.lmstudio.ai/download":
+            raise RuntimeError("lmstudio_installer_artifact_host_not_allowed")
+        return {"version": version, "variant": variant, "artifact_base": artifact_base}
+
+    @staticmethod
+    def safe_extract_zip(archive: Path, destination: Path) -> None:
+        destination = destination.resolve()
+        with zipfile.ZipFile(archive) as bundle:
+            for item in bundle.infolist():
+                target = (destination / item.filename).resolve()
+                try:
+                    target.relative_to(destination)
+                except ValueError as exc:
+                    raise RuntimeError("lmstudio_archive_path_escape") from exc
+            bundle.extractall(destination)
+
+    def download_https_file(
+        self,
+        url: str,
+        destination: Path,
+        max_bytes: int,
+        allowed_hosts: set[str],
+    ) -> None:
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(request, timeout=120) as response:  # nosec B310
+            final = urllib.parse.urlsplit(response.geturl())
+            if final.scheme != "https" or final.hostname not in allowed_hosts:
+                raise RuntimeError("lmstudio_download_redirect_not_allowed")
+            total = 0
+            with destination.open("wb") as stream:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise RuntimeError("lmstudio_download_too_large")
+                    stream.write(chunk)
+        if not destination.is_file() or destination.stat().st_size <= 0:
+            raise RuntimeError("lmstudio_download_empty")
+
+    def install_lmstudio_windows_native(self) -> None:
+        machine = (platform.machine() or os.environ.get("PROCESSOR_ARCHITECTURE") or "").lower()
+        if machine in {"amd64", "x86_64"}:
+            arch = "x64"
+        elif machine in {"arm64", "aarch64"}:
+            arch = "arm64"
+        else:
+            raise RuntimeError(f"lmstudio_windows_arch_unsupported:{machine or 'unknown'}")
+
+        work = Path(tempfile.mkdtemp(prefix="citadel-llmster-", dir=self.config.data_dir))
+        installer = work / "install.ps1"
+        archive = work / "llmster.zip"
+        checksum_path = work / "checksum.txt"
+        try:
+            self.report_ai_state(
+                installed=False,
+                last_action="installing",
+                progress_phase="official_metadata",
+                progress_current=0,
+                progress_total=5,
+                progress_detail="Reading official LM Studio installer metadata without executing PowerShell",
+            )
+            self.download_https_file(
+                LMSTUDIO_WINDOWS_INSTALLER_URL,
+                installer,
+                LMSTUDIO_WINDOWS_MAX_INSTALLER_BYTES,
+                {"lmstudio.ai"},
+            )
+            metadata = self.parse_lmstudio_windows_installer_metadata(
+                installer.read_text(encoding="utf-8-sig", errors="strict")
+            )
+            release_name = f"{metadata['version']}-win32-{arch}.{metadata['variant']}"
+            base = f"https://{metadata['artifact_base']}"
+            artifact_url = f"{base}/{release_name}.zip"
+            checksum_urls = [
+                f"{artifact_url}.sha512",
+                f"{base}/{release_name}.sha512",
+            ]
+            self.report_ai_state(
+                progress_phase="runtime_download",
+                progress_current=1,
+                progress_total=5,
+                progress_detail=f"Downloading official llmster {metadata['version']} ({arch})",
+            )
+            self.download_https_file(
+                artifact_url,
+                archive,
+                LMSTUDIO_WINDOWS_MAX_ARCHIVE_BYTES,
+                {LMSTUDIO_WINDOWS_ARTIFACT_HOST},
+            )
+            checksum = None
+            for checksum_url in checksum_urls:
+                try:
+                    self.download_https_file(
+                        checksum_url,
+                        checksum_path,
+                        4096,
+                        {LMSTUDIO_WINDOWS_ARTIFACT_HOST},
+                    )
+                    token = checksum_path.read_text(encoding="ascii", errors="strict").strip().split()[0].lower()
+                    if re.fullmatch(r"[0-9a-f]{128}", token):
+                        checksum = token
+                        break
+                except Exception as error:
+                    self.log.write(
+                        "lmstudio_checksum_candidate_failed",
+                        url=checksum_url,
+                        error=str(error)[:200],
+                    )
+            if checksum is None:
+                raise RuntimeError("lmstudio_sha512_checksum_unavailable")
+            digest = hashlib.sha512()
+            with archive.open("rb") as stream:
+                while True:
+                    chunk = stream.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+            if digest.hexdigest() != checksum:
+                raise RuntimeError("lmstudio_sha512_mismatch")
+            self.report_ai_state(
+                progress_phase="runtime_verified",
+                progress_current=2,
+                progress_total=5,
+                progress_detail="Official llmster archive SHA-512 verified",
+            )
+            extract_root = work / "payload"
+            extract_root.mkdir()
+            self.safe_extract_zip(archive, extract_root)
+            bootstrap = extract_root / "llmster.exe"
+            if not bootstrap.is_file():
+                raise RuntimeError("lmstudio_bootstrap_missing")
+            env = self.lmstudio_process_env()
+            env["LMS_BOOTSTRAP_INSTALL_SH"] = "1"
+            result = subprocess.run(  # nosec B603
+                [str(bootstrap), "bootstrap"],
+                cwd=extract_root,
+                env=env,
+                timeout=600,
+                capture_output=True,
+                text=True,
+                shell=False,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "llmster bootstrap failed").strip()
+                raise RuntimeError(f"lmstudio_bootstrap_failed:{detail[:400]}")
+            if not self.find_lms():
+                raise RuntimeError("lmstudio_lms_missing_after_bootstrap")
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
     def install_lmstudio(self, payload: dict[str, Any]) -> None:
         if not self.validate_lmstudio_install_payload(payload):
             raise RuntimeError("invalid lmstudio installer payload")
         asset = payload["asset"]
+        if os.name == "nt":
+            self.install_lmstudio_windows_native()
+            self.report_ai_state(
+                installed=True, progress_phase="runtime_verified", progress_current=3, progress_total=5,
+                progress_detail="lms CLI verified",
+            )
+            self.run_lms(["daemon", "up"], timeout=120)
+            self.report_ai_state(
+                installed=True, progress_phase="daemon_running", progress_current=4, progress_total=5,
+                progress_detail="llmster daemon running",
+            )
+            self.run_lms(["server", "start", "--port", "1234"], timeout=120)
+            self.report_ai_state(
+                installed=True, server_running=True, last_action="installed",
+                progress_phase="complete", progress_current=5, progress_total=5,
+                progress_detail="LM Studio server running on localhost:1234",
+            )
+            self.log.write("lmstudio_installed", installer="python_native_windows")
+            return
         self.report_ai_state(
             installed=False, last_action="installing",
             progress_phase="helper_download", progress_current=0, progress_total=5,
@@ -2748,6 +2940,19 @@ def self_test() -> int:
         require_test(
             "no AI/LLM was called" in agent.python_mode_answer("Who wrote Hamlet?"),
             "Python-only unsupported prompt did not fail closed",
+        )
+        lm_meta = agent.parse_lmstudio_windows_installer_metadata(
+            "$APP_VERSION = '0.0.20-1'\n"
+            "$APP_VARIANT = 'full'\n"
+            "$ARTIFACT_DOWNLOAD_URL = 'llmster.lmstudio.ai/download'\n"
+        )
+        require_test(
+            lm_meta == {
+                "version": "0.0.20-1",
+                "variant": "full",
+                "artifact_base": "llmster.lmstudio.ai/download",
+            },
+            "LM Studio official installer metadata parser failed",
         )
         mini_report = agent.execute_project_python({
             "project_id": "project_test",
