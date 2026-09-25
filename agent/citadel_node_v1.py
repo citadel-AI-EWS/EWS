@@ -2,9 +2,11 @@
 """Bounded CITADEL/EWS node for operator-owned or administered computers.
 
 The node speaks the existing Cloudflare /api/v1 Ed25519 protocol. It has no
-remote shell, arbitrary code loader, exploit engine, credential collector,
-self-propagation, stealth installation, or autonomous financial actions.
-Only locally registered mission handlers can execute.
+arbitrary remote-command executor, code loader, exploit engine, credential
+collector, self-propagation, stealth installation, or autonomous financial
+actions. An optional SSH gate can only expose an already-local SSH service
+through a loopback-only, signed, time-limited proxy. Only locally registered
+mission handlers and explicitly allowlisted controller actions can execute.
 """
 from __future__ import annotations
 
@@ -24,8 +26,10 @@ import json
 import os
 import platform
 import re
+import select
 import shutil
 import socket
+import threading
 # Subprocesses below use a fixed interpreter, allowlisted local scripts and no shell.
 import subprocess  # nosec B404
 import sys
@@ -52,11 +56,16 @@ VERSION = "0.3.16"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}
+SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_open", "ssh_close"}
 CORE_UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
 UPDATE_FILE_NAMES = CORE_UPDATE_FILE_NAMES | {"windows_enterprise_probe.ps1"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
 COMMAND_MAX_AGE_SECONDS = 15 * 60
+SSH_GATE_MIN_TTL_SECONDS = 60
+SSH_GATE_MAX_TTL_SECONDS = 15 * 60
+SSH_GATE_DEFAULT_LISTEN_PORT = 2222
+SSH_GATE_DEFAULT_TARGET_PORT = 22
+SSH_GATE_SESSION_RE = re.compile(r"^ssh_[a-f0-9]{32}$")
 SERVICE_RESTART_EXIT_CODE = 75
 SERVICE_STOP_EXIT_CODE = 76
 LMSTUDIO_INSTALL_FILE_NAMES = {"install_llmstudio_headless.py", "install_llmstudio_headless.ps1", "install_llmstudio_headless.sh"}
@@ -297,6 +306,9 @@ class AgentConfig:
     network_recovery_enabled: bool = True
     allowed_wifi_profiles: tuple[str, ...] = ()
     lm_api_token: str | None = None
+    ssh_gate_enabled: bool = False
+    ssh_gate_listen_port: int = SSH_GATE_DEFAULT_LISTEN_PORT
+    ssh_gate_target_port: int = SSH_GATE_DEFAULT_TARGET_PORT
 
     @classmethod
     def from_file(cls, path: Path) -> "AgentConfig":
@@ -328,6 +340,14 @@ class AgentConfig:
                     raise ValueError("lm_api_token must be 1-512 printable ASCII characters")
                 lm_api_token = token
 
+        ssh_gate_enabled = raw.get("ssh_gate_enabled", False) is True
+        ssh_gate_listen_port = int(raw.get("ssh_gate_listen_port", SSH_GATE_DEFAULT_LISTEN_PORT))
+        ssh_gate_target_port = int(raw.get("ssh_gate_target_port", SSH_GATE_DEFAULT_TARGET_PORT))
+        if not 1024 <= ssh_gate_listen_port <= 65535:
+            raise ValueError("ssh_gate_listen_port must be between 1024 and 65535")
+        if not 1 <= ssh_gate_target_port <= 65535:
+            raise ValueError("ssh_gate_target_port must be between 1 and 65535")
+
         return cls(
             controller_url=controller_url,
             data_dir=Path(raw.get("data_dir") or default_data_dir()).expanduser().resolve(),
@@ -341,6 +361,9 @@ class AgentConfig:
             network_recovery_enabled=raw.get("network_recovery_enabled", True) is not False,
             allowed_wifi_profiles=tuple(profiles[:16]),
             lm_api_token=lm_api_token,
+            ssh_gate_enabled=ssh_gate_enabled,
+            ssh_gate_listen_port=ssh_gate_listen_port,
+            ssh_gate_target_port=ssh_gate_target_port,
         )
 
 
@@ -533,6 +556,120 @@ class ResultQueue:
 
 MissionHandler = Callable[[dict[str, Any]], dict[str, Any]]
 
+
+class SshGateProxy:
+    """Loopback-only TCP gate for an already-local SSH daemon.
+
+    The listener never binds to a LAN/public address. Cloudflare Tunnel/Access
+    can target the loopback listener, while the signed controller command
+    decides when the listener exists. Agent exit closes the socket, so a crash
+    fails closed.
+    """
+
+    def __init__(self, listen_port: int, target_port: int) -> None:
+        self.listen_port = listen_port
+        self.target_port = target_port
+        self._listener: socket.socket | None = None
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._deadline = 0.0
+
+    @property
+    def active(self) -> bool:
+        thread = self._thread
+        return bool(
+            thread
+            and thread.is_alive()
+            and self._listener is not None
+            and time.monotonic() < self._deadline
+            and not self._stop.is_set()
+        )
+
+    def start(self, ttl_seconds: int) -> None:
+        self.stop()
+        # Fail before opening the gate if no SSH daemon is reachable locally.
+        with socket.create_connection(("127.0.0.1", self.target_port), timeout=2.0):
+            pass
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", self.listen_port))
+        listener.listen(16)
+        listener.settimeout(0.5)
+        with self._lock:
+            self._stop.clear()
+            self._deadline = time.monotonic() + ttl_seconds
+            self._listener = listener
+            self._thread = threading.Thread(
+                target=self._serve,
+                name="citadel-ssh-gate",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def _serve(self) -> None:
+        try:
+            while not self._stop.is_set() and time.monotonic() < self._deadline:
+                listener = self._listener
+                if listener is None:
+                    return
+                try:
+                    client, _ = listener.accept()
+                except socket.timeout:
+                    continue
+                except OSError:
+                    return
+                threading.Thread(
+                    target=self._relay,
+                    args=(client,),
+                    name="citadel-ssh-gate-client",
+                    daemon=True,
+                ).start()
+        finally:
+            self._close_listener()
+
+    def _relay(self, client: socket.socket) -> None:
+        target: socket.socket | None = None
+        try:
+            target = socket.create_connection(("127.0.0.1", self.target_port), timeout=5.0)
+            client.settimeout(2.0)
+            target.settimeout(2.0)
+            sockets = [client, target]
+            while not self._stop.is_set() and time.monotonic() < self._deadline:
+                readable, _, _ = select.select(sockets, [], [], 0.5)
+                if not readable:
+                    continue
+                for source in readable:
+                    data = source.recv(65536)
+                    if not data:
+                        return
+                    destination = target if source is client else client
+                    destination.sendall(data)
+        except (OSError, ValueError):
+            return
+        finally:
+            with contextlib.suppress(OSError):
+                client.close()
+            if target is not None:
+                with contextlib.suppress(OSError):
+                    target.close()
+
+    def _close_listener(self) -> None:
+        with self._lock:
+            listener = self._listener
+            self._listener = None
+        if listener is not None:
+            with contextlib.suppress(OSError):
+                listener.close()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._close_listener()
+        thread = self._thread
+        if thread and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+        self._thread = None
+        self._deadline = 0.0
 
 
 TAILSCALE_INTERFACE_MARKER = "tailscale"
@@ -810,6 +947,12 @@ class Agent:
         self.service_ready_path = Path(service_ready).resolve() if service_ready else None
         self.paused_path = config.data_dir / "PAUSED"
         self.lmstudio_state_path = config.data_dir / "lmstudio-state.json"
+        self.ssh_gate_state_path = config.data_dir / "ssh-gate-state.json"
+        self.ssh_gate = (
+            SshGateProxy(config.ssh_gate_listen_port, config.ssh_gate_target_port)
+            if config.ssh_gate_enabled
+            else None
+        )
         self.network_recovery_path = config.data_dir / "network-recovery.json"
         self.last_network_recovery = 0.0
         self.last_network_remember = 0.0
@@ -831,6 +974,8 @@ class Agent:
             capabilities.add("windows_quick_user")
         if _windows_enterprise_probe_file_valid():
             capabilities.add("windows_enterprise_readonly")
+        if self.config.ssh_gate_enabled:
+            capabilities.add("ssh_gate_loopback")
         return sorted(capabilities)
 
     def require_node_id(self) -> str:
@@ -1155,6 +1300,9 @@ class Agent:
         elif command_type == "hybrid_query":
             if not self.validate_hybrid_payload(payload):
                 return False
+        elif command_type == "ssh_open":
+            if not self.validate_ssh_open_payload(payload):
+                return False
         elif payload != {}:
             return False
         payload_json = json_text(payload)
@@ -1176,6 +1324,20 @@ class Agent:
             return True
         except Exception:
             return False
+
+    @staticmethod
+    def validate_ssh_open_payload(payload: dict[str, Any]) -> bool:
+        if set(payload) != {"session_id", "ttl_seconds"}:
+            return False
+        session_id = payload.get("session_id")
+        ttl_seconds = payload.get("ttl_seconds")
+        return (
+            isinstance(session_id, str)
+            and bool(SSH_GATE_SESSION_RE.fullmatch(session_id))
+            and isinstance(ttl_seconds, int)
+            and not isinstance(ttl_seconds, bool)
+            and SSH_GATE_MIN_TTL_SECONDS <= ttl_seconds <= SSH_GATE_MAX_TTL_SECONDS
+        )
 
     @staticmethod
     def validate_update_payload(payload: dict[str, Any]) -> bool:
@@ -2265,6 +2427,72 @@ class Agent:
         )
         self.log.write(event)
 
+    def open_ssh_gate(self, payload: dict[str, Any]) -> None:
+        if not self.config.ssh_gate_enabled or self.ssh_gate is None:
+            raise RuntimeError("ssh_gate_disabled")
+        if not self.validate_ssh_open_payload(payload):
+            raise RuntimeError("invalid_ssh_gate_payload")
+        session_id = str(payload["session_id"])
+        ttl_seconds = int(payload["ttl_seconds"])
+        self.close_ssh_gate("replaced", log_if_absent=False)
+        self.ssh_gate.start(ttl_seconds)
+        expires_at = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=ttl_seconds)
+        atomic_write(
+            self.ssh_gate_state_path,
+            json.dumps(
+                {
+                    "session_id": session_id,
+                    "expires_at": expires_at.isoformat(timespec="seconds"),
+                    "listen_host": "127.0.0.1",
+                    "listen_port": self.config.ssh_gate_listen_port,
+                    "target_host": "127.0.0.1",
+                    "target_port": self.config.ssh_gate_target_port,
+                },
+                sort_keys=True,
+            )
+            + "\n",
+        )
+        self.log.write(
+            "ssh_gate_opened",
+            session_id=session_id,
+            ttl_seconds=ttl_seconds,
+            listen_host="127.0.0.1",
+            listen_port=self.config.ssh_gate_listen_port,
+        )
+
+    def close_ssh_gate(self, reason: str, log_if_absent: bool = True) -> None:
+        state = load_json(self.ssh_gate_state_path, {}) or {}
+        session_id = state.get("session_id") if isinstance(state, dict) else None
+        existed = self.ssh_gate_state_path.exists() or bool(self.ssh_gate and self.ssh_gate.active)
+        if self.ssh_gate is not None:
+            self.ssh_gate.stop()
+        with contextlib.suppress(FileNotFoundError):
+            self.ssh_gate_state_path.unlink()
+        if existed or log_if_absent:
+            self.log.write("ssh_gate_closed", session_id=session_id, reason=reason)
+
+    def enforce_ssh_gate_ttl(self) -> None:
+        state = load_json(self.ssh_gate_state_path, {}) or {}
+        if not isinstance(state, dict) or not state:
+            return
+        session_id = str(state.get("session_id") or "")
+        expires_at = str(state.get("expires_at") or "")
+        try:
+            expires = dt.datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=dt.timezone.utc)
+        except (TypeError, ValueError):
+            self.close_ssh_gate("invalid_state")
+            return
+        if expires <= dt.datetime.now(dt.timezone.utc):
+            self.close_ssh_gate("ttl_expired")
+            return
+        # A persisted state without a live in-process listener means the agent
+        # restarted/crashed. Do not recreate it automatically: fail closed and
+        # require a fresh signed Controller knock.
+        if self.ssh_gate is None or not self.ssh_gate.active:
+            self.close_ssh_gate("agent_restart_fail_closed")
+
     def ack_command(self, command_id: str, status: str) -> None:
         node_id = self.require_node_id()
         quoted = urllib.parse.quote(command_id, safe="")
@@ -2329,6 +2557,10 @@ class Agent:
                     self.load_lmstudio_model(command.get("payload") or {})
                 elif command_type == "hybrid_query":
                     self.run_hybrid_query(command.get("payload") or {})
+                elif command_type == "ssh_open":
+                    self.open_ssh_gate(command.get("payload") or {})
+                elif command_type == "ssh_close":
+                    self.close_ssh_gate("controller")
                 self.ack_command(command_id, "completed")
                 self.log.write(
                     "command_completed",
@@ -2558,6 +2790,7 @@ class Agent:
     def cycle(self) -> None:
         self.enforce_power_guard()
         self.enroll()
+        self.enforce_ssh_gate_ttl()
         if self.lifecycle_stop_requested() or self.stop_path.exists():
             raise SystemExit(0)
         if self.service_hold_requested():
@@ -2614,6 +2847,9 @@ class Agent:
                     self.interruptible_sleep(backoff)
                     backoff = min(60, backoff * 2)
         finally:
+            # The SSH listener is in-process and loopback-only. Closing it here
+            # makes process exit/restart fail closed even before TTL.
+            self.close_ssh_gate("agent_exit", log_if_absent=False)
             self.clear_power_guard()
 
 
@@ -2764,8 +3000,14 @@ def self_test() -> int:
             "unapproved command accepted",
         )
         require_test(
-            {"system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}.issubset(SUPPORTED_COMMANDS),
-            "restricted power/wake/LM Studio commands missing",
+            {"system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_open", "ssh_close"}.issubset(SUPPORTED_COMMANDS),
+            "restricted power/wake/LM Studio/SSH gate commands missing",
+        )
+        require_test(
+            agent.validate_ssh_open_payload({"session_id": "ssh_" + "a" * 32, "ttl_seconds": 600})
+            and not agent.validate_ssh_open_payload({"session_id": "ssh_" + "a" * 32, "ttl_seconds": 3600})
+            and not agent.validate_ssh_open_payload({"session_id": "bad", "ttl_seconds": 600}),
+            "SSH gate payload validation failed",
         )
         require_test(
             "shell" not in SUPPORTED_COMMANDS,
