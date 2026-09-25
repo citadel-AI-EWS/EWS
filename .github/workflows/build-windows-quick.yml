@@ -119,7 +119,7 @@ jobs:
             & $py (Join-Path $root.FullName "quick_install.py") --controller-url https://127.0.0.1:9 --skip-lmstudio --skip-enrollment --no-start
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-            $release = Join-Path $env:LOCALAPPDATA "CitadelEWS\releases\0.3.16"
+            $release = Join-Path $env:LOCALAPPDATA "CitadelEWS\releases\0.3.17"
             $state = Join-Path $env:LOCALAPPDATA "CitadelEWS\state"
             foreach ($required in @(
               "runtime\python.exe","citadel_node_v1.py","citadel_node_v2.py","quick_runner.py",
