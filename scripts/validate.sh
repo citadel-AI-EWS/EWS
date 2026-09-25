@@ -151,7 +151,7 @@ for forbidden in (
 for forbidden in ("Контрольные точки", "Последние события аудита"):
     if forbidden in architect:
         raise SystemExit(f"obsolete Architect UI surfaced again: {forbidden}")
-for required in ('data-lang="ru"', 'data-lang="en"', 'data-lang="he"', "missionNodeState", "readableReport", "wakeButton", "updateAgentState", "siteClock", "projectStageTrack", "projectWorkerReadiness", "WAITING MODEL", "Подготовить ноду в Hub"):
+for required in ('data-lang="ru"', 'data-lang="en"', 'data-lang="he"', "missionNodeState", "readableReport", "wakeButton", "updateAgentState", "siteClock", "projectStageTrack", "projectWorkerReadiness", "WAITING MODEL", "Подготовить ноду в Hub", 'id="sshTtl"', 'id="sshGateState"', 'id="sshOpenGateButton"', 'id="sshCloseGateButton"', '"OPEN_SSH"', '"ssh_open"', '"ssh_close"'):
     if required not in architect:
         raise SystemExit(f"Architect production UI capability missing: {required}")
 
@@ -231,6 +231,26 @@ for forbidden in ("cmd.exe", "powershell.exe", "UseShellExecute = true"):
         raise SystemExit(f"unsafe Windows service host pattern detected: {forbidden}")
 if '"windows_core_service"' not in agent_v1:
     raise SystemExit("Windows SCM capability reporting is missing")
+for required in (
+    '"ssh_open"',
+    '"ssh_close"',
+    '"ssh_gate_loopback"',
+    'listener.bind(("127.0.0.1", self.listen_port))',
+    'socket.create_connection(("127.0.0.1", self.target_port)',
+    "SSH_GATE_MAX_TTL_SECONDS = 15 * 60",
+):
+    if required not in agent_v1:
+        raise SystemExit(f"bounded SSH gate capability missing: {required}")
+for forbidden in (
+    'listener.bind(("0.0.0.0"',
+    'listener.bind(("",',
+):
+    if forbidden in agent_v1:
+        raise SystemExit(f"SSH gate attempted non-loopback bind: {forbidden}")
+if "enablesshgate" not in setup:
+    raise SystemExit("Windows installer explicit SSH gate opt-in is missing")
+if '"ssh_open"' not in worker or '"ssh_close"' not in worker or '"OPEN_SSH"' not in worker:
+    raise SystemExit("Controller-signed SSH gate command contract is missing")
 
 for required in (
     "Get-CimInstance",
