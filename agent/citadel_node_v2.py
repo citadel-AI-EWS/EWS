@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 import citadel_node_v1 as v1
 
-VERSION = "0.3.16"
+VERSION = "0.3.17"
 v1.VERSION = VERSION
 v1.USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 
@@ -69,6 +69,8 @@ ALLOWED_EVENTS = {
     "lmstudio_model_key_resolution_fallback",
     "command_failure_ack_failed",
     "command_failed",
+    "ssh_gate_opened",
+    "ssh_gate_closed",
 }
 MAX_BATCH_EVENTS = 50
 MAX_PAYLOAD_BYTES = 60 * 1024

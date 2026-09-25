@@ -31,20 +31,23 @@ const ALLOWED_REPORT_SENSITIVITIES = new Set([
 ]);
 const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
-const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
-const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
+const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_open", "ssh_close"]);
+const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO", ssh_open: "OPEN_SSH" });
+const SSH_GATE_MIN_TTL_SECONDS = 60;
+const SSH_GATE_MAX_TTL_SECONDS = 15 * 60;
+const SSH_GATE_DEFAULT_TTL_SECONDS = 10 * 60;
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.16",
+  version: "0.3.17",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "364c39c534a0f979b56b355e1734f1f62302495f9f63a6f9b6be9bd9e8d74559"
+      sha256: "1232ebdc9568b786073bca634fdc7909acc1ec1743b7e08a8832c0937c8801ef"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "f87721a185fbed1d6bc6d3317cbc2ccfb1007b4aa6885168cf53c931e144e986"
+      sha256: "3080574137b28bae65c9133352c44285cbe1c1dd4e9eca5cf64b97f2eef320c0"
     }
   ]
 });
@@ -4253,7 +4256,7 @@ async function architectOverview(request, env) {
     ).first(),
     env.DB.prepare(
       "SELECT n.node_id, nn.node_number, n.hostname, n.os_name, n.os_version, n.architecture, " +
-      "n.agent_version, CASE WHEN n.status = 'online' " +
+      "n.agent_version, n.capabilities_json, CASE WHEN n.status = 'online' " +
       "AND (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-5 minutes')) " +
       "THEN 'offline' ELSE n.status END AS status, n.cpu_percent, n.memory_percent, " +
       "n.enrolled_at, n.last_seen_at, net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json, " +
@@ -4303,7 +4306,7 @@ async function architectOverview(request, env) {
       "ORDER BY m.created_at DESC LIMIT 100"
     ).all(),
     env.DB.prepare(
-      "SELECT c.command_id, c.node_id, c.command_type, c.status, c.created_at, c.completed_at, " +
+      "SELECT c.command_id, c.node_id, c.command_type, c.status, c.created_at, c.completed_at, c.payload_json, " +
       "CASE WHEN EXISTS (SELECT 1 FROM audit_events AS ae " +
       "WHERE ae.target_type = 'command' AND ae.target_id = c.command_id " +
       "AND ae.action = 'command.expired') THEN 1 ELSE 0 END AS ttl_expired " +
@@ -4326,6 +4329,25 @@ async function architectOverview(request, env) {
     };
   });
 
+  const commands = (commandsQuery.results || []).map((row) => {
+    const payload = safeJson(row.payload_json, {});
+    const sshTtl = row.command_type === "ssh_open" && Number.isInteger(payload.ttl_seconds)
+      ? payload.ttl_seconds
+      : null;
+    const createdMs = Date.parse(String(row.created_at || "").replace(" ", "T") + (String(row.created_at || "").includes("T") ? "" : "Z"));
+    return {
+      ...row,
+      payload_json: undefined,
+      ssh_session_id: row.command_type === "ssh_open" && typeof payload.session_id === "string"
+        ? payload.session_id
+        : null,
+      ssh_ttl_seconds: sshTtl,
+      ssh_expires_at: sshTtl && Number.isFinite(createdMs)
+        ? new Date(createdMs + sshTtl * 1000).toISOString()
+        : null
+    };
+  });
+
   const rawNodes = nodesQuery.results || [];
   const liveRelays = rawNodes.filter((node) =>
     node.status === "online" &&
@@ -4341,9 +4363,12 @@ async function architectOverview(request, env) {
         )
       : null;
     const operationalState = operationalNodeState(node);
+    const capabilities = safeJson(node.capabilities_json, []);
     return {
       ...node,
       operational_state: operationalState,
+      capabilities: Array.isArray(capabilities) ? capabilities : [],
+      capabilities_json: undefined,
       test_node: operationalState === "test",
       lmstudio_runtime: safeJson(node.lmstudio_runtime_json, {}),
       lmstudio_runtime_json: undefined,
@@ -4369,7 +4394,7 @@ async function architectOverview(request, env) {
     },
     nodes,
     missions,
-    commands: commandsQuery.results || []
+    commands
   });
 }
 
@@ -4446,7 +4471,7 @@ async function architectCreateCommand(request, env, nodeId) {
     throw new ApiError(400, "command_type_not_allowed");
   }
   if (
-    ["uninstall", "system_reboot", "system_shutdown", "lmstudio_uninstall"].includes(commandType) &&
+    ["uninstall", "system_reboot", "system_shutdown", "lmstudio_uninstall", "ssh_open", "ssh_close"].includes(commandType) &&
     !roleHasPermission(actor.role, "admin")
   ) {
     throw new ApiError(403, "architect_admin_required");
@@ -4457,7 +4482,7 @@ async function architectCreateCommand(request, env, nodeId) {
     if (confirmation !== requiredConfirmation) {
       throw new ApiError(
         400,
-        commandType === "lmstudio_uninstall"
+        commandType === "lmstudio_uninstall" || commandType === "ssh_open"
           ? "command_confirmation_required"
           : "power_confirmation_required"
       );
@@ -4465,7 +4490,7 @@ async function architectCreateCommand(request, env, nodeId) {
   }
 
   const node = await env.DB.prepare(
-    "SELECT node_id, status, agent_version, os_name, architecture, last_seen_at, " +
+    "SELECT node_id, status, agent_version, os_name, architecture, capabilities_json, last_seen_at, " +
     "CASE WHEN last_seen_at IS NOT NULL " +
     "AND datetime(last_seen_at) >= datetime('now', '-5 minutes') THEN 1 ELSE 0 END AS recently_seen " +
     "FROM nodes WHERE node_id = ?"
@@ -4490,6 +4515,12 @@ async function architectCreateCommand(request, env, nodeId) {
   }
   if (commandType === "resume" && node.status !== "paused") {
     throw new ApiError(409, "node_not_paused");
+  }
+  if (commandType === "ssh_open" || commandType === "ssh_close") {
+    const capabilities = safeJson(node.capabilities_json, []);
+    if (!Array.isArray(capabilities) || !capabilities.includes("ssh_gate_loopback")) {
+      throw new ApiError(409, "ssh_gate_unavailable");
+    }
   }
 
   const pending = await env.DB.prepare(
@@ -4526,6 +4557,23 @@ async function architectCreateCommand(request, env, nodeId) {
       quantization: normalizeLmQuantization(body.quantization),
       settings: normalizeLmLoadSettings(body.settings)
     };
+  } else if (commandType === "ssh_open") {
+    const ttlSeconds = body.ttl_seconds === undefined
+      ? SSH_GATE_DEFAULT_TTL_SECONDS
+      : body.ttl_seconds;
+    if (
+      !Number.isInteger(ttlSeconds) ||
+      ttlSeconds < SSH_GATE_MIN_TTL_SECONDS ||
+      ttlSeconds > SSH_GATE_MAX_TTL_SECONDS
+    ) {
+      throw new ApiError(400, "invalid_ssh_ttl_seconds");
+    }
+    payload = {
+      session_id: "ssh_" + crypto.randomUUID().replaceAll("-", ""),
+      ttl_seconds: ttlSeconds
+    };
+  } else if (commandType === "ssh_close") {
+    payload = {};
   } else if (commandType === "hybrid_query") {
     const mode = requireString(body.mode, "hybrid_mode", 16);
     if (!["python","lmstudio","both"].includes(mode)) throw new ApiError(400, "invalid_hybrid_mode");
@@ -4554,7 +4602,13 @@ async function architectCreateCommand(request, env, nodeId) {
     payloadJson,
     createdAt
   );
-  const detailsJson = JSON.stringify({ node_id: nodeId, command_type: commandType });
+  const detailsJson = JSON.stringify({
+    node_id: nodeId,
+    command_type: commandType,
+    ...(commandType === "ssh_open"
+      ? { ssh_session_id: payload.session_id, ttl_seconds: payload.ttl_seconds }
+      : {})
+  });
 
   try {
     await env.DB.batch([
@@ -4585,7 +4639,16 @@ async function architectCreateCommand(request, env, nodeId) {
       command_type: commandType,
       status: "pending",
       created_at: createdAt
-    }
+    },
+    ...(commandType === "ssh_open"
+      ? {
+          ssh_gate: {
+            session_id: payload.session_id,
+            ttl_seconds: payload.ttl_seconds,
+            expires_at: new Date(Date.parse(createdAt) + payload.ttl_seconds * 1000).toISOString()
+          }
+        }
+      : {})
   }, 201);
 }
 
@@ -4838,8 +4901,13 @@ function apiDescription() {
     api_version: "v1",
     authentication: "CITADEL-Ed25519",
     mission_types: ["system_inventory"],
-    command_types: ["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"],
-    arbitrary_remote_execution: false
+    command_types: ["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_open", "ssh_close"],
+    arbitrary_remote_execution: false,
+    ssh_gate: {
+      transport: "signed_controller_command",
+      listen_scope: "loopback_only",
+      ttl_seconds: { min: SSH_GATE_MIN_TTL_SECONDS, max: SSH_GATE_MAX_TTL_SECONDS, default: SSH_GATE_DEFAULT_TTL_SECONDS }
+    }
   });
 }
 

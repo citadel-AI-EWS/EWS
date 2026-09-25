@@ -5,6 +5,7 @@ param(
   [string]$StateRoot = "$env:ProgramData\CitadelEWS\state",
   [switch]$Uninstall,
   [switch]$PreserveState,
+  [switch]$EnableSshGate,
   [string]$LegacyUserSid = ""
 )
 
@@ -14,9 +15,9 @@ Set-StrictMode -Version Latest
 $ServiceName = "CitadelEWSNode"
 $ServiceDisplayName = "CITADEL EWS Node"
 $PythonWingetId = "Python.Python.3.14"
-$ReleaseVersion = "0.3.16"
-$ExpectedV1Sha256 = "364c39c534a0f979b56b355e1734f1f62302495f9f63a6f9b6be9bd9e8d74559"
-$ExpectedV2Sha256 = "f87721a185fbed1d6bc6d3317cbc2ccfb1007b4aa6885168cf53c931e144e986"
+$ReleaseVersion = "0.3.17"
+$ExpectedV1Sha256 = "1232ebdc9568b786073bca634fdc7909acc1ec1743b7e08a8832c0937c8801ef"
+$ExpectedV2Sha256 = "3080574137b28bae65c9133352c44285cbe1c1dd4e9eca5cf64b97f2eef320c0"
 $ExpectedServiceHostSha256 = "892c5f388f9b54c0bcbb2956381dd601dfa8065b0e9258ba673e9505c2f81cad"
 $ExpectedServiceHelperSha256 = "e0e66f5a27018a283c65d42e6ead93e382706a163da682e6bd49f2b1fb9b0f99"
 $ExpectedEnterpriseProbeSha256 = "0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
@@ -63,6 +64,7 @@ if (-not (Test-IsAdministrator)) {
   )
   if ($Uninstall) { $ElevatedArgs += "-Uninstall" }
   if ($PreserveState) { $ElevatedArgs += "-PreserveState" }
+  if ($EnableSshGate) { $ElevatedArgs += "-EnableSshGate" }
   $Elevated = Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $ElevatedArgs -Wait -PassThru
   exit $Elevated.ExitCode
 }
@@ -336,6 +338,9 @@ $ConfigJson = @{
   prevent_automatic_sleep = $true
   network_recovery_enabled = $true
   allowed_wifi_profiles = @()
+  ssh_gate_enabled = [bool]$EnableSshGate
+  ssh_gate_listen_port = 2222
+  ssh_gate_target_port = 22
   controller_public_x = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 } | ConvertTo-Json
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)

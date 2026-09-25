@@ -1,4 +1,4 @@
-CITADEL/EWS QUICK AGENT 0.3.16 — WINDOWS
+CITADEL/EWS QUICK AGENT 0.3.17 — WINDOWS
 
 ОСНОВНАЯ УСТАНОВКА
 1. Полностью распакуйте ZIP.
@@ -12,7 +12,7 @@ PowerShell для обычной установки не нужен.
 Системный Python не нужен: приватный Python runtime уже находится внутри пакета.
 
 КУДА УСТАНАВЛИВАЕТСЯ
-- программа: %LOCALAPPDATA%\CitadelEWS\releases\0.3.16
+- программа: %LOCALAPPDATA%\CitadelEWS\releases\0.3.17
 - состояние/identity: %LOCALAPPDATA%\CitadelEWS\state
 - автозапуск: только текущий пользователь (HKCU Run)
 

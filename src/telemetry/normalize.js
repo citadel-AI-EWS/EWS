@@ -40,7 +40,9 @@ export const ALLOWED_EVENT_TYPES = new Set([
   "network_profile_remember_failed",
   "windows_sleep_hibernate_inhibit",
   "command_failure_ack_failed",
-  "command_failed"
+  "command_failed",
+  "ssh_gate_opened",
+  "ssh_gate_closed"
 ]);
 
 export function normalizeTelemetryEvent(raw) {

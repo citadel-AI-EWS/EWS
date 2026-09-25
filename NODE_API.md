@@ -101,6 +101,22 @@ the agent time to acknowledge and log the request first.
 Read-only diagnostics such as inventory, CPU/RAM, network state and operational
 logs remain separate bounded APIs/missions rather than shell commands.
 
+### Temporary SSH gate (TEST)
+
+`ssh_open` and `ssh_close` are allow-listed transport-gate commands, not a
+Controller-supplied shell. `ssh_open` is admin-only, requires `OPEN_SSH`,
+carries a Controller-generated session id and a TTL from 60 through 900 seconds,
+and is covered by the normal Ed25519 Controller signature.
+
+When locally enabled, the agent checks an already-existing loopback SSH service
+and temporarily binds only `127.0.0.1:2222`; it proxies only to the configured
+loopback SSH target (default `127.0.0.1:22`). The listener is closed on TTL,
+`ssh_close`, or agent exit/restart. The agent never opens a firewall rule or
+binds the gate to a LAN/public interface.
+
+Cloudflare Tunnel should target the loopback gate and Cloudflare Access/MFA must
+remain the external identity boundary. See `docs/SSH_GATE.md`.
+
 ## Durable reports
 
 `POST /api/v1/nodes/{node_id}/results` stores the complete authenticated report
@@ -175,14 +191,17 @@ stored events.
 
 ## Safety boundary
 
-The active Python node contains only locally registered bounded mission handlers.
-It has no remote shell, arbitrary code loader, credential collector, exploit
-engine, lateral movement, stealth installation, self-propagation, or autonomous
-financial transaction capability.
+The active Python node contains only locally registered bounded mission handlers
+and explicitly allow-listed signed controls. It has no arbitrary remote-command
+API, arbitrary code loader, credential collector, exploit engine, lateral
+movement, stealth installation, self-propagation, or autonomous financial
+transaction capability. The optional SSH gate is a fixed loopback transport
+window; it cannot carry Controller-supplied command text and is disabled unless
+the local node configuration explicitly opts in.
 
 Architect routes require a separately configured bearer token. The browser
-console exposes only allow-listed safe missions, signed node controls and
-read-only operational telemetry.
+console exposes only allow-listed missions, signed node controls, the bounded
+temporary SSH gate, and read-only operational telemetry.
 
 
 ## Replay protection (agent 0.3.10+)

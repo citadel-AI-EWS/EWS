@@ -28,8 +28,8 @@ need(index.includes("LEFT JOIN node_numbers AS nn"), "Architect node number join
 need(!readme.includes("-EnrollmentToken"), "README still documents EnrollmentToken");
 need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_token");
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
-need(agentV1.includes('VERSION = "0.3.16"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.16"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.17"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.17"'), "v2 release not bumped");
 need(quickStart.includes("runtime\\python.exe") && quickStart.includes("quick_install.py"), "Quick Agent START_HERE must use bundled Python");
 for (const forbidden of ["powershell.exe", "-Verb RunAs", "ExecutionPolicy Bypass", "sc.exe", "Enable-PSRemoting", "Invoke-Command"]) {
   need(!quickStart.toLowerCase().includes(forbidden.toLowerCase()), "Quick START_HERE contains privileged/PowerShell primitive: " + forbidden);
@@ -164,5 +164,5 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.16"'), "Controller release not bumped");
+need(index.includes('version: "0.3.17"'), "Controller release not bumped");
 console.log("Review backlog guards: PASS");
