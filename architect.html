@@ -223,11 +223,22 @@
 
       <section class="card">
         <h2 data-i18n="sshTitle">SSH / Zero Trust</h2>
-        <p class="small">SSH не открывает порт 22 в интернет. Здесь настраивается локальная команда для Cloudflare Access/Tunnel. Наличие Tunnel проверяется отдельно.</p>
+        <p class="small">SSH закрыт по умолчанию. Сайт не делает обычный сетевой port-knock: Controller отправляет агенту подписанную команду «открыть», и агент временно поднимает только loopback-gate 127.0.0.1:2222 к локальному SSH. Входящий порт 22 в интернет не открывается. Через 1–15 минут gate закрывается сам; остановка/перезапуск агента тоже закрывает его. Cloudflare Tunnel + Access/MFA остаются обязательной внешней защитой.</p>
         <label for="sshHost">Cloudflare Access hostname</label>
         <input id="sshHost" type="text" inputmode="url" placeholder="ssh.example.com">
         <label for="sshUser">SSH user</label>
         <input id="sshUser" type="text" autocomplete="username" placeholder="username">
+        <label for="sshTtl">Время открытия</label>
+        <select id="sshTtl">
+          <option value="300">5 минут</option>
+          <option value="600" selected>10 минут</option>
+          <option value="900">15 минут</option>
+        </select>
+        <div id="sshGateState" class="status">Выберите живую ноду — gate закрыт по умолчанию.</div>
+        <div class="control-buttons">
+          <button id="sshOpenGateButton" class="secondary" type="button" disabled>🔐 Открыть SSH временно</button>
+          <button id="sshCloseGateButton" class="danger" type="button" disabled>Закрыть SSH сейчас</button>
+        </div>
         <div id="sshState" class="status">SSH цель ещё не настроена.</div>
         <pre id="sshCommand" class="report-body">Укажите hostname и пользователя.</pre>
         <div class="toolbar">
@@ -567,6 +578,10 @@
     const sshUser = document.getElementById("sshUser");
     const sshState = document.getElementById("sshState");
     const sshCommand = document.getElementById("sshCommand");
+    const sshTtl = document.getElementById("sshTtl");
+    const sshGateState = document.getElementById("sshGateState");
+    const sshOpenGateButton = document.getElementById("sshOpenGateButton");
+    const sshCloseGateButton = document.getElementById("sshCloseGateButton");
     const copySshButton = document.getElementById("copySshButton");
     const openSshButton = document.getElementById("openSshButton");
     const statusElement = document.getElementById("status");
@@ -1126,22 +1141,85 @@
       }
     }
 
+    function latestSshGateCommand(nodeId) {
+      return currentCommands.find((item) =>
+        item.node_id === nodeId && ["ssh_open", "ssh_close"].includes(item.command_type)
+      ) || null;
+    }
+
+    function sshGateStatus(node) {
+      if (!node) return { state: "unavailable", open: false, pending: false, expiresAt: null };
+      const command = latestSshGateCommand(node.node_id);
+      if (!command) return { state: "closed", open: false, pending: false, expiresAt: null };
+      if (["pending", "accepted"].includes(command.status)) {
+        return {
+          state: command.command_type === "ssh_open" ? "opening" : "closing",
+          open: command.command_type === "ssh_close",
+          pending: true,
+          expiresAt: command.ssh_expires_at || null
+        };
+      }
+      if (command.command_type === "ssh_close") {
+        return { state: "closed", open: false, pending: false, expiresAt: null };
+      }
+      const expiresAt = command.ssh_expires_at || null;
+      const active = command.status === "completed" && expiresAt && Date.parse(expiresAt) > Date.now();
+      return { state: active ? "open" : "closed", open: Boolean(active), pending: false, expiresAt };
+    }
+
     function updateSshPanel() {
       const host = safeHost(sshHost.value);
       const user = safeUser(sshUser.value);
       sessionStorage.setItem("citadelSshHost", host);
       sessionStorage.setItem("citadelSshUser", user);
       const ready = Boolean(host && user);
+      const node = selectedNode();
+      const live = Boolean(node && isNodeLive(node));
+      const capabilities = Array.isArray(node?.capabilities) ? node.capabilities : [];
+      const gateCapable = capabilities.includes("ssh_gate_loopback");
+      const gate = sshGateStatus(node);
+      const pendingNodeCommand = currentCommands.some((item) =>
+        item.node_id === node?.node_id && ["pending", "accepted"].includes(item.status)
+      );
+      const ttlSeconds = Number(sshTtl.value || 600);
       const command = ready
         ? `ssh -o ProxyCommand="cloudflared access ssh --hostname %h" ${user}@${host}`
         : "Укажите корректные hostname и пользователя.";
       sshCommand.textContent = command;
       sshState.textContent = ready
-        ? "SSH цель настроена локально; доступность Cloudflare Tunnel ещё не проверена."
+        ? "Cloudflare Access-цель введена. Tunnel должен быть настроен на 127.0.0.1:2222; парольный SSH лучше оставить выключенным и использовать ключ/сертификат."
         : "SSH цель ещё не настроена.";
       sshState.className = `status ${ready ? "good" : ""}`.trim();
+
+      if (!node) {
+        sshGateState.textContent = "Выберите ноду — SSH gate закрыт.";
+        sshGateState.className = "status";
+      } else if (!live) {
+        sshGateState.textContent = "Нода не в live-состоянии: открыть gate нельзя.";
+        sshGateState.className = "status bad";
+      } else if (!gateCapable) {
+        sshGateState.textContent = "Эта версия/конфигурация агента не объявляет capability ssh_gate_loopback.";
+        sshGateState.className = "status bad";
+      } else if (gate.state === "opening") {
+        sshGateState.textContent = "Подписанный knock отправлен. Агент проверяет локальный SSH и открывает loopback-gate.";
+        sshGateState.className = "status";
+      } else if (gate.state === "closing") {
+        sshGateState.textContent = "Команда закрытия отправлена.";
+        sshGateState.className = "status";
+      } else if (gate.open) {
+        const until = gate.expiresAt ? new Date(gate.expiresAt).toLocaleTimeString() : "TTL";
+        sshGateState.textContent = `✓ SSH gate временно открыт до ${until}. Публичный port 22 по-прежнему не открывается.`;
+        sshGateState.className = "status good";
+      } else {
+        sshGateState.textContent = "🔒 SSH gate закрыт. Для доступа сначала отправьте подписанный knock.";
+        sshGateState.className = "status good";
+      }
+
+      sshOpenGateButton.textContent = `🔐 Открыть SSH на ${Math.round(ttlSeconds / 60)} мин`;
+      sshOpenGateButton.disabled = !ready || !live || !gateCapable || pendingNodeCommand || gate.open;
+      sshCloseGateButton.disabled = !live || !gateCapable || pendingNodeCommand || !gate.open;
       copySshButton.disabled = !ready;
-      openSshButton.disabled = !ready;
+      openSshButton.disabled = !ready || !gate.open;
     }
 
     async function createInventoryMission(nodeId, title, taskText, expiresInHours) {
@@ -1677,13 +1755,14 @@
       shutdownButton.disabled = liveUnavailable || pending;
       disconnectButton.disabled = liveUnavailable || pending;
       renderNodeDiagnostics();
+      updateSshPanel();
     }
 
     function renderCommands(commands) {
       currentCommands = commands;
       const list = document.getElementById("commandsList");
       list.replaceChildren();
-      const labels = { pause: "Пауза", resume: "Возобновление", update: "Обновление", restart: "Перезапуск агента", stop: "Остановка агента", rollback: "Откат", uninstall: "Отзыв узла", system_reboot: "Перезагрузка ПК", system_shutdown: "Выключение ПК" };
+      const labels = { pause: "Пауза", resume: "Возобновление", update: "Обновление", restart: "Перезапуск агента", stop: "Остановка агента", rollback: "Откат", uninstall: "Отзыв узла", system_reboot: "Перезагрузка ПК", system_shutdown: "Выключение ПК", ssh_open: "SSH gate · открыть", ssh_close: "SSH gate · закрыть" };
       for (const command of commands) {
         const item = document.createElement("div");
         item.className = `item ${command.status === "completed" ? "ok" : "warn"}`;
@@ -2548,7 +2627,7 @@
       if (!operationsAlert.classList.contains("hidden")) dismissOperationsBrief();
       if (!projectCreatedOverlay.classList.contains("hidden")) dismissProjectCreated();
     });
-    controlNodeSelect.addEventListener("change", () => { updateControlButtons(); renderNodeDiagnostics(); });
+    controlNodeSelect.addEventListener("change", () => { updateControlButtons(); renderNodeDiagnostics(); updateSshPanel(); });
     nodeSelect.addEventListener("change", renderMissionNodeState);
 
     async function sendControl(commandType, confirmation = null) {
@@ -2921,6 +3000,54 @@
     sshUser.value = sessionStorage.getItem("citadelSshUser") || "";
     sshHost.addEventListener("input", updateSshPanel);
     sshUser.addEventListener("input", updateSshPanel);
+    sshTtl.addEventListener("change", updateSshPanel);
+
+    sshOpenGateButton.addEventListener("click", async () => {
+      const node = selectedNode();
+      if (!node || !isNodeLive(node)) return setStatus("Выберите живую ноду.", "bad");
+      const ttlSeconds = Number(sshTtl.value || 600);
+      if (!confirm(`Временно открыть SSH gate для ${nodeDisplayName(node)} на ${Math.round(ttlSeconds / 60)} минут?\n\nОткроется только 127.0.0.1:2222; публичный port 22 не создаётся.`)) return;
+      sshOpenGateButton.disabled = true;
+      try {
+        const data = await api(`/api/v1/architect/nodes/${encodeURIComponent(node.node_id)}/commands`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            command_type: "ssh_open",
+            ttl_seconds: ttlSeconds,
+            confirmation: "OPEN_SSH"
+          })
+        });
+        const until = data.ssh_gate?.expires_at
+          ? new Date(data.ssh_gate.expires_at).toLocaleTimeString()
+          : "по TTL";
+        setStatus(`Подписанный SSH knock создан. Gate будет закрыт автоматически: ${until}.\nCommand ID: ${data.command.command_id}`, "good");
+        await refreshOperationalData();
+      } catch (error) {
+        setStatus(`SSH gate не открыт: ${error.message}`, "bad");
+      } finally {
+        updateSshPanel();
+      }
+    });
+
+    sshCloseGateButton.addEventListener("click", async () => {
+      const node = selectedNode();
+      if (!node || !isNodeLive(node)) return setStatus("Выберите живую ноду.", "bad");
+      sshCloseGateButton.disabled = true;
+      try {
+        const data = await api(`/api/v1/architect/nodes/${encodeURIComponent(node.node_id)}/commands`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ command_type: "ssh_close" })
+        });
+        setStatus(`Команда немедленного закрытия SSH gate создана.\nCommand ID: ${data.command.command_id}`, "good");
+        await refreshOperationalData();
+      } catch (error) {
+        setStatus(`SSH gate не закрыт: ${error.message}`, "bad");
+      } finally {
+        updateSshPanel();
+      }
+    });
     copySshButton.addEventListener("click", async () => {
       try {
         await navigator.clipboard.writeText(sshCommand.textContent);
