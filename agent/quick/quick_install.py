@@ -19,7 +19,7 @@ import urllib.request
 import winreg
 from pathlib import Path
 
-VERSION = "0.3.16"
+VERSION = "0.3.17"
 DEFAULT_CONTROLLER_URL = "https://citadel-ai.init1.workers.dev"
 CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 RUN_VALUE_NAME = "CitadelEWSQuickNode"
@@ -266,7 +266,7 @@ def probe_lm_server(timeout_seconds: int = 45) -> bool:
     token = os.environ.get("LM_API_TOKEN", "").strip()
     while time.monotonic() < deadline:
         try:
-            headers = {"Accept": "application/json", "User-Agent": "CITADEL-EWS-Quick/0.3.16"}
+            headers = {"Accept": "application/json", "User-Agent": "CITADEL-EWS-Quick/0.3.17"}
             if token:
                 headers["Authorization"] = "Bearer " + token
             request = urllib.request.Request("http://127.0.0.1:1234/v1/models", headers=headers)
