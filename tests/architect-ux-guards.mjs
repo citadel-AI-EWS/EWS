@@ -307,7 +307,9 @@ assert.match(architect, /sessionStorage\.setItem\("citadel-lmnode-request"/);
     /ensureAutoEnrollmentStorage/,
     "public Hub GET path must remain read-only and must not run schema DDL"
   );
-  assert.match(publicHubBlock, /SELECT \* FROM nodes LIMIT 500/);
+  assert.match(publicHubBlock, /SELECT node_id, agent_version, status, enrolled_at, last_seen_at/);
+  assert.match(publicHubBlock, /FROM nodes WHERE status != 'revoked' LIMIT 500/);
+  assert.match(publicHubBlock, /cache-control/);
   assert.doesNotMatch(publicHubBlock, /node_numbers/);
   assert.doesNotMatch(publicHubBlock, /sqlite_master/);
 }
@@ -326,6 +328,14 @@ assert.match(index, /hub_d1_overloaded/);
   assert.doesNotMatch(overviewBlock, /backfillLegacyReports\(env\)/);
 }
 assert.match(hub, /setInterval\(refresh,60000\)/);
+assert.doesNotMatch(home, /setInterval\(refresh,10000\)/);
+assert.match(home, /function scheduleRefresh\(delay=60000\)/);
+assert.match(home, /healthFetchedAt>=300000/);
+assert.match(home, /hub_d1_daily_read_limit_exceeded/);
+assert.match(home, /nextUtcReset/);
+assert.match(index, /idx_project_work_items_status_project_created/);
+assert.match(index, /idx_nodes_status_last_seen/);
+assert.match(index, /idx_audit_events_created_action/);
 assert.match(architect, /\}, 60000\);/);
 assert.match(index, /function operationalNodeState/);
 assert.match(index, /function isTestNodeRecord/);
