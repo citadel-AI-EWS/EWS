@@ -586,9 +586,36 @@ class SshGateProxy:
             and not self._stop.is_set()
         )
 
+    def _target_is_loopback_only(self) -> bool:
+        """Require the underlying SSH daemon itself to be loopback-only."""
+        found_loopback = False
+        try:
+            connections = psutil.net_connections(kind="tcp")
+        except Exception:
+            return False
+        for connection in connections:
+            if connection.status != psutil.CONN_LISTEN or not connection.laddr:
+                continue
+            local = connection.laddr
+            port = getattr(local, "port", local[1] if len(local) > 1 else None)
+            if port != self.target_port:
+                continue
+            host = str(getattr(local, "ip", local[0] if len(local) else "")).split("%", 1)[0]
+            try:
+                address = ipaddress.ip_address(host)
+            except ValueError:
+                return False
+            if not address.is_loopback:
+                return False
+            found_loopback = True
+        return found_loopback
+
     def start(self, ttl_seconds: int) -> None:
         self.stop()
-        # Fail before opening the gate if no SSH daemon is reachable locally.
+        # Fail closed if the actual SSH daemon listens on LAN/all interfaces.
+        if not self._target_is_loopback_only():
+            raise RuntimeError("ssh_target_not_loopback_only")
+        # Require an IPv4 loopback listener because the fixed proxy target is 127.0.0.1.
         with socket.create_connection(("127.0.0.1", self.target_port), timeout=2.0):
             pass
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -2427,16 +2454,26 @@ class Agent:
         )
         self.log.write(event)
 
-    def open_ssh_gate(self, payload: dict[str, Any]) -> None:
+    def open_ssh_gate(self, payload: dict[str, Any], command_created_at: str) -> None:
         if not self.config.ssh_gate_enabled or self.ssh_gate is None:
             raise RuntimeError("ssh_gate_disabled")
         if not self.validate_ssh_open_payload(payload):
             raise RuntimeError("invalid_ssh_gate_payload")
         session_id = str(payload["session_id"])
         ttl_seconds = int(payload["ttl_seconds"])
+        try:
+            created_at = dt.datetime.fromisoformat(str(command_created_at).replace("Z", "+00:00"))
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=dt.timezone.utc)
+            expires_at = created_at.astimezone(dt.timezone.utc) + dt.timedelta(seconds=ttl_seconds)
+        except (TypeError, ValueError):
+            raise RuntimeError("invalid_ssh_gate_created_at") from None
+        remaining_seconds = int((expires_at - dt.datetime.now(dt.timezone.utc)).total_seconds())
+        if remaining_seconds <= 0:
+            raise RuntimeError("ssh_gate_command_expired")
         self.close_ssh_gate("replaced", log_if_absent=False)
-        self.ssh_gate.start(ttl_seconds)
-        expires_at = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=ttl_seconds)
+        # The gate may never outlive the signed Controller command's own expiry.
+        self.ssh_gate.start(min(ttl_seconds, remaining_seconds))
         atomic_write(
             self.ssh_gate_state_path,
             json.dumps(
@@ -2455,7 +2492,7 @@ class Agent:
         self.log.write(
             "ssh_gate_opened",
             session_id=session_id,
-            ttl_seconds=ttl_seconds,
+            ttl_seconds=min(ttl_seconds, remaining_seconds),
             listen_host="127.0.0.1",
             listen_port=self.config.ssh_gate_listen_port,
         )
@@ -2558,7 +2595,10 @@ class Agent:
                 elif command_type == "hybrid_query":
                     self.run_hybrid_query(command.get("payload") or {})
                 elif command_type == "ssh_open":
-                    self.open_ssh_gate(command.get("payload") or {})
+                    self.open_ssh_gate(
+                        command.get("payload") or {},
+                        str(command.get("created_at") or ""),
+                    )
                 elif command_type == "ssh_close":
                     self.close_ssh_gate("controller")
                 self.ack_command(command_id, "completed")
