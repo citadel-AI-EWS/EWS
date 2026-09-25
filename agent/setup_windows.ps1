@@ -5,6 +5,7 @@ param(
   [string]$StateRoot = "$env:ProgramData\CitadelEWS\state",
   [switch]$Uninstall,
   [switch]$PreserveState,
+  [switch]$EnableSshGate,
   [string]$LegacyUserSid = ""
 )
 
@@ -63,6 +64,7 @@ if (-not (Test-IsAdministrator)) {
   )
   if ($Uninstall) { $ElevatedArgs += "-Uninstall" }
   if ($PreserveState) { $ElevatedArgs += "-PreserveState" }
+  if ($EnableSshGate) { $ElevatedArgs += "-EnableSshGate" }
   $Elevated = Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $ElevatedArgs -Wait -PassThru
   exit $Elevated.ExitCode
 }
@@ -336,6 +338,9 @@ $ConfigJson = @{
   prevent_automatic_sleep = $true
   network_recovery_enabled = $true
   allowed_wifi_profiles = @()
+  ssh_gate_enabled = [bool]$EnableSshGate
+  ssh_gate_listen_port = 2222
+  ssh_gate_target_port = 22
   controller_public_x = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 } | ConvertTo-Json
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
