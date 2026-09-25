@@ -164,6 +164,12 @@ def write_config(state_root: Path, controller_url: str) -> Path:
         "prevent_automatic_sleep": True,
         "network_recovery_enabled": True,
         "allowed_wifi_profiles": existing.get("allowed_wifi_profiles", []),
+        # Quick mode never silently enables remote administration. If an
+        # administrator has explicitly provisioned local-only SSH + Access,
+        # preserve that opt-in across Quick reinstalls.
+        "ssh_gate_enabled": existing.get("ssh_gate_enabled", False) is True,
+        "ssh_gate_listen_port": int(existing.get("ssh_gate_listen_port", 2222)),
+        "ssh_gate_target_port": int(existing.get("ssh_gate_target_port", 22)),
         "controller_public_x": CONTROLLER_PUBLIC_X,
     }
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
