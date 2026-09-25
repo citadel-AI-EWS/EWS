@@ -21,11 +21,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         return
 
+    def do_GET(self):
+        SEEN.append({"path": self.path, "body": None, "authorization": self.headers.get("Authorization")})
+        if self.path != "/v1/models":
+            self.send_response(404)
+            self.end_headers()
+            return
+        payload = json.dumps({"data": [{"id": "test/model"}]}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
     def do_POST(self):
         length = int(self.headers.get("content-length", "0"))
         raw = self.rfile.read(length)
         body = json.loads(raw.decode("utf-8"))
-        SEEN.append({"path": self.path, "body": body})
+        SEEN.append({"path": self.path, "body": body, "authorization": self.headers.get("Authorization")})
 
         if self.path == "/api/v1/chat":
             payload = (
@@ -63,6 +76,7 @@ def main() -> int:
             "https://example.invalid",
             root,
             controller_public_x="erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0",
+            lm_api_token="ci-local-token",
         )
         agent = node.Agent(config)
         agent.probe_lmstudio = lambda: {
@@ -77,6 +91,7 @@ def main() -> int:
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
+                models = agent.lmstudio_http_json("GET", "/v1/models", timeout=5)
                 answer = agent.stream_lmstudio_answer(
                     "ping",
                     {"temperature": 0.1, "max_output_tokens": 32},
@@ -92,9 +107,13 @@ def main() -> int:
                 server.shutdown()
                 thread.join(timeout=5)
 
+        assert models["data"][0]["id"] == "test/model", models
         assert answer == "LM OK", answer
         assert report["content"] == "PROJECT OK", report
         assert report["model"] == "test/model", report
+
+        model_probe = next(item for item in SEEN if item["path"] == "/v1/models")
+        assert model_probe["authorization"] == "Bearer ci-local-token"
 
         stream = next(item for item in SEEN if item["path"] == "/api/v1/chat")
         stream_body = stream["body"]
@@ -103,12 +122,14 @@ def main() -> int:
         assert stream_body["input"] == "ping"
         assert stream_body["stream"] is True
         assert stream_body["temperature"] == 0.1
+        assert stream["authorization"] == "Bearer ci-local-token"
 
         project = next(item for item in SEEN if item["path"] == "/v1/chat/completions")
         project_body = project["body"]
         assert isinstance(project_body, dict)
         assert project_body["model"] == "test/model"
         assert project_body["messages"][-1]["content"] == "Return PROJECT OK"
+        assert project["authorization"] == "Bearer ci-local-token"
 
         print("LM Studio REST + OpenAI-compatible local protocols: PASS")
         return 0

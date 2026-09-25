@@ -34,17 +34,17 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.15",
+  version: "0.3.16",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "78cdcf5af888d14f4696e987b4709559f52cd746eec3afe4eba4f1aece5e6689"
+      sha256: "364c39c534a0f979b56b355e1734f1f62302495f9f63a6f9b6be9bd9e8d74559"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "3b35861efd6912225d2da9e422f668ddc577d62314208c0e80465e3a170375f9"
+      sha256: "f87721a185fbed1d6bc6d3317cbc2ccfb1007b4aa6885168cf53c931e144e986"
     }
   ]
 });
@@ -53,9 +53,9 @@ const LMSTUDIO_INTEGRATION = Object.freeze({
   official_url: "https://lmstudio.ai",
   server_url: "http://127.0.0.1:1234",
   windows_asset: Object.freeze({
-    path: "install_llmstudio_headless.ps1",
-    url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/install_llmstudio_headless.ps1",
-    sha256: "0d24fb0ce1d7ba40539b98c30875f2244d93b328dc32358bcf880d4c8cfd78fc"
+    path: "install_llmstudio_headless.py",
+    url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/install_llmstudio_headless.py",
+    sha256: "9180f758c027923e687a5e45e5592b9a6e39e66a2e2be989ad27018fe166e4ee"
   }),
   linux_asset: Object.freeze({
     path: "install_llmstudio_headless.sh",

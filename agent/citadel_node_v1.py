@@ -48,7 +48,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.15"
+VERSION = "0.3.16"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -59,7 +59,7 @@ UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
 COMMAND_MAX_AGE_SECONDS = 15 * 60
 SERVICE_RESTART_EXIT_CODE = 75
 SERVICE_STOP_EXIT_CODE = 76
-LMSTUDIO_INSTALL_FILE_NAMES = {"install_llmstudio_headless.ps1", "install_llmstudio_headless.sh"}
+LMSTUDIO_INSTALL_FILE_NAMES = {"install_llmstudio_headless.py", "install_llmstudio_headless.ps1", "install_llmstudio_headless.sh"}
 LMSTUDIO_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,95})?(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,31})?$")
 LMSTUDIO_QUANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
 HYBRID_MODES = {"python", "lmstudio", "both"}
@@ -296,6 +296,7 @@ class AgentConfig:
     prevent_automatic_sleep: bool = True
     network_recovery_enabled: bool = True
     allowed_wifi_profiles: tuple[str, ...] = ()
+    lm_api_token: str | None = None
 
     @classmethod
     def from_file(cls, path: Path) -> "AgentConfig":
@@ -316,6 +317,17 @@ class AgentConfig:
             name = value.strip()
             if name and len(name) <= 120 and name not in profiles:
                 profiles.append(name)
+        raw_lm_token = raw.get("lm_api_token")
+        if raw_lm_token is None:
+            raw_lm_token = os.environ.get("LM_API_TOKEN")
+        lm_api_token = None
+        if raw_lm_token is not None:
+            token = str(raw_lm_token).strip()
+            if token:
+                if len(token) > 512 or any(ord(ch) < 33 or ord(ch) > 126 for ch in token):
+                    raise ValueError("lm_api_token must be 1-512 printable ASCII characters")
+                lm_api_token = token
+
         return cls(
             controller_url=controller_url,
             data_dir=Path(raw.get("data_dir") or default_data_dir()).expanduser().resolve(),
@@ -328,6 +340,7 @@ class AgentConfig:
             prevent_automatic_sleep=raw.get("prevent_automatic_sleep", True) is not False,
             network_recovery_enabled=raw.get("network_recovery_enabled", True) is not False,
             allowed_wifi_profiles=tuple(profiles[:16]),
+            lm_api_token=lm_api_token,
         )
 
 
@@ -762,6 +775,7 @@ def system_inventory(payload: dict[str, Any]) -> dict[str, Any]:
         "architecture": platform.machine(),
         "python_version": platform.python_version(),
         "windows_core_service": os.name == "nt" and os.environ.get("CITADEL_SERVICE_MANAGED") == "1",
+        "windows_quick_user": os.name == "nt" and os.environ.get("CITADEL_QUICK_USER") == "1",
         "cpu_logical_count": psutil.cpu_count(logical=True),
         "memory_total_bytes": int(memory.total),
         "disk_home_total_bytes": int(disk.total),
@@ -813,6 +827,8 @@ class Agent:
             capabilities.add("known_network_recovery")
         if os.name == "nt" and os.environ.get("CITADEL_SERVICE_MANAGED") == "1":
             capabilities.add("windows_core_service")
+        if os.name == "nt" and os.environ.get("CITADEL_QUICK_USER") == "1":
+            capabilities.add("windows_quick_user")
         if _windows_enterprise_probe_file_valid():
             capabilities.add("windows_enterprise_readonly")
         return sorted(capabilities)
@@ -934,6 +950,7 @@ class Agent:
                     "Content-Type": "application/json",
                     "Accept": "application/json",
                     "User-Agent": USER_AGENT,
+                    **self.lmstudio_auth_headers(),
                 },
             )
             response = connection.getresponse()
@@ -1228,7 +1245,7 @@ class Agent:
             or any(char not in "0123456789abcdef" for char in digest)
         ):
             return False
-        expected = "install_llmstudio_headless.ps1" if os.name == "nt" else "install_llmstudio_headless.sh"
+        expected = "install_llmstudio_headless.py" if os.name == "nt" else "install_llmstudio_headless.sh"
         return name == expected
 
     @staticmethod
@@ -1296,7 +1313,14 @@ class Agent:
         env["CITADEL_LMSTUDIO_HOME"] = runtime_home
         env["HOME"] = runtime_home
         env["LMS_NO_MODIFY_PATH"] = "1"
+        if self.config.lm_api_token:
+            env["LM_API_TOKEN"] = self.config.lm_api_token
         return env
+
+    def lmstudio_auth_headers(self) -> dict[str, str]:
+        if not self.config.lm_api_token:
+            return {}
+        return {"Authorization": "Bearer " + self.config.lm_api_token}
 
     def run_lms(self, args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
         executable = self.find_lms()
@@ -1325,7 +1349,7 @@ class Agent:
         if not path.startswith("/api/v1/") and path != "/v1/models":
             raise RuntimeError("lmstudio_path_not_allowed")
         encoded = None if body is None else json_text(body).encode("utf-8")
-        headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
+        headers = {"Accept": "application/json", "User-Agent": USER_AGENT, **self.lmstudio_auth_headers()}
         if encoded is not None:
             headers["Content-Type"] = "application/json"
         connection = http.client.HTTPConnection("127.0.0.1", 1234, timeout=timeout)
@@ -1368,6 +1392,11 @@ class Agent:
                 server_running = bool(decoded.get("running")) if isinstance(decoded, dict) else False
             except Exception:
                 server_running = False
+            if server_running:
+                try:
+                    self.lmstudio_http_json("GET", "/v1/models", timeout=10)
+                except Exception:
+                    server_running = False
             if server_running:
                 try:
                     loaded = self.run_lms(["ps", "--json"], timeout=20)
@@ -1531,10 +1560,13 @@ class Agent:
         try:
             helper.write_bytes(data)
             if os.name == "nt":
-                powershell = shutil.which("powershell.exe") or shutil.which("powershell")
-                if not powershell:
-                    raise RuntimeError("PowerShell unavailable")
-                argv = [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(helper)]
+                if helper.suffix.lower() == ".py":
+                    argv = [sys.executable, str(helper)]
+                else:
+                    powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+                    if not powershell:
+                        raise RuntimeError("PowerShell unavailable")
+                    argv = [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(helper)]
             else:
                 bash = shutil.which("bash")
                 if not bash:
@@ -1566,11 +1598,23 @@ class Agent:
                 installed=True, progress_phase="daemon_running", progress_current=4, progress_total=5,
                 progress_detail="llmster daemon running",
             )
-            self.run_lms(["server", "start", "--port", "1234"], timeout=120)
+            self.run_lms(["server", "start", "--port", "1234", "--bind", "127.0.0.1"], timeout=120)
+            deadline = time.monotonic() + 45
+            last_error: Exception | None = None
+            while time.monotonic() < deadline:
+                try:
+                    self.lmstudio_http_json("GET", "/v1/models", timeout=5)
+                    last_error = None
+                    break
+                except Exception as error:
+                    last_error = error
+                    time.sleep(1)
+            if last_error is not None:
+                raise RuntimeError("lmstudio_server_not_responding:" + str(last_error)[:300])
             self.report_ai_state(
                 installed=True, server_running=True, last_action="installed",
                 progress_phase="complete", progress_current=5, progress_total=5,
-                progress_detail="LM Studio server running on localhost:1234",
+                progress_detail="LM Studio server verified on http://127.0.0.1:1234/v1/models",
             )
             self.log.write("lmstudio_installed")
         finally:
@@ -1918,7 +1962,7 @@ class Agent:
                 "POST",
                 "/api/v1/chat",
                 body=json_text(body).encode("utf-8"),
-                headers={"Content-Type": "application/json", "Accept": "text/event-stream", "User-Agent": USER_AGENT},
+                headers={"Content-Type": "application/json", "Accept": "text/event-stream", "User-Agent": USER_AGENT, **self.lmstudio_auth_headers()},
             )
             response = connection.getresponse()
             if response.status != 200:

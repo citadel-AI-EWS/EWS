@@ -14,9 +14,9 @@ Set-StrictMode -Version Latest
 $ServiceName = "CitadelEWSNode"
 $ServiceDisplayName = "CITADEL EWS Node"
 $PythonWingetId = "Python.Python.3.14"
-$ReleaseVersion = "0.3.15"
-$ExpectedV1Sha256 = "78cdcf5af888d14f4696e987b4709559f52cd746eec3afe4eba4f1aece5e6689"
-$ExpectedV2Sha256 = "3b35861efd6912225d2da9e422f668ddc577d62314208c0e80465e3a170375f9"
+$ReleaseVersion = "0.3.16"
+$ExpectedV1Sha256 = "364c39c534a0f979b56b355e1734f1f62302495f9f63a6f9b6be9bd9e8d74559"
+$ExpectedV2Sha256 = "f87721a185fbed1d6bc6d3317cbc2ccfb1007b4aa6885168cf53c931e144e986"
 $ExpectedServiceHostSha256 = "892c5f388f9b54c0bcbb2956381dd601dfa8065b0e9258ba673e9505c2f81cad"
 $ExpectedServiceHelperSha256 = "e0e66f5a27018a283c65d42e6ead93e382706a163da682e6bd49f2b1fb9b0f99"
 $ExpectedEnterpriseProbeSha256 = "0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
@@ -253,14 +253,20 @@ Write-Host "[CITADEL] Machine install/state ACLs rebuilt before migration."
 
 $NewIdentity = Join-Path $StateRoot "identity.json"
 $LegacyIdentity = Join-Path $LegacyStateRoot "identity.json"
-if (-not (Test-Path -LiteralPath $NewIdentity) -and (Test-Path -LiteralPath $LegacyIdentity)) {
+$InstallStatePath = Join-Path $InstallRoot "install-state.json"
+$LegacyMigrationCompletePath = Join-Path $StateRoot "LEGACY_MIGRATION_COMPLETE"
+# An install-state from an older Core Service installation also proves that
+# cutover already completed. Repairs must not re-import stale user-profile state.
+$LegacyMigrationRequired = -not (Test-Path -LiteralPath $InstallStatePath) -and
+  -not (Test-Path -LiteralPath $LegacyMigrationCompletePath)
+if ($LegacyMigrationRequired -and -not (Test-Path -LiteralPath $NewIdentity) -and (Test-Path -LiteralPath $LegacyIdentity)) {
   Copy-Item -LiteralPath $LegacyIdentity -Destination $NewIdentity -Force
   Write-Host "[CITADEL] Migrated existing node identity from the original user profile."
 }
 foreach ($StateName in @("pending-results.json", "network-recovery.json", "lmstudio-state.json", "PAUSED")) {
   $LegacyFile = Join-Path $LegacyStateRoot $StateName
   $NewFile = Join-Path $StateRoot $StateName
-  if (-not (Test-Path -LiteralPath $NewFile) -and (Test-Path -LiteralPath $LegacyFile)) {
+  if ($LegacyMigrationRequired -and -not (Test-Path -LiteralPath $NewFile) -and (Test-Path -LiteralPath $LegacyFile)) {
     Copy-Item -LiteralPath $LegacyFile -Destination $NewFile -Force
   }
 }
@@ -273,7 +279,6 @@ $ReleaseBase = Join-Path $InstallRoot "releases"
 $ReleaseRoot = Join-Path $ReleaseBase $ReleaseId
 Set-CitadelDirectoryAcl -Path $ReleaseBase
 
-$InstallStatePath = Join-Path $InstallRoot "install-state.json"
 $PreviousReleaseRoot = $null
 if (Test-Path -LiteralPath $InstallStatePath) {
   try {
@@ -496,7 +501,7 @@ try {
     throw "Legacy agent cleanup is incomplete; new service remains safely held."
   }
 
-  if ($LegacyStateMatchesNode) {
+  if ($LegacyMigrationRequired -and $LegacyStateMatchesNode) {
     foreach ($StateName in @("pending-results.json", "network-recovery.json", "lmstudio-state.json")) {
       $LegacyFile = Join-Path $LegacyStateRoot $StateName
       $NewFile = Join-Path $StateRoot $StateName
@@ -510,6 +515,13 @@ try {
     } elseif (Test-Path -LiteralPath $PausedPath) {
       Remove-Item -LiteralPath $PausedPath -Force
     }
+  }
+
+  # Mark the one-time cutover before removing the hold. Legacy files remain in
+  # the user profile for uninstall compatibility, but repairs must never treat
+  # those stale snapshots as authoritative again.
+  if ($LegacyMigrationRequired) {
+    [System.IO.File]::WriteAllText($LegacyMigrationCompletePath, $NodeId + [Environment]::NewLine, $Utf8NoBom)
   }
 
   if ($LegacyShortcutExisted -and (Test-Path -LiteralPath $LegacyShortcutPath)) {
