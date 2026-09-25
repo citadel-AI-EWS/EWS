@@ -4256,7 +4256,7 @@ async function architectOverview(request, env) {
     ).first(),
     env.DB.prepare(
       "SELECT n.node_id, nn.node_number, n.hostname, n.os_name, n.os_version, n.architecture, " +
-      "n.agent_version, CASE WHEN n.status = 'online' " +
+      "n.agent_version, n.capabilities_json, CASE WHEN n.status = 'online' " +
       "AND (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-5 minutes')) " +
       "THEN 'offline' ELSE n.status END AS status, n.cpu_percent, n.memory_percent, " +
       "n.enrolled_at, n.last_seen_at, net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json, " +
@@ -4344,9 +4344,12 @@ async function architectOverview(request, env) {
         )
       : null;
     const operationalState = operationalNodeState(node);
+    const capabilities = safeJson(node.capabilities_json, []);
     return {
       ...node,
       operational_state: operationalState,
+      capabilities: Array.isArray(capabilities) ? capabilities : [],
+      capabilities_json: undefined,
       test_node: operationalState === "test",
       lmstudio_runtime: safeJson(node.lmstudio_runtime_json, {}),
       lmstudio_runtime_json: undefined,
@@ -4460,7 +4463,7 @@ async function architectCreateCommand(request, env, nodeId) {
     if (confirmation !== requiredConfirmation) {
       throw new ApiError(
         400,
-        commandType === "lmstudio_uninstall"
+        commandType === "lmstudio_uninstall" || commandType === "ssh_open"
           ? "command_confirmation_required"
           : "power_confirmation_required"
       );
