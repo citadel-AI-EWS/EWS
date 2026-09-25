@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 AGENT = ROOT / "agent"
 DIST = ROOT / "dist"
-PACKAGE_NAME = "CITADEL_LINUX_AGENT_0.3.15"
+PACKAGE_NAME = "CITADEL_LINUX_AGENT_0.3.16"
 STAGE = DIST / PACKAGE_NAME
 ARCHIVE = DIST / f"{PACKAGE_NAME}.tar.gz"
 
@@ -56,10 +56,10 @@ def build() -> Path:
     v1 = STAGE / "citadel_node_v1.py"
     v2 = STAGE / "citadel_node_v2.py"
     setup = (STAGE / "setup_linux.sh").read_text(encoding="utf-8")
-    if 'VERSION = "0.3.15"' not in v1.read_text(encoding="utf-8"):
-        raise RuntimeError("repository v1 source is not release 0.3.15")
-    if 'VERSION = "0.3.15"' not in v2.read_text(encoding="utf-8"):
-        raise RuntimeError("repository v2 source is not release 0.3.15")
+    if 'VERSION = "0.3.16"' not in v1.read_text(encoding="utf-8"):
+        raise RuntimeError("repository v1 source is not release 0.3.16")
+    if 'VERSION = "0.3.16"' not in v2.read_text(encoding="utf-8"):
+        raise RuntimeError("repository v2 source is not release 0.3.16")
     enterprise_probe = STAGE / "windows_enterprise_probe.ps1"
     if sha256(v1) not in setup or sha256(v2) not in setup or sha256(enterprise_probe) not in setup:
         raise RuntimeError("setup_linux.sh SHA pins do not match repository release files")

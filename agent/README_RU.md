@@ -1,5 +1,15 @@
 # CITADEL/EWS Python Node v1
 
+## v0.3.16 — Quick Agent без EXE и проверенный LM Studio server
+
+- Для обычной Windows-ноды основной путь установки — ZIP с `START_HERE.cmd`: двойной клик запускает встроенный приватный Python runtime без системной установки Python, без EXE, без UAC и без обязательного PowerShell.
+- Quick Agent устанавливается только в профиль текущего пользователя (`%LOCALAPPDATA%\\CitadelEWS`) и регистрирует автозапуск только в HKCU; Windows Core Service остаётся отдельным вариантом для серверов и машин, которым нужна работа до входа пользователя.
+- Узел сам регистрируется в Controller и появляется в Hub; если Controller временно недоступен, установка не ломается — фоновый агент продолжает bounded retry.
+- Windows LM Studio/llmster bootstrap больше не зависит от PowerShell ExecutionPolicy: Python-helper читает официальный installer metadata, скачивает официальный llmster archive с `llmster.lmstudio.ai`, проверяет SHA-512 и запускает только `llmster.exe bootstrap`.
+- Установка LM Studio считается успешной только после `lms daemon up`, `lms server start --port 1234 --bind 127.0.0.1` и реального HTTP-ответа `/v1/models`.
+- LM Studio API token поддерживается через `lm_api_token` или `LM_API_TOKEN`; Bearer header используется только если token задан. По умолчанию локальный server остаётся на `127.0.0.1`.
+- Локальная multi-agent модель сохранена: один основной Agent координирует bounded mini-workers внутри той же машины; это не сетевое самораспространение.
+
 ## v0.3.15 — mini-workers, delta update и стабильный llmster HOME
 
 - Python-only проект координирует до 8 локальных mini-workers (до 4 одновременно) и не вызывает LLM.

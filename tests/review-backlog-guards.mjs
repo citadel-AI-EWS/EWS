@@ -13,6 +13,11 @@ const telemetry = fs.readFileSync("src/telemetry/normalize.js", "utf8");
 const telemetryCommon = fs.readFileSync("src/telemetry/common.js", "utf8");
 const buildSite = fs.readFileSync("scripts/build_site.sh", "utf8");
 const hub = fs.readFileSync("hub.html", "utf8");
+const quickInstall = fs.readFileSync("agent/quick/quick_install.py", "utf8");
+const quickRunner = fs.readFileSync("agent/quick/quick_runner.py", "utf8");
+const quickStart = fs.readFileSync("agent/quick/START_HERE.cmd", "utf8");
+const lmPythonBootstrap = fs.readFileSync("agent/lmstudio/install_llmstudio_headless.py", "utf8");
+
 need(index.includes("auto_enrollment_windows"), "global auto-enrollment window missing");
 need(index.includes("AUTO_ENROLL_MAX_NEW_PER_HOUR"), "enrollment hourly setting missing");
 need(index.includes("AUTO_ENROLL_MAX_NODES"), "enrollment node cap setting missing");
@@ -23,8 +28,27 @@ need(index.includes("LEFT JOIN node_numbers AS nn"), "Architect node number join
 need(!readme.includes("-EnrollmentToken"), "README still documents EnrollmentToken");
 need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_token");
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
-need(agentV1.includes('VERSION = "0.3.15"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.15"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.16"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.16"'), "v2 release not bumped");
+need(quickStart.includes("runtime\\python.exe") && quickStart.includes("quick_install.py"), "Quick Agent START_HERE must use bundled Python");
+for (const forbidden of ["powershell.exe", "-Verb RunAs", "ExecutionPolicy Bypass", "sc.exe", "Enable-PSRemoting", "Invoke-Command"]) {
+  need(!quickStart.toLowerCase().includes(forbidden.toLowerCase()), "Quick START_HERE contains privileged/PowerShell primitive: " + forbidden);
+  need(!quickInstall.toLowerCase().includes(forbidden.toLowerCase()), "Quick installer contains privileged/PowerShell primitive: " + forbidden);
+}
+need(quickInstall.includes("HKEY_CURRENT_USER"), "Quick Agent must use current-user autostart");
+need(quickInstall.includes("LOCALAPPDATA"), "Quick Agent must stay in current-user profile");
+need(quickInstall.includes("runtime") && quickInstall.includes("python.exe"), "Quick Agent bundled runtime path missing");
+need(quickRunner.includes("Local\\\\CitadelEWSQuickAgent") || quickRunner.includes('MUTEX_NAME = r"Local\\CitadelEWSQuickAgent"'), "Quick Agent single-instance mutex missing");
+need(quickRunner.includes("CITADEL_QUICK_USER"), "Quick Agent capability marker missing");
+need(agentV1.includes('"windows_quick_user"'), "Quick Agent capability reporting missing");
+need(agentV1.includes("lmstudio_auth_headers"), "LM Studio optional Bearer auth missing");
+need(agentV1.includes('"install_llmstudio_headless.py"'), "Windows LM Studio Python helper missing from allow-list");
+need(agentV1.includes('"/v1/models"'), "LM Studio HTTP readiness proof missing");
+need(agentV1.includes('"--bind", "127.0.0.1"'), "LM Studio server must bind to localhost");
+need(lmPythonBootstrap.includes("llmster.lmstudio.ai"), "Official llmster artifact host missing");
+need(lmPythonBootstrap.includes("sha512"), "llmster SHA-512 verification missing");
+need(lmPythonBootstrap.includes('"bootstrap"'), "llmster fixed bootstrap entry missing");
+need(lmPythonBootstrap.includes("shell=False"), "llmster helper must avoid shell execution");
 need(setup.includes('ServiceName = "CitadelEWSNode"'), "Windows Core Service name missing");
 need(setup.includes('LegacyUserSid'), "original user SID preservation missing");
 need(setup.includes('Set-CitadelDirectoryAcl'), "Windows clean ACL reconstruction missing");
@@ -138,5 +162,5 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.15"'), "Controller release not bumped");
+need(index.includes('version: "0.3.16"'), "Controller release not bumped");
 console.log("Review backlog guards: PASS");

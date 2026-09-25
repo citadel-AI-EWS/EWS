@@ -1,0 +1,165 @@
+name: Build Windows Quick Agent
+
+on:
+  pull_request:
+    paths:
+      - "agent/**"
+      - "scripts/build_windows_quick.ps1"
+      - ".github/workflows/build-windows-quick.yml"
+  push:
+    branches: [main]
+    paths:
+      - "agent/**"
+      - "scripts/build_windows_quick.ps1"
+      - ".github/workflows/build-windows-quick.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-quick-agent-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-smoke-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          architecture: x64
+          cache: pip
+          cache-dependency-path: agent/requirements.txt
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --requirement agent/requirements.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Guard Quick Agent against privilege and PowerShell dependencies
+        shell: pwsh
+        run: |
+          $start = (Get-Content -LiteralPath agent/quick/START_HERE.cmd -Raw).ToLowerInvariant()
+          $install = (Get-Content -LiteralPath agent/quick/quick_install.py -Raw).ToLowerInvariant()
+          $runner = (Get-Content -LiteralPath agent/quick/quick_runner.py -Raw).ToLowerInvariant()
+          $lm = (Get-Content -LiteralPath agent/lmstudio/install_llmstudio_headless.py -Raw).ToLowerInvariant()
+          foreach ($forbidden in @("powershell.exe","-verb runas","executionpolicy bypass","sc.exe","enable-psremoting","invoke-command","new-pssession")) {
+            if ($start.Contains($forbidden) -or $install.Contains($forbidden) -or $runner.Contains($forbidden)) {
+              throw "Quick Agent contains forbidden target-PC primitive: $forbidden"
+            }
+          }
+          foreach ($required in @("runtime\python.exe","quick_install.py")) {
+            if (-not $start.Contains($required)) { throw "START_HERE missing: $required" }
+          }
+          foreach ($required in @("hkey_current_user","localappdata","citadelewsquicknode","skip-enrollment","no-start")) {
+            if (-not $install.Contains($required)) { throw "Quick installer missing: $required" }
+          }
+          foreach ($required in @("local\citadelewsquickagent","citadel_quick_user")) {
+            if (-not $runner.Contains($required)) { throw "Quick runner missing: $required" }
+          }
+          foreach ($required in @("lmstudio.ai/install.ps1","llmster.lmstudio.ai","sha512","llmster.exe","bootstrap","shell=false")) {
+            if (-not $lm.Contains($required)) { throw "LM Python bootstrap missing: $required" }
+          }
+          Write-Host "Quick Agent privilege/bootstrap guards: PASS"
+
+      - name: Build self-contained Quick Agent ZIP
+        shell: pwsh
+        run: |
+          ./scripts/build_windows_quick.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify ZIP and bundled runtime
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -LiteralPath dist -Filter "CITADEL_QUICK_AGENT_*_x64.zip" | Select-Object -First 1
+          if (-not $zip) { throw "Quick Agent ZIP not found" }
+          $unpack = Join-Path $env:RUNNER_TEMP "quick-package"
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $unpack -Force
+          $root = Get-ChildItem -LiteralPath $unpack -Directory | Select-Object -First 1
+          if (-not $root) { throw "Quick Agent archive root missing" }
+          foreach ($required in @(
+            "START_HERE.cmd","UNINSTALL.cmd","quick_install.py","quick_runner.py",
+            "citadel_node_v1.py","citadel_node_v2.py","SHA256SUMS.txt",
+            "runtime\python.exe","runtime\pythonw.exe","lmstudio\install_llmstudio_headless.py"
+          )) {
+            if (-not (Test-Path -LiteralPath (Join-Path $root.FullName $required))) {
+              throw "Quick Agent package missing: $required"
+            }
+          }
+          $manifest = Get-Content -LiteralPath (Join-Path $root.FullName "SHA256SUMS.txt")
+          foreach ($line in $manifest) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $parts = $line -split "  ", 2
+            if ($parts.Count -ne 2) { throw "Invalid Quick Agent manifest line" }
+            $path = Join-Path $root.FullName ($parts[1].Replace("/","\"))
+            $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $parts[0]) { throw "Quick Agent hash mismatch: $($parts[1])" }
+          }
+          & (Join-Path $root.FullName "runtime\python.exe") (Join-Path $root.FullName "citadel_node_v2.py") self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "Quick Agent archive/runtime integrity: PASS"
+
+      - name: User-mode install smoke test
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -LiteralPath dist -Filter "CITADEL_QUICK_AGENT_*_x64.zip" | Select-Object -First 1
+          $unpack = Join-Path $env:RUNNER_TEMP "quick-smoke-package"
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $unpack -Force
+          $root = Get-ChildItem -LiteralPath $unpack -Directory | Select-Object -First 1
+          $oldLocal = $env:LOCALAPPDATA
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP "CitadelQuickLocal"
+          New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA | Out-Null
+          try {
+            $py = Join-Path $root.FullName "runtime\python.exe"
+            & $py (Join-Path $root.FullName "quick_install.py") --controller-url https://127.0.0.1:9 --skip-lmstudio --skip-enrollment --no-start
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+            $release = Join-Path $env:LOCALAPPDATA "CitadelEWS\releases\0.3.16"
+            $state = Join-Path $env:LOCALAPPDATA "CitadelEWS\state"
+            foreach ($required in @(
+              "runtime\python.exe","citadel_node_v1.py","citadel_node_v2.py","quick_runner.py",
+              "lmstudio\install_llmstudio_headless.py"
+            )) {
+              if (-not (Test-Path -LiteralPath (Join-Path $release $required))) {
+                throw "Installed Quick Agent missing: $required"
+              }
+            }
+            $status = Get-Content -LiteralPath (Join-Path $state "quick-install.json") -Raw | ConvertFrom-Json
+            if ($status.mode -ne "quick-user" -or $status.admin_required -ne $false -or $status.powershell_required -ne $false) {
+              throw "Quick Agent install status is invalid"
+            }
+            $runKey = Get-ItemProperty -LiteralPath "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "CitadelEWSQuickNode" -ErrorAction Stop
+            if ([string]::IsNullOrWhiteSpace([string]$runKey.CitadelEWSQuickNode)) { throw "HKCU autostart missing" }
+            if (Get-Service -Name CitadelEWSNode -ErrorAction SilentlyContinue) {
+              throw "Quick Agent unexpectedly installed Windows service"
+            }
+
+            # The exact same package must be safe to launch again while the
+            # release is already installed. This is the real double-click-again
+            # case and must reuse verified files instead of replacing a live runtime.
+            & $py (Join-Path $root.FullName "quick_install.py") --controller-url https://127.0.0.1:9 --skip-lmstudio --skip-enrollment --no-start
+            if ($LASTEXITCODE -ne 0) { throw "Second Quick Agent install was not idempotent" }
+
+            & $py (Join-Path $root.FullName "quick_install.py") --uninstall
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $runKeyAfter = Get-ItemProperty -LiteralPath "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "CitadelEWSQuickNode" -ErrorAction SilentlyContinue
+            if ($null -ne $runKeyAfter) { throw "Quick Agent autostart remained after uninstall" }
+          } finally {
+            $env:LOCALAPPDATA = $oldLocal
+          }
+          Write-Host "Quick Agent user-mode install/uninstall: PASS"
+
+      - name: Upload Quick Agent
+        uses: actions/upload-artifact@v4
+        with:
+          name: CITADEL-Quick-Agent-${{ github.sha }}
+          path: |
+            dist/CITADEL_QUICK_AGENT_*_x64.zip
+            dist/CITADEL_QUICK_AGENT_*_x64.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
