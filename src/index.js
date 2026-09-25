@@ -382,11 +382,28 @@ async function ensureSessionStorage(env) {
 
 async function ensureCommandStorage(env) {
   if (!commandIndexPromise) {
-    commandIndexPromise = env.DB.prepare(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_one_active_per_node
-      ON commands(node_id)
-      WHERE status IN ('pending', 'accepted')
-    `).run().catch((error) => {
+    commandIndexPromise = (async () => {
+      // Existing TEST databases may contain an old pending/accepted command.
+      // Drain stale rows before creating the partial UNIQUE index; otherwise
+      // SQLite can reject index creation and surface an opaque internal_error.
+      let expiredBatchSize;
+      do {
+        expiredBatchSize = await expireStaleCommands(env);
+      } while (expiredBatchSize === 250);
+      try {
+        await env.DB.prepare(`
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_one_active_per_node
+          ON commands(node_id)
+          WHERE status IN ('pending', 'accepted')
+        `).run();
+      } catch (error) {
+        const message = String(error);
+        if (message.includes("UNIQUE") || message.includes("idx_commands_one_active_per_node")) {
+          throw new ApiError(409, "command_already_pending");
+        }
+        throw error;
+      }
+    })().catch((error) => {
       commandIndexPromise = undefined;
       throw error;
     });
@@ -4419,8 +4436,9 @@ async function architectRelease(request, env) {
 
 async function architectCreateCommand(request, env, nodeId) {
   const actor = await authenticateArchitect(request, env);
-  await ensureCommandStorage(env);
+  // Clean this node first as a fast path, then enforce storage invariants.
   await expireStaleNodeCommands(env, nodeId);
+  await ensureCommandStorage(env);
   const bodyText = await readBodyText(request, 8 * 1024);
   const body = parseJsonObject(bodyText);
   const commandType = requireString(body.command_type, "command_type", 32);
