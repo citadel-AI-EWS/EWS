@@ -4306,7 +4306,7 @@ async function architectOverview(request, env) {
       "ORDER BY m.created_at DESC LIMIT 100"
     ).all(),
     env.DB.prepare(
-      "SELECT c.command_id, c.node_id, c.command_type, c.status, c.created_at, c.completed_at, " +
+      "SELECT c.command_id, c.node_id, c.command_type, c.status, c.created_at, c.completed_at, c.payload_json, " +
       "CASE WHEN EXISTS (SELECT 1 FROM audit_events AS ae " +
       "WHERE ae.target_type = 'command' AND ae.target_id = c.command_id " +
       "AND ae.action = 'command.expired') THEN 1 ELSE 0 END AS ttl_expired " +
@@ -4326,6 +4326,25 @@ async function architectOverview(request, env) {
       payload_json: undefined,
       metrics: safeJson(row.metrics_json, {}),
       metrics_json: undefined
+    };
+  });
+
+  const commands = (commandsQuery.results || []).map((row) => {
+    const payload = safeJson(row.payload_json, {});
+    const sshTtl = row.command_type === "ssh_open" && Number.isInteger(payload.ttl_seconds)
+      ? payload.ttl_seconds
+      : null;
+    const createdMs = Date.parse(String(row.created_at || "").replace(" ", "T") + (String(row.created_at || "").includes("T") ? "" : "Z"));
+    return {
+      ...row,
+      payload_json: undefined,
+      ssh_session_id: row.command_type === "ssh_open" && typeof payload.session_id === "string"
+        ? payload.session_id
+        : null,
+      ssh_ttl_seconds: sshTtl,
+      ssh_expires_at: sshTtl && Number.isFinite(createdMs)
+        ? new Date(createdMs + sshTtl * 1000).toISOString()
+        : null
     };
   });
 
@@ -4375,7 +4394,7 @@ async function architectOverview(request, env) {
     },
     nodes,
     missions,
-    commands: commandsQuery.results || []
+    commands
   });
 }
 
