@@ -642,7 +642,7 @@ async function startUpdateAllRollout(request, env) {
 
 async function ensureRolloutCommandForNode(env, nodeId) {
   await Promise.all([ensureRolloutStorage(env), ensureCommandStorage(env)]);
-  const [rollout, node, pending, recentCompletedUpdate] = await Promise.all([
+  const [rollout, node, pending, recentCompletedUpdate, recentFailedUpdate] = await Promise.all([
     env.DB.prepare(
       "SELECT rollout_id, target_version, release_json FROM agent_rollouts WHERE status = 'active' ORDER BY created_at DESC LIMIT 1"
     ).first(),
@@ -657,25 +657,43 @@ async function ensureRolloutCommandForNode(env, nodeId) {
       "WHERE node_id = ? AND command_type = 'update' AND status = 'completed' " +
       "AND datetime(completed_at) >= datetime('now', '-10 minutes') " +
       "ORDER BY completed_at DESC LIMIT 1"
+    ).bind(nodeId).first(),
+    env.DB.prepare(
+      "SELECT payload_json, completed_at FROM commands " +
+      "WHERE node_id = ? AND command_type = 'update' AND status = 'failed' " +
+      "AND datetime(completed_at) >= datetime('now', '-60 minutes') " +
+      "ORDER BY completed_at DESC LIMIT 1"
     ).bind(nodeId).first()
   ]);
+
+  const activeLatestRollout = rollout?.target_version === LATEST_NODE_RELEASE.version
+    ? rollout
+    : null;
+  const targetVersion = LATEST_NODE_RELEASE.version;
   if (
-    !rollout ||
     !node ||
     pending ||
     node.status === "revoked" ||
     isTestNodeRecord(node) ||
-    node.agent_version === rollout.target_version
+    node.agent_version === targetVersion
   ) {
     return;
   }
   const recentlyInstalled = recentCompletedUpdate
-    ? safeJson(recentCompletedUpdate.payload_json, {})?.version === rollout.target_version
+    ? safeJson(recentCompletedUpdate.payload_json, {})?.version === targetVersion
     : false;
-  if (recentlyInstalled) return;
-  if (rollout.target_version !== LATEST_NODE_RELEASE.version) return;
+  const recentlyFailed = recentFailedUpdate
+    ? safeJson(recentFailedUpdate.payload_json, {})?.version === targetVersion
+    : false;
+  if (recentlyInstalled || recentlyFailed) return;
+
+  // Automatic latest-release rollout: every eligible outdated node receives the
+  // signed, hash-pinned current release without requiring an Architect button.
+  // The node performs its existing startup health-check and automatically
+  // restores the complete local backup if that check fails.
   const commandId = "command_" + crypto.randomUUID();
-  const payloadJson = rollout.release_json;
+  const payloadJson = activeLatestRollout?.release_json || JSON.stringify(LATEST_NODE_RELEASE);
+  const rolloutActor = activeLatestRollout?.rollout_id || ("automatic_latest_" + targetVersion);
   const createdAt = new Date().toISOString();
   const signature = await signControllerCommand(
     env, commandId, nodeId, "update", payloadJson, createdAt
@@ -689,7 +707,15 @@ async function ensureRolloutCommandForNode(env, nodeId) {
       env.DB.prepare(
         "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
         "VALUES ('controller', ?, 'agent.rollout.command_created', 'command', ?, ?)"
-      ).bind(rollout.rollout_id, commandId, JSON.stringify({ node_id: nodeId, target_version: rollout.target_version }))
+      ).bind(
+        rolloutActor,
+        commandId,
+        JSON.stringify({
+          node_id: nodeId,
+          target_version: targetVersion,
+          mode: activeLatestRollout ? "architect_rollout" : "automatic_latest"
+        })
+      )
     ]);
   } catch (error) {
     if (!String(error).includes("UNIQUE")) throw error;
@@ -2513,13 +2539,9 @@ async function heartbeat(request, env, nodeId, url) {
     : normalizeCapabilities(body.capabilities);
   const network = normalizeNodeNetwork(body.network);
   if (network) await ensureNodeNetworkStorage(env);
-  const detailsJson = JSON.stringify({
-    cpu_percent: cpuPercent,
-    memory_percent: memoryPercent,
-    agent_version: agentVersion,
-    lan_ipv4: network?.lan_ipv4 || null
-  });
-
+  // Heartbeat is live monitoring state, not an append-only audit event.
+  // Keep one current row in nodes and avoid writing a new audit row every
+  // heartbeat interval; durable telemetry is reserved for meaningful events.
   const heartbeatStatements = [
     env.DB.prepare(`
       UPDATE nodes
@@ -2530,14 +2552,7 @@ async function heartbeat(request, env, nodeId, url) {
           status = CASE WHEN status = 'paused' THEN 'paused' ELSE 'online' END,
           last_seen_at = CURRENT_TIMESTAMP
       WHERE node_id = ? AND status != 'revoked'
-    `).bind(cpuPercent, memoryPercent, agentVersion, capabilitiesJson, nodeId),
-    env.DB.prepare(`
-      INSERT INTO audit_events (
-        actor_type, actor_id, action, target_type, target_id, details_json
-      )
-      SELECT 'node', ?, 'node.heartbeat', 'node', ?, ?
-      WHERE changes() = 1
-    `).bind(nodeId, nodeId, detailsJson)
+    `).bind(cpuPercent, memoryPercent, agentVersion, capabilitiesJson, nodeId)
   ];
   if (network) {
     heartbeatStatements.push(env.DB.prepare(`
@@ -2552,6 +2567,10 @@ async function heartbeat(request, env, nodeId, url) {
           ELSE node_network_state.mac_addresses_json
         END,
         updated_at = CURRENT_TIMESTAMP
+      WHERE
+        (excluded.lan_ipv4 IS NOT NULL AND excluded.lan_ipv4 IS NOT node_network_state.lan_ipv4)
+        OR (excluded.tailscale_ipv4 IS NOT NULL AND excluded.tailscale_ipv4 IS NOT node_network_state.tailscale_ipv4)
+        OR (excluded.mac_addresses_json != '[]' AND excluded.mac_addresses_json IS NOT node_network_state.mac_addresses_json)
     `).bind(
       nodeId,
       network.lan_ipv4,
