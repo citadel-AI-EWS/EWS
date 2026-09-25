@@ -796,6 +796,18 @@ async function ensureProjectStorage(env) {
         ON project_work_items(node_id, status, created_at)
       `),
       env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_project_work_items_status_project_created
+        ON project_work_items(status, project_id, created_at, sequence_no)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_nodes_status_last_seen
+        ON nodes(status, last_seen_at DESC, node_id)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_audit_events_created_action
+        ON audit_events(created_at DESC, action)
+      `),
+      env.DB.prepare(`
         CREATE TABLE IF NOT EXISTS project_specializations (
           project_id TEXT NOT NULL,
           role_name TEXT NOT NULL,
@@ -4359,18 +4371,19 @@ function publicHubQueryErrorCode(error) {
 async function publicHubNodes(env) {
   let query;
   try {
-    query = await env.DB.prepare("SELECT * FROM nodes LIMIT 500").all();
+    query = await env.DB.prepare(
+      "SELECT node_id, agent_version, status, enrolled_at, last_seen_at " +
+      "FROM nodes WHERE status != 'revoked' LIMIT 500"
+    ).all();
   } catch (error) {
     console.error("Public Hub nodes query failed", error);
     throw new ApiError(503, publicHubQueryErrorCode(error));
   }
-  const rows = (query.results || [])
-    .filter((node) => String(node?.status || "").toLowerCase() !== "revoked")
-    .sort((left, right) => {
-      const a = String(left?.enrolled_at || "") + "\n" + String(left?.node_id || "");
-      const b = String(right?.enrolled_at || "") + "\n" + String(right?.node_id || "");
-      return a.localeCompare(b);
-    });
+  const rows = (query.results || []).sort((left, right) => {
+    const a = String(left?.enrolled_at || "") + "\n" + String(left?.node_id || "");
+    const b = String(right?.enrolled_at || "") + "\n" + String(right?.node_id || "");
+    return a.localeCompare(b);
+  });
   return json({
     ok: true,
     refreshed_at: new Date().toISOString(),
@@ -4382,6 +4395,8 @@ async function publicHubNodes(env) {
       enrolled_at: typeof node.enrolled_at === "string" ? node.enrolled_at : null,
       last_seen_at: typeof node.last_seen_at === "string" ? node.last_seen_at : null
     }))
+  }, 200, {
+    "cache-control": "public, max-age=60, stale-while-revalidate=120"
   });
 }
 
