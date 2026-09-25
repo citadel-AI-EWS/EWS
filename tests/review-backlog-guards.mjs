@@ -53,6 +53,8 @@ need(setup.includes('ServiceName = "CitadelEWSNode"'), "Windows Core Service nam
 need(setup.includes('LegacyUserSid'), "original user SID preservation missing");
 need(setup.includes('Set-CitadelDirectoryAcl'), "Windows clean ACL reconstruction missing");
 need(setup.includes('"PAUSED"'), "paused-state migration missing");
+need(setup.includes('$LegacyMigrationRequired -and $LegacyStateMatchesNode'), "legacy final state migration is not limited to initial cutover");
+need(setup.includes('LEGACY_MIGRATION_COMPLETE'), "legacy migration completion marker missing");
 need(setup.includes('Set-CitadelServiceDefinition'), "verified SCM service configuration missing");
 need(setup.includes('Restore-CitadelServiceDefinition'), "service rollback path missing");
 need(setup.includes('-Uninstall'), "Windows service uninstall flow missing");
