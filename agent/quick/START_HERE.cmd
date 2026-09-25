@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title CITADEL EWS Quick Agent 0.3.16
+title CITADEL EWS Quick Agent 0.3.17
 
 set "PY=%~dp0runtime\python.exe"
 if not exist "%PY%" (
