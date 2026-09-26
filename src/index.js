@@ -34,17 +34,17 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.15",
+  version: "0.3.16",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "78cdcf5af888d14f4696e987b4709559f52cd746eec3afe4eba4f1aece5e6689"
+      sha256: "1e1871534f9c04c852a995f9e038654253f9d14cf9090c64209036b0f804a3c1"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "3b35861efd6912225d2da9e422f668ddc577d62314208c0e80465e3a170375f9"
+      sha256: "f87721a185fbed1d6bc6d3317cbc2ccfb1007b4aa6885168cf53c931e144e986"
     }
   ]
 });
@@ -73,6 +73,7 @@ let legacyReportBackfillPromise;
 let sessionSchemaPromise;
 let commandIndexPromise;
 let nodeNetworkSchemaPromise;
+let nodeHardwareSchemaPromise;
 let rolloutSchemaPromise;
 let projectSchemaPromise;
 let nodeAiSchemaPromise;
@@ -170,6 +171,42 @@ function normalizeNodeNetwork(value) {
     lan_ipv4: normalizeIpv4(value.lan_ipv4, true),
     tailscale_ipv4: normalizeIpv4(value.tailscale_ipv4, false),
     mac_addresses: macAddresses
+  };
+}
+
+function normalizeNodeHardware(value) {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ApiError(400, "invalid_hardware");
+  }
+  const memoryTotal = Number(value.memory_total_bytes);
+  const cpuLogical = Number(value.cpu_logical_count);
+  if (!Number.isSafeInteger(memoryTotal) || memoryTotal < 256 * 1024 * 1024 || memoryTotal > 4 * 1024 ** 5) {
+    throw new ApiError(400, "invalid_hardware_memory");
+  }
+  if (!Number.isInteger(cpuLogical) || cpuLogical < 1 || cpuLogical > 4096) {
+    throw new ApiError(400, "invalid_hardware_cpu");
+  }
+  const rawGpus = value.gpus === undefined ? [] : value.gpus;
+  if (!Array.isArray(rawGpus) || rawGpus.length > 8) throw new ApiError(400, "invalid_hardware_gpus");
+  const gpus = rawGpus.map((gpu) => {
+    if (!gpu || typeof gpu !== "object" || Array.isArray(gpu)) throw new ApiError(400, "invalid_hardware_gpu");
+    const name = requireString(gpu.name, "gpu_name", 160);
+    const rawVram = gpu.vram_total_bytes;
+    let vramTotalBytes = null;
+    if (rawVram !== undefined && rawVram !== null) {
+      const parsed = Number(rawVram);
+      if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 1024 ** 5) {
+        throw new ApiError(400, "invalid_hardware_vram");
+      }
+      vramTotalBytes = parsed;
+    }
+    return { name, vram_total_bytes: vramTotalBytes };
+  });
+  return {
+    memory_total_bytes: memoryTotal,
+    cpu_logical_count: cpuLogical,
+    gpus
   };
 }
 
@@ -458,6 +495,31 @@ async function ensureNodeNetworkStorage(env) {
     });
   }
   await nodeNetworkSchemaPromise;
+}
+
+async function ensureNodeHardwareStorage(env) {
+  if (!nodeHardwareSchemaPromise) {
+    nodeHardwareSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS node_hardware_state (
+          node_id TEXT PRIMARY KEY,
+          memory_total_bytes INTEGER NOT NULL,
+          cpu_logical_count INTEGER NOT NULL,
+          gpus_json TEXT NOT NULL DEFAULT '[]',
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_node_hardware_updated
+        ON node_hardware_state(updated_at DESC)
+      `)
+    ]).catch((error) => {
+      nodeHardwareSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await nodeHardwareSchemaPromise;
 }
 
 async function ensureNodeAiStorage(env) {
@@ -2518,7 +2580,9 @@ async function heartbeat(request, env, nodeId, url) {
     ? null
     : normalizeCapabilities(body.capabilities);
   const network = normalizeNodeNetwork(body.network);
+  const hardware = normalizeNodeHardware(body.hardware);
   if (network) await ensureNodeNetworkStorage(env);
+  if (hardware) await ensureNodeHardwareStorage(env);
   const heartbeatStatements = [
     env.DB.prepare(`
       UPDATE nodes
@@ -2549,6 +2613,23 @@ async function heartbeat(request, env, nodeId, url) {
       network.lan_ipv4,
       network.tailscale_ipv4,
       JSON.stringify(network.mac_addresses)
+    ));
+  }
+  if (hardware) {
+    heartbeatStatements.push(env.DB.prepare(`
+      INSERT INTO node_hardware_state (
+        node_id, memory_total_bytes, cpu_logical_count, gpus_json, updated_at
+      ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(node_id) DO UPDATE SET
+        memory_total_bytes = excluded.memory_total_bytes,
+        cpu_logical_count = excluded.cpu_logical_count,
+        gpus_json = excluded.gpus_json,
+        updated_at = CURRENT_TIMESTAMP
+    `).bind(
+      nodeId,
+      hardware.memory_total_bytes,
+      hardware.cpu_logical_count,
+      JSON.stringify(hardware.gpus)
     ));
   }
   const results = await env.DB.batch(heartbeatStatements);
@@ -4600,14 +4681,17 @@ async function architectNodeAiState(request, env, nodeId) {
 
 async function architectNodeDetails(request, env, nodeId) {
   await authenticateArchitect(request, env);
-  await Promise.all([ensureNodeNetworkStorage(env), ensureNodeAiStorage(env)]);
+  await Promise.all([ensureNodeNetworkStorage(env), ensureNodeAiStorage(env), ensureNodeHardwareStorage(env)]);
   const row = await env.DB.prepare(`
     SELECT n.node_id, n.hostname, n.os_name, n.os_version, n.architecture,
       n.agent_version, n.status, n.cpu_percent, n.memory_percent, n.last_seen_at,
       net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json,
-      net.updated_at AS network_updated_at
+      net.updated_at AS network_updated_at,
+      hw.memory_total_bytes, hw.cpu_logical_count, hw.gpus_json,
+      hw.updated_at AS hardware_updated_at
     FROM nodes AS n
     LEFT JOIN node_network_state AS net ON net.node_id = n.node_id
+    LEFT JOIN node_hardware_state AS hw ON hw.node_id = n.node_id
     WHERE n.node_id = ? AND n.status != 'revoked'
   `).bind(nodeId).first();
   if (!row) throw new ApiError(404, "node_not_found");
@@ -4634,18 +4718,89 @@ async function architectNodeDetails(request, env, nodeId) {
       mac_addresses: Array.isArray(macAddresses) ? macAddresses : [],
       updated_at: row.network_updated_at || null
     },
+    hardware: {
+      memory_total_bytes: Number(row.memory_total_bytes || 0) || null,
+      cpu_logical_count: Number(row.cpu_logical_count || 0) || null,
+      gpus: safeJson(row.gpus_json, []),
+      updated_at: row.hardware_updated_at || null
+    },
+    model_recommendation: modelRecommendationProfile({
+      memory_total_bytes: Number(row.memory_total_bytes || 0) || null,
+      gpus: safeJson(row.gpus_json, [])
+    }),
     ai
   });
 }
 
-async function architectSearchModels(request, env, url) {
-  await authenticateArchitect(request, env);
-  const query = requireString(url.searchParams.get("q"), "model_search", 80);
+function modelRecommendationProfile(hardware) {
+  const ramGiB = Number(hardware?.memory_total_bytes || 0) / (1024 ** 3);
+  const gpus = Array.isArray(hardware?.gpus) ? hardware.gpus : [];
+  const maxVramGiB = gpus.reduce((best, gpu) =>
+    Math.max(best, Number(gpu?.vram_total_bytes || 0) / (1024 ** 3)), 0);
+
+  if (maxVramGiB >= 20 || ramGiB >= 48) {
+    return {
+      tier: "large",
+      target_parameters_b: "12-24B",
+      quantization: "Q4_K_M",
+      context_length: 32768,
+      search_query: "GGUF instruct 14B",
+      reason: `RAM ${ramGiB.toFixed(1)} GiB · VRAM ${maxVramGiB.toFixed(1)} GiB`
+    };
+  }
+  if (maxVramGiB >= 10 || ramGiB >= 24) {
+    return {
+      tier: "medium",
+      target_parameters_b: "7-12B",
+      quantization: "Q4_K_M",
+      context_length: 16384,
+      search_query: "GGUF instruct 8B",
+      reason: `RAM ${ramGiB.toFixed(1)} GiB · VRAM ${maxVramGiB.toFixed(1)} GiB`
+    };
+  }
+  if (maxVramGiB >= 6 || ramGiB >= 16) {
+    return {
+      tier: "compact",
+      target_parameters_b: "3-7B",
+      quantization: "Q4_K_M",
+      context_length: 8192,
+      search_query: "GGUF instruct 4B",
+      reason: `RAM ${ramGiB.toFixed(1)} GiB · VRAM ${maxVramGiB.toFixed(1)} GiB`
+    };
+  }
+  return {
+    tier: "micro",
+    target_parameters_b: "0.5-3B",
+    quantization: "Q4_K_M",
+    context_length: 4096,
+    search_query: "GGUF instruct 1B",
+    reason: ramGiB > 0
+      ? `RAM ${ramGiB.toFixed(1)} GiB · dedicated VRAM not confirmed`
+      : "Hardware profile is incomplete; conservative model tier selected"
+  };
+}
+
+function mapHuggingFaceModels(rows, limit = 16) {
+  return (Array.isArray(rows) ? rows : [])
+    .filter((item) => item && typeof item.id === "string")
+    .map((item) => ({
+      id: item.id,
+      downloads: Number(item.downloads || 0),
+      likes: Number(item.likes || 0),
+      pipeline_tag: typeof item.pipeline_tag === "string" ? item.pipeline_tag : null,
+      gguf: Array.isArray(item.tags) && item.tags.some((tag) => String(tag).toLowerCase() === "gguf"),
+      last_modified: item.lastModified || item.last_modified || null
+    }))
+    .sort((a,b) => Number(b.gguf) - Number(a.gguf) || b.downloads - a.downloads)
+    .slice(0, limit);
+}
+
+async function fetchHuggingFaceModels(query, limit = 30) {
   const hfUrl = new URL("https://huggingface.co/api/models");
-  hfUrl.searchParams.set("search", query);
+  if (query) hfUrl.searchParams.set("search", query);
   hfUrl.searchParams.set("sort", "downloads");
   hfUrl.searchParams.set("direction", "-1");
-  hfUrl.searchParams.set("limit", "30");
+  hfUrl.searchParams.set("limit", String(Math.max(1, Math.min(100, limit))));
   hfUrl.searchParams.set("full", "true");
   let response;
   try {
@@ -4665,19 +4820,55 @@ async function architectSearchModels(request, env, url) {
     throw new ApiError(502, "huggingface_invalid_response");
   }
   if (!Array.isArray(rows)) throw new ApiError(502, "huggingface_invalid_response");
-  const models = rows
-    .filter((item) => item && typeof item.id === "string")
-    .map((item) => ({
-      id: item.id,
-      downloads: Number(item.downloads || 0),
-      likes: Number(item.likes || 0),
-      pipeline_tag: typeof item.pipeline_tag === "string" ? item.pipeline_tag : null,
-      gguf: Array.isArray(item.tags) && item.tags.some((tag) => String(tag).toLowerCase() === "gguf"),
-      last_modified: item.lastModified || item.last_modified || null
-    }))
-    .sort((a,b) => Number(b.gguf) - Number(a.gguf) || b.downloads - a.downloads)
-    .slice(0, 16);
-  return json({ ok: true, query, models });
+  return rows;
+}
+
+async function architectSearchModels(request, env, url) {
+  await authenticateArchitect(request, env);
+  const raw = String(url.searchParams.get("q") || "").trim();
+  const query = raw ? requireString(raw, "model_search", 80) : "GGUF instruct";
+  const rows = await fetchHuggingFaceModels(query, 40);
+  return json({ ok: true, query, source: "huggingface", models: mapHuggingFaceModels(rows, 24) });
+}
+
+async function architectRecommendModels(request, env, nodeId) {
+  await authenticateArchitect(request, env);
+  await ensureNodeHardwareStorage(env);
+  const node = await env.DB.prepare(`
+    SELECT n.node_id, n.hostname, n.architecture, n.status, n.last_seen_at,
+      h.memory_total_bytes, h.cpu_logical_count, h.gpus_json, h.updated_at AS hardware_updated_at
+    FROM nodes AS n
+    LEFT JOIN node_hardware_state AS h ON h.node_id = n.node_id
+    WHERE n.node_id = ? AND n.status != 'revoked'
+  `).bind(nodeId).first();
+  if (!node) throw new ApiError(404, "node_not_found");
+  const hardware = {
+    memory_total_bytes: Number(node.memory_total_bytes || 0) || null,
+    cpu_logical_count: Number(node.cpu_logical_count || 0) || null,
+    gpus: safeJson(node.gpus_json, []),
+    updated_at: node.hardware_updated_at || null
+  };
+  const profile = modelRecommendationProfile(hardware);
+  let models = [];
+  let catalogStatus = "ready";
+  try {
+    const rows = await fetchHuggingFaceModels(profile.search_query, 40);
+    models = mapHuggingFaceModels(rows, 8).filter((item) => item.gguf);
+    if (!models.length) models = mapHuggingFaceModels(rows, 8);
+  } catch {
+    catalogStatus = "unavailable";
+  }
+  if (!models.length && profile.tier === "micro") {
+    models = [{ id: "ibm/granite-4-micro", downloads: 0, likes: 0, pipeline_tag: "text-generation", gguf: false, last_modified: null }];
+  }
+  return json({
+    ok: true,
+    node: { node_id: node.node_id, hostname: node.hostname, architecture: node.architecture },
+    hardware,
+    recommendation: profile,
+    catalog_status: catalogStatus,
+    models
+  });
 }
 
 async function architectWakeNode(request, env, targetNodeId) {
@@ -4964,6 +5155,7 @@ async function handleApi(request, env, url) {
         controller_signing: controllerSigning,
         report_storage: reportStorage,
         session_storage: sessionStorage,
+        openrouter_quality: openRouterQualityConfig(env).configured ? "configured" : "unconfigured",
         project_execution: projectExecution,
         project_readiness_error: projectReadinessError,
         project_online_nodes: projectOnlineNodes,
@@ -5210,6 +5402,15 @@ async function handleApi(request, env, url) {
   if (architectNodeDetailsMatch) {
     return request.method === "GET"
       ? architectNodeDetails(request, env, decodeURIComponent(architectNodeDetailsMatch[1]))
+      : methodNotAllowed(["GET"]);
+  }
+
+  const architectModelRecommendationsMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/nodes\/([^/]+)\/model-recommendations$/
+  );
+  if (architectModelRecommendationsMatch) {
+    return request.method === "GET"
+      ? architectRecommendModels(request, env, decodeURIComponent(architectModelRecommendationsMatch[1]))
       : methodNotAllowed(["GET"]);
   }
 

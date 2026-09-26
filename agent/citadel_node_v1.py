@@ -48,7 +48,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.15"
+VERSION = "0.3.16"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -749,6 +749,85 @@ def windows_enterprise_probe() -> dict[str, Any]:
     return payload
 
 
+def gpu_inventory() -> list[dict[str, Any]]:
+    """Collect bounded GPU identity/VRAM data without installing vendor tooling."""
+    rows: list[dict[str, Any]] = []
+    nvidia_smi = shutil.which("nvidia-smi")
+    if nvidia_smi:
+        try:
+            result = subprocess.run(  # nosec B603
+                [
+                    nvidia_smi,
+                    "--query-gpu=name,memory.total",
+                    "--format=csv,noheader,nounits",
+                ],
+                timeout=10,
+                capture_output=True,
+                text=True,
+                shell=False,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines()[:8]:
+                    parts = [part.strip() for part in line.split(",", 1)]
+                    if not parts or not parts[0]:
+                        continue
+                    vram_bytes = None
+                    if len(parts) > 1:
+                        with contextlib.suppress(ValueError):
+                            vram_bytes = max(0, int(float(parts[1]) * 1024 * 1024))
+                    rows.append({"name": parts[0][:160], "vram_total_bytes": vram_bytes})
+        except (OSError, subprocess.SubprocessError):
+            pass
+    if rows or os.name != "nt":
+        return rows
+
+    powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+    if not powershell:
+        return rows
+    try:
+        result = subprocess.run(  # nosec B603
+            [
+                powershell,
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Get-CimInstance Win32_VideoController | "
+                "Select-Object Name,AdapterRAM | ConvertTo-Json -Compress",
+            ],
+            timeout=12,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return rows
+        decoded = json.loads(result.stdout)
+        devices = decoded if isinstance(decoded, list) else [decoded]
+        for item in devices[:8]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("Name") or "").strip()
+            if not name:
+                continue
+            raw_vram = item.get("AdapterRAM")
+            vram_bytes = int(raw_vram) if isinstance(raw_vram, (int, float)) and raw_vram > 0 else None
+            rows.append({"name": name[:160], "vram_total_bytes": vram_bytes})
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError, TypeError):
+        pass
+    return rows
+
+
+def hardware_snapshot() -> dict[str, Any]:
+    memory = psutil.virtual_memory()
+    return {
+        "cpu_logical_count": int(psutil.cpu_count(logical=True) or 1),
+        "memory_total_bytes": int(memory.total),
+        "gpus": gpu_inventory(),
+        "gpus": gpu_inventory(),
+    }
+
+
 def system_inventory(payload: dict[str, Any]) -> dict[str, Any]:
     disk = shutil.disk_usage(Path.home())
     memory = psutil.virtual_memory()
@@ -802,6 +881,7 @@ class Agent:
         self.last_power_guard = 0.0
         self.power_guard_active = False
         self.last_heartbeat = 0.0
+        self.last_hardware_report = 0.0
         self.enrollment_confirmed = False
 
     @property
@@ -859,20 +939,25 @@ class Agent:
     def heartbeat(self) -> None:
         node_id = self.require_node_id()
         network = local_network_addresses()
+        now = time.monotonic()
+        payload: dict[str, Any] = {
+            "cpu_percent": float(psutil.cpu_percent(interval=0.05)),
+            "memory_percent": float(psutil.virtual_memory().percent),
+            "agent_version": VERSION,
+            "capabilities": self.capabilities,
+            "network": {
+                "lan_ipv4": network.get("lan_ipv4"),
+                "tailscale_ipv4": network.get("tailscale_ipv4"),
+                "mac_addresses": network.get("mac_addresses") or [],
+            },
+        }
+        if now - self.last_hardware_report >= 300:
+            payload["hardware"] = hardware_snapshot()
+            self.last_hardware_report = now
         self.api.request(
             "POST",
             f"/api/v1/nodes/{node_id}/heartbeat",
-            {
-                "cpu_percent": float(psutil.cpu_percent(interval=0.05)),
-                "memory_percent": float(psutil.virtual_memory().percent),
-                "agent_version": VERSION,
-                "capabilities": self.capabilities,
-                "network": {
-                    "lan_ipv4": network.get("lan_ipv4"),
-                    "tailscale_ipv4": network.get("tailscale_ipv4"),
-                    "mac_addresses": network.get("mac_addresses") or [],
-                },
-            },
+            payload,
         )
         self.last_heartbeat = time.monotonic()
         if time.monotonic() - self.last_network_remember >= 300:
@@ -891,34 +976,23 @@ class Agent:
         node_id = self.require_node_id()
         self.api.request("POST", f"/api/v1/nodes/{node_id}/results", result)
 
-    def execute_project_text(self, payload: dict[str, Any]) -> dict[str, Any]:
-        task_text = str(payload.get("task_text") or "").strip()
-        role_name = str(payload.get("role_name") or "planner").strip()
-        project_id = str(payload.get("project_id") or "").strip()
-        work_item_id = str(payload.get("work_item_id") or "").strip()
-        if not task_text or len(task_text) > 20000:
-            raise RuntimeError("invalid project task")
-        if not role_name or len(role_name) > 64:
-            raise RuntimeError("invalid project role")
-
-        state = self.lmstudio_state()
-        model = str(state.get("loaded_model") or "").strip()
-        if not model or not LMSTUDIO_MODEL_RE.fullmatch(model):
-            raise RuntimeError("lmstudio_model_not_loaded")
-
-        system_prompt = (
-            "You are the CITADEL project worker for role: " + role_name + ". "
-            "Work only on the supplied text task. Return a useful factual result in plain text. "
-            "Do not execute commands, access credentials, modify the host, or claim actions you did not perform."
-        )
+    def _project_llm_chat(
+        self,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens: int,
+        temperature: float = 0.2,
+    ) -> str:
         request_body = json_text({
             "model": model,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": task_text},
+                {"role": "user", "content": user_prompt},
             ],
-            "temperature": 0.2,
-            "max_tokens": 4096,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
         })
         connection = http.client.HTTPConnection(
             "127.0.0.1",
@@ -952,7 +1026,99 @@ class Agent:
             raise RuntimeError("lmstudio_invalid_response")
         if not isinstance(content, str) or not content.strip():
             raise RuntimeError("lmstudio_empty_response")
-        content = content.strip()
+        return content.strip()
+
+    def execute_project_text(self, payload: dict[str, Any]) -> dict[str, Any]:
+        task_text = str(payload.get("task_text") or "").strip()
+        role_name = str(payload.get("role_name") or "planner").strip()
+        project_id = str(payload.get("project_id") or "").strip()
+        work_item_id = str(payload.get("work_item_id") or "").strip()
+        if not task_text or len(task_text) > 20000:
+            raise RuntimeError("invalid project task")
+        if not role_name or len(role_name) > 64:
+            raise RuntimeError("invalid project role")
+
+        state = self.lmstudio_state()
+        model = str(state.get("loaded_model") or "").strip()
+        if not model or not LMSTUDIO_MODEL_RE.fullmatch(model):
+            raise RuntimeError("lmstudio_model_not_loaded")
+
+        desired = 1 + int(len(task_text) > 800) + int(len(task_text) > 1800)
+        ram_gib = float(psutil.virtual_memory().total) / float(1024 ** 3)
+        capacity = 1 if ram_gib < 12 else (2 if ram_gib < 24 else 3)
+        mini_count = max(1, min(3, desired, capacity))
+        focuses = [
+            "primary analysis and direct solution",
+            "independent verification, contradictions and unsupported claims",
+            "edge cases, risks, missing assumptions and practical improvements",
+        ]
+        mini_agents: list[dict[str, Any]] = []
+        base_guard = (
+            "Work only on the supplied text task. Return useful factual plain text. "
+            "Do not execute commands, access credentials, modify the host, or claim actions you did not perform. "
+        )
+        for index in range(mini_count):
+            system_prompt = (
+                "You are CITADEL local mini-agent "
+                + str(index + 1)
+                + " for project role: "
+                + role_name
+                + ". Focus on "
+                + focuses[index]
+                + ". "
+                + base_guard
+            )
+            try:
+                answer = self._project_llm_chat(
+                    model,
+                    system_prompt,
+                    task_text,
+                    max_tokens=1536,
+                    temperature=0.2 + (0.05 * index),
+                )
+            except Exception:
+                if index == 0:
+                    raise
+                continue
+            mini_agents.append({
+                "mini_agent_id": f"llm-mini-{index + 1}",
+                "focus": focuses[index],
+                "content": answer[:12000],
+            })
+
+        if not mini_agents:
+            raise RuntimeError("lmstudio_mini_agents_failed")
+
+        if len(mini_agents) == 1:
+            content = mini_agents[0]["content"]
+        else:
+            synthesis_parts = []
+            for item in mini_agents:
+                synthesis_parts.append(
+                    "[" + item["mini_agent_id"] + " · " + item["focus"] + "]\n" +
+                    str(item["content"])[:3500]
+                )
+            synthesis_prompt = (
+                "ORIGINAL TASK\n" + task_text[:8000] +
+                "\n\nINDEPENDENT MINI-AGENT RESULTS\n" +
+                "\n\n".join(synthesis_parts)
+            )
+            try:
+                content = self._project_llm_chat(
+                    model,
+                    (
+                        "You are the CITADEL local synthesis agent for role: " + role_name + ". "
+                        "Combine the independent results into one accurate answer. Resolve contradictions, "
+                        "remove duplication, preserve useful caveats, and do not mention the internal mini-agent process. "
+                        + base_guard
+                    ),
+                    synthesis_prompt,
+                    max_tokens=3072,
+                    temperature=0.15,
+                )
+            except Exception:
+                content = "\n\n".join(str(item["content"]) for item in mini_agents)
+
         if len(content) > 180000:
             content = content[:180000] + "\n\n[truncated]"
         return {
@@ -960,6 +1126,8 @@ class Agent:
             "work_item_id": work_item_id or None,
             "role_name": role_name,
             "model": model,
+            "mini_agent_count": len(mini_agents),
+            "mini_agents": mini_agents,
             "content": content,
             "completed_at": now_iso(),
         }
