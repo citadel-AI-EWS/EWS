@@ -18,6 +18,7 @@ for source, target in (
     ("architect-logs.html", "/tmp/ews-architect-logs.js"),
     ("node-test.html", "/tmp/ews-node-test.js"),
     ("hub.html", "/tmp/ews-hub.js"),
+    ("operations.html", "/tmp/ews-operations.js"),
 ):
     html = Path(source).read_text(encoding="utf-8")
     match = re.search(r"<script>(.*)</script>", html, re.S)
@@ -287,6 +288,7 @@ node --check /tmp/ews-architect.js
 node --check /tmp/ews-architect-logs.js
 node --check /tmp/ews-node-test.js
 node --check /tmp/ews-hub.js
+node --check /tmp/ews-operations.js
 node --check src/index.js
 node --check src/quality/openrouter.js
 node --check src/worker.js
@@ -359,7 +361,7 @@ cfn-lint controller_template.yaml project_stack.yaml
 
 artifact="$(mktemp --suffix=.zip)"
 cleanup_validation_files() {
-  for path in "$artifact" /tmp/ews-site.js /tmp/ews-live-site.js /tmp/ews-architect.js /tmp/ews-architect-logs.js /tmp/ews-node-test.js /tmp/ews-hub.js; do
+  for path in "$artifact" /tmp/ews-site.js /tmp/ews-live-site.js /tmp/ews-architect.js /tmp/ews-architect-logs.js /tmp/ews-node-test.js /tmp/ews-hub.js /tmp/ews-operations.js; do
     if [[ -e "$path" ]]; then
       unlink "$path"
     fi

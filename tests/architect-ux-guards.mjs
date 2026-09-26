@@ -6,6 +6,7 @@ const hub = fs.readFileSync("hub.html", "utf8");
 const logs = fs.readFileSync("architect-logs.html", "utf8");
 const home = fs.readFileSync("live-index.html", "utf8");
 const index = fs.readFileSync("src/index.js", "utf8");
+const operations = fs.readFileSync("operations.html", "utf8");
 const agent = fs.readFileSync("agent/citadel_node_v1.py", "utf8");
 const deployWorkflow = fs.readFileSync(".github/workflows/deploy-cloudflare.yml", "utf8");
 const autoEnrollmentMigration = fs.readFileSync("migrations/0013_auto_enrollment_storage.sql", "utf8");
@@ -173,6 +174,41 @@ assert.match(index, /architectSetEnterprisePolicy/);
 assert.match(index, /architectEnterpriseRecoveryManifest/);
 assert.match(index, /requiredArchitectPermission/);
 assert.doesNotMatch(index, /command_type\s*[:=]\s*["']shell["']/);
+assert.match(index, /async function architectNodeDetails/);
+assert.ok(index.includes("/details$"), "node details route missing");
+for (const required of [
+  'id="nodeDialog"',
+  'id="nodeNetwork"',
+  'id="nodeAi"',
+  'id="lmInstall"',
+  'id="lmProbe"',
+  'id="lmRemove"',
+  'id="modelId"',
+  'id="modelGet"',
+  'id="modelLoad"',
+  'id="detailWake"',
+  'id="detailRestart"',
+  'id="detailStop"',
+  'id="detailRollback"',
+  'id="detailReboot"',
+  'id="detailShutdown"',
+  'id="detailUninstall"',
+  "/details",
+  "LAN IP",
+  "Tailscale IP",
+  "MAC",
+  "lmstudio_install",
+  "lmstudio_probe",
+  "lmstudio_model_get",
+  "lmstudio_model_load",
+  "system_reboot",
+  "system_shutdown",
+  "setTimeout(refresh,60000)"
+]) {
+  assert.ok(operations.includes(required), "Operations capability missing: " + required);
+}
+assert.ok(!operations.includes("setInterval(refresh,10000)"), "Operations console must not poll every 10 seconds");
+
 
 assert.match(architect, /Ноды, проекты, миссии, отчёты, модели и данные не удаляются/);
 assert.match(architect, /\/api\/v1\/architect\/security\/recovery-code/);
