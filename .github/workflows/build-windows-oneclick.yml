@@ -7,6 +7,7 @@ on:
       - "scripts/build_windows_oneclick.ps1"
       - "tests/lmstudio-local-protocol.py"
       - "tests/llm-miniagents-parallel.py"
+      - "tests/network-recovery-priority.py"
       - "src/quality/openrouter.js"
       - "tests/openrouter-quality-gate.mjs"
       - ".github/workflows/build-windows-oneclick.yml"
@@ -63,6 +64,8 @@ jobs:
           python tests/lmstudio-local-protocol.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/llm-miniagents-parallel.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/network-recovery-priority.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/openrouter-quality-gate.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
