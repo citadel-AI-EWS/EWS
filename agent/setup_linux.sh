@@ -158,7 +158,7 @@ path, node_id, controller = sys.argv[1:]
 payload = {
     "node_id": node_id,
     "controller_url": controller.rstrip("/"),
-    "agent_version": "0.3.16",
+    "agent_version": "0.3.17",
     "platform": "linux",
     "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
 }

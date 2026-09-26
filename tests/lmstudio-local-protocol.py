@@ -37,7 +37,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             content_type = "text/event-stream"
         elif self.path == "/v1/chat/completions":
             payload = json.dumps({
-                "choices": [{"message": {"role": "assistant", "content": "PROJECT OK"}}]
+                "choices": [{"message": {"role": "assistant", "content": "PROJECT OK"}}],
+                "usage": {"prompt_tokens": 11, "completion_tokens": 3, "total_tokens": 14},
             }).encode("utf-8")
             content_type = "application/json"
         else:
@@ -95,6 +96,8 @@ def main() -> int:
         assert answer == "LM OK", answer
         assert report["content"] == "PROJECT OK", report
         assert report["model"] == "test/model", report
+        assert report["token_usage"]["total_tokens"] == 14, report
+        assert report["token_usage"]["agents"]["llm-mini-1"]["prompt_tokens"] == 11, report
 
         stream = next(item for item in SEEN if item["path"] == "/api/v1/chat")
         stream_body = stream["body"]
