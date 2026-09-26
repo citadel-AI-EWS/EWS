@@ -170,6 +170,7 @@ jobs:
           }
 
       - name: Forced fallback install smoke test
+        id: fallback_install
         shell: pwsh
         run: |
           $installer = Get-ChildItem -LiteralPath dist -Filter "CITADEL_EWS_Node_Setup_*_x64.exe" | Select-Object -First 1
@@ -205,7 +206,7 @@ jobs:
           Write-Host "Windows fallback startup task: PASS"
 
       - name: Fallback uninstall smoke test
-        if: always()
+        if: ${{ always() && steps.fallback_install.outcome != 'skipped' }}
         shell: pwsh
         run: |
           $uninstaller = Join-Path $env:ProgramData "CitadelEWS\uninstall\unins000.exe"
