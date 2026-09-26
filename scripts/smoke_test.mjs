@@ -47,6 +47,9 @@ function assertReady(health, hub, api, root) {
   if (health.project_readiness_error !== null && typeof health.project_readiness_error !== "string") {
     throw new Error("health.project_readiness_error is invalid");
   }
+  if (!["configured", "unconfigured"].includes(health.openrouter_quality)) {
+    throw new Error("health.openrouter_quality is invalid");
+  }
   for (const field of requiredReady) {
     if (health[field] !== "ready") throw new Error(`${field} is not ready`);
   }
@@ -82,6 +85,7 @@ for (let attempt = 1; attempt <= attempts; attempt += 1) {
       deploy_sha: deploySha,
       registered_nodes: hub.nodes.length,
       project_execution: health.project_execution,
+      openrouter_quality: health.openrouter_quality,
       project_readiness_error: health.project_readiness_error,
       project_online_nodes: health.project_online_nodes,
       project_ai_ready_workers: health.project_ai_ready_workers,
