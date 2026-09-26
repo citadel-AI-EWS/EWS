@@ -87,11 +87,15 @@ end;
 
 procedure StopFallbackTask;
 var
-  SchTasks: string;
+  SchTasks, TaskKill: string;
 begin
   SchTasks := ExpandConstant('{sys}\schtasks.exe');
+  TaskKill := ExpandConstant('{sys}\taskkill.exe');
   TryExec(SchTasks, '/End /TN "{#FallbackTaskName}"');
   Sleep(1000);
+  { Fixed-name cleanup only: terminate our fallback host and its child agent tree. }
+  TryExec(TaskKill, '/IM CitadelNodeService.exe /T /F');
+  Sleep(500);
 end;
 
 procedure DeleteFallbackTask;
@@ -107,6 +111,7 @@ begin
   { Stop either installation mode before [Files] replaces bundled binaries. }
   StopExistingService;
   StopFallbackTask;
+  DeleteFallbackTask;
   Result := '';
 end;
 
