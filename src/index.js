@@ -1553,6 +1553,7 @@ async function architectCreateProject(request, env) {
   const onlineNodes = (nodesQuery.results || []).filter((node) => !isTestNodeRecord(node));
   if (!onlineNodes.length) throw new ApiError(409, "no_available_nodes");
   const nodes = onlineNodes.filter((node) => projectNodeReady(node, sourceType));
+  if (!nodes.length) throw new ApiError(409, "no_ready_workers_check_agent_and_loaded_model");
 
   const recommendedWork = executionMode === "python"
     ? [{ sequence_no: 1, role_name: "programmer", task_text: taskText, role_source: "hub_recommended" }]
@@ -2513,13 +2514,6 @@ async function heartbeat(request, env, nodeId, url) {
     : normalizeCapabilities(body.capabilities);
   const network = normalizeNodeNetwork(body.network);
   if (network) await ensureNodeNetworkStorage(env);
-  const detailsJson = JSON.stringify({
-    cpu_percent: cpuPercent,
-    memory_percent: memoryPercent,
-    agent_version: agentVersion,
-    lan_ipv4: network?.lan_ipv4 || null
-  });
-
   const heartbeatStatements = [
     env.DB.prepare(`
       UPDATE nodes
@@ -2530,14 +2524,7 @@ async function heartbeat(request, env, nodeId, url) {
           status = CASE WHEN status = 'paused' THEN 'paused' ELSE 'online' END,
           last_seen_at = CURRENT_TIMESTAMP
       WHERE node_id = ? AND status != 'revoked'
-    `).bind(cpuPercent, memoryPercent, agentVersion, capabilitiesJson, nodeId),
-    env.DB.prepare(`
-      INSERT INTO audit_events (
-        actor_type, actor_id, action, target_type, target_id, details_json
-      )
-      SELECT 'node', ?, 'node.heartbeat', 'node', ?, ?
-      WHERE changes() = 1
-    `).bind(nodeId, nodeId, detailsJson)
+    `).bind(cpuPercent, memoryPercent, agentVersion, capabilitiesJson, nodeId)
   ];
   if (network) {
     heartbeatStatements.push(env.DB.prepare(`
@@ -5004,6 +4991,22 @@ async function handleApi(request, env, url) {
     return request.method === "GET"
       ? architectWorkRoles(request, env)
       : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/machines") {
+    if (request.method !== "GET") return methodNotAllowed(["GET"]);
+    await authenticateArchitect(request, env);
+    const [nodes, commands] = await Promise.all([
+      env.DB.prepare(`SELECT node_id, hostname, agent_version, cpu_percent, memory_percent,
+        last_seen_at, CASE WHEN status = 'online' AND
+        (last_seen_at IS NULL OR datetime(last_seen_at) < datetime('now', '-2 minutes'))
+        THEN 'offline' ELSE status END AS status
+        FROM nodes WHERE status != 'revoked' ORDER BY node_id LIMIT 500`).all(),
+      env.DB.prepare(`SELECT command_id, node_id, command_type, status, created_at
+        FROM commands WHERE status IN ('pending','accepted')
+        ORDER BY created_at DESC LIMIT 100`).all()
+    ]);
+    return json({ok:true, nodes:nodes.results || [], commands:commands.results || []});
   }
 
   if (url.pathname === "/api/v1/architect/projects/check") {

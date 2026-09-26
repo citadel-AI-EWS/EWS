@@ -54,11 +54,15 @@ if [[ -d "$OUTPUT" ]]; then
   find "$OUTPUT" -mindepth 1 -delete
 fi
 
-mkdir -p "$OUTPUT/architect/logs" "$OUTPUT/hub"
-cp "$ROOT/live-index.html" "$OUTPUT/index.html"
-cp "$ROOT/architect.html" "$OUTPUT/architect/index.html"
-cp "$ROOT/architect-logs.html" "$OUTPUT/architect/logs/index.html"
-cp "$ROOT/hub.html" "$OUTPUT/hub/index.html"
+mkdir -p "$OUTPUT/architect/logs" "$OUTPUT/hub" "$OUTPUT/logs"
+cp "$ROOT/operations.html" "$OUTPUT/index.html"
+# Compatibility links lead to the two-page console; legacy panels are not shipped.
+for route in architect hub; do
+  printf '%s\n' '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/"><a href="/">Машины</a>' > "$OUTPUT/$route/index.html"
+done
+for route in logs architect/logs; do
+  printf '%s\n' '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/#logs"><a href="/#logs">Логи</a>' > "$OUTPUT/$route/index.html"
+done
 cat > "$OUTPUT/_headers" <<'HEADERS'
 /*
   Cache-Control: no-store

@@ -1,3 +1,4 @@
+import { keepOperationalEvent } from "./retention.js";
 import {
   TELEMETRY_LIMITS,
   TelemetryError,
@@ -28,7 +29,8 @@ export async function ingestNodeLogs(request, env, nodeId, url) {
   if (body.events.length > TELEMETRY_LIMITS.batch_events) {
     throw new TelemetryError(413, "too_many_events");
   }
-  const events = body.events.map(normalizeTelemetryEvent);
+  const normalized = body.events.map(normalizeTelemetryEvent);
+  const events = normalized.filter(keepOperationalEvent);
 
   const insertStatements = events.map((event) => env.DB.prepare(`
     INSERT OR IGNORE INTO node_logs (
@@ -43,7 +45,7 @@ export async function ingestNodeLogs(request, env, nodeId, url) {
     event.details_json,
     event.created_at
   ));
-  const results = await env.DB.batch(insertStatements);
+  const results = insertStatements.length ? await env.DB.batch(insertStatements) : [];
   const accepted = results.reduce(
     (sum, result) => sum + (result?.meta?.changes || 0),
     0
@@ -70,7 +72,8 @@ export async function ingestNodeLogs(request, env, nodeId, url) {
 
   return json({
     ok: true,
-    received: events.length,
+    received: normalized.length,
+    discarded: normalized.length - events.length,
     accepted,
     duplicates: events.length - accepted,
     retention_days: TELEMETRY_LIMITS.retention_days,
