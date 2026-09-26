@@ -49,29 +49,54 @@ jobs:
       - name: Build immutable static site
         run: scripts/build_site.sh
 
+      - name: Normalize optional OpenRouter quality-gate secret
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          let key = String(process.env.OPENROUTER_API_KEY || "").trim();
+          if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
+            key = key.slice(1, -1).trim();
+          }
+          if (!key) {
+            fs.writeFileSync("/tmp/openrouter-key", "", { mode: 0o600 });
+            process.exit(0);
+          }
+          if (!/^[\x21-\x7E]{16,512}$/.test(key)) {
+            console.error("OPENROUTER_API_KEY remains invalid after trimming whitespace/quotes.");
+            process.exit(2);
+          }
+          fs.writeFileSync("/tmp/openrouter-key", key, { mode: 0o600 });
+          NODE
+
       - name: Sync optional OpenRouter quality-gate secret
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          if [ -z "$OPENROUTER_API_KEY" ]; then
+          if [ ! -s /tmp/openrouter-key ]; then
             echo "OPENROUTER_API_KEY is not configured; final quality gate will remain bypassed."
-          elif node -e 'const k=process.env.OPENROUTER_API_KEY||"";process.exit(/^[\\x21-\\x7E]{16,512}$/.test(k)?0:1)'; then
-            printf '%s' "$OPENROUTER_API_KEY" | npx wrangler secret put OPENROUTER_API_KEY
           else
-            echo "::warning::OPENROUTER_API_KEY has invalid format; skipping secret sync so core deployment can continue."
+            npx wrangler secret put OPENROUTER_API_KEY < /tmp/openrouter-key
           fi
 
       - name: Verify configured OpenRouter API key
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          if [ -z "$OPENROUTER_API_KEY" ]; then
+          if [ ! -s /tmp/openrouter-key ]; then
             echo "OPENROUTER_API_KEY is not configured; probe skipped."
-          elif ! node -e 'const k=process.env.OPENROUTER_API_KEY||"";process.exit(/^[\\x21-\\x7E]{16,512}$/.test(k)?0:1)'; then
-            echo "::warning::OpenRouter key probe skipped: invalid key format."
           else
-            node -e 'const r=await fetch("https://openrouter.ai/api/v1/key",{headers:{authorization:"Bearer "+process.env.OPENROUTER_API_KEY}});if(!r.ok){console.warn("OpenRouter key probe returned HTTP "+r.status);process.exit(0)}console.log("OpenRouter key probe: authenticated");'
+            node <<'NODE'
+          const fs = require("node:fs");
+          const key = fs.readFileSync("/tmp/openrouter-key", "utf8");
+          const r = await fetch("https://openrouter.ai/api/v1/key", {
+            headers: { authorization: "Bearer " + key }
+          });
+          if (!r.ok) {
+            console.error("OpenRouter key probe returned HTTP " + r.status);
+            process.exit(1);
+          }
+          console.log("OpenRouter key probe: authenticated");
+          NODE
           fi
 
       - name: Deploy TEST site and Worker
