@@ -143,6 +143,9 @@ need(index.includes('"lmstudio_probe"'), "LM Studio probe command missing from C
 need(index.includes('"hybrid_query"'), "Hybrid command missing from Controller allow-list");
 need(agentV1.includes("validate_hybrid_payload"), "Hybrid payload validation missing");
 need(agentV1.includes("execute_project_text"), "LM Studio project text worker missing");
+need(agentV1.includes("_project_llm_chat"), "local LLM mini-agent chat helper missing");
+need(agentV1.includes("llm-mini-"), "bounded LLM mini-agent orchestration missing");
+need(agentV1.includes("mini_agent_count"), "LLM mini-agent result metadata missing");
 need(agentV1.includes('"project_text"'), "project_text capability missing");
 need(agentV1.includes('"127.0.0.1"'), "project worker must stay on local LM Studio endpoint");
 need(index.includes("materializeProjectWorkForNode"), "planned project materializer missing");
