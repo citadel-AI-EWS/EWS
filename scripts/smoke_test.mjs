@@ -92,6 +92,10 @@ for (let attempt = 1; attempt <= attempts; attempt += 1) {
   } catch (error) {
     lastError = error;
     console.error(`smoke attempt ${attempt}/${attempts} failed: ${error.message}`);
+    if (String(error?.message || "").includes("hub_d1_daily_read_limit_exceeded")) {
+      console.error("D1 daily read quota is exhausted; retries cannot recover before the quota reset.");
+      break;
+    }
     if (attempt < attempts) await sleep(delayMs);
   }
 }
