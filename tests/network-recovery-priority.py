@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import json
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,14 +14,13 @@ import citadel_node_v1 as node  # noqa: E402
 
 
 def make_agent(root: Path) -> node.Agent:
-    config = node.AgentConfig(
-        "https://controller.example.invalid",
-        root,
-        allowed_wifi_profiles=("BackupWiFi",),
+    return node.Agent(
+        node.AgentConfig(
+            "https://controller.example.invalid",
+            root,
+            allowed_wifi_profiles=("BackupWiFi",),
+        )
     )
-    agent = node.Agent(config)
-    agent.last_network_recovery = -10000.0
-    return agent
 
 
 def main() -> int:
@@ -35,70 +33,47 @@ def main() -> int:
             "netsh": "C:/Windows/System32/netsh.exe",
             "ipconfig.exe": "C:/Windows/System32/ipconfig.exe",
             "ipconfig": "C:/Windows/System32/ipconfig.exe",
-            "powershell.exe": "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
-            "powershell": "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
         }.get(name)
         node.time.sleep = lambda seconds: None
 
+        # Primary network is retried three times before fallback is attempted.
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            agent = make_agent(root)
-            agent.network_recovery_path.write_text(
-                json.dumps({
-                    "last_windows_wifi_profile": "HomeWiFi",
-                    "windows_profiles": ["HomeWiFi", "BackupWiFi"],
-                }),
-                encoding="utf-8",
-            )
+            agent = make_agent(Path(temp))
             commands: list[list[str]] = []
 
             def fake_run(argv, **kwargs):
                 commands.append([str(item) for item in argv])
-                # The PowerShell remember probe returns no data, preserving state.
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
 
             node.subprocess.run = fake_run
-            reachability = iter([False, False, False, False, True])
+            reachability = iter([False, False, False, True])
             agent.controller_reachable = lambda timeout=5.0: next(reachability)
-
-            attempts: list[str] = []
-            recovered = agent._recover_windows_network(
-                json.loads(agent.network_recovery_path.read_text(encoding="utf-8")), attempts
-            )
-            assert recovered is True
-
-            wlan = [cmd for cmd in commands if "wlan" in cmd]
-            assert len(wlan) == 4, wlan
-            assert all("name=HomeWiFi" in cmd for cmd in wlan[:3]), wlan
-            assert "name=BackupWiFi" in wlan[3], wlan
-            renew = [cmd for cmd in commands if any("/renew" == part for part in cmd)]
-            assert len(renew) == 1, commands
             state = {
                 "last_windows_wifi_profile": "HomeWiFi",
                 "windows_profiles": ["HomeWiFi", "BackupWiFi"],
             }
-            attempts = []
-            reachability = iter([False, False, False, True])
-            agent.controller_reachable = lambda timeout=5.0: next(reachability)
-            commands.clear()
+            attempts: list[str] = []
+
             recovered = agent._recover_windows_network(state, attempts)
+
             assert recovered is True
             wlan = [cmd for cmd in commands if "wlan" in cmd]
             assert len(wlan) == 4, wlan
             assert all("name=HomeWiFi" in cmd for cmd in wlan[:3]), wlan
             assert "name=BackupWiFi" in wlan[3], wlan
+            assert len([cmd for cmd in commands if "/renew" in cmd]) == 1, commands
             assert state["last_windows_wifi_profile"] == "BackupWiFi", state
+            assert attempts[:4] == [
+                "wifi_primary_retry:1:HomeWiFi",
+                "dhcp_renew",
+                "wifi_primary_retry:2:HomeWiFi",
+                "wifi_primary_retry:3:HomeWiFi",
+            ], attempts
+            assert attempts[-1] == "wifi_fallback_profile:BackupWiFi", attempts
 
+        # If the preferred network returns on the second retry, fallback is never touched.
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            agent = make_agent(root)
-            agent.network_recovery_path.write_text(
-                json.dumps({
-                    "last_windows_wifi_profile": "HomeWiFi",
-                    "windows_profiles": ["HomeWiFi", "BackupWiFi"],
-                }),
-                encoding="utf-8",
-            )
+            agent = make_agent(Path(temp))
             commands = []
 
             def fake_run_primary(argv, **kwargs):
@@ -106,17 +81,17 @@ def main() -> int:
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
 
             node.subprocess.run = fake_run_primary
-            reachability = iter([False, False, True])
+            reachability = iter([False, True])
             agent.controller_reachable = lambda timeout=5.0: next(reachability)
-
             state = {
                 "last_windows_wifi_profile": "HomeWiFi",
                 "windows_profiles": ["HomeWiFi", "BackupWiFi"],
             }
-            attempts: list[str] = []
-            recovered = agent._recover_windows_network(state, attempts)
-            assert recovered is True
+            attempts = []
 
+            recovered = agent._recover_windows_network(state, attempts)
+
+            assert recovered is True
             wlan = [cmd for cmd in commands if "wlan" in cmd]
             assert len(wlan) == 2, wlan
             assert all("name=HomeWiFi" in cmd for cmd in wlan), wlan
