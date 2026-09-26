@@ -26,12 +26,10 @@ def make_agent(root: Path) -> node.Agent:
 
 
 def main() -> int:
-    original_os_name = node.os.name
     original_which = node.shutil.which
     original_run = node.subprocess.run
     original_sleep = node.time.sleep
     try:
-        node.os.name = "nt"
         node.shutil.which = lambda name: {
             "netsh.exe": "C:/Windows/System32/netsh.exe",
             "netsh": "C:/Windows/System32/netsh.exe",
@@ -63,7 +61,11 @@ def main() -> int:
             reachability = iter([False, False, False, False, True])
             agent.controller_reachable = lambda timeout=5.0: next(reachability)
 
-            agent.recover_network()
+            attempts: list[str] = []
+            recovered = agent._recover_windows_network(
+                json.loads(agent.network_recovery_path.read_text(encoding="utf-8")), attempts
+            )
+            assert recovered is True
 
             wlan = [cmd for cmd in commands if "wlan" in cmd]
             assert len(wlan) == 4, wlan
@@ -71,7 +73,20 @@ def main() -> int:
             assert "name=BackupWiFi" in wlan[3], wlan
             renew = [cmd for cmd in commands if any("/renew" == part for part in cmd)]
             assert len(renew) == 1, commands
-            state = json.loads(agent.network_recovery_path.read_text(encoding="utf-8"))
+            state = {
+                "last_windows_wifi_profile": "HomeWiFi",
+                "windows_profiles": ["HomeWiFi", "BackupWiFi"],
+            }
+            attempts = []
+            reachability = iter([False, False, False, True])
+            agent.controller_reachable = lambda timeout=5.0: next(reachability)
+            commands.clear()
+            recovered = agent._recover_windows_network(state, attempts)
+            assert recovered is True
+            wlan = [cmd for cmd in commands if "wlan" in cmd]
+            assert len(wlan) == 4, wlan
+            assert all("name=HomeWiFi" in cmd for cmd in wlan[:3]), wlan
+            assert "name=BackupWiFi" in wlan[3], wlan
             assert state["last_windows_wifi_profile"] == "BackupWiFi", state
 
         with tempfile.TemporaryDirectory() as temp:
@@ -94,19 +109,23 @@ def main() -> int:
             reachability = iter([False, False, True])
             agent.controller_reachable = lambda timeout=5.0: next(reachability)
 
-            agent.recover_network()
+            state = {
+                "last_windows_wifi_profile": "HomeWiFi",
+                "windows_profiles": ["HomeWiFi", "BackupWiFi"],
+            }
+            attempts: list[str] = []
+            recovered = agent._recover_windows_network(state, attempts)
+            assert recovered is True
 
             wlan = [cmd for cmd in commands if "wlan" in cmd]
             assert len(wlan) == 2, wlan
             assert all("name=HomeWiFi" in cmd for cmd in wlan), wlan
             assert not any("name=BackupWiFi" in cmd for cmd in wlan), wlan
-            state = json.loads(agent.network_recovery_path.read_text(encoding="utf-8"))
             assert state["last_windows_wifi_profile"] == "HomeWiFi", state
 
         print("Preferred-network recovery and bounded fallback: PASS")
         return 0
     finally:
-        node.os.name = original_os_name
         node.shutil.which = original_which
         node.subprocess.run = original_run
         node.time.sleep = original_sleep
