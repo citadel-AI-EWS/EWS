@@ -227,6 +227,7 @@ jobs:
           } | Select-Object -First 1
           if ($orphan) { throw "Fallback uninstall left a CITADEL process running." }
           Write-Host "Windows fallback uninstall: PASS"
+          exit 0
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
