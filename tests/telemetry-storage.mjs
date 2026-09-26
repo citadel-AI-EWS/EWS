@@ -135,7 +135,7 @@ class Statement {
       });
       return { meta: { changes: 1 } };
     }
-    if (this.sql.startsWith("DELETE FROM node_logs") && this.sql.includes("datetime(received_at)")) {
+    if (this.sql.startsWith("DELETE FROM node_logs") && this.sql.includes("received_at < datetime")) {
       const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
       const before = state.logs.length;
       state.logs = state.logs.filter((item) => Date.parse(item.received_at) >= cutoff);

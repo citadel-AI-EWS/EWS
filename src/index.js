@@ -2302,9 +2302,14 @@ async function authenticateNode(request, env, nodeId, url, bodyBytes) {
     if ((nonce?.meta?.changes || 0) !== 1) {
       throw new ApiError(409, "replayed_request");
     }
-    await env.DB.prepare(
-      "DELETE FROM node_request_nonces WHERE datetime(received_at) < datetime('now', '-10 minutes')"
-    ).run();
+    // Replay protection is enforced by the PRIMARY KEY insert above. Cleanup
+    // can be opportunistic: retaining expired nonces longer is safe, while
+    // pruning on every signed poll caused repeated D1 scans.
+    if (requestId.endsWith("0")) {
+      await env.DB.prepare(
+        "DELETE FROM node_request_nonces WHERE received_at < datetime('now', '-10 minutes')"
+      ).run();
+    }
   }
   return node;
 }
