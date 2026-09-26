@@ -27,8 +27,8 @@ need(index.includes("LEFT JOIN node_numbers AS nn"), "Architect node number join
 need(!readme.includes("-EnrollmentToken"), "README still documents EnrollmentToken");
 need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_token");
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
-need(agentV1.includes('VERSION = "0.3.17"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.17"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.18"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.18"'), "v2 release not bumped");
 need(agentV1.includes("hardware_snapshot"), "node hardware snapshot missing");
 need(agentV1.includes("gpu_inventory"), "GPU/VRAM discovery missing");
 need(agentV1.includes('"hardware"'), "hardware heartbeat payload missing");
