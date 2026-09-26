@@ -4889,6 +4889,38 @@ async function handleApi(request, env, url) {
           .then(() => "ready")
           .catch(() => "unavailable")
       ]);
+
+      let projectExecution = "unavailable";
+      let projectOnlineNodes = 0;
+      let projectAiReadyWorkers = 0;
+      let projectPythonReadyWorkers = 0;
+      try {
+        const projectNodes = await env.DB.prepare(`
+          SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
+            ai.installed, ai.loaded_model, ai.server_running
+          FROM nodes AS n
+          LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
+          WHERE n.status = 'online'
+            AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes')
+          ORDER BY n.last_seen_at DESC
+          LIMIT 500
+        `).all();
+        const liveProjectNodes = (projectNodes.results || [])
+          .filter((node) => !isTestNodeRecord(node));
+        projectOnlineNodes = liveProjectNodes.length;
+        projectAiReadyWorkers = liveProjectNodes
+          .filter((node) => projectNodeReady(node, "architect_manual")).length;
+        projectPythonReadyWorkers = liveProjectNodes
+          .filter((node) => projectNodeReady(node, "architect_python")).length;
+        projectExecution = projectAiReadyWorkers > 0
+          ? "ready"
+          : projectOnlineNodes > 0
+            ? "waiting_for_ai_worker"
+            : "waiting_for_online_node";
+      } catch {
+        projectExecution = "unavailable";
+      }
+
       return json({
         ok: row?.ok === 1 &&
           controllerSigning === "ready" &&
@@ -4898,7 +4930,11 @@ async function handleApi(request, env, url) {
         database: "citadel-control",
         controller_signing: controllerSigning,
         report_storage: reportStorage,
-        session_storage: sessionStorage
+        session_storage: sessionStorage,
+        project_execution: projectExecution,
+        project_online_nodes: projectOnlineNodes,
+        project_ai_ready_workers: projectAiReadyWorkers,
+        project_python_ready_workers: projectPythonReadyWorkers
       });
     } catch {
       return json({
