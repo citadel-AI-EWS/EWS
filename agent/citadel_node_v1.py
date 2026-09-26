@@ -907,8 +907,6 @@ class Agent:
             capabilities.add("known_network_recovery")
         if os.name == "nt" and os.environ.get("CITADEL_SERVICE_MANAGED") == "1":
             capabilities.add("windows_core_service")
-        if os.name == "nt" and os.environ.get("CITADEL_TASK_MANAGED") == "1":
-            capabilities.add("windows_boot_task_fallback")
         if _windows_enterprise_probe_file_valid():
             capabilities.add("windows_enterprise_readonly")
         return sorted(capabilities)
