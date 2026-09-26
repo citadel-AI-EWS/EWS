@@ -1,4 +1,5 @@
 import { getProjectExperienceRegistry } from "./experience/registry.js";
+import { d1UsageOverview } from "./d1-usage.js";
 import { openRouterQualityConfig, reviewWithOpenRouter } from "./quality/openrouter.js";
 import { ARCHITECT_ROLE_PERMISSIONS, DEFAULT_ENTERPRISE_POLICY, evaluateEnterpriseNode, normalizeEnterprisePolicy, requiredArchitectPermission, roleHasPermission } from "./enterprise/policy.js";
 
@@ -39,7 +40,7 @@ const LATEST_NODE_RELEASE = Object.freeze({
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "11bbf2fb785d05009f998a56cacd694d892f9af7af80eb4aa10795a7f22ff523"
+      sha256: "86c3cf6897dc16a26904f15be96ad41d05ab22c3fc28f4e5e91f9594fd65ba97"
     },
     {
       path: "citadel_node_v2.py",
@@ -4684,7 +4685,7 @@ async function architectNodeDetails(request, env, nodeId) {
   await Promise.all([ensureNodeNetworkStorage(env), ensureNodeAiStorage(env), ensureNodeHardwareStorage(env)]);
   const row = await env.DB.prepare(`
     SELECT n.node_id, n.hostname, n.os_name, n.os_version, n.architecture,
-      n.agent_version, n.status, n.cpu_percent, n.memory_percent, n.last_seen_at,
+      n.agent_version, n.status, n.cpu_percent, n.memory_percent, n.last_seen_at, n.capabilities_json,
       net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json,
       net.updated_at AS network_updated_at,
       hw.memory_total_bytes, hw.cpu_logical_count, hw.gpus_json,
@@ -4707,6 +4708,9 @@ async function architectNodeDetails(request, env, nodeId) {
       os_version: row.os_version,
       architecture: row.architecture,
       agent_version: row.agent_version,
+      latest_agent_version: LATEST_NODE_RELEASE.version,
+      update_required: row.agent_version !== LATEST_NODE_RELEASE.version,
+      capabilities: safeJson(row.capabilities_json, []),
       status: row.status,
       cpu_percent: row.cpu_percent,
       memory_percent: row.memory_percent,
@@ -5226,6 +5230,12 @@ async function handleApi(request, env, url) {
     return request.method === "GET"
       ? architectOverview(request, env)
       : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/d1-usage") {
+    if (request.method !== "GET") return methodNotAllowed(["GET"]);
+    await authenticateArchitect(request, env);
+    return json(await d1UsageOverview(env));
   }
 
   if (url.pathname === "/api/v1/architect/enterprise") {

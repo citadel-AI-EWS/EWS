@@ -315,6 +315,10 @@ node tests/experience-registry.mjs
 node tests/architect-ux-guards.mjs
 node tests/enterprise-policy.mjs
 node tests/hub-five-questions.mjs
+node tests/d1-usage.mjs
+node tests/ten-prompt-routing.mjs
+python tests/lmstudio-local-protocol.py
+python tests/mini-agents.py
 node tests/openrouter-quality-gate.mjs
 
 python - <<'PY'
