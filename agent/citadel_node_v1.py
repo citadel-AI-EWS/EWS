@@ -48,7 +48,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.15"
+VERSION = "0.3.16"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -749,6 +749,85 @@ def windows_enterprise_probe() -> dict[str, Any]:
     return payload
 
 
+def gpu_inventory() -> list[dict[str, Any]]:
+    """Collect bounded GPU identity/VRAM data without installing vendor tooling."""
+    rows: list[dict[str, Any]] = []
+    nvidia_smi = shutil.which("nvidia-smi")
+    if nvidia_smi:
+        try:
+            result = subprocess.run(  # nosec B603
+                [
+                    nvidia_smi,
+                    "--query-gpu=name,memory.total",
+                    "--format=csv,noheader,nounits",
+                ],
+                timeout=10,
+                capture_output=True,
+                text=True,
+                shell=False,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines()[:8]:
+                    parts = [part.strip() for part in line.split(",", 1)]
+                    if not parts or not parts[0]:
+                        continue
+                    vram_bytes = None
+                    if len(parts) > 1:
+                        with contextlib.suppress(ValueError):
+                            vram_bytes = max(0, int(float(parts[1]) * 1024 * 1024))
+                    rows.append({"name": parts[0][:160], "vram_total_bytes": vram_bytes})
+        except (OSError, subprocess.SubprocessError):
+            pass
+    if rows or os.name != "nt":
+        return rows
+
+    powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+    if not powershell:
+        return rows
+    try:
+        result = subprocess.run(  # nosec B603
+            [
+                powershell,
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Get-CimInstance Win32_VideoController | "
+                "Select-Object Name,AdapterRAM | ConvertTo-Json -Compress",
+            ],
+            timeout=12,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return rows
+        decoded = json.loads(result.stdout)
+        devices = decoded if isinstance(decoded, list) else [decoded]
+        for item in devices[:8]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("Name") or "").strip()
+            if not name:
+                continue
+            raw_vram = item.get("AdapterRAM")
+            vram_bytes = int(raw_vram) if isinstance(raw_vram, (int, float)) and raw_vram > 0 else None
+            rows.append({"name": name[:160], "vram_total_bytes": vram_bytes})
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError, TypeError):
+        pass
+    return rows
+
+
+def hardware_snapshot() -> dict[str, Any]:
+    memory = psutil.virtual_memory()
+    return {
+        "cpu_logical_count": int(psutil.cpu_count(logical=True) or 1),
+        "memory_total_bytes": int(memory.total),
+        "gpus": gpu_inventory(),
+        "gpus": gpu_inventory(),
+    }
+
+
 def system_inventory(payload: dict[str, Any]) -> dict[str, Any]:
     disk = shutil.disk_usage(Path.home())
     memory = psutil.virtual_memory()
@@ -802,6 +881,7 @@ class Agent:
         self.last_power_guard = 0.0
         self.power_guard_active = False
         self.last_heartbeat = 0.0
+        self.last_hardware_report = 0.0
         self.enrollment_confirmed = False
 
     @property
@@ -859,20 +939,25 @@ class Agent:
     def heartbeat(self) -> None:
         node_id = self.require_node_id()
         network = local_network_addresses()
+        now = time.monotonic()
+        payload: dict[str, Any] = {
+            "cpu_percent": float(psutil.cpu_percent(interval=0.05)),
+            "memory_percent": float(psutil.virtual_memory().percent),
+            "agent_version": VERSION,
+            "capabilities": self.capabilities,
+            "network": {
+                "lan_ipv4": network.get("lan_ipv4"),
+                "tailscale_ipv4": network.get("tailscale_ipv4"),
+                "mac_addresses": network.get("mac_addresses") or [],
+            },
+        }
+        if now - self.last_hardware_report >= 300:
+            payload["hardware"] = hardware_snapshot()
+            self.last_hardware_report = now
         self.api.request(
             "POST",
             f"/api/v1/nodes/{node_id}/heartbeat",
-            {
-                "cpu_percent": float(psutil.cpu_percent(interval=0.05)),
-                "memory_percent": float(psutil.virtual_memory().percent),
-                "agent_version": VERSION,
-                "capabilities": self.capabilities,
-                "network": {
-                    "lan_ipv4": network.get("lan_ipv4"),
-                    "tailscale_ipv4": network.get("tailscale_ipv4"),
-                    "mac_addresses": network.get("mac_addresses") or [],
-                },
-            },
+            payload,
         )
         self.last_heartbeat = time.monotonic()
         if time.monotonic() - self.last_network_remember >= 300:
