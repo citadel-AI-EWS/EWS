@@ -1093,7 +1093,10 @@ class Agent:
             "Do not execute commands, access credentials, modify the host, or claim actions you did not perform. "
         )
 
-        def run_mini_agent(index: int) -> dict[str, Any]:
+        def run_mini_agent(
+            index: int,
+            timeout_seconds: int = LLM_MINI_AGENT_CALL_TIMEOUT_SECONDS,
+        ) -> dict[str, Any]:
             system_prompt = (
                 "You are CITADEL local mini-agent "
                 + str(index + 1)
@@ -1111,7 +1114,7 @@ class Agent:
                 task_text,
                 max_tokens=1536,
                 temperature=0.2 + (0.05 * index),
-                timeout_seconds=LLM_MINI_AGENT_CALL_TIMEOUT_SECONDS,
+                timeout_seconds=timeout_seconds,
             )
             return {
                 "mini_agent_id": f"llm-mini-{index + 1}",
@@ -1122,6 +1125,7 @@ class Agent:
 
         results: dict[int, dict[str, Any]] = {}
         failures: dict[int, str] = {}
+        mini_phase_started = time.monotonic()
         futures: dict[concurrent.futures.Future[dict[str, Any]], int] = {}
         pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=max_workers,
@@ -1188,9 +1192,19 @@ class Agent:
                 failed_count=len(failures),
                 retry_concurrency=1,
             )
-            for index in sorted(failures):
+            for index in sorted(list(failures)):
+                remaining = LLM_MINI_AGENT_TOTAL_TIMEOUT_SECONDS - (
+                    time.monotonic() - mini_phase_started
+                )
+                if remaining < 30:
+                    failures[index] = "llm_mini_agent_total_timeout"
+                    break
+                retry_timeout = min(
+                    LLM_MINI_AGENT_CALL_TIMEOUT_SECONDS,
+                    max(30, int(remaining)),
+                )
                 try:
-                    item = run_mini_agent(index)
+                    item = run_mini_agent(index, retry_timeout)
                 except Exception as error:
                     failures[index] = str(error)[:240]
                     self.log.write(
