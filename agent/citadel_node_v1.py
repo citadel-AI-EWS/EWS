@@ -976,34 +976,23 @@ class Agent:
         node_id = self.require_node_id()
         self.api.request("POST", f"/api/v1/nodes/{node_id}/results", result)
 
-    def execute_project_text(self, payload: dict[str, Any]) -> dict[str, Any]:
-        task_text = str(payload.get("task_text") or "").strip()
-        role_name = str(payload.get("role_name") or "planner").strip()
-        project_id = str(payload.get("project_id") or "").strip()
-        work_item_id = str(payload.get("work_item_id") or "").strip()
-        if not task_text or len(task_text) > 20000:
-            raise RuntimeError("invalid project task")
-        if not role_name or len(role_name) > 64:
-            raise RuntimeError("invalid project role")
-
-        state = self.lmstudio_state()
-        model = str(state.get("loaded_model") or "").strip()
-        if not model or not LMSTUDIO_MODEL_RE.fullmatch(model):
-            raise RuntimeError("lmstudio_model_not_loaded")
-
-        system_prompt = (
-            "You are the CITADEL project worker for role: " + role_name + ". "
-            "Work only on the supplied text task. Return a useful factual result in plain text. "
-            "Do not execute commands, access credentials, modify the host, or claim actions you did not perform."
-        )
+    def _project_llm_chat(
+        self,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens: int,
+        temperature: float = 0.2,
+    ) -> str:
         request_body = json_text({
             "model": model,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": task_text},
+                {"role": "user", "content": user_prompt},
             ],
-            "temperature": 0.2,
-            "max_tokens": 4096,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
         })
         connection = http.client.HTTPConnection(
             "127.0.0.1",
@@ -1037,7 +1026,99 @@ class Agent:
             raise RuntimeError("lmstudio_invalid_response")
         if not isinstance(content, str) or not content.strip():
             raise RuntimeError("lmstudio_empty_response")
-        content = content.strip()
+        return content.strip()
+
+    def execute_project_text(self, payload: dict[str, Any]) -> dict[str, Any]:
+        task_text = str(payload.get("task_text") or "").strip()
+        role_name = str(payload.get("role_name") or "planner").strip()
+        project_id = str(payload.get("project_id") or "").strip()
+        work_item_id = str(payload.get("work_item_id") or "").strip()
+        if not task_text or len(task_text) > 20000:
+            raise RuntimeError("invalid project task")
+        if not role_name or len(role_name) > 64:
+            raise RuntimeError("invalid project role")
+
+        state = self.lmstudio_state()
+        model = str(state.get("loaded_model") or "").strip()
+        if not model or not LMSTUDIO_MODEL_RE.fullmatch(model):
+            raise RuntimeError("lmstudio_model_not_loaded")
+
+        desired = 1 + int(len(task_text) > 800) + int(len(task_text) > 1800)
+        ram_gib = float(psutil.virtual_memory().total) / float(1024 ** 3)
+        capacity = 1 if ram_gib < 12 else (2 if ram_gib < 24 else 3)
+        mini_count = max(1, min(3, desired, capacity))
+        focuses = [
+            "primary analysis and direct solution",
+            "independent verification, contradictions and unsupported claims",
+            "edge cases, risks, missing assumptions and practical improvements",
+        ]
+        mini_agents: list[dict[str, Any]] = []
+        base_guard = (
+            "Work only on the supplied text task. Return useful factual plain text. "
+            "Do not execute commands, access credentials, modify the host, or claim actions you did not perform. "
+        )
+        for index in range(mini_count):
+            system_prompt = (
+                "You are CITADEL local mini-agent "
+                + str(index + 1)
+                + " for project role: "
+                + role_name
+                + ". Focus on "
+                + focuses[index]
+                + ". "
+                + base_guard
+            )
+            try:
+                answer = self._project_llm_chat(
+                    model,
+                    system_prompt,
+                    task_text,
+                    max_tokens=1536,
+                    temperature=0.2 + (0.05 * index),
+                )
+            except Exception:
+                if index == 0:
+                    raise
+                continue
+            mini_agents.append({
+                "mini_agent_id": f"llm-mini-{index + 1}",
+                "focus": focuses[index],
+                "content": answer[:12000],
+            })
+
+        if not mini_agents:
+            raise RuntimeError("lmstudio_mini_agents_failed")
+
+        if len(mini_agents) == 1:
+            content = mini_agents[0]["content"]
+        else:
+            synthesis_parts = []
+            for item in mini_agents:
+                synthesis_parts.append(
+                    "[" + item["mini_agent_id"] + " · " + item["focus"] + "]\n" +
+                    str(item["content"])[:3500]
+                )
+            synthesis_prompt = (
+                "ORIGINAL TASK\n" + task_text[:8000] +
+                "\n\nINDEPENDENT MINI-AGENT RESULTS\n" +
+                "\n\n".join(synthesis_parts)
+            )
+            try:
+                content = self._project_llm_chat(
+                    model,
+                    (
+                        "You are the CITADEL local synthesis agent for role: " + role_name + ". "
+                        "Combine the independent results into one accurate answer. Resolve contradictions, "
+                        "remove duplication, preserve useful caveats, and do not mention the internal mini-agent process. "
+                        + base_guard
+                    ),
+                    synthesis_prompt,
+                    max_tokens=3072,
+                    temperature=0.15,
+                )
+            except Exception:
+                content = "\n\n".join(str(item["content"]) for item in mini_agents)
+
         if len(content) > 180000:
             content = content[:180000] + "\n\n[truncated]"
         return {
@@ -1045,6 +1126,8 @@ class Agent:
             "work_item_id": work_item_id or None,
             "role_name": role_name,
             "model": model,
+            "mini_agent_count": len(mini_agents),
+            "mini_agents": mini_agents,
             "content": content,
             "completed_at": now_iso(),
         }
