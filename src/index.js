@@ -4593,6 +4593,46 @@ async function architectNodeAiState(request, env, nodeId) {
   return json({ ok: true, node, ai: await nodeAiStateResponse(env, nodeId) });
 }
 
+async function architectNodeDetails(request, env, nodeId) {
+  await authenticateArchitect(request, env);
+  await Promise.all([ensureNodeNetworkStorage(env), ensureNodeAiStorage(env)]);
+  const row = await env.DB.prepare(`
+    SELECT n.node_id, n.hostname, n.os_name, n.os_version, n.architecture,
+      n.agent_version, n.status, n.cpu_percent, n.memory_percent, n.last_seen_at,
+      net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json,
+      net.updated_at AS network_updated_at
+    FROM nodes AS n
+    LEFT JOIN node_network_state AS net ON net.node_id = n.node_id
+    WHERE n.node_id = ? AND n.status != 'revoked'
+  `).bind(nodeId).first();
+  if (!row) throw new ApiError(404, "node_not_found");
+
+  const macAddresses = safeJson(row.mac_addresses_json, []);
+  const ai = await nodeAiStateResponse(env, nodeId);
+  return json({
+    ok: true,
+    node: {
+      node_id: row.node_id,
+      hostname: row.hostname,
+      os_name: row.os_name,
+      os_version: row.os_version,
+      architecture: row.architecture,
+      agent_version: row.agent_version,
+      status: row.status,
+      cpu_percent: row.cpu_percent,
+      memory_percent: row.memory_percent,
+      last_seen_at: row.last_seen_at
+    },
+    network: {
+      lan_ipv4: row.lan_ipv4 || null,
+      tailscale_ipv4: row.tailscale_ipv4 || null,
+      mac_addresses: Array.isArray(macAddresses) ? macAddresses : [],
+      updated_at: row.network_updated_at || null
+    },
+    ai
+  });
+}
+
 async function architectSearchModels(request, env, url) {
   await authenticateArchitect(request, env);
   const query = requireString(url.searchParams.get("q"), "model_search", 80);
@@ -5091,6 +5131,15 @@ async function handleApi(request, env, url) {
           env,
           decodeURIComponent(architectReportMatch[1])
         )
+      : methodNotAllowed(["GET"]);
+  }
+
+  const architectNodeDetailsMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/nodes\/([^/]+)\/details$/
+  );
+  if (architectNodeDetailsMatch) {
+    return request.method === "GET"
+      ? architectNodeDetails(request, env, decodeURIComponent(architectNodeDetailsMatch[1]))
       : methodNotAllowed(["GET"]);
   }
 
