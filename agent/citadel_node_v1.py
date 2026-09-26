@@ -2774,6 +2774,73 @@ class Agent:
         except Exception as error:
             self.log.write("network_profile_remember_failed", error=str(error)[:300])
 
+    def _recover_windows_network(self, state: dict[str, Any], attempts: list[str]) -> bool:
+        """Recover Controller connectivity by preferring the last active Windows Wi-Fi profile."""
+        ipconfig = shutil.which("ipconfig.exe") or shutil.which("ipconfig")
+        netsh = shutil.which("netsh.exe") or shutil.which("netsh")
+        profiles: list[str] = []
+        preferred = state.get("last_windows_wifi_profile")
+        if isinstance(preferred, str):
+            preferred = preferred.strip()
+            if not preferred or len(preferred) > 120:
+                preferred = None
+        else:
+            preferred = None
+        for profile in [
+            preferred,
+            *(state.get("windows_profiles") or []),
+            *self.config.allowed_wifi_profiles,
+        ]:
+            if isinstance(profile, str):
+                name = profile.strip()
+                if name and len(name) <= 120 and name not in profiles:
+                    profiles.append(name)
+
+        if netsh and preferred:
+            for retry_index in range(NETWORK_PRIMARY_PROFILE_RETRIES):
+                result = subprocess.run(  # nosec B603
+                    [netsh, "wlan", "connect", f"name={preferred}"],
+                    timeout=30, capture_output=True, text=True, shell=False,
+                )
+                attempts.append(
+                    f"wifi_primary_retry:{retry_index + 1}:" + preferred[:64]
+                )
+                if result.returncode == 0:
+                    if ipconfig and retry_index == 0:
+                        subprocess.run(  # nosec B603
+                            [ipconfig, "/renew"],
+                            timeout=60, capture_output=True, text=True, shell=False,
+                        )
+                        attempts.append("dhcp_renew")
+                    time.sleep(NETWORK_PRIMARY_RETRY_DELAYS[retry_index])
+                    if self.controller_reachable():
+                        state["last_windows_wifi_profile"] = preferred
+                        return True
+
+        if ipconfig and not preferred:
+            subprocess.run(  # nosec B603
+                [ipconfig, "/renew"], timeout=60, capture_output=True, text=True, shell=False,
+            )
+            attempts.append("dhcp_renew")
+            if self.controller_reachable():
+                return True
+
+        if netsh:
+            for profile in profiles[:16]:
+                if profile == preferred:
+                    continue
+                result = subprocess.run(  # nosec B603
+                    [netsh, "wlan", "connect", f"name={profile}"],
+                    timeout=30, capture_output=True, text=True, shell=False,
+                )
+                attempts.append("wifi_fallback_profile:" + profile[:64])
+                if result.returncode == 0:
+                    time.sleep(3)
+                    if self.controller_reachable():
+                        state["last_windows_wifi_profile"] = profile
+                        return True
+        return False
+
     def recover_network(self) -> None:
         if not self.config.network_recovery_enabled:
             return
@@ -2789,74 +2856,7 @@ class Agent:
         recovered = False
         try:
             if os.name == "nt":
-                ipconfig = shutil.which("ipconfig.exe") or shutil.which("ipconfig")
-                netsh = shutil.which("netsh.exe") or shutil.which("netsh")
-                profiles: list[str] = []
-                preferred = state.get("last_windows_wifi_profile")
-                if isinstance(preferred, str):
-                    preferred = preferred.strip()
-                    if not preferred or len(preferred) > 120:
-                        preferred = None
-                else:
-                    preferred = None
-                for profile in [
-                    preferred,
-                    *(state.get("windows_profiles") or []),
-                    *self.config.allowed_wifi_profiles,
-                ]:
-                    if isinstance(profile, str):
-                        name = profile.strip()
-                        if name and len(name) <= 120 and name not in profiles:
-                            profiles.append(name)
-
-                # Reconnect to the last active Wi-Fi first.  A transient AP/router
-                # outage should not make the node immediately roam to another network.
-                if netsh and preferred:
-                    for retry_index in range(NETWORK_PRIMARY_PROFILE_RETRIES):
-                        result = subprocess.run(  # nosec B603
-                            [netsh, "wlan", "connect", f"name={preferred}"],
-                            timeout=30, capture_output=True, text=True, shell=False,
-                        )
-                        attempts.append(
-                            f"wifi_primary_retry:{retry_index + 1}:" + preferred[:64]
-                        )
-                        if result.returncode == 0:
-                            if ipconfig and retry_index == 0:
-                                subprocess.run(  # nosec B603
-                                    [ipconfig, "/renew"],
-                                    timeout=60, capture_output=True, text=True, shell=False,
-                                )
-                                attempts.append("dhcp_renew")
-                            time.sleep(NETWORK_PRIMARY_RETRY_DELAYS[retry_index])
-                            if self.controller_reachable():
-                                recovered = True
-                                state["last_windows_wifi_profile"] = preferred
-                                break
-
-                if ipconfig and not recovered and not preferred:
-                    subprocess.run(  # nosec B603
-                        [ipconfig, "/renew"], timeout=60, capture_output=True, text=True, shell=False,
-                    )
-                    attempts.append("dhcp_renew")
-                    recovered = self.controller_reachable()
-
-                # Only after the primary profile has had bounded retries do we try
-                # other previously observed or explicitly allowlisted profiles.
-                if netsh and not recovered:
-                    for profile in profiles[:16]:
-                        if profile == preferred:
-                            continue
-                        result = subprocess.run(  # nosec B603
-                            [netsh, "wlan", "connect", f"name={profile}"],
-                            timeout=30, capture_output=True, text=True, shell=False,
-                        )
-                        attempts.append("wifi_fallback_profile:" + profile[:64])
-                        if result.returncode == 0:
-                            time.sleep(3)
-                            if self.controller_reachable():
-                                recovered = True
-                                state["last_windows_wifi_profile"] = profile
-                                break
+                recovered = self._recover_windows_network(state, attempts)
             elif os.name == "posix":
                 nmcli = shutil.which("nmcli")
                 if nmcli:
