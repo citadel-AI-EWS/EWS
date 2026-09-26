@@ -1,5 +1,13 @@
 # CITADEL/EWS Python Node v1
 
+## v0.3.16 — hardware-aware модели, Hugging Face и OpenRouter readiness
+
+- Нода раз в 5 минут сообщает bounded hardware-профиль: RAM, logical CPU и GPU/VRAM, если они доступны.
+- Architect использует этот профиль для рекомендуемого размера модели, quantization и context length.
+- Основной operations console умеет искать модели Hugging Face и передавать выбранный ID в LM Studio для скачивания/загрузки.
+- Python mini-workers и распределение проектных ролей между нодами сохраняются.
+- OpenRouter остаётся финальным quality gate после сборки ответа; deploy теперь нормализует и проверяет ключ до публикации.
+
 ## v0.3.15 — mini-workers, delta update и стабильный llmster HOME
 
 - Python-only проект координирует до 8 локальных mini-workers (до 4 одновременно) и не вызывает LLM.
