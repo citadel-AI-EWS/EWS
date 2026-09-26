@@ -117,6 +117,28 @@ def main() -> int:
                 {"mini_agent_id": "llm-mini-2", "error": "simulated_secondary_failure"}
             ], partial
 
+            # The first LLM worker is no longer a single point of failure.
+            def first_failure_chat(model, system_prompt, user_prompt, *, max_tokens, temperature=0.2, timeout_seconds=None):
+                if "synthesis agent" in system_prompt:
+                    return "FIRST FAILURE SYNTHESIS OK"
+                if "mini-agent 1 " in system_prompt:
+                    raise RuntimeError("simulated_primary_failure")
+                return "SURVIVOR"
+
+            agent._project_llm_chat = first_failure_chat
+            first_failure = agent.execute_project_text({
+                "project_id": "first-failure",
+                "work_item_id": "first-failure-1",
+                "role_name": "reviewer",
+                "task_text": "Z" * 1901,
+            })
+            assert first_failure["mini_agent_requested_count"] == 3, first_failure
+            assert first_failure["mini_agent_count"] == 2, first_failure
+            assert first_failure["content"] == "FIRST FAILURE SYNTHESIS OK", first_failure
+            assert first_failure["mini_agent_failures"] == [
+                {"mini_agent_id": "llm-mini-1", "error": "simulated_primary_failure"}
+            ], first_failure
+
         print("LLM mini-agent bounded parallelism: PASS")
         return 0
     finally:
