@@ -147,6 +147,8 @@ jobs:
           if (-not $svc) { throw "SCM service record missing." }
           if ($svc.StartName -ne "NT AUTHORITY\LocalService") { throw "Unexpected service account." }
           if ($svc.StartMode -ne "Auto") { throw "Service is not automatic." }
+          $mode = (Get-Content -LiteralPath (Join-Path $stateRoot "install-mode.txt") -Raw).Trim()
+          if ($mode -ne "windows_service") { throw "Installer did not record Windows Service mode." }
 
           Write-Host "Windows one-click silent installation: PASS"
 
@@ -166,6 +168,64 @@ jobs:
           if (Get-Service -Name CitadelEWSNode -ErrorAction SilentlyContinue) {
             throw "CITADEL service remained registered after uninstall."
           }
+
+      - name: Forced fallback install smoke test
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -LiteralPath dist -Filter "CITADEL_EWS_Node_Setup_*_x64.exe" | Select-Object -First 1
+          if (-not $installer) { throw "Installer artifact not found." }
+          $log = Join-Path $env:RUNNER_TEMP "citadel-oneclick-fallback.log"
+          $p = Start-Process -FilePath $installer.FullName -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/SP-",
+            "/CONTROLLERURL=https://127.0.0.1:9",
+            "/FORCEFALLBACK=1",
+            "/LOG=$log"
+          ) -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log }
+            throw "Fallback installer failed with exit code $($p.ExitCode)."
+          }
+          if (Get-Service -Name CitadelEWSNode -ErrorAction SilentlyContinue) {
+            throw "Fallback mode unexpectedly left the SCM service registered."
+          }
+          schtasks.exe /Query /TN "CitadelEWSNodeFallback" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Fallback startup task was not registered." }
+          $modePath = Join-Path $env:ProgramData "CitadelEWS\state\install-mode.txt"
+          if ((Get-Content -LiteralPath $modePath -Raw).Trim() -ne "windows_boot_task") {
+            throw "Fallback install mode was not recorded."
+          }
+          Start-Sleep -Seconds 3
+          $taskHost = Get-CimInstance Win32_Process | Where-Object {
+            $_.Name -eq "CitadelNodeService.exe" -and $_.CommandLine -like "*--task-host*"
+          } | Select-Object -First 1
+          if (-not $taskHost) { throw "Fallback task host is not running." }
+          Write-Host "Windows fallback startup task: PASS"
+
+      - name: Fallback uninstall smoke test
+        if: always()
+        shell: pwsh
+        run: |
+          $uninstaller = Join-Path $env:ProgramData "CitadelEWS\uninstall\unins000.exe"
+          if (Test-Path -LiteralPath $uninstaller) {
+            $p = Start-Process -FilePath $uninstaller -ArgumentList @(
+              "/VERYSILENT",
+              "/SUPPRESSMSGBOXES",
+              "/NORESTART"
+            ) -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "Fallback uninstaller failed with exit code $($p.ExitCode)." }
+          }
+          schtasks.exe /Query /TN "CitadelEWSNodeFallback" *> $null
+          if ($LASTEXITCODE -eq 0) { throw "Fallback task remained registered after uninstall." }
+          Start-Sleep -Seconds 2
+          $orphan = Get-CimInstance Win32_Process | Where-Object {
+            ($_.Name -eq "CitadelNodeService.exe" -and $_.CommandLine -like "*--task-host*") -or
+            ($_.Name -eq "python.exe" -and $_.CommandLine -like "*citadel_node_v2.py*")
+          } | Select-Object -First 1
+          if ($orphan) { throw "Fallback uninstall left a CITADEL process running." }
+          Write-Host "Windows fallback uninstall: PASS"
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
