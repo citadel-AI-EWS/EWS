@@ -4891,35 +4891,62 @@ async function handleApi(request, env, url) {
       ]);
 
       let projectExecution = "unavailable";
+      let projectReadinessError = null;
       let projectOnlineNodes = 0;
       let projectAiReadyWorkers = 0;
       let projectPythonReadyWorkers = 0;
+      let liveProjectNodes = [];
       try {
-        await ensureNodeAiStorage(env);
         const projectNodes = await env.DB.prepare(`
-          SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
-            ai.installed, ai.loaded_model, ai.server_running
-          FROM nodes AS n
-          LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
-          WHERE n.status = 'online'
-            AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes')
-          ORDER BY n.last_seen_at DESC
+          SELECT node_id, hostname, status, last_seen_at, capabilities_json
+          FROM nodes
+          WHERE status = 'online'
+            AND datetime(last_seen_at) >= datetime('now', '-5 minutes')
+          ORDER BY last_seen_at DESC
           LIMIT 500
         `).all();
-        const liveProjectNodes = (projectNodes.results || [])
+        liveProjectNodes = (projectNodes.results || [])
           .filter((node) => !isTestNodeRecord(node));
         projectOnlineNodes = liveProjectNodes.length;
-        projectAiReadyWorkers = liveProjectNodes
-          .filter((node) => projectNodeReady(node, "architect_manual")).length;
         projectPythonReadyWorkers = liveProjectNodes
           .filter((node) => projectNodeReady(node, "architect_python")).length;
-        projectExecution = projectAiReadyWorkers > 0
-          ? "ready"
-          : projectOnlineNodes > 0
-            ? "waiting_for_ai_worker"
-            : "waiting_for_online_node";
-      } catch {
-        projectExecution = "unavailable";
+      } catch (error) {
+        projectReadinessError = "node_presence_query_failed";
+        console.error("Project readiness node query failed", error);
+      }
+
+      if (projectReadinessError === null && projectOnlineNodes === 0) {
+        projectExecution = "waiting_for_online_node";
+      } else if (projectReadinessError === null) {
+        try {
+          await ensureNodeAiStorage(env);
+          const aiRows = await env.DB.prepare(`
+            SELECT node_id, installed, loaded_model, server_running
+            FROM node_ai_state
+            ORDER BY updated_at DESC
+            LIMIT 500
+          `).all();
+          const aiByNode = new Map(
+            (aiRows.results || []).map((row) => [row.node_id, row])
+          );
+          projectAiReadyWorkers = liveProjectNodes
+            .map((node) => ({ ...node, ...(aiByNode.get(node.node_id) || {}) }))
+            .filter((node) => projectNodeReady(node, "architect_manual")).length;
+          projectExecution = projectAiReadyWorkers > 0
+            ? "ready"
+            : "waiting_for_ai_worker";
+        } catch (error) {
+          const detail = String(error || "").toLowerCase();
+          projectReadinessError = detail.includes("daily row read")
+            ? "d1_read_limit"
+            : detail.includes("daily row write")
+              ? "d1_write_limit"
+              : detail.includes("no such table")
+                ? "ai_state_schema_missing"
+                : "ai_state_query_failed";
+          projectExecution = "unavailable";
+          console.error("Project readiness AI query failed", error);
+        }
       }
 
       return json({
@@ -4933,6 +4960,7 @@ async function handleApi(request, env, url) {
         report_storage: reportStorage,
         session_storage: sessionStorage,
         project_execution: projectExecution,
+        project_readiness_error: projectReadinessError,
         project_online_nodes: projectOnlineNodes,
         project_ai_ready_workers: projectAiReadyWorkers,
         project_python_ready_workers: projectPythonReadyWorkers
