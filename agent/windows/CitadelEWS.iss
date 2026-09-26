@@ -9,6 +9,7 @@
 #endif
 
 #define ServiceName "CitadelEWSNode"
+#define FallbackTaskName "CitadelEWSNodeFallback"
 #define ProductName "CITADEL EWS Node"
 #define PublisherName "CITADEL AI EWS"
 
@@ -84,10 +85,28 @@ begin
   Sleep(1500);
 end;
 
+procedure StopFallbackTask;
+var
+  SchTasks: string;
+begin
+  SchTasks := ExpandConstant('{sys}\schtasks.exe');
+  TryExec(SchTasks, '/End /TN "{#FallbackTaskName}"');
+  Sleep(1000);
+end;
+
+procedure DeleteFallbackTask;
+var
+  SchTasks: string;
+begin
+  SchTasks := ExpandConstant('{sys}\schtasks.exe');
+  TryExec(SchTasks, '/Delete /TN "{#FallbackTaskName}" /F');
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  { Stop an existing service before [Files] replaces the bundled runtime or host. }
+  { Stop either installation mode before [Files] replaces bundled binaries. }
   StopExistingService;
+  StopFallbackTask;
   Result := '';
 end;
 
@@ -143,47 +162,80 @@ begin
   );
 end;
 
-procedure InstallService;
+function ExecOk(FileName, Params: string): Boolean;
 var
-  Sc, ServiceExe, ServiceArgs: string;
   ResultCode: Integer;
 begin
+  Result := Exec(FileName, Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+end;
+
+function ForceFallbackRequested: Boolean;
+begin
+  Result := CompareText(ExpandConstant('{param:FORCEFALLBACK|0}'), '1') = 0;
+end;
+
+procedure WriteInstallMode(Mode: string);
+var
+  ModePath: string;
+begin
+  ModePath := ExpandConstant('{commonappdata}\CitadelEWS\state\install-mode.txt');
+  if not SaveStringToFile(ModePath, Mode + #13#10, False) then
+    RaiseException('Unable to record CITADEL installation mode.');
+end;
+
+function TryInstallService: Boolean;
+var
+  Sc, ServiceExe, ServiceArgs: string;
+begin
+  Result := False;
+  if ForceFallbackRequested then exit;
+
   Sc := ExpandConstant('{sys}\sc.exe');
   ServiceExe := ExpandConstant('{app}\CitadelNodeService.exe');
   ServiceArgs :=
     'binPath= "' + ServiceExe +
     '" start= delayed-auto obj= "NT AUTHORITY\LocalService" DisplayName= "{#ProductName}"';
 
-  { Repair/upgrade in place when the service already exists. }
-  if not Exec(Sc, 'config {#ServiceName} ' + ServiceArgs, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
-    RaiseException('Unable to inspect/update the CITADEL Windows service');
+  if not ExecOk(Sc, 'config {#ServiceName} ' + ServiceArgs) then
+    if not ExecOk(Sc, 'create {#ServiceName} ' + ServiceArgs) then exit;
 
-  if ResultCode <> 0 then
-  begin
-    RequireExec(
-      Sc,
-      'create {#ServiceName} ' + ServiceArgs,
-      'Unable to register the CITADEL Windows service'
-    );
-  end;
+  if not ExecOk(Sc, 'description {#ServiceName} "CITADEL/EWS bounded node service with bundled Python runtime"') then exit;
+  if not ExecOk(Sc, 'failure {#ServiceName} reset= 86400 actions= restart/5000/restart/15000/restart/60000') then exit;
+  if not ExecOk(Sc, 'start {#ServiceName}') then exit;
 
-  RequireExec(
-    Sc,
-    'description {#ServiceName} "CITADEL/EWS bounded node service with bundled Python runtime"',
-    'Unable to set the CITADEL service description'
-  );
+  DeleteFallbackTask;
+  WriteInstallMode('windows_service');
+  Result := True;
+end;
 
-  RequireExec(
-    Sc,
-    'failure {#ServiceName} reset= 86400 actions= restart/5000/restart/15000/restart/60000',
-    'Unable to configure CITADEL service recovery'
-  );
+procedure InstallFallbackTask;
+var
+  SchTasks, XmlPath, HostExe, Xml: string;
+begin
+  StopExistingService;
+  TryExec(ExpandConstant('{sys}\sc.exe'), 'delete {#ServiceName}');
+  Sleep(1000);
 
-  RequireExec(
-    Sc,
-    'start {#ServiceName}',
-    'Unable to start the CITADEL Windows service'
-  );
+  SchTasks := ExpandConstant('{sys}\schtasks.exe');
+  XmlPath := ExpandConstant('{tmp}\CitadelEWSFallbackTask.xml');
+  HostExe := ExpandConstant('{app}\CitadelNodeService.exe');
+
+  Xml :=
+    '<?xml version="1.0" encoding="UTF-16"?>' + #13#10 +
+    '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">' + #13#10 +
+    '  <Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>' + #13#10 +
+    '  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><LogonType>ServiceAccount</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>' + #13#10 +
+    '  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><AllowStartOnDemand>true</AllowStartOnDemand><Enabled>true</Enabled><Hidden>false</Hidden><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure></Settings>' + #13#10 +
+    '  <Actions Context="Author"><Exec><Command>' + HostExe + '</Command><Arguments>--task-host</Arguments><WorkingDirectory>' + ExpandConstant('{app}') + '</WorkingDirectory></Exec></Actions>' + #13#10 +
+    '</Task>' + #13#10;
+
+  if not SaveStringToFile(XmlPath, Xml, False) then
+    RaiseException('Unable to prepare CITADEL fallback task definition.');
+
+  RequireExec(SchTasks, '/Create /TN "{#FallbackTaskName}" /XML "' + XmlPath + '" /F', 'Unable to register CITADEL fallback startup task');
+  RequireExec(SchTasks, '/Run /TN "{#FallbackTaskName}"', 'Unable to start CITADEL fallback startup task');
+  WriteInstallMode('windows_boot_task');
+  DeleteFile(XmlPath);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -192,7 +244,11 @@ begin
   begin
     WriteDefaultConfig;
     HardenDirectories;
-    InstallService;
+    if not TryInstallService then
+    begin
+      Log('CITADEL Windows Service path unavailable; switching to bounded SYSTEM boot-task fallback.');
+      InstallFallbackTask;
+    end;
   end;
 end;
 
@@ -206,5 +262,7 @@ begin
     TryExec(Sc, 'stop {#ServiceName}');
     Sleep(1000);
     TryExec(Sc, 'delete {#ServiceName}');
+    StopFallbackTask;
+    DeleteFallbackTask;
   end;
 end;
