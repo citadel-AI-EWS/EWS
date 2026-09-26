@@ -56,6 +56,8 @@ jobs:
           node <<'NODE'
           const fs = require("node:fs");
           let key = String(process.env.OPENROUTER_API_KEY || "").trim();
+          if (/^OPENROUTER_API_KEY=/i.test(key)) key = key.replace(/^OPENROUTER_API_KEY=/i, "").trim();
+          if (/^Bearer\s+/i.test(key)) key = key.replace(/^Bearer\s+/i, "").trim();
           if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
             key = key.slice(1, -1).trim();
           }
