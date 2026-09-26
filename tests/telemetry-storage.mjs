@@ -207,21 +207,27 @@ const batch = {
     {
       event_id: "log_evt_001",
       level: "info",
-      event_type: "agent_start",
-      message: "agent_start",
+      event_type: "command_completed",
+      message: "command_completed",
       created_at: "2026-09-12T20:00:00Z",
       details: { version: "0.2.0", token: "must-not-be-stored" }
     },
     {
       event_id: "log_evt_002",
       level: "warn",
-      event_type: "resource_guard",
+      event_type: "result_submitted",
       message: "resource guard",
       created_at: "2026-09-12T20:00:01Z",
       details: { cpu_percent: 95.2 }
     }
   ]
 };
+
+// Routine machine status is acknowledged without storing history.
+const routineResponse = await signedPost({events:[{...batch.events[0],event_id:"routine_status",event_type:"agent_start"}]});
+assert.equal(routineResponse.status, 200);
+assert.equal((await routineResponse.json()).discarded, 1);
+assert.equal(state.logs.length, 0);
 
 const firstRequestId = crypto.randomUUID();
 let response = await signedPost(batch, { requestId: firstRequestId });
@@ -330,7 +336,7 @@ state.logs.push({
   event_id: "expired_event",
   node_id: state.node.node_id,
   level: "info",
-  event_type: "agent_start",
+  event_type: "command_completed",
   message: "expired",
   details_json: "{}",
   created_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),

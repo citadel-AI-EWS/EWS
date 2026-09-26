@@ -68,7 +68,7 @@ export async function architectListLogs(request, env, url) {
         'controller' AS source
       FROM audit_events
       WHERE datetime(created_at) >= datetime('now', '-7 days')
-        AND action != 'node.heartbeat'
+        AND (action LIKE '%completed%' OR action LIKE '%failed%' OR action LIKE '%result%' OR action LIKE '%report%')
     )
     SELECT event_id, node_id, level, event_type, message, details_json,
            created_at, received_at, source
@@ -125,7 +125,7 @@ export async function architectLogStats(request, env) {
         created_at AS received_at
       FROM audit_events
       WHERE datetime(created_at) >= datetime('now', '-7 days')
-        AND action != 'node.heartbeat'
+        AND (action LIKE '%completed%' OR action LIKE '%failed%' OR action LIKE '%result%' OR action LIKE '%report%')
     )
     SELECT COUNT(*) AS event_count,
       COUNT(DISTINCT node_id) AS node_count,
@@ -147,7 +147,7 @@ export async function architectLogStats(request, env) {
         created_at
       FROM audit_events
       WHERE datetime(created_at) >= datetime('now', '-7 days')
-        AND action != 'node.heartbeat'
+        AND (action LIKE '%completed%' OR action LIKE '%failed%' OR action LIKE '%result%' OR action LIKE '%report%')
     )
     SELECT node_id, COUNT(*) AS event_count, MAX(created_at) AS newest_created_at
     FROM combined

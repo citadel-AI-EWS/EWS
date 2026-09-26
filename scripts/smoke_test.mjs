@@ -51,7 +51,7 @@ function assertReady(health, hub, api, root) {
   if (!Array.isArray(api.command_types) || !api.command_types.includes("update")) {
     throw new Error("signed update command is unavailable");
   }
-  if (!root.includes("נתונים אמיתיים בלבד")) throw new Error("real-data landing marker missing");
+  if (!['id="machines"', 'id="logs"', 'id="taskForm"'].every(marker => root.includes(marker))) throw new Error("operations console markers missing");
   if (root.includes("ews-demo-has-project")) throw new Error("demo state leaked into live root");
 }
 
