@@ -9,7 +9,6 @@ on:
       - "tests/llm-miniagents-parallel.py"
       - "src/quality/openrouter.js"
       - "tests/openrouter-quality-gate.mjs"
-      - "tools/setup_copilot_review_bridge.ps1"
       - ".github/workflows/build-windows-oneclick.yml"
   push:
     branches: [main]
@@ -55,21 +54,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           choco install innosetup -y --no-progress
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Parse Copilot reviewer setup script
-        shell: pwsh
-        run: |
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path "tools/setup_copilot_review_bridge.ps1"),
-            [ref]$tokens,
-            [ref]$errors
-          ) | Out-Null
-          if ($errors.Count -gt 0) {
-            $errors | ForEach-Object { Write-Error $_.Message }
-            exit 1
-          }
 
       - name: Verify agent, LM Studio protocol, and OpenRouter quality gate
         shell: pwsh
