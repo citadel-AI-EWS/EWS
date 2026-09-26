@@ -123,7 +123,7 @@ need(agentV1.includes('"known_network_recovery"'), "known-network recovery capab
 need(agentV1.includes("prevent_automatic_sleep"), "automatic sleep guard config missing");
 need(agentV1.includes("allowed_wifi_profiles"), "Wi-Fi recovery allowlist missing");
 need(agentV1.includes("controller_reachable"), "network recovery reachability verification missing");
-need(agentV1.includes("wifi_saved_profile:"), "saved Wi-Fi profile recovery loop missing");
+need(agentV1.includes("wifi_primary_retry:") && agentV1.includes("wifi_fallback_profile:"), "preferred/fallback Wi-Fi recovery loop missing");
 need(agentV1.includes("SetThreadExecutionState"), "Windows power execution-state guard missing");
 need(agentV1.includes("stream_lmstudio_answer"), "streaming Hybrid answer missing");
 need(agentV1.includes("/api/v1/models/download/status/"), "LM Studio download progress polling missing");
