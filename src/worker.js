@@ -1,7 +1,7 @@
 import baseWorker from "./index.js";
 import { json } from "./telemetry/common.js";
 import { isTelemetryPath, handleTelemetryRequest } from "./telemetry/router.js";
-import { ensureTelemetryStorage } from "./telemetry/schema.js";
+import { ensureTelemetryStorage, pruneExpiredTelemetry } from "./telemetry/schema.js";
 import {
   ENGINEERING_EXPERIENCE_VERSION,
   validateEngineeringExperience
@@ -14,6 +14,10 @@ import {
 } from "./presence.js";
 
 export default {
+  async scheduled(_controller, env) {
+    await pruneExpiredTelemetry(env);
+  },
+
   async fetch(request, env) {
     const url = new URL(request.url);
     if (isTelemetryPath(url.pathname)) {
