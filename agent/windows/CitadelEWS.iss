@@ -215,32 +215,34 @@ end;
 
 procedure InstallFallbackTask;
 var
-  SchTasks, XmlPath, HostExe, Xml: string;
+  SchTasks, Sc, HostExe, TaskRun: string;
 begin
   StopExistingService;
-  TryExec(ExpandConstant('{sys}\sc.exe'), 'delete {#ServiceName}');
+  Sc := ExpandConstant('{sys}\sc.exe');
+  TryExec(Sc, 'delete {#ServiceName}');
   Sleep(1000);
 
   SchTasks := ExpandConstant('{sys}\schtasks.exe');
-  XmlPath := ExpandConstant('{tmp}\CitadelEWSFallbackTask.xml');
   HostExe := ExpandConstant('{app}\CitadelNodeService.exe');
+  TaskRun := '"' + HostExe + '" --task-host';
 
-  Xml :=
-    '<?xml version="1.0" encoding="UTF-16"?>' + #13#10 +
-    '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">' + #13#10 +
-    '  <Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>' + #13#10 +
-    '  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><LogonType>ServiceAccount</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>' + #13#10 +
-    '  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><AllowStartOnDemand>true</AllowStartOnDemand><Enabled>true</Enabled><Hidden>false</Hidden><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure></Settings>' + #13#10 +
-    '  <Actions Context="Author"><Exec><Command>' + HostExe + '</Command><Arguments>--task-host</Arguments><WorkingDirectory>' + ExpandConstant('{app}') + '</WorkingDirectory></Exec></Actions>' + #13#10 +
-    '</Task>' + #13#10;
-
-  if not SaveStringToFile(XmlPath, Xml, False) then
-    RaiseException('Unable to prepare CITADEL fallback task definition.');
-
-  RequireExec(SchTasks, '/Create /TN "{#FallbackTaskName}" /XML "' + XmlPath + '" /F', 'Unable to register CITADEL fallback startup task');
-  RequireExec(SchTasks, '/Run /TN "{#FallbackTaskName}"', 'Unable to start CITADEL fallback startup task');
+  DeleteFallbackTask;
+  RequireExec(
+    SchTasks,
+    '/Create /TN "{#FallbackTaskName}" /SC ONSTART /RU SYSTEM /RL HIGHEST /TR "' + TaskRun + '" /F',
+    'Unable to register CITADEL fallback startup task'
+  );
+  RequireExec(
+    SchTasks,
+    '/Query /TN "{#FallbackTaskName}"',
+    'CITADEL fallback startup task was not persisted'
+  );
+  RequireExec(
+    SchTasks,
+    '/Run /TN "{#FallbackTaskName}"',
+    'Unable to start CITADEL fallback startup task'
+  );
   WriteInstallMode('windows_boot_task');
-  DeleteFile(XmlPath);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
