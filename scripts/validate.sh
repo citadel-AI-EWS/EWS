@@ -4,8 +4,9 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 python -m unittest -v controller_tests.py
-python -m py_compile controller_app.py controller_tests.py agent/citadel_node_v1.py agent/citadel_node_v2.py
+python -m py_compile controller_app.py controller_tests.py agent/citadel_node_v1.py agent/citadel_node_v2.py tests/network-recovery-priority.py
 python agent/citadel_node_v2.py self-test
+python tests/network-recovery-priority.py
 
 python - <<'PY'
 from pathlib import Path
@@ -315,6 +316,10 @@ node tests/experience-registry.mjs
 node tests/architect-ux-guards.mjs
 node tests/enterprise-policy.mjs
 node tests/hub-five-questions.mjs
+node tests/d1-usage.mjs
+node tests/ten-prompt-routing.mjs
+python tests/lmstudio-local-protocol.py
+python tests/mini-agents.py
 node tests/openrouter-quality-gate.mjs
 
 python - <<'PY'

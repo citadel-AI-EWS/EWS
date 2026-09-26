@@ -48,7 +48,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.16"
+VERSION = "0.3.18"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -63,6 +63,8 @@ LMSTUDIO_INSTALL_FILE_NAMES = {"install_llmstudio_headless.ps1", "install_llmstu
 LMSTUDIO_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,95})?(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,31})?$")
 LMSTUDIO_QUANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
 HYBRID_MODES = {"python", "lmstudio", "both"}
+NETWORK_PRIMARY_PROFILE_RETRIES = 3
+NETWORK_PRIMARY_RETRY_DELAYS = (2, 4, 8)
 WINDOWS_DPAPI_PROTECTION = "windows-dpapi-local-machine-v1"
 CRYPTPROTECT_UI_FORBIDDEN = 0x1
 CRYPTPROTECT_LOCAL_MACHINE = 0x4
@@ -249,6 +251,18 @@ def json_text(value: Any) -> str:
 
 def sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def local_error_code(error: Exception) -> str:
+    """Only expose fixed diagnostic codes, never arbitrary exception text."""
+    code = str(error)
+    if re.fullmatch(r"lmstudio_[a-z_]+|lmstudio_http_[0-9]{3}", code):
+        return code
+    if isinstance(error, (TimeoutError, socket.timeout)):
+        return "lmstudio_timeout"
+    if isinstance(error, ConnectionError):
+        return "lmstudio_connection_failed"
+    return "local_execution_error"
 
 
 def atomic_write(path: Path, text: str, mode: int = 0o600) -> None:
@@ -984,7 +998,7 @@ class Agent:
         *,
         max_tokens: int,
         temperature: float = 0.2,
-    ) -> str:
+    ) -> tuple[str, dict[str, int] | None]:
         request_body = json_text({
             "model": model,
             "messages": [
@@ -1026,7 +1040,19 @@ class Agent:
             raise RuntimeError("lmstudio_invalid_response")
         if not isinstance(content, str) or not content.strip():
             raise RuntimeError("lmstudio_empty_response")
-        return content.strip()
+        usage = decoded.get("usage")
+        measured = None
+        if isinstance(usage, dict):
+            prompt_tokens = usage.get("prompt_tokens")
+            completion_tokens = usage.get("completion_tokens")
+            if (type(prompt_tokens) is int and prompt_tokens >= 0
+                    and type(completion_tokens) is int and completion_tokens >= 0):
+                measured = {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                }
+        return content.strip(), measured
 
     def execute_project_text(self, payload: dict[str, Any]) -> dict[str, Any]:
         task_text = str(payload.get("task_text") or "").strip()
@@ -1053,11 +1079,24 @@ class Agent:
             "edge cases, risks, missing assumptions and practical improvements",
         ]
         mini_agents: list[dict[str, Any]] = []
+        failures: list[dict[str, str]] = []
+        token_usage: dict[str, Any] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "measured_calls": 0, "unmeasured_calls": 0, "agents": {}}
+        def record_usage(agent_id: str, usage: dict[str, int] | None) -> None:
+            token_usage["agents"][agent_id] = usage
+            if usage is None:
+                token_usage["unmeasured_calls"] += 1
+            else:
+                token_usage["measured_calls"] += 1
+                for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                    token_usage[key] += usage[key]
         base_guard = (
             "Work only on the supplied text task. Return useful factual plain text. "
             "Do not execute commands, access credentials, modify the host, or claim actions you did not perform. "
         )
         for index in range(mini_count):
+            self.report_ai_state(last_action="project_text", progress_phase="mini_agent_running",
+                                 progress_current=index, progress_total=mini_count + int(mini_count > 1),
+                                 progress_detail=f"Mini-agent {index + 1}/{mini_count} · {role_name}")
             system_prompt = (
                 "You are CITADEL local mini-agent "
                 + str(index + 1)
@@ -1069,17 +1108,20 @@ class Agent:
                 + base_guard
             )
             try:
-                answer = self._project_llm_chat(
+                answer, usage = self._project_llm_chat(
                     model,
                     system_prompt,
                     task_text,
                     max_tokens=1536,
                     temperature=0.2 + (0.05 * index),
                 )
-            except Exception:
+            except Exception as error:
+                failures.append({"mini_agent_id": f"llm-mini-{index + 1}", "error_code": local_error_code(error)})
                 if index == 0:
+                    self.report_ai_state(progress_phase="failed", progress_detail=local_error_code(error))
                     raise
                 continue
+            record_usage(f"llm-mini-{index + 1}", usage)
             mini_agents.append({
                 "mini_agent_id": f"llm-mini-{index + 1}",
                 "focus": focuses[index],
@@ -1104,7 +1146,9 @@ class Agent:
                 "\n\n".join(synthesis_parts)
             )
             try:
-                content = self._project_llm_chat(
+                self.report_ai_state(progress_phase="synthesis_running", progress_current=mini_count,
+                                     progress_detail="Combining mini-agent answers")
+                content, usage = self._project_llm_chat(
                     model,
                     (
                         "You are the CITADEL local synthesis agent for role: " + role_name + ". "
@@ -1116,18 +1160,28 @@ class Agent:
                     max_tokens=3072,
                     temperature=0.15,
                 )
-            except Exception:
+                record_usage("synthesis", usage)
+            except Exception as error:
+                failures.append({"mini_agent_id": "synthesis", "error_code": local_error_code(error)})
                 content = "\n\n".join(str(item["content"]) for item in mini_agents)
 
         if len(content) > 180000:
             content = content[:180000] + "\n\n[truncated]"
+        token_usage["unmeasured_failed_calls"] = len(failures)
+        self.report_ai_state(progress_phase="completed_partial" if failures else "completed",
+                             progress_current=mini_count + int(mini_count > 1),
+                             progress_detail=f"Completed {len(mini_agents)}/{mini_count} mini-agents")
         return {
             "project_id": project_id or None,
             "work_item_id": work_item_id or None,
             "role_name": role_name,
+            "engine": "lmstudio",
             "model": model,
+            "mini_agent_requested_count": mini_count,
             "mini_agent_count": len(mini_agents),
             "mini_agents": mini_agents,
+            "mini_agent_failures": failures,
+            "token_usage": token_usage,
             "content": content,
             "completed_at": now_iso(),
         }
@@ -1250,7 +1304,7 @@ class Agent:
                 },
                 "report_type": mission_type,
                 "sensitivity": "internal",
-                "report": {"error_type": type(error).__name__},
+                "report": {"error_type": type(error).__name__, "error_code": local_error_code(error)},
             }
         try:
             self.submit_result(result)
@@ -2539,9 +2593,19 @@ class Agent:
                 powershell = shutil.which("powershell.exe") or shutil.which("powershell")
                 if powershell:
                     script = (
-                        "Get-NetConnectionProfile | "
+                        "$profiles = Get-NetConnectionProfile | "
                         "Where-Object {$_.IPv4Connectivity -ne 'Disconnected'} | "
-                        "Select-Object Name,InterfaceAlias,IPv4Connectivity | ConvertTo-Json -Compress"
+                        "ForEach-Object { "
+                        "$adapter = Get-NetAdapter -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue; "
+                        "$wireless = $false; "
+                        "if ($adapter) { "
+                        "$wireless = ($adapter.NdisPhysicalMedium -eq 9) -or "
+                        "([string]$adapter.PhysicalMediaType -match '802\\.11|Wireless'); "
+                        "}; "
+                        "[PSCustomObject]@{Name=$_.Name;InterfaceAlias=$_.InterfaceAlias;"
+                        "IPv4Connectivity=$_.IPv4Connectivity;IsWireless=$wireless} "
+                        "}; "
+                        "$profiles | ConvertTo-Json -Compress"
                     )
                     result = subprocess.run(  # nosec B603
                         [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
@@ -2552,12 +2616,24 @@ class Agent:
                         rows = decoded if isinstance(decoded, list) else [decoded]
                         names = [str(item.get("Name") or "").strip() for item in rows if isinstance(item, dict)]
                         names = [name for name in names if name]
+                        active_wifi = next(
+                            (
+                                str(item.get("Name") or "").strip()
+                                for item in rows
+                                if isinstance(item, dict)
+                                and item.get("IsWireless") is True
+                                and str(item.get("Name") or "").strip()
+                            ),
+                            None,
+                        )
                         remembered = list(state.get("windows_profiles") or [])
                         for name in [*names, *self.config.allowed_wifi_profiles]:
                             if name and name not in remembered:
                                 remembered.append(name)
                         if remembered:
                             state["windows_profiles"] = remembered[:16]
+                        if active_wifi:
+                            state["last_windows_wifi_profile"] = active_wifi[:120]
             elif os.name == "posix":
                 nmcli = shutil.which("nmcli")
                 if nmcli:
@@ -2575,10 +2651,78 @@ class Agent:
                                 profiles.append({"name": name[:120], "type": kind})
                         if profiles:
                             state["linux_profiles"] = profiles[:8]
+                            state["last_linux_profile"] = profiles[0]["name"]
             state["remembered_at"] = now_iso()
             atomic_write(self.network_recovery_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
         except Exception as error:
             self.log.write("network_profile_remember_failed", error=str(error)[:300])
+
+    def _recover_windows_network(self, state: dict[str, Any], attempts: list[str]) -> bool:
+        """Recover Controller connectivity by preferring the last active Windows Wi-Fi profile."""
+        ipconfig = shutil.which("ipconfig.exe") or shutil.which("ipconfig")
+        netsh = shutil.which("netsh.exe") or shutil.which("netsh")
+        profiles: list[str] = []
+        preferred = state.get("last_windows_wifi_profile")
+        if isinstance(preferred, str):
+            preferred = preferred.strip()
+            if not preferred or len(preferred) > 120:
+                preferred = None
+        else:
+            preferred = None
+        for profile in [
+            preferred,
+            *(state.get("windows_profiles") or []),
+            *self.config.allowed_wifi_profiles,
+        ]:
+            if isinstance(profile, str):
+                name = profile.strip()
+                if name and len(name) <= 120 and name not in profiles:
+                    profiles.append(name)
+
+        if netsh and preferred:
+            for retry_index in range(NETWORK_PRIMARY_PROFILE_RETRIES):
+                result = subprocess.run(  # nosec B603
+                    [netsh, "wlan", "connect", f"name={preferred}"],
+                    timeout=30, capture_output=True, text=True, shell=False,
+                )
+                attempts.append(
+                    f"wifi_primary_retry:{retry_index + 1}:" + preferred[:64]
+                )
+                if result.returncode == 0:
+                    if ipconfig and retry_index == 0:
+                        subprocess.run(  # nosec B603
+                            [ipconfig, "/renew"],
+                            timeout=60, capture_output=True, text=True, shell=False,
+                        )
+                        attempts.append("dhcp_renew")
+                    time.sleep(NETWORK_PRIMARY_RETRY_DELAYS[retry_index])
+                    if self.controller_reachable():
+                        state["last_windows_wifi_profile"] = preferred
+                        return True
+
+        if ipconfig and not preferred:
+            subprocess.run(  # nosec B603
+                [ipconfig, "/renew"], timeout=60, capture_output=True, text=True, shell=False,
+            )
+            attempts.append("dhcp_renew")
+            if self.controller_reachable():
+                return True
+
+        if netsh:
+            for profile in profiles[:16]:
+                if profile == preferred:
+                    continue
+                result = subprocess.run(  # nosec B603
+                    [netsh, "wlan", "connect", f"name={profile}"],
+                    timeout=30, capture_output=True, text=True, shell=False,
+                )
+                attempts.append("wifi_fallback_profile:" + profile[:64])
+                if result.returncode == 0:
+                    time.sleep(3)
+                    if self.controller_reachable():
+                        state["last_windows_wifi_profile"] = profile
+                        return True
+        return False
 
     def recover_network(self) -> None:
         if not self.config.network_recovery_enabled:
@@ -2595,41 +2739,50 @@ class Agent:
         recovered = False
         try:
             if os.name == "nt":
-                ipconfig = shutil.which("ipconfig.exe") or shutil.which("ipconfig")
-                if ipconfig:
-                    subprocess.run(  # nosec B603
-                        [ipconfig, "/renew"], timeout=60, capture_output=True, text=True, shell=False,
-                    )
-                    attempts.append("dhcp_renew")
-                    recovered = self.controller_reachable()
-                netsh = shutil.which("netsh.exe") or shutil.which("netsh")
-                if netsh and not recovered:
-                    profiles: list[str] = []
-                    for profile in [*(state.get("windows_profiles") or []), *self.config.allowed_wifi_profiles]:
-                        if isinstance(profile, str):
-                            name = profile.strip()
-                            if name and len(name) <= 120 and name not in profiles:
-                                profiles.append(name)
-                    for profile in profiles[:16]:
-                        result = subprocess.run(  # nosec B603
-                            [netsh, "wlan", "connect", f"name={profile}"],
-                            timeout=30, capture_output=True, text=True, shell=False,
-                        )
-                        attempts.append("wifi_saved_profile:" + profile[:64])
-                        if result.returncode == 0:
-                            time.sleep(3)
-                            if self.controller_reachable():
-                                recovered = True
-                                break
+                recovered = self._recover_windows_network(state, attempts)
             elif os.name == "posix":
                 nmcli = shutil.which("nmcli")
                 if nmcli:
                     subprocess.run(  # nosec B603
                         [nmcli, "networking", "on"], timeout=20, capture_output=True, text=True, shell=False,
                     )
+                    linux_profiles: list[str] = []
+                    preferred = state.get("last_linux_profile")
+                    if isinstance(preferred, str):
+                        preferred = preferred.strip()
+                        if not preferred or len(preferred) > 120:
+                            preferred = None
+                    else:
+                        preferred = None
                     for item in state.get("linux_profiles") or []:
                         name = item.get("name") if isinstance(item, dict) else None
-                        if isinstance(name, str) and name and len(name) <= 120:
+                        if isinstance(name, str):
+                            name = name.strip()
+                            if name and len(name) <= 120 and name not in linux_profiles:
+                                linux_profiles.append(name)
+                    if preferred and preferred not in linux_profiles:
+                        linux_profiles.insert(0, preferred)
+
+                    if preferred:
+                        for retry_index in range(NETWORK_PRIMARY_PROFILE_RETRIES):
+                            result = subprocess.run(  # nosec B603
+                                [nmcli, "connection", "up", preferred],
+                                timeout=60, capture_output=True, text=True, shell=False,
+                            )
+                            attempts.append(
+                                f"linux_primary_retry:{retry_index + 1}:" + preferred[:64]
+                            )
+                            if result.returncode == 0:
+                                time.sleep(NETWORK_PRIMARY_RETRY_DELAYS[retry_index])
+                                if self.controller_reachable():
+                                    recovered = True
+                                    state["last_linux_profile"] = preferred
+                                    break
+
+                    if not recovered:
+                        for name in linux_profiles[:8]:
+                            if name == preferred:
+                                continue
                             result = subprocess.run(  # nosec B603
                                 [nmcli, "connection", "up", name],
                                 timeout=60, capture_output=True, text=True, shell=False,
@@ -2639,8 +2792,13 @@ class Agent:
                                 time.sleep(3)
                                 if self.controller_reachable():
                                     recovered = True
+                                    state["last_linux_profile"] = name
                                     break
             if recovered:
+                atomic_write(
+                    self.network_recovery_path,
+                    json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+                )
                 self.remember_network_profile()
             self.log.write("network_recovery_attempted", attempts=attempts, recovered=recovered)
         except Exception as error:

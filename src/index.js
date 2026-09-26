@@ -1,4 +1,5 @@
 import { getProjectExperienceRegistry } from "./experience/registry.js";
+import { d1UsageOverview } from "./d1-usage.js";
 import { openRouterQualityConfig, reviewWithOpenRouter } from "./quality/openrouter.js";
 import { ARCHITECT_ROLE_PERMISSIONS, DEFAULT_ENTERPRISE_POLICY, evaluateEnterpriseNode, normalizeEnterprisePolicy, requiredArchitectPermission, roleHasPermission } from "./enterprise/policy.js";
 
@@ -34,17 +35,17 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.16",
+  version: "0.3.18",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "1e1871534f9c04c852a995f9e038654253f9d14cf9090c64209036b0f804a3c1"
+      sha256: "9b9560792f97d4ba0b98f4251aedca5f5d2125a905141a1107e60529775315e8"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "f87721a185fbed1d6bc6d3317cbc2ccfb1007b4aa6885168cf53c931e144e986"
+      sha256: "88a4406299df36c2d5c411ad4ad835585f78446a4ce0ff2731cd2341353bad3e"
     }
   ]
 });
@@ -4684,7 +4685,7 @@ async function architectNodeDetails(request, env, nodeId) {
   await Promise.all([ensureNodeNetworkStorage(env), ensureNodeAiStorage(env), ensureNodeHardwareStorage(env)]);
   const row = await env.DB.prepare(`
     SELECT n.node_id, n.hostname, n.os_name, n.os_version, n.architecture,
-      n.agent_version, n.status, n.cpu_percent, n.memory_percent, n.last_seen_at,
+      n.agent_version, n.status, n.cpu_percent, n.memory_percent, n.last_seen_at, n.capabilities_json,
       net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json,
       net.updated_at AS network_updated_at,
       hw.memory_total_bytes, hw.cpu_logical_count, hw.gpus_json,
@@ -4707,6 +4708,9 @@ async function architectNodeDetails(request, env, nodeId) {
       os_version: row.os_version,
       architecture: row.architecture,
       agent_version: row.agent_version,
+      latest_agent_version: LATEST_NODE_RELEASE.version,
+      update_required: row.agent_version !== LATEST_NODE_RELEASE.version,
+      capabilities: safeJson(row.capabilities_json, []),
       status: row.status,
       cpu_percent: row.cpu_percent,
       memory_percent: row.memory_percent,
@@ -5226,6 +5230,12 @@ async function handleApi(request, env, url) {
     return request.method === "GET"
       ? architectOverview(request, env)
       : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/d1-usage") {
+    if (request.method !== "GET") return methodNotAllowed(["GET"]);
+    await authenticateArchitect(request, env);
+    return json(await d1UsageOverview(env));
   }
 
   if (url.pathname === "/api/v1/architect/enterprise") {
