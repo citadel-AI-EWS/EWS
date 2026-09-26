@@ -126,6 +126,9 @@ need(agentV1.includes('"127.0.0.1"'), "project worker must stay on local LM Stud
 need(index.includes("materializeProjectWorkForNode"), "planned project materializer missing");
 need(index.includes("waiting_for_lmstudio_project_worker"), "planned project waiting reason missing");
 need(index.includes("final_report:"), "project final report aggregation missing");
+need(index.includes("project_execution"), "project execution readiness health missing");
+need(index.includes("project_ai_ready_workers"), "AI project worker readiness count missing");
+need(index.includes("project_python_ready_workers"), "Python project worker readiness count missing");
 need(agentV1.includes("shell=False"), "fixed argv execution guard missing");
 need(!agentV1.includes('"shell" in SUPPORTED_COMMANDS'), "arbitrary shell command registered");
 need(!buildSite.includes("execute-api.*.amazonaws.com"), "invalid CSP API Gateway wildcard returned");

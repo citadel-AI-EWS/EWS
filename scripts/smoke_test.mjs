@@ -36,6 +36,14 @@ function assertReady(health, hub, api, root) {
     "presence_storage"
   ];
   if (health.ok !== true) throw new Error("health.ok is not true");
+  for (const field of ["project_online_nodes", "project_ai_ready_workers", "project_python_ready_workers"]) {
+    if (!Number.isInteger(health[field]) || health[field] < 0) {
+      throw new Error(`health.${field} is invalid`);
+    }
+  }
+  if (!["ready", "waiting_for_ai_worker", "waiting_for_online_node", "unavailable"].includes(health.project_execution)) {
+    throw new Error("health.project_execution is invalid");
+  }
   for (const field of requiredReady) {
     if (health[field] !== "ready") throw new Error(`${field} is not ready`);
   }
@@ -70,6 +78,10 @@ for (let attempt = 1; attempt <= attempts; attempt += 1) {
       base_url: baseUrl,
       deploy_sha: deploySha,
       registered_nodes: hub.nodes.length,
+      project_execution: health.project_execution,
+      project_online_nodes: health.project_online_nodes,
+      project_ai_ready_workers: health.project_ai_ready_workers,
+      project_python_ready_workers: health.project_python_ready_workers,
       checked_at: new Date().toISOString()
     }));
     process.exit(0);
