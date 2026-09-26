@@ -91,10 +91,10 @@ var
 begin
   SchTasks := ExpandConstant('{sys}\schtasks.exe');
   TaskKill := ExpandConstant('{sys}\taskkill.exe');
-  TryExec(SchTasks, '/End /TN "{#FallbackTaskName}"');
-  Sleep(1000);
-  { Fixed-name cleanup only: terminate our fallback host and its child agent tree. }
+  { Kill our host while it is still the parent so /T also terminates the agent child. }
   TryExec(TaskKill, '/IM CitadelNodeService.exe /T /F');
+  Sleep(500);
+  TryExec(SchTasks, '/End /TN "{#FallbackTaskName}"');
   Sleep(500);
 end;
 
