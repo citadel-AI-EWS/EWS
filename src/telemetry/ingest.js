@@ -53,8 +53,8 @@ export async function ingestNodeLogs(request, env, nodeId, url) {
 
   // Telemetry batches are intentionally not mirrored into audit_events: doing so
   // would make the supposedly bounded observability path grow D1 indefinitely.
-  // The per-node cap stays strict. Age-based retention is opportunistic and uses
-  // the received_at index without wrapping the indexed column in datetime().
+  // The per-node cap stays strict. A server-controlled scheduled Worker trigger
+  // enforces age-based retention independently of node-supplied event IDs.
   const retention = [
     env.DB.prepare(`
       DELETE FROM node_logs
@@ -67,13 +67,6 @@ export async function ingestNodeLogs(request, env, nodeId, url) {
         )
     `).bind(nodeId, nodeId)
   ];
-  const retentionKey = events[0]?.event_id || "";
-  if (retentionKey.endsWith("0")) {
-    retention.push(env.DB.prepare(`
-      DELETE FROM node_logs
-      WHERE received_at < datetime('now', '-7 days')
-    `));
-  }
   await env.DB.batch(retention);
 
   return json({
