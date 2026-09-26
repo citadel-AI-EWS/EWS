@@ -80,8 +80,16 @@ Write-Host "[CITADEL] Checking Copilot CLI..."
 & copilot --version
 if ($LASTEXITCODE -ne 0) { throw "Copilot CLI is not available." }
 
-Write-Host "[CITADEL] Testing Copilot authentication. If GitHub asks you to authorize Copilot, complete that one-time sign-in."
-$Probe = & copilot -p "Reply exactly CITADEL_COPILOT_READY" -s --no-ask-user --available-tools=view 2>&1
+$CopilotHome = Join-Path $env:LOCALAPPDATA "CitadelEWS\copilot-reviewer\copilot-home"
+New-Item -ItemType Directory -Force -Path $CopilotHome | Out-Null
+$env:COPILOT_HOME = $CopilotHome
+$env:COPILOT_ALLOW_ALL = "false"
+Remove-Item Env:COPILOT_GITHUB_TOKEN -ErrorAction SilentlyContinue
+Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
+Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+
+Write-Host "[CITADEL] Testing isolated Copilot authentication. The reviewer uses GitHub CLI auth and a clean permission store."
+$Probe = & copilot -p "Reply exactly CITADEL_COPILOT_READY" -s --no-ask-user --available-tools=view --allow-tool=read 2>&1
 if ($LASTEXITCODE -ne 0 -or (($Probe | Out-String) -notmatch "CITADEL_COPILOT_READY")) {
   Write-Host "[CITADEL] Copilot CLI still needs authorization."
   Write-Host "[CITADEL] Run: copilot login"
