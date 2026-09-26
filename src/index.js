@@ -4895,6 +4895,7 @@ async function handleApi(request, env, url) {
       let projectAiReadyWorkers = 0;
       let projectPythonReadyWorkers = 0;
       try {
+        await ensureNodeAiStorage(env);
         const projectNodes = await env.DB.prepare(`
           SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
             ai.installed, ai.loaded_model, ai.server_running
