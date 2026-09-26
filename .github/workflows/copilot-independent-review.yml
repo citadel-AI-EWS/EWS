@@ -135,6 +135,7 @@ QUESTIONS FOR CHATGPT
             -s \
             --no-ask-user \
             --no-color \
+            --available-tools='bash,view,grep,glob' \
             --allow-tool=read \
             --allow-tool='shell(git status)' \
             --allow-tool='shell(git diff:*)' \
