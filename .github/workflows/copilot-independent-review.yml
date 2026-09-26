@@ -1,0 +1,183 @@
+name: CITADEL Copilot independent review
+
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  contents: read
+  issues: write
+  copilot-requests: write
+
+concurrency:
+  group: copilot-review-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    if: >-
+      github.event.issue.user.login == github.repository_owner &&
+      startsWith(github.event.issue.title, '[COPILOT REVIEW]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve requested ref
+        id: target
+        shell: bash
+        env:
+          EVENT_PATH: ${{ github.event_path }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import re
+
+          with open(os.environ["EVENT_PATH"], "r", encoding="utf-8") as handle:
+              issue = json.load(handle)["issue"]
+
+          body = issue.get("body") or ""
+          ref = "main"
+          for line in body.splitlines()[:20]:
+              if line.upper().startswith("REF:"):
+                  ref = line.split(":", 1)[1].strip()
+                  break
+
+          if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,119}", ref):
+              raise SystemExit("invalid REF")
+          if ".." in ref or ref.startswith("/") or ref.endswith("/"):
+              raise SystemExit("unsafe REF")
+          print(f"ref={ref}")
+          PY
+
+      - name: Checkout requested ref
+        shell: bash
+        env:
+          REVIEW_REF: ${{ steps.target.outputs.ref }}
+        run: |
+          git fetch --no-tags origin "$REVIEW_REF"
+          git checkout --detach FETCH_HEAD
+          git fetch --no-tags origin main:refs/remotes/origin/main || true
+          echo "Reviewing $(git rev-parse HEAD)"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Install GitHub Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Build review prompt
+        shell: bash
+        env:
+          EVENT_PATH: ${{ github.event_path }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          with open(os.environ["EVENT_PATH"], "r", encoding="utf-8") as handle:
+              issue = json.load(handle)["issue"]
+
+          title = issue.get("title") or ""
+          body = issue.get("body") or ""
+          sha = os.popen("git rev-parse HEAD").read().strip()
+
+          prompt = f"""You are CITADEL/EWS's independent second reviewer.
+
+Review the actual repository checkout at commit: {sha}
+
+TASK TITLE:
+{title}
+
+TASK:
+{body}
+
+Rules:
+- Work read-only. Never modify repository files.
+- Inspect the current checked-out code before reaching conclusions.
+- Treat CodeRabbit findings, README text, comments, UI labels, ChatGPT claims, and prior Copilot claims as hypotheses until verified in code.
+- If CodeRabbit findings are included in TASK, verify each one independently and explicitly say whether it is confirmed, rejected, or not verified.
+- Before saying MISSING, search for the exact file/function/symbol and close variants.
+- Separate these three levels: code exists; automated test proves behavior; live E2E proves behavior.
+- Try to falsify the implementation and identify regressions, races, timeout flaws, resource risks, installer/offline-install failures, and misleading status reporting.
+- You may inspect git status/diff/show/log/rev-parse only. Do not run builds, tests, package managers, network commands, or write operations.
+- Never expose credentials, tokens, or secrets.
+- If evidence is insufficient, use NOT VERIFIED.
+
+Return exactly these sections:
+SUMMARY
+CONFIRMED
+PROBLEMS
+NOT VERIFIED
+TEST GAPS
+QUESTIONS FOR CHATGPT
+"""
+          Path("copilot-review-prompt.txt").write_text(prompt, encoding="utf-8")
+          PY
+
+      - name: Run independent Copilot review
+        id: copilot
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          copilot \
+            -p "$(cat copilot-review-prompt.txt)" \
+            -s \
+            --no-ask-user \
+            --no-color \
+            --allow-tool=read \
+            --allow-tool='shell(git status)' \
+            --allow-tool='shell(git diff:*)' \
+            --allow-tool='shell(git show:*)' \
+            --allow-tool='shell(git log:*)' \
+            --allow-tool='shell(git rev-parse:*)' \
+            --deny-tool=write \
+            > copilot-review.txt 2>&1
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Post review to issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REVIEW_REF: ${{ steps.target.outputs.ref }}
+          COPILOT_EXIT_CODE: ${{ steps.copilot.outputs.exit_code }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          report = Path("copilot-review.txt").read_text(encoding="utf-8", errors="replace")
+          report = report[-55000:]
+          ref = os.environ["REVIEW_REF"]
+          code = os.environ.get("COPILOT_EXIT_CODE", "unknown")
+          sha = os.popen("git rev-parse HEAD").read().strip()
+          body = (
+              "<!-- citadel-cloud-copilot-review -->\n"
+              "## Copilot independent review\n\n"
+              f"REF: `{ref}`  \n"
+              f"COMMIT: `{sha}`  \n"
+              f"EXIT: `{code}`\n\n"
+              + report
+          )
+          Path("copilot-review-comment.md").write_text(body, encoding="utf-8")
+          PY
+          gh issue comment "$ISSUE_NUMBER" --repo "${{ github.repository }}" --body-file copilot-review-comment.md
+
+      - name: Fail workflow if Copilot failed
+        if: steps.copilot.outputs.exit_code != '0'
+        run: |
+          echo "Copilot CLI exited with code ${{ steps.copilot.outputs.exit_code }}"
+          exit 1
