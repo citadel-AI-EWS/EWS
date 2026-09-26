@@ -97,9 +97,11 @@ if (-not $NoStartup) {
   $LogRoot = Join-Path $env:LOCALAPPDATA "CitadelEWS\copilot-reviewer"
   New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
   $Log = Join-Path $LogRoot "bridge.log"
+  $ChildCommand = '""' + $Python + '" "' + $Bridge + '" --repository "' + $Repository +
+                  '" --repo-root "' + $ReviewerRoot + '" >> "' + $Log + '" 2>&1"'
   $Line = '@echo off' + [Environment]::NewLine +
           'cd /d "' + $ReviewerRoot + '"' + [Environment]::NewLine +
-          'start "CITADEL Copilot Reviewer" /min "' + $Python + '" "' + $Bridge + '" --repository "' + $Repository + '" --repo-root "' + $ReviewerRoot + '" >> "' + $Log + '" 2>&1'
+          'start "CITADEL Copilot Reviewer" /min cmd.exe /d /c ' + $ChildCommand
   Set-Content -LiteralPath $Launcher -Value $Line -Encoding Ascii
   Write-Host "[CITADEL] Startup launcher installed: $Launcher"
 }
