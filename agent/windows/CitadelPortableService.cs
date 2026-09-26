@@ -176,6 +176,14 @@ namespace CitadelEws
                     }
                     if (File.Exists(paths.StopFile)) continue;
 
+                    if (taskMode)
+                    {
+                        // The Task Scheduler fallback keeps one stable host alive and
+                        // restarts only the bounded agent child after an unexpected exit.
+                        Thread.Sleep(5000);
+                        continue;
+                    }
+
                     Environment.Exit(code == 0 ? 1 : code);
                     return;
                 }
