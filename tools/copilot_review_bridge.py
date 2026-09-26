@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -28,7 +29,14 @@ FAILED_LABEL = "citadel-copilot-failed"
 REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$")
 
 
-def run(args: list[str], *, cwd: Path | None = None, timeout: int = 120, check: bool = True) -> subprocess.CompletedProcess[str]:
+def run(
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    timeout: int = 120,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     completed = subprocess.run(
         args,
         cwd=str(cwd) if cwd else None,
@@ -36,6 +44,7 @@ def run(args: list[str], *, cwd: Path | None = None, timeout: int = 120, check: 
         capture_output=True,
         timeout=timeout,
         shell=False,
+        env=env,
     )
     if check and completed.returncode != 0:
         stderr = (completed.stderr or completed.stdout or "").strip()
@@ -123,6 +132,16 @@ QUESTIONS FOR CHATGPT
 
 
 def copilot_review(repo_root: Path, prompt: str, timeout: int) -> str:
+    copilot_home = repo_root.parent / "copilot-cli-home"
+    copilot_home.mkdir(parents=True, exist_ok=True)
+    clean_env = os.environ.copy()
+    clean_env["COPILOT_HOME"] = str(copilot_home)
+    clean_env["COPILOT_ALLOW_ALL"] = "false"
+    # Do not let unrelated CI/provider tokens silently override the dedicated
+    # GitHub CLI authentication used by this reviewer.
+    for name in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+        clean_env.pop(name, None)
+
     completed = run(
         [
             "copilot",
@@ -142,6 +161,7 @@ def copilot_review(repo_root: Path, prompt: str, timeout: int) -> str:
         ],
         cwd=repo_root,
         timeout=timeout,
+        env=clean_env,
     )
     text = (completed.stdout or "").strip()
     if not text:
