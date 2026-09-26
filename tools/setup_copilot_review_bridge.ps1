@@ -84,13 +84,23 @@ $CopilotHome = Join-Path $env:LOCALAPPDATA "CitadelEWS\copilot-reviewer\copilot-
 New-Item -ItemType Directory -Force -Path $CopilotHome | Out-Null
 $env:COPILOT_HOME = $CopilotHome
 $env:COPILOT_ALLOW_ALL = "false"
-Remove-Item Env:COPILOT_GITHUB_TOKEN -ErrorAction SilentlyContinue
-Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
-Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
 
-Write-Host "[CITADEL] Testing isolated Copilot authentication. The reviewer uses GitHub CLI auth and a clean permission store."
-$Probe = & copilot -p "Reply exactly CITADEL_COPILOT_READY" -s --no-ask-user --available-tools=view --allow-tool=read 2>&1
-if ($LASTEXITCODE -ne 0 -or (($Probe | Out-String) -notmatch "CITADEL_COPILOT_READY")) {
+Write-Host "[CITADEL] Testing isolated Copilot authentication. The reviewer uses a clean permission store."
+$SavedCopilotToken = $env:COPILOT_GITHUB_TOKEN
+$SavedGhToken = $env:GH_TOKEN
+$SavedGithubToken = $env:GITHUB_TOKEN
+try {
+  Remove-Item Env:COPILOT_GITHUB_TOKEN -ErrorAction SilentlyContinue
+  Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
+  Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+  $Probe = & copilot -p "Reply exactly CITADEL_COPILOT_READY" -s --no-ask-user --available-tools=view --allow-tool=read 2>&1
+  $ProbeExitCode = $LASTEXITCODE
+} finally {
+  if ($null -ne $SavedCopilotToken) { $env:COPILOT_GITHUB_TOKEN = $SavedCopilotToken }
+  if ($null -ne $SavedGhToken) { $env:GH_TOKEN = $SavedGhToken }
+  if ($null -ne $SavedGithubToken) { $env:GITHUB_TOKEN = $SavedGithubToken }
+}
+if ($ProbeExitCode -ne 0 -or (($Probe | Out-String) -notmatch "CITADEL_COPILOT_READY")) {
   Write-Host "[CITADEL] Copilot CLI still needs authorization."
   Write-Host "[CITADEL] Run: copilot login"
   throw "Complete the one-time Copilot login, then rerun setup."
