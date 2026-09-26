@@ -195,7 +195,6 @@ for (const required of [
   'id="detailUninstall"',
   "/details",
   "LAN IP",
-  "Tailscale IP",
   "MAC",
   "lmstudio_install",
   "lmstudio_probe",
@@ -208,6 +207,7 @@ for (const required of [
   assert.ok(operations.includes(required), "Operations capability missing: " + required);
 }
 assert.ok(!operations.includes("setInterval(refresh,10000)"), "Operations console must not poll every 10 seconds");
+assert.doesNotMatch(operations, /tailscale/i, "Tailscale-specific UI must not return");
 
 
 assert.match(architect, /Ноды, проекты, миссии, отчёты, модели и данные не удаляются/);
