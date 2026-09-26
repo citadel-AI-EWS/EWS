@@ -48,7 +48,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.16"
+VERSION = "0.3.17"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -249,6 +249,18 @@ def json_text(value: Any) -> str:
 
 def sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def local_error_code(error: Exception) -> str:
+    """Only expose fixed diagnostic codes, never arbitrary exception text."""
+    code = str(error)
+    if re.fullmatch(r"lmstudio_[a-z_]+|lmstudio_http_[0-9]{3}", code):
+        return code
+    if isinstance(error, (TimeoutError, socket.timeout)):
+        return "lmstudio_timeout"
+    if isinstance(error, ConnectionError):
+        return "lmstudio_connection_failed"
+    return "local_execution_error"
 
 
 def atomic_write(path: Path, text: str, mode: int = 0o600) -> None:
@@ -984,7 +996,7 @@ class Agent:
         *,
         max_tokens: int,
         temperature: float = 0.2,
-    ) -> str:
+    ) -> tuple[str, dict[str, int] | None]:
         request_body = json_text({
             "model": model,
             "messages": [
@@ -1026,7 +1038,19 @@ class Agent:
             raise RuntimeError("lmstudio_invalid_response")
         if not isinstance(content, str) or not content.strip():
             raise RuntimeError("lmstudio_empty_response")
-        return content.strip()
+        usage = decoded.get("usage")
+        measured = None
+        if isinstance(usage, dict):
+            prompt_tokens = usage.get("prompt_tokens")
+            completion_tokens = usage.get("completion_tokens")
+            if (type(prompt_tokens) is int and prompt_tokens >= 0
+                    and type(completion_tokens) is int and completion_tokens >= 0):
+                measured = {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                }
+        return content.strip(), measured
 
     def execute_project_text(self, payload: dict[str, Any]) -> dict[str, Any]:
         task_text = str(payload.get("task_text") or "").strip()
@@ -1053,11 +1077,24 @@ class Agent:
             "edge cases, risks, missing assumptions and practical improvements",
         ]
         mini_agents: list[dict[str, Any]] = []
+        failures: list[dict[str, str]] = []
+        token_usage: dict[str, Any] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "measured_calls": 0, "unmeasured_calls": 0, "agents": {}}
+        def record_usage(agent_id: str, usage: dict[str, int] | None) -> None:
+            token_usage["agents"][agent_id] = usage
+            if usage is None:
+                token_usage["unmeasured_calls"] += 1
+            else:
+                token_usage["measured_calls"] += 1
+                for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                    token_usage[key] += usage[key]
         base_guard = (
             "Work only on the supplied text task. Return useful factual plain text. "
             "Do not execute commands, access credentials, modify the host, or claim actions you did not perform. "
         )
         for index in range(mini_count):
+            self.report_ai_state(last_action="project_text", progress_phase="mini_agent_running",
+                                 progress_current=index, progress_total=mini_count + int(mini_count > 1),
+                                 progress_detail=f"Mini-agent {index + 1}/{mini_count} · {role_name}")
             system_prompt = (
                 "You are CITADEL local mini-agent "
                 + str(index + 1)
@@ -1069,17 +1106,20 @@ class Agent:
                 + base_guard
             )
             try:
-                answer = self._project_llm_chat(
+                answer, usage = self._project_llm_chat(
                     model,
                     system_prompt,
                     task_text,
                     max_tokens=1536,
                     temperature=0.2 + (0.05 * index),
                 )
-            except Exception:
+            except Exception as error:
+                failures.append({"mini_agent_id": f"llm-mini-{index + 1}", "error_code": local_error_code(error)})
                 if index == 0:
+                    self.report_ai_state(progress_phase="failed", progress_detail=local_error_code(error))
                     raise
                 continue
+            record_usage(f"llm-mini-{index + 1}", usage)
             mini_agents.append({
                 "mini_agent_id": f"llm-mini-{index + 1}",
                 "focus": focuses[index],
@@ -1104,7 +1144,9 @@ class Agent:
                 "\n\n".join(synthesis_parts)
             )
             try:
-                content = self._project_llm_chat(
+                self.report_ai_state(progress_phase="synthesis_running", progress_current=mini_count,
+                                     progress_detail="Combining mini-agent answers")
+                content, usage = self._project_llm_chat(
                     model,
                     (
                         "You are the CITADEL local synthesis agent for role: " + role_name + ". "
@@ -1116,18 +1158,28 @@ class Agent:
                     max_tokens=3072,
                     temperature=0.15,
                 )
-            except Exception:
+                record_usage("synthesis", usage)
+            except Exception as error:
+                failures.append({"mini_agent_id": "synthesis", "error_code": local_error_code(error)})
                 content = "\n\n".join(str(item["content"]) for item in mini_agents)
 
         if len(content) > 180000:
             content = content[:180000] + "\n\n[truncated]"
+        token_usage["unmeasured_failed_calls"] = len(failures)
+        self.report_ai_state(progress_phase="completed_partial" if failures else "completed",
+                             progress_current=mini_count + int(mini_count > 1),
+                             progress_detail=f"Completed {len(mini_agents)}/{mini_count} mini-agents")
         return {
             "project_id": project_id or None,
             "work_item_id": work_item_id or None,
             "role_name": role_name,
+            "engine": "lmstudio",
             "model": model,
+            "mini_agent_requested_count": mini_count,
             "mini_agent_count": len(mini_agents),
             "mini_agents": mini_agents,
+            "mini_agent_failures": failures,
+            "token_usage": token_usage,
             "content": content,
             "completed_at": now_iso(),
         }
@@ -1250,7 +1302,7 @@ class Agent:
                 },
                 "report_type": mission_type,
                 "sensitivity": "internal",
-                "report": {"error_type": type(error).__name__},
+                "report": {"error_type": type(error).__name__, "error_code": local_error_code(error)},
             }
         try:
             self.submit_result(result)
