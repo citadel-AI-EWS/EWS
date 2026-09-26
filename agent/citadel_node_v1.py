@@ -63,6 +63,8 @@ LMSTUDIO_INSTALL_FILE_NAMES = {"install_llmstudio_headless.ps1", "install_llmstu
 LMSTUDIO_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,95})?(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,31})?$")
 LMSTUDIO_QUANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
 HYBRID_MODES = {"python", "lmstudio", "both"}
+LLM_MINI_AGENT_CALL_TIMEOUT_SECONDS = 900
+LLM_MINI_AGENT_TOTAL_TIMEOUT_SECONDS = 930
 WINDOWS_DPAPI_PROTECTION = "windows-dpapi-local-machine-v1"
 CRYPTPROTECT_UI_FORBIDDEN = 0x1
 CRYPTPROTECT_LOCAL_MACHINE = 0x4
@@ -984,6 +986,7 @@ class Agent:
         *,
         max_tokens: int,
         temperature: float = 0.2,
+        timeout_seconds: int | None = None,
     ) -> str:
         request_body = json_text({
             "model": model,
@@ -994,10 +997,14 @@ class Agent:
             "temperature": temperature,
             "max_tokens": max_tokens,
         })
+        if timeout_seconds is None:
+            request_timeout = max(1800, self.config.request_timeout_seconds)
+        else:
+            request_timeout = max(30, min(1800, int(timeout_seconds)))
         connection = http.client.HTTPConnection(
             "127.0.0.1",
             1234,
-            timeout=max(1800, self.config.request_timeout_seconds),
+            timeout=request_timeout,
         )
         try:
             connection.request(
@@ -1028,6 +1035,36 @@ class Agent:
             raise RuntimeError("lmstudio_empty_response")
         return content.strip()
 
+    def llm_mini_agent_plan(self, task_text: str) -> dict[str, Any]:
+        """Choose a bounded LLM worker count and concurrency from task size and live resources."""
+        desired = 1 + int(len(task_text) > 800) + int(len(task_text) > 1800)
+        memory = psutil.virtual_memory()
+        ram_gib = float(memory.total) / float(1024 ** 3)
+        available_gib = float(getattr(memory, "available", memory.total)) / float(1024 ** 3)
+
+        total_ram_capacity = 1 if ram_gib < 12 else (2 if ram_gib < 24 else 3)
+        available_ram_capacity = 1 if available_gib < 8 else (2 if available_gib < 16 else 3)
+        mini_count = max(1, min(3, desired, total_ram_capacity))
+        concurrency = max(1, min(mini_count, available_ram_capacity))
+
+        gpu_rows = gpu_inventory()
+        max_vram_gib = 0.0
+        for gpu in gpu_rows:
+            raw_vram = gpu.get("vram_total_bytes")
+            if isinstance(raw_vram, (int, float)) and raw_vram > 0:
+                max_vram_gib = max(max_vram_gib, float(raw_vram) / float(1024 ** 3))
+        if max_vram_gib > 0:
+            vram_capacity = 1 if max_vram_gib < 8 else (2 if max_vram_gib < 16 else 3)
+            concurrency = max(1, min(concurrency, vram_capacity))
+
+        return {
+            "mini_agent_count": mini_count,
+            "concurrency": concurrency,
+            "ram_gib": round(ram_gib, 2),
+            "available_ram_gib": round(available_gib, 2),
+            "max_vram_gib": round(max_vram_gib, 2),
+        }
+
     def execute_project_text(self, payload: dict[str, Any]) -> dict[str, Any]:
         task_text = str(payload.get("task_text") or "").strip()
         role_name = str(payload.get("role_name") or "planner").strip()
@@ -1043,21 +1080,20 @@ class Agent:
         if not model or not LMSTUDIO_MODEL_RE.fullmatch(model):
             raise RuntimeError("lmstudio_model_not_loaded")
 
-        desired = 1 + int(len(task_text) > 800) + int(len(task_text) > 1800)
-        ram_gib = float(psutil.virtual_memory().total) / float(1024 ** 3)
-        capacity = 1 if ram_gib < 12 else (2 if ram_gib < 24 else 3)
-        mini_count = max(1, min(3, desired, capacity))
+        plan = self.llm_mini_agent_plan(task_text)
+        mini_count = int(plan["mini_agent_count"])
+        max_workers = int(plan["concurrency"])
         focuses = [
             "primary analysis and direct solution",
             "independent verification, contradictions and unsupported claims",
             "edge cases, risks, missing assumptions and practical improvements",
         ]
-        mini_agents: list[dict[str, Any]] = []
         base_guard = (
             "Work only on the supplied text task. Return useful factual plain text. "
             "Do not execute commands, access credentials, modify the host, or claim actions you did not perform. "
         )
-        for index in range(mini_count):
+
+        def run_mini_agent(index: int) -> dict[str, Any]:
             system_prompt = (
                 "You are CITADEL local mini-agent "
                 + str(index + 1)
@@ -1068,41 +1104,139 @@ class Agent:
                 + ". "
                 + base_guard
             )
-            try:
-                answer = self._project_llm_chat(
-                    model,
-                    system_prompt,
-                    task_text,
-                    max_tokens=1536,
-                    temperature=0.2 + (0.05 * index),
-                )
-            except Exception:
-                if index == 0:
-                    raise
-                continue
-            mini_agents.append({
+            started = time.monotonic()
+            answer = self._project_llm_chat(
+                model,
+                system_prompt,
+                task_text,
+                max_tokens=1536,
+                temperature=0.2 + (0.05 * index),
+                timeout_seconds=LLM_MINI_AGENT_CALL_TIMEOUT_SECONDS,
+            )
+            return {
                 "mini_agent_id": f"llm-mini-{index + 1}",
                 "focus": focuses[index],
                 "content": answer[:12000],
-            })
+                "duration_ms": int((time.monotonic() - started) * 1000),
+            }
 
+        results: dict[int, dict[str, Any]] = {}
+        failures: dict[int, str] = {}
+        futures: dict[concurrent.futures.Future[dict[str, Any]], int] = {}
+        pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix="citadel-llm-mini",
+        )
+        try:
+            for index in range(mini_count):
+                self.log.write(
+                    "llm_mini_agent_started",
+                    project_id=project_id or None,
+                    work_item_id=work_item_id or None,
+                    mini_agent_id=f"llm-mini-{index + 1}",
+                    concurrency=max_workers,
+                )
+                futures[pool.submit(run_mini_agent, index)] = index
+
+            done, not_done = concurrent.futures.wait(
+                futures,
+                timeout=LLM_MINI_AGENT_TOTAL_TIMEOUT_SECONDS,
+            )
+            for future in done:
+                index = futures[future]
+                try:
+                    item = future.result()
+                except Exception as error:
+                    failures[index] = str(error)[:240]
+                    self.log.write(
+                        "llm_mini_agent_failed",
+                        project_id=project_id or None,
+                        work_item_id=work_item_id or None,
+                        mini_agent_id=f"llm-mini-{index + 1}",
+                        error=str(error)[:240],
+                    )
+                else:
+                    results[index] = item
+                    self.log.write(
+                        "llm_mini_agent_completed",
+                        project_id=project_id or None,
+                        work_item_id=work_item_id or None,
+                        mini_agent_id=item["mini_agent_id"],
+                        duration_ms=item["duration_ms"],
+                    )
+            for future in not_done:
+                index = futures[future]
+                future.cancel()
+                failures[index] = "llm_mini_agent_timeout"
+                self.log.write(
+                    "llm_mini_agent_failed",
+                    project_id=project_id or None,
+                    work_item_id=work_item_id or None,
+                    mini_agent_id=f"llm-mini-{index + 1}",
+                    error="llm_mini_agent_timeout",
+                )
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
+
+        # If LM Studio rejects concurrent generation, retry only failed workers serially.
+        # This keeps normal operation parallel while degrading safely on constrained runtimes.
+        if failures and max_workers > 1:
+            self.log.write(
+                "llm_mini_agents_degraded",
+                project_id=project_id or None,
+                work_item_id=work_item_id or None,
+                failed_count=len(failures),
+                retry_concurrency=1,
+            )
+            for index in sorted(failures):
+                try:
+                    item = run_mini_agent(index)
+                except Exception as error:
+                    failures[index] = str(error)[:240]
+                    self.log.write(
+                        "llm_mini_agent_failed",
+                        project_id=project_id or None,
+                        work_item_id=work_item_id or None,
+                        mini_agent_id=f"llm-mini-{index + 1}",
+                        error=str(error)[:240],
+                        retry=True,
+                    )
+                else:
+                    results[index] = item
+                    failures.pop(index, None)
+                    self.log.write(
+                        "llm_mini_agent_completed",
+                        project_id=project_id or None,
+                        work_item_id=work_item_id or None,
+                        mini_agent_id=item["mini_agent_id"],
+                        duration_ms=item["duration_ms"],
+                        retry=True,
+                    )
+
+        mini_agents = [results[index] for index in sorted(results)]
         if not mini_agents:
             raise RuntimeError("lmstudio_mini_agents_failed")
 
         if len(mini_agents) == 1:
             content = mini_agents[0]["content"]
         else:
-            synthesis_parts = []
-            for item in mini_agents:
-                synthesis_parts.append(
-                    "[" + item["mini_agent_id"] + " · " + item["focus"] + "]\n" +
-                    str(item["content"])[:3500]
-                )
+            synthesis_parts = [
+                "[" + item["mini_agent_id"] + " · " + item["focus"] + "]\n" +
+                str(item["content"])[:3500]
+                for item in mini_agents
+            ]
             synthesis_prompt = (
                 "ORIGINAL TASK\n" + task_text[:8000] +
                 "\n\nINDEPENDENT MINI-AGENT RESULTS\n" +
                 "\n\n".join(synthesis_parts)
             )
+            self.log.write(
+                "llm_synthesis_started",
+                project_id=project_id or None,
+                work_item_id=work_item_id or None,
+                mini_agent_count=len(mini_agents),
+            )
+            synthesis_started = time.monotonic()
             try:
                 content = self._project_llm_chat(
                     model,
@@ -1115,9 +1249,23 @@ class Agent:
                     synthesis_prompt,
                     max_tokens=3072,
                     temperature=0.15,
+                    timeout_seconds=LLM_MINI_AGENT_CALL_TIMEOUT_SECONDS,
                 )
-            except Exception:
+            except Exception as error:
+                self.log.write(
+                    "llm_synthesis_failed",
+                    project_id=project_id or None,
+                    work_item_id=work_item_id or None,
+                    error=str(error)[:240],
+                )
                 content = "\n\n".join(str(item["content"]) for item in mini_agents)
+            else:
+                self.log.write(
+                    "llm_synthesis_completed",
+                    project_id=project_id or None,
+                    work_item_id=work_item_id or None,
+                    duration_ms=int((time.monotonic() - synthesis_started) * 1000),
+                )
 
         if len(content) > 180000:
             content = content[:180000] + "\n\n[truncated]"
@@ -1127,6 +1275,13 @@ class Agent:
             "role_name": role_name,
             "model": model,
             "mini_agent_count": len(mini_agents),
+            "mini_agent_requested_count": mini_count,
+            "mini_agent_concurrency": max_workers,
+            "mini_agent_failures": [
+                {"mini_agent_id": f"llm-mini-{index + 1}", "error": failures[index]}
+                for index in sorted(failures)
+            ],
+            "resource_plan": plan,
             "mini_agents": mini_agents,
             "content": content,
             "completed_at": now_iso(),
