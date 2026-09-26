@@ -55,14 +55,16 @@ namespace CitadelEws
         private const int StopExitCode = 76;
 
         private readonly PortablePaths paths;
+        private readonly bool taskMode;
         private readonly object sync = new object();
         private Thread supervisor;
         private Process child;
         private volatile bool stopping;
 
-        internal CitadelPortableService(PortablePaths paths)
+        internal CitadelPortableService(PortablePaths paths, bool taskMode = false)
         {
             this.paths = paths;
+            this.taskMode = taskMode;
             ServiceName = ServiceId;
             CanStop = true;
             CanShutdown = true;
@@ -108,7 +110,10 @@ namespace CitadelEws
                 CreateNoWindow = true
             };
             start.EnvironmentVariables["PYTHONHOME"] = Path.Combine(paths.AppRoot, "runtime");
-            start.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] = "1";
+            if (taskMode)
+                start.EnvironmentVariables["CITADEL_TASK_MANAGED"] = "1";
+            else
+                start.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] = "1";
             start.EnvironmentVariables["CITADEL_SERVICE_STOP_FILE"] = paths.LifecycleStopFile;
             start.EnvironmentVariables["CITADEL_SERVICE_HOLD_FILE"] = paths.HoldFile;
             start.EnvironmentVariables["CITADEL_SERVICE_READY_FILE"] = paths.ReadyFile;
@@ -119,6 +124,15 @@ namespace CitadelEws
         {
             if (File.Exists(paths.LifecycleStopFile))
                 File.Delete(paths.LifecycleStopFile);
+        }
+
+        internal int RunTaskHost()
+        {
+            paths.Validate();
+            DeleteLifecycleStopFile();
+            stopping = false;
+            Supervise();
+            return 0;
         }
 
         private void Supervise()
@@ -243,10 +257,17 @@ namespace CitadelEws
                     start.FileName != paths.PythonPath ||
                     start.Arguments.IndexOf(" run --config ", StringComparison.Ordinal) < 0 ||
                     start.EnvironmentVariables["PYTHONHOME"] != runtime ||
-                    start.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] != "1")
+                    start.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] != "1" ||
+                    start.EnvironmentVariables["CITADEL_TASK_MANAGED"] != null)
                     throw new InvalidOperationException("Portable service child contract failed.");
 
-                Console.WriteLine("CITADEL portable Windows service SELF TEST: PASS");
+                var taskHost = new CitadelPortableService(paths, true);
+                var taskStart = taskHost.BuildChildStartInfo();
+                if (taskStart.EnvironmentVariables["CITADEL_TASK_MANAGED"] != "1" ||
+                    taskStart.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] != null)
+                    throw new InvalidOperationException("Portable fallback task child contract failed.");
+
+                Console.WriteLine("CITADEL portable Windows service/task-host SELF TEST: PASS");
                 return 0;
             }
             finally
@@ -258,8 +279,11 @@ namespace CitadelEws
         public static int Main(string[] args)
         {
             if (args.Length == 1 && args[0] == "--self-test") return SelfTest();
-            if (args.Length != 0) throw new ArgumentException("The portable service does not accept runtime arguments.");
             var paths = PortablePaths.Discover();
+            if (args.Length == 1 && args[0] == "--task-host")
+                return new CitadelPortableService(paths, true).RunTaskHost();
+            if (args.Length != 0)
+                throw new ArgumentException("The portable host accepts only --self-test or --task-host.");
             ServiceBase.Run(new CitadelPortableService(paths));
             return 0;
         }
