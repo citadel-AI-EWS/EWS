@@ -131,6 +131,7 @@ def copilot_review(repo_root: Path, prompt: str, timeout: int) -> str:
             "-s",
             "--no-ask-user",
             "--available-tools=view,grep,glob,bash",
+            "--allow-tool=read",
             "--allow-tool=shell(git status)",
             "--allow-tool=shell(git diff:*)",
             "--allow-tool=shell(git show:*)",
