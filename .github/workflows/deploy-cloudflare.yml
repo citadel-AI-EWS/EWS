@@ -61,6 +61,10 @@ jobs:
           if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
             key = key.slice(1, -1).trim();
           }
+          if (!/^sk-or-v1-[A-Za-z0-9_-]{20,}$/.test(key)) {
+            const embedded = key.match(/sk-or-v1-[A-Za-z0-9_-]{20,}/);
+            if (embedded) key = embedded[0];
+          }
           if (!key) {
             fs.writeFileSync("/tmp/openrouter-key", "", { mode: 0o600 });
             process.exit(0);
