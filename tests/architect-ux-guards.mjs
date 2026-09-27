@@ -181,6 +181,7 @@ for (const required of [
   'id="nodeNetwork"',
   'id="nodeAi"',
   'id="lmInstall"',
+  'id="workerTarget"',
   'id="lmProbe"',
   'id="lmRemove"',
   'id="modelId"',
@@ -249,6 +250,10 @@ assert.match(index, /project_work_items/);
 assert.match(index, /project_specializations/);
 assert.match(index, /architectGetProject/);
 assert.match(index, /normalizeRequestedProjectRoles/);
+assert.match(index, /normalizeProjectWorkerTarget/);
+assert.match(index, /targetProjectWork/);
+assert.match(operations, /value="50"/);
+assert.match(operations, /value="all"/);
 assert.match(index, /final_report_ready/);
 assert.match(index, /worker_readiness/);
 assert.match(index, /ready_workers_now/);
@@ -555,7 +560,8 @@ assert.match(architect, /Controller покажет READY-ноды и точны�
       body: JSON.stringify({
         source_type: "architect_manual",
         title: "Waiting-worker behavior",
-        task_text: "Explain why bounded queues should not starve compatible work."
+        task_text: "Explain why bounded queues should not starve compatible work.",
+        worker_target: 10
       })
     }
   ), projectEnv);
@@ -564,8 +570,10 @@ assert.match(architect, /Controller покажет READY-ноды и точны�
   const body = await response.json();
   assert.equal(body.ok, true);
   assert.equal(body.project.worker_count, 0);
+  assert.equal(body.project.desired_workers, 10);
+  assert.equal(body.project.worker_target.mode, "fixed");
   assert.equal(body.execution.detail, "hub_plan_saved_waiting_for_ready_lmstudio_worker");
-  assert.ok(body.project.work_item_count >= 1);
+  assert.equal(body.project.work_item_count, 10);
   assert.equal(persisted.project?.worker_count, 0);
   assert.equal(persisted.workItems, body.project.work_item_count);
   assert.ok(body.project.work_items.every((item) => item.node_id === null));
