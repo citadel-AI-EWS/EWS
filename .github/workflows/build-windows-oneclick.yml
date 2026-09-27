@@ -264,8 +264,49 @@ jobs:
           }
           $deadline = (Get-Date).AddSeconds(30)
           do { Start-Sleep -Seconds 1 } until (@(Get-AgentChild).Count -eq 1 -or (Get-Date) -gt $deadline)
-          if (@(Get-AgentChild).Count -ne 1) { throw "Agent did not resume after clearing stop marker." }
-          Write-Host "Windows fallback settings, child recovery, stop/resume: PASS"
+          $children = @(Get-AgentChild)
+          if ($children.Count -ne 1) { throw "Agent did not resume after clearing stop marker." }
+
+          # Killing the scheduled-task host must also kill its Python child. Otherwise
+          # Task Scheduler can restart the host while an orphaned agent is still alive.
+          $oldTaskHostPid = $taskHost.ProcessId
+          $oldChildPid = $children[0].ProcessId
+          Stop-Process -Id $oldTaskHostPid -Force
+          $deadline = (Get-Date).AddSeconds(15)
+          do {
+            Start-Sleep -Milliseconds 500
+            $oldChild = Get-Process -Id $oldChildPid -ErrorAction SilentlyContinue
+          } until (-not $oldChild -or (Get-Date) -gt $deadline)
+          if ($oldChild) {
+            throw "Fallback task-host termination left its Python child orphaned."
+          }
+
+          # Start a fresh task instance immediately instead of waiting for the
+          # one-minute scheduler recovery interval, then require one owned child.
+          Start-ScheduledTask -TaskName CitadelEWSNodeFallback
+          $deadline = (Get-Date).AddSeconds(30)
+          do {
+            Start-Sleep -Seconds 1
+            $newTaskHost = Get-CimInstance Win32_Process | Where-Object {
+              $_.Name -eq "CitadelNodeService.exe" -and
+              $_.CommandLine -like "*--task-host*" -and
+              $_.ProcessId -ne $oldTaskHostPid
+            } | Select-Object -First 1
+            $children = @(Get-AgentChild)
+          } until (
+            $newTaskHost -and
+            $children.Count -eq 1 -and
+            $children[0].ParentProcessId -eq $newTaskHost.ProcessId -or
+            (Get-Date) -gt $deadline
+          )
+          if (-not $newTaskHost -or
+              $children.Count -ne 1 -or
+              $children[0].ParentProcessId -ne $newTaskHost.ProcessId) {
+            throw "Fallback host restart did not recover exactly one owned Python agent."
+          }
+          $taskHost = $newTaskHost
+
+          Write-Host "Windows fallback settings, child recovery, host-orphan cleanup, stop/resume: PASS"
           # Actual OS reboot and signed hub stop/restart remain a clean-VM acceptance gate.
 
       - name: Fallback uninstall smoke test
