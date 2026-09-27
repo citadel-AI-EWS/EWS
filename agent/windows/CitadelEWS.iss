@@ -54,6 +54,7 @@ const
 
 var
   StartupConfigured: Boolean;
+  LegacyCutoverActive: Boolean;
 
 function JsonEscape(Value: string): string;
 begin
@@ -109,6 +110,62 @@ var
 begin
   SchTasks := ExpandConstant('{sys}\schtasks.exe');
   TryExec(SchTasks, '/Delete /TN "{#FallbackTaskName}" /F');
+end;
+
+
+function LegacyCutoverMarkerPath: string;
+begin
+  Result := ExpandConstant('{commonappdata}\CitadelEWS\state\legacy-cutover.json');
+end;
+
+procedure RequireLegacyCutover(Action, ExtraArgs: string);
+var
+  PythonExe, ScriptPath, AppRoot, StateRoot, Params: string;
+begin
+  PythonExe := ExpandConstant('{app}\runtime\python.exe');
+  ScriptPath := ExpandConstant('{app}\windows_legacy_cutover.py');
+  AppRoot := ExpandConstant('{app}');
+  StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\state');
+  Params :=
+    '"' + ScriptPath + '" ' + Action +
+    ' --app-root "' + AppRoot + '"' +
+    ' --state-root "' + StateRoot + '"' +
+    ExtraArgs;
+  RequireExec(PythonExe, Params, 'CITADEL legacy lifecycle ' + Action + ' failed');
+end;
+
+procedure TryLegacyCutover(Action, ExtraArgs: string);
+var
+  PythonExe, ScriptPath, AppRoot, StateRoot, Params: string;
+begin
+  PythonExe := ExpandConstant('{app}\runtime\python.exe');
+  ScriptPath := ExpandConstant('{app}\windows_legacy_cutover.py');
+  if not FileExists(PythonExe) or not FileExists(ScriptPath) then
+    exit;
+  AppRoot := ExpandConstant('{app}');
+  StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\state');
+  Params :=
+    '"' + ScriptPath + '" ' + Action +
+    ' --app-root "' + AppRoot + '"' +
+    ' --state-root "' + StateRoot + '"' +
+    ExtraArgs;
+  TryExec(PythonExe, Params);
+end;
+
+procedure AbortLegacyMigrationLifecycle;
+var
+  Sc: string;
+begin
+  { A legacy migration failed after the replacement supervisor was staged.
+    Remove only the new machine lifecycle and release the HOLD marker; the
+    helper keeps/restores the old per-user Startup lifecycle on failure. }
+  StopExistingService;
+  StopFallbackTask;
+  DeleteFallbackTask;
+  Sc := ExpandConstant('{sys}\sc.exe');
+  TryExec(Sc, 'delete {#ServiceName}');
+  TryLegacyCutover('abort', '');
+  DeleteFile(ExpandConstant('{commonappdata}\CitadelEWS\state\install-mode.txt'));
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -294,14 +351,24 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
-    WriteDefaultConfig;
     HardenDirectories;
-    if not TryInstallService then
-    begin
-      Log('CITADEL Windows Service path unavailable; switching to bounded LocalService boot-task fallback.');
-      InstallFallbackTask;
+    RequireLegacyCutover('stage', '');
+    LegacyCutoverActive := FileExists(LegacyCutoverMarkerPath);
+    try
+      WriteDefaultConfig;
+      if not TryInstallService then
+      begin
+        Log('CITADEL Windows Service path unavailable; switching to bounded LocalService boot-task fallback.');
+        InstallFallbackTask;
+      end;
+      if LegacyCutoverActive then
+        RequireLegacyCutover('commit', ' --expected-version "{#MyVersion}"');
+      StartupConfigured := True;
+    except
+      if LegacyCutoverActive then
+        AbortLegacyMigrationLifecycle;
+      raise;
     end;
-    StartupConfigured := True;
   end;
 end;
 
@@ -323,5 +390,6 @@ begin
     TryExec(Sc, 'delete {#ServiceName}');
     StopFallbackTask;
     DeleteFallbackTask;
+    TryLegacyCutover('uninstall', '');
   end;
 end;
