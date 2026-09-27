@@ -588,6 +588,7 @@
     let currentWorkRoles = [];
     let currentRecommendedProjectRoles = new Set();
     let architectAddedProjectRoles = new Set();
+    let lastAiProjectWorkerCount = "";
     let activeProjectId = null;
     let pendingCreatedProjectId = null;
     let activeVoiceRecognition = null;
@@ -861,9 +862,14 @@
       projectExecutionHint.textContent = pythonOnly
         ? "Python only: никакой LLM, LM Studio или OpenRouter не вызывается. Поддерживаются расчёты, text:/json: и диагностика CPU/RAM/диска/сети."
         : "AI: рабочие блоки выполняются локальной моделью LM Studio; после завершения действует обычный quality gate.";
-      projectWorkerCount.disabled = pythonOnly;
-      if (pythonOnly) projectWorkerCount.value = "1";
-      else if (projectWorkerCount.value === "1") projectWorkerCount.value = "";
+      if (pythonOnly) {
+        if (!projectWorkerCount.disabled) lastAiProjectWorkerCount = projectWorkerCount.value;
+        projectWorkerCount.value = "1";
+        projectWorkerCount.disabled = true;
+      } else {
+        projectWorkerCount.disabled = false;
+        projectWorkerCount.value = lastAiProjectWorkerCount;
+      }
       if (pythonOnly) architectAddedProjectRoles.clear();
       renderWorkRoles(currentWorkRoles);
       if (!currentProjectCheck) renderRolePlanSummary();
