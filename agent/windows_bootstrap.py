@@ -247,8 +247,11 @@ def install_user_mode(controller_url: str) -> dict:
 def self_test() -> int:
     root = package_root()
     if os.name == "nt":
-        runtime = selected_runtime(root)
-        verify_runtime(runtime)
+        running_runtime = Path(sys.executable).resolve().parent
+        if (running_runtime / "CITADEL_RUNTIME.json").is_file():
+            verify_runtime(running_runtime)
+        else:
+            verify_runtime(selected_runtime(root))
     print("CITADEL Windows bootstrap SELF TEST: PASS")
     return 0
 
