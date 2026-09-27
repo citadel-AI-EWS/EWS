@@ -377,6 +377,7 @@ def install_update_mutex(timeout_seconds: float = 30.0):
         time.sleep(0.1)
 
     marker_written = False
+    clean_exit = False
     try:
         if marker_path.exists():
             raise RuntimeError("install_update_lock_abandoned")
@@ -390,8 +391,14 @@ def install_update_mutex(timeout_seconds: float = 30.0):
         atomic_write(marker_path, json.dumps(marker, sort_keys=True) + "\n")
         marker_written = True
         yield
+        clean_exit = True
     finally:
-        if marker_written:
+        # Only a normal return from the protected lifecycle mutation proves
+        # that the live tree is coherent. KeyboardInterrupt, SystemExit,
+        # process termination and unexpected BaseException paths deliberately
+        # leave the crash marker behind so remote update fails closed until a
+        # full installer/repair acquires the lock and repairs the machine.
+        if marker_written and clean_exit:
             with contextlib.suppress(FileNotFoundError):
                 marker_path.unlink()
         if handle not in (None, 0, invalid_handle_value):
