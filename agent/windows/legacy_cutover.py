@@ -448,6 +448,8 @@ def main(argv: list[str] | None = None) -> int:
         return self_test()
     if args.command == "uninstall":
         uninstall_legacy(args.profiles_root)
+        if args.state_root is not None:
+            abort_cutover(args.state_root.resolve())
         return 0
     if args.state_root is None:
         parser.error("--state-root is required")
