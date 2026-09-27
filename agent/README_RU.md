@@ -11,6 +11,8 @@
 - Неизвестные/случайные открытые Wi-Fi сети автоматически не используются.
 - Аналогичный приоритет последнего профиля применяется к Linux через `nmcli`.
 - Добавлен regression-test, доказывающий порядок primary retries → fallback и отсутствие fallback, если основная сеть восстановилась.
+- Обычный Windows ZIP теперь содержит hash-pinned Python 3.13.15 для x64 и win32; `START_HERE.cmd` ставит user-mode агент без PowerShell, winget, pip и прав администратора.
+- `Install Windows Core Service.cmd` остаётся отдельным административным путём и использует тот же проверенный bundled runtime вместо сетевой установки Python.
 
 ## v0.3.16 — hardware-aware модели, Hugging Face и OpenRouter readiness
 
@@ -97,24 +99,27 @@
 
 ## Windows setup
 
-Адрес контроллера уже встроен. Setup при необходимости устанавливает Python 3.14 через Windows Package Manager, создаёт отдельное `.venv`, ставит зависимости, выполняет `doctor` и self-test, автоматически регистрирует узел и проверяет живой цикл с Controller. Узел получает постоянный номер; enrollment token, логин и код подтверждения не требуются.
+Адрес Controller уже встроен. Для обычной установки распакуйте ZIP полностью и запустите `START_HERE.cmd`. Этот путь использует только bundled Python 3.13.15 из пакета, не вызывает PowerShell, не использует winget/pip на целевом компьютере и не требует прав администратора. Если Controller временно недоступен, файлы всё равно устанавливаются, а агент продолжает переподключаться после восстановления сети.
 
-```powershell
-powershell -File .\setup_windows.ps1
-```
+Для машины, где агент должен работать до входа пользователя, запустите `Install Windows Core Service.cmd`. Windows запросит обычное административное подтверждение для создания/обновления службы. Core Service также использует bundled runtime и не устанавливает Python через интернет.
 
-После успешной проверки Setup компилирует минимальный проверяемый service-host из `CitadelNodeService.cs`, регистрирует `CitadelEWSNode` как Automatic (Delayed Start) Windows Service и запускает Core Agent под LocalService. Повторный запуск Setup выполняет repair той же установки и сохраняет Ed25519-идентичность.
+После проверки Core Setup компилирует минимальный service-host из `CitadelNodeService.cs`, регистрирует `CitadelEWSNode` как Automatic (Delayed Start) и запускает Core Agent под LocalService. При переходе с user-mode удаляются оба старых Startup-варианта, чтобы одна node identity не работала одновременно в двух процессах.
 
 Unattended/autostart предназначен только для компьютеров, принадлежащих оператору или находящихся под его администрированием.
 
 ## Ручной запуск
 
-```powershell
-.\.venv\Scripts\python.exe .\citadel_node_v1.py self-test
-.\.venv\Scripts\python.exe .\citadel_node_v1.py doctor --config .\config.json
-.\.venv\Scripts\python.exe .\citadel_node_v1.py once --config .\config.json
-.\.venv\Scripts\python.exe .\citadel_node_v1.py run --config .\config.json
+Для user-mode установки подставьте фактический каталог `<release-id>` из `%LOCALAPPDATA%\CitadelEWS\agent\releases`:
+
+```cmd
+set "RELEASE=%LOCALAPPDATA%\CitadelEWS\agent\releases\<release-id>"
+"%RELEASE%\python_runtime\python.exe" "%RELEASE%\citadel_node_v1.py" self-test
+"%RELEASE%\python_runtime\python.exe" "%RELEASE%\citadel_node_v1.py" doctor --config "%RELEASE%\config.json"
+"%RELEASE%\python_runtime\python.exe" "%RELEASE%\citadel_node_v1.py" once --config "%RELEASE%\config.json"
+"%RELEASE%\python_runtime\python.exe" "%RELEASE%\citadel_node_v1.py" run --config "%RELEASE%\config.json"
 ```
+
+Для Core Service аналогичный release находится под `%ProgramData%\CitadelEWS\agent\releases\<release-id>`.
 
 ## Следующие обработчики
 
