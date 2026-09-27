@@ -48,7 +48,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.18"
+VERSION = "0.3.19"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -1064,9 +1064,9 @@ class Agent:
         if not role_name or len(role_name) > 64:
             raise RuntimeError("invalid project role")
 
-        state = self.lmstudio_state()
+        state = self.ensure_lmstudio_ready(require_model=True)
         model = str(state.get("loaded_model") or "").strip()
-        if not model or not LMSTUDIO_MODEL_RE.fullmatch(model):
+        if not model:
             raise RuntimeError("lmstudio_model_not_loaded")
 
         desired = 1 + int(len(task_text) > 800) + int(len(task_text) > 1800)
@@ -1630,6 +1630,75 @@ class Agent:
         )
         return snapshot
 
+    def ensure_lmstudio_ready(self, require_model: bool = False) -> dict[str, Any]:
+        """Live-check LM Studio, self-heal daemon/server, and optionally require a loaded model."""
+        if not self.find_lms():
+            self.report_ai_state(
+                installed=False,
+                server_running=False,
+                loaded_model=None,
+                last_action="runtime_missing",
+                progress_phase="failed",
+                progress_detail="lms CLI not found",
+            )
+            raise RuntimeError("lmstudio_not_installed")
+
+        snapshot = self.probe_lmstudio()
+        if not snapshot.get("server_running"):
+            self.report_ai_state(
+                installed=True,
+                server_running=False,
+                last_action="server_recovering",
+                progress_phase="server_recovery",
+                progress_detail="Starting LM Studio daemon/server",
+            )
+            self.run_lms(["daemon", "up"], timeout=120)
+            try:
+                self.run_lms(["server", "start", "--port", "1234"], timeout=120)
+            except Exception:
+                pass
+            deadline = time.monotonic() + 60
+            while True:
+                snapshot = self.probe_lmstudio()
+                if snapshot.get("server_running"):
+                    break
+                if time.monotonic() >= deadline:
+                    self.report_ai_state(
+                        installed=True,
+                        server_running=False,
+                        last_action="server_recovery_failed",
+                        progress_phase="failed",
+                        progress_detail="LM Studio server did not become ready on localhost:1234",
+                    )
+                    raise RuntimeError("lmstudio_server_not_ready")
+                time.sleep(2)
+
+        model = str(snapshot.get("loaded_model") or "").strip()
+        if require_model and not model:
+            self.report_ai_state(
+                installed=True,
+                server_running=True,
+                loaded_model=None,
+                last_action="model_missing",
+                progress_phase="waiting_model",
+                progress_detail="LM Studio server is ready but no model is loaded",
+            )
+            raise RuntimeError("lmstudio_model_not_loaded")
+
+        self.report_ai_state(
+            installed=True,
+            server_running=True,
+            loaded_model=model or None,
+            last_action="ready" if (model or not require_model) else "server_ready",
+            progress_phase="ready" if (model or not require_model) else "server_ready",
+            progress_detail=(
+                f"LM Studio READY · {model}"
+                if model else
+                "LM Studio server READY on localhost:1234"
+            ),
+        )
+        return snapshot
+
     @staticmethod
     def validate_lmstudio_install_payload(payload: dict[str, Any]) -> bool:
         asset = payload.get("asset")
@@ -1783,16 +1852,18 @@ class Agent:
                 installed=True, progress_phase="runtime_verified", progress_current=3, progress_total=5,
                 progress_detail="lms CLI verified",
             )
-            self.run_lms(["daemon", "up"], timeout=120)
             self.report_ai_state(
                 installed=True, progress_phase="daemon_running", progress_current=4, progress_total=5,
-                progress_detail="llmster daemon running",
+                progress_detail="Starting and live-checking LM Studio daemon/server",
             )
-            self.run_lms(["server", "start", "--port", "1234"], timeout=120)
+            snapshot = self.ensure_lmstudio_ready(require_model=False)
             self.report_ai_state(
-                installed=True, server_running=True, last_action="installed",
+                installed=True,
+                server_running=bool(snapshot.get("server_running")),
+                loaded_model=snapshot.get("loaded_model"),
+                last_action="installed",
                 progress_phase="complete", progress_current=5, progress_total=5,
-                progress_detail="LM Studio server running on localhost:1234",
+                progress_detail="LM Studio runtime verified on localhost:1234",
             )
             self.log.write("lmstudio_installed")
         finally:
@@ -1932,8 +2003,7 @@ class Agent:
         model = payload["model"]
         source = payload.get("source", "catalog")
         quantization = payload.get("quantization")
-        self.run_lms(["daemon", "up"], timeout=120)
-        self.run_lms(["server", "start", "--port", "1234"], timeout=120)
+        self.ensure_lmstudio_ready(require_model=False)
         request_model = f"https://huggingface.co/{model}" if source == "huggingface" else model
         body: dict[str, Any] = {"model": request_model}
         if quantization:
@@ -1986,8 +2056,7 @@ class Agent:
         quantization = payload.get("quantization")
         settings = payload.get("settings") or {}
         model_key = self.resolve_lmstudio_model_key(model, quantization)
-        self.run_lms(["daemon", "up"], timeout=120)
-        self.run_lms(["server", "start", "--port", "1234"], timeout=120)
+        self.ensure_lmstudio_ready(require_model=False)
         body = {"model": model_key, "echo_load_config": True, **settings}
         self.report_ai_state(
             installed=True, server_running=True, selected_model=model_key,
@@ -1998,15 +2067,24 @@ class Agent:
         if loaded.get("status") != "loaded":
             raise RuntimeError("lmstudio_model_not_loaded")
         load_config = loaded.get("load_config") if isinstance(loaded.get("load_config"), dict) else settings
-        instance = loaded.get("instance_id")
-        loaded_model = str(instance or model_key)
+        snapshot = self.ensure_lmstudio_ready(require_model=True)
+        loaded_model = str(snapshot.get("loaded_model") or loaded.get("instance_id") or model_key).strip()
+        test_answer, _ = self._project_llm_chat(
+            loaded_model,
+            "You are a local readiness probe. Reply with a short acknowledgement.",
+            "Reply exactly READY.",
+            max_tokens=16,
+            temperature=0.0,
+        )
+        if not test_answer.strip():
+            raise RuntimeError("lmstudio_inference_probe_failed")
         self.report_ai_state(
             installed=True, selected_model=model_key, loaded_model=loaded_model,
-            server_running=True, last_action="model_loaded",
-            progress_phase="load_complete", progress_current=1, progress_total=1,
-            progress_detail=f"Loaded: {loaded_model}", load_config=load_config,
+            server_running=True, last_action="model_ready",
+            progress_phase="ready", progress_current=1, progress_total=1,
+            progress_detail=f"READY: {loaded_model} · inference verified", load_config=load_config,
         )
-        self.log.write("lmstudio_model_loaded", model=loaded_model)
+        self.log.write("lmstudio_model_loaded", model=loaded_model, inference_verified=True)
 
     def python_mode_answer(self, prompt: str) -> str:
         """Answer only operations Python can determine without inference or an LLM."""
@@ -2117,8 +2195,8 @@ class Agent:
         request_id: str,
         python_context: str | None = None,
     ) -> str:
-        state = self.probe_lmstudio()
-        model = str(state.get("loaded_model") or state.get("selected_model") or "").strip()
+        state = self.ensure_lmstudio_ready(require_model=True)
+        model = str(state.get("loaded_model") or "").strip()
         if not model:
             raise RuntimeError("lmstudio_model_not_loaded")
         body: dict[str, Any] = {
@@ -2531,6 +2609,17 @@ class Agent:
                     )
                     raise SystemExit(0)
             except Exception as error:
+                if command_type.startswith("lmstudio_") or command_type == "hybrid_query":
+                    with contextlib.suppress(Exception):
+                        snapshot = self.probe_lmstudio()
+                        self.report_ai_state(
+                            installed=bool(snapshot.get("installed")),
+                            server_running=bool(snapshot.get("server_running")),
+                            loaded_model=snapshot.get("loaded_model"),
+                            last_action=command_type + "_failed",
+                            progress_phase="failed",
+                            progress_detail=local_error_code(error),
+                        )
                 try:
                     self.ack_command(command_id, "failed")
                 except Exception as ack_error:
