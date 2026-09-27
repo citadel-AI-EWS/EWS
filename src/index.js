@@ -1219,7 +1219,16 @@ function splitProjectText(text, maxChars = 2000) {
   return blocks.length ? blocks : [text];
 }
 
-function projectWorkerProfile(text, requestedRoles = []) {
+function normalizeRequestedWorkerCount(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 50) {
+    throw new ApiError(400, "invalid_requested_workers");
+  }
+  return parsed;
+}
+
+function projectWorkerProfile(text, requestedRoles = [], requestedWorkers = null) {
   const value = String(text || "").toLowerCase();
   const roles = [];
   const add = (role) => { if (!roles.includes(role)) roles.push(role); };
@@ -1255,9 +1264,13 @@ function projectWorkerProfile(text, requestedRoles = []) {
   if (String(text || "").length > 700) desired = Math.max(desired, 3);
   if (String(text || "").length > 1800) desired = Math.max(desired, 4);
   for (const role of requestedRoles) add(role);
-  desired = Math.max(desired, Math.min(requestedRoles.length, 6));
-  desired = Math.max(1, Math.min(6, desired));
-  return { desired_workers: desired, suggested_roles: roles.slice(0, desired) };
+  if (requestedWorkers === null) {
+    desired = Math.max(desired, Math.min(requestedRoles.length, 6));
+    desired = Math.max(1, Math.min(6, desired));
+  } else {
+    desired = Math.max(1, Math.min(50, requestedWorkers));
+  }
+  return { desired_workers: desired, suggested_roles: roles.slice(0, Math.min(roles.length, desired)) };
 }
 
 function projectFinalText(sections) {
@@ -1267,9 +1280,9 @@ function projectFinalText(sections) {
     .join("\n\n");
 }
 
-function planProjectWork(text, requestedRoles = []) {
+function planProjectWork(text, requestedRoles = [], requestedWorkers = null) {
   const sourceText = String(text || "").trim();
-  const profile = projectWorkerProfile(sourceText, requestedRoles);
+  const profile = projectWorkerProfile(sourceText, requestedRoles, requestedWorkers);
   const blocks = splitProjectText(sourceText);
   const items = blocks.map((taskText, index) => ({
     sequence_no: index + 1,
@@ -1568,15 +1581,17 @@ async function architectCheckProject(request, env) {
   const title = requireString(body.title, "title", 160);
   const taskText = requireString(body.task_text, "task_text", 20000);
   const requestedRoles = normalizeRequestedProjectRoles(body.requested_roles);
+  const requestedWorkers = normalizeRequestedWorkerCount(body.requested_workers);
   const executionMode = projectExecutionMode(sourceType);
   const effectiveRequestedRoles = executionMode === "python" ? [] : requestedRoles;
+  const effectiveRequestedWorkers = executionMode === "python" ? 1 : requestedWorkers;
   const result = await evaluateProjectChecks(env, sourceType, title, taskText);
   const recommendedWork = executionMode === "python"
     ? [{ sequence_no: 1, role_name: "programmer", task_text: taskText, role_source: "hub_recommended" }]
-    : planProjectWork(taskText);
+    : planProjectWork(taskText, [], effectiveRequestedWorkers);
   const plannedWork = executionMode === "python"
     ? recommendedWork
-    : planProjectWork(taskText, effectiveRequestedRoles);
+    : planProjectWork(taskText, effectiveRequestedRoles, effectiveRequestedWorkers);
   const recommendedRolePlan = rolePlanSummary(recommendedWork);
   const selectedRolePlan = rolePlanSummary(plannedWork);
   return json({
@@ -1586,10 +1601,11 @@ async function architectCheckProject(request, env) {
     recommended_role_plan: recommendedRolePlan,
     recommended_roles: Object.keys(recommendedRolePlan),
     requested_roles: effectiveRequestedRoles,
+    requested_workers: effectiveRequestedWorkers,
     selected_roles: Object.keys(selectedRolePlan),
     desired_workers: executionMode === "python"
       ? 1
-      : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers,
+      : projectWorkerProfile(taskText, effectiveRequestedRoles, effectiveRequestedWorkers).desired_workers,
     role_plan: selectedRolePlan,
     work_preview: plannedWork.map(({ sequence_no, role_name, role_source }) => ({
       sequence_no,
@@ -1611,8 +1627,10 @@ async function architectCreateProject(request, env) {
   const title = requireString(body.title, "title", 160);
   const taskText = requireString(body.task_text, "task_text", 20000);
   const requestedRoles = normalizeRequestedProjectRoles(body.requested_roles);
+  const requestedWorkers = normalizeRequestedWorkerCount(body.requested_workers);
   const executionMode = projectExecutionMode(sourceType);
   const effectiveRequestedRoles = executionMode === "python" ? [] : requestedRoles;
+  const effectiveRequestedWorkers = executionMode === "python" ? 1 : requestedWorkers;
   const evaluated = await evaluateProjectChecks(env, sourceType, title, taskText);
   if (!projectChecksPassed(evaluated.checks)) {
     throw new ApiError(409, "project_checks_failed");
@@ -1637,11 +1655,11 @@ async function architectCreateProject(request, env) {
 
   const recommendedWork = executionMode === "python"
     ? [{ sequence_no: 1, role_name: "programmer", task_text: taskText, role_source: "hub_recommended" }]
-    : planProjectWork(taskText);
+    : planProjectWork(taskText, [], effectiveRequestedWorkers);
   const recommendedRoles = new Set(recommendedWork.map((item) => item.role_name));
   const plannedWork = executionMode === "python"
     ? recommendedWork
-    : planProjectWork(taskText, effectiveRequestedRoles);
+    : planProjectWork(taskText, effectiveRequestedRoles, effectiveRequestedWorkers);
   const workerCount = Math.min(nodes.length, plannedWork.length);
   const projectId = "project_" + crypto.randomUUID();
   const checksJson = JSON.stringify(evaluated.checks);
@@ -1664,6 +1682,7 @@ async function architectCreateProject(request, env) {
       work_items: plannedWork.length,
       roles: rolePlanSummary(plannedWork),
       requested_roles: effectiveRequestedRoles,
+      requested_workers: effectiveRequestedWorkers,
       execution_mode: executionMode
     }))
   ];
@@ -1707,9 +1726,10 @@ async function architectCreateProject(request, env) {
       status: "planned",
       architect_approved: true,
       worker_count: workerCount,
+      requested_workers: effectiveRequestedWorkers,
       desired_workers: executionMode === "python"
         ? 1
-        : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers,
+        : projectWorkerProfile(taskText, effectiveRequestedRoles, effectiveRequestedWorkers).desired_workers,
       work_item_count: plannedWork.length,
       role_plan: rolePlanSummary(plannedWork),
       recommended_roles: [...recommendedRoles],
@@ -1834,7 +1854,7 @@ async function architectGetProject(request, env, projectId) {
 
   const readyWorkers = workerReadiness.filter((node) => node.ready);
   if (project.status === "planned" || project.status === "running") {
-    for (const worker of readyWorkers.slice(0, 6)) {
+    for (const worker of readyWorkers.slice(0, 50)) {
       await materializeProjectWorkForNode(env, worker.node_id, projectId);
     }
   }
@@ -1975,9 +1995,7 @@ async function architectGetProject(request, env, projectId) {
         state: executionState,
         counts,
         execution_mode: executionMode,
-        desired_workers: executionMode === "python"
-          ? 1
-          : projectWorkerProfile(project.task_text, specializations.filter((item) => item.source === "architect_added").map((item) => item.id)).desired_workers,
+        desired_workers: executionMode === "python" ? 1 : workItems.length,
         ready_workers_at_creation: Number(project.worker_count || 0),
         ready_workers_now: readyWorkers.length,
         worker_readiness: workerReadiness,
