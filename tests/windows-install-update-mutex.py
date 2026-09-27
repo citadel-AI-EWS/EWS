@@ -26,6 +26,7 @@ def load_agent_module():
 def holder() -> int:
     node = load_agent_module()
     with node.install_update_mutex(timeout_seconds=2):
+        node.begin_install_update_mutation("test_crash")
         print("HELD", flush=True)
         time.sleep(30)
     return 0
@@ -81,7 +82,15 @@ def main() -> int:
         _, marker_path = node.windows_install_update_paths()
         marker_path.unlink()
         with node.install_update_mutex(timeout_seconds=2):
+            # Lock-only operations do not create mutation evidence.
             pass
+        assert not marker_path.exists()
+
+        with node.install_update_mutex(timeout_seconds=2):
+            node.begin_install_update_mutation("test_success")
+            assert marker_path.exists()
+            node.complete_install_update_mutation()
+        assert not marker_path.exists()
     finally:
         if child.poll() is None:
             child.kill()
