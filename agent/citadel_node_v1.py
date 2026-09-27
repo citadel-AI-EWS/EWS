@@ -48,7 +48,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.18"
+VERSION = "0.3.19"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -1054,6 +1054,95 @@ class Agent:
                 }
         return content.strip(), measured
 
+    def ensure_lmstudio_ready_for_inference(self) -> str:
+        """Use live LM Studio state and repair daemon/server/model drift before inference."""
+        previous = self.lmstudio_state()
+        snapshot = self.probe_lmstudio()
+        if not snapshot.get("installed"):
+            self.report_ai_state(
+                last_action="project_preflight",
+                progress_phase="failed",
+                progress_detail="lmstudio_not_installed",
+            )
+            raise RuntimeError("lmstudio_not_installed")
+
+        if not snapshot.get("server_running"):
+            self.report_ai_state(
+                installed=True,
+                server_running=False,
+                last_action="project_preflight",
+                progress_phase="server_recovery",
+                progress_detail="LM Studio server is down; restarting daemon and server",
+            )
+            self.run_lms(["daemon", "up"], timeout=120)
+            self.run_lms(["server", "start", "--port", "1234"], timeout=120)
+            snapshot = self.probe_lmstudio()
+            if not snapshot.get("server_running"):
+                self.report_ai_state(
+                    installed=True,
+                    server_running=False,
+                    last_action="project_preflight",
+                    progress_phase="failed",
+                    progress_detail="lmstudio_server_not_running",
+                )
+                raise RuntimeError("lmstudio_server_not_running")
+
+        model = str(snapshot.get("loaded_model") or "").strip()
+        if not model:
+            selected = str(
+                snapshot.get("selected_model")
+                or previous.get("selected_model")
+                or ""
+            ).strip()
+            if selected and LMSTUDIO_MODEL_RE.fullmatch(selected):
+                self.report_ai_state(
+                    installed=True,
+                    server_running=True,
+                    selected_model=selected,
+                    last_action="project_preflight",
+                    progress_phase="model_recovery",
+                    progress_detail=f"Reloading selected model: {selected}",
+                )
+                try:
+                    self.load_lmstudio_model({
+                        "model": selected,
+                        "source": "catalog",
+                        "settings": {},
+                    })
+                except Exception as error:
+                    self.report_ai_state(
+                        installed=True,
+                        server_running=True,
+                        selected_model=selected,
+                        loaded_model=None,
+                        last_action="project_preflight",
+                        progress_phase="failed",
+                        progress_detail=local_error_code(error),
+                    )
+                    raise RuntimeError("lmstudio_model_not_loaded") from error
+                snapshot = self.probe_lmstudio()
+                model = str(snapshot.get("loaded_model") or "").strip()
+
+        if not model or not LMSTUDIO_MODEL_RE.fullmatch(model):
+            self.report_ai_state(
+                installed=True,
+                server_running=True,
+                last_action="project_preflight",
+                progress_phase="failed",
+                progress_detail="lmstudio_model_not_loaded",
+            )
+            raise RuntimeError("lmstudio_model_not_loaded")
+
+        self.report_ai_state(
+            installed=True,
+            server_running=True,
+            loaded_model=model,
+            last_action="project_preflight",
+            progress_phase="ready",
+            progress_detail=f"LM Studio ready: {model}",
+        )
+        return model
+
     def execute_project_text(self, payload: dict[str, Any]) -> dict[str, Any]:
         task_text = str(payload.get("task_text") or "").strip()
         role_name = str(payload.get("role_name") or "planner").strip()
@@ -1064,10 +1153,7 @@ class Agent:
         if not role_name or len(role_name) > 64:
             raise RuntimeError("invalid project role")
 
-        state = self.lmstudio_state()
-        model = str(state.get("loaded_model") or "").strip()
-        if not model or not LMSTUDIO_MODEL_RE.fullmatch(model):
-            raise RuntimeError("lmstudio_model_not_loaded")
+        model = self.ensure_lmstudio_ready_for_inference()
 
         desired = 1 + int(len(task_text) > 800) + int(len(task_text) > 1800)
         ram_gib = float(psutil.virtual_memory().total) / float(1024 ** 3)

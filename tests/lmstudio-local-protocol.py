@@ -72,7 +72,8 @@ def main() -> int:
             "server_running": True,
             "loaded_model": "test/model",
         }
-        agent.save_lmstudio_state(loaded_model="test/model", selected_model="test/model")
+        # Deliberately stale persisted state: project execution must use the live probe.
+        agent.save_lmstudio_state(loaded_model="stale/model", selected_model="test/model")
 
         with ReusableTCPServer(("127.0.0.1", 1234), Handler) as server:
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -113,7 +114,60 @@ def main() -> int:
         assert project_body["model"] == "test/model"
         assert project_body["messages"][-1]["content"] == "Return PROJECT OK"
 
-        print("LM Studio REST + OpenAI-compatible local protocols: PASS")
+        # A dead server is restarted before an AI assignment instead of trusting stale state.
+        recovery = node.Agent(config)
+        recovery.save_lmstudio_state(selected_model="test/model")
+        recovery_states = iter([
+            {
+                "installed": True,
+                "server_running": False,
+                "loaded_model": None,
+                "selected_model": "test/model",
+            },
+            {
+                "installed": True,
+                "server_running": True,
+                "loaded_model": "test/model",
+                "selected_model": "test/model",
+            },
+        ])
+        recovery.probe_lmstudio = lambda: next(recovery_states)
+        recovery_commands: list[list[str]] = []
+        recovery.run_lms = lambda args, timeout: recovery_commands.append(list(args))
+        assert recovery.ensure_lmstudio_ready_for_inference() == "test/model"
+        assert recovery_commands == [
+            ["daemon", "up"],
+            ["server", "start", "--port", "1234"],
+        ], recovery_commands
+
+        # A selected local model is reloaded when the server is alive but memory is empty.
+        reload_agent = node.Agent(config)
+        reload_agent.save_lmstudio_state(selected_model="test/model")
+        reload_states = iter([
+            {
+                "installed": True,
+                "server_running": True,
+                "loaded_model": None,
+                "selected_model": "test/model",
+            },
+            {
+                "installed": True,
+                "server_running": True,
+                "loaded_model": "test/model",
+                "selected_model": "test/model",
+            },
+        ])
+        reload_agent.probe_lmstudio = lambda: next(reload_states)
+        reload_payloads: list[dict[str, object]] = []
+        reload_agent.load_lmstudio_model = lambda payload: reload_payloads.append(dict(payload))
+        assert reload_agent.ensure_lmstudio_ready_for_inference() == "test/model"
+        assert reload_payloads == [{
+            "model": "test/model",
+            "source": "catalog",
+            "settings": {},
+        }], reload_payloads
+
+        print("LM Studio REST + live preflight/self-heal protocols: PASS")
         return 0
 
 
