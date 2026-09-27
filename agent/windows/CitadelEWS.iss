@@ -214,18 +214,103 @@ begin
   Exec(FileName, Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
-function CitadelHostRunning: Boolean;
+function IsCitadelManagedProcess(ProcessObj: Variant): Boolean;
 var
-  Cmd: string;
-  ResultCode: Integer;
+  ExePath, CommandLine, HostExe, RuntimePython, RuntimePythonW: string;
 begin
-  Cmd := ExpandConstant('{cmd}');
-  Result :=
-    Exec(
-      Cmd,
-      '/C tasklist /FI "IMAGENAME eq CitadelNodeService.exe" /NH | findstr /I /C:"CitadelNodeService.exe" >NUL 2>&1',
-      '', SW_HIDE, ewWaitUntilTerminated, ResultCode
-    ) and (ResultCode = 0);
+  Result := False;
+  ExePath := '';
+  CommandLine := '';
+  try
+    ExePath := VarToStr(ProcessObj.ExecutablePath);
+  except
+    exit;
+  end;
+  try
+    CommandLine := Lowercase(VarToStr(ProcessObj.CommandLine));
+  except
+    CommandLine := '';
+  end;
+
+  HostExe := ExpandConstant('{app}\CitadelNodeService.exe');
+  RuntimePython := ExpandConstant('{app}\runtime\python.exe');
+  RuntimePythonW := ExpandConstant('{app}\runtime\pythonw.exe');
+
+  if CompareText(ExePath, HostExe) = 0 then
+  begin
+    Result := True;
+    exit;
+  end;
+
+  if ((CompareText(ExePath, RuntimePython) = 0) or
+      (CompareText(ExePath, RuntimePythonW) = 0)) and
+     ((Pos('citadel_node_v1.py', CommandLine) > 0) or
+      (Pos('citadel_node_v2.py', CommandLine) > 0)) then
+    Result := True;
+end;
+
+function CitadelManagedProcessRunning: Boolean;
+var
+  Locator, Services, Processes, ProcessObj: Variant;
+  I: Integer;
+begin
+  Result := False;
+  try
+    Locator := CreateOleObject('WbemScripting.SWbemLocator');
+    Services := Locator.ConnectServer('.', 'root\cimv2');
+    Processes := Services.ExecQuery(
+      'SELECT ExecutablePath,CommandLine FROM Win32_Process ' +
+      'WHERE Name="CitadelNodeService.exe" OR Name="python.exe" OR Name="pythonw.exe"'
+    );
+    for I := 0 to Processes.Count - 1 do
+    begin
+      ProcessObj := Processes.ItemIndex(I);
+      if IsCitadelManagedProcess(ProcessObj) then
+      begin
+        Result := True;
+        exit;
+      end;
+    end;
+  except
+    RaiseException('Unable to verify existing CITADEL processes before lifecycle mutation.');
+  end;
+end;
+
+procedure TerminateOrphanedCitadelPython;
+var
+  Locator, Services, Processes, ProcessObj: Variant;
+  I, ResultCode: Integer;
+  ExePath, CommandLine, RuntimePython, RuntimePythonW: string;
+begin
+  RuntimePython := ExpandConstant('{app}\runtime\python.exe');
+  RuntimePythonW := ExpandConstant('{app}\runtime\pythonw.exe');
+  try
+    Locator := CreateOleObject('WbemScripting.SWbemLocator');
+    Services := Locator.ConnectServer('.', 'root\cimv2');
+    Processes := Services.ExecQuery(
+      'SELECT ProcessId,ExecutablePath,CommandLine FROM Win32_Process ' +
+      'WHERE Name="python.exe" OR Name="pythonw.exe"'
+    );
+    for I := 0 to Processes.Count - 1 do
+    begin
+      ProcessObj := Processes.ItemIndex(I);
+      ExePath := VarToStr(ProcessObj.ExecutablePath);
+      CommandLine := Lowercase(VarToStr(ProcessObj.CommandLine));
+      if ((CompareText(ExePath, RuntimePython) = 0) or
+          (CompareText(ExePath, RuntimePythonW) = 0)) and
+         ((Pos('citadel_node_v1.py', CommandLine) > 0) or
+          (Pos('citadel_node_v2.py', CommandLine) > 0)) then
+      begin
+        ResultCode := ProcessObj.Terminate(1);
+        if ResultCode <> 0 then
+          Log('CITADEL could not terminate orphaned bundled-Python agent PID ' +
+              IntToStr(Integer(ProcessObj.ProcessId)) + '; WMI code ' +
+              IntToStr(ResultCode) + '.');
+      end;
+    end;
+  except
+    RaiseException('Unable to terminate orphaned CITADEL Python process safely.');
+  end;
 end;
 
 procedure WaitForCitadelHostExit;
@@ -234,10 +319,10 @@ var
 begin
   for Attempt := 1 to 100 do
   begin
-    if not CitadelHostRunning then exit;
+    if not CitadelManagedProcessRunning then exit;
     Sleep(500);
   end;
-  RaiseException('Existing CITADEL supervisor did not stop within 50 seconds.');
+  RaiseException('Existing CITADEL supervisor/agent did not stop within 50 seconds.');
 end;
 
 procedure StopExistingService;
@@ -257,6 +342,7 @@ begin
     host tree explicitly, then prove the executable is no longer running before
     [Files] is allowed to replace the live install tree. }
   TryExec(TaskKill, '/IM CitadelNodeService.exe /T /F');
+  TerminateOrphanedCitadelPython;
   WaitForCitadelHostExit;
 end;
 
@@ -269,6 +355,7 @@ begin
   TryExec(SchTasks, '/Change /TN "{#FallbackTaskName}" /DISABLE');
   TryExec(SchTasks, '/End /TN "{#FallbackTaskName}"');
   TryExec(TaskKill, '/IM CitadelNodeService.exe /T /F');
+  TerminateOrphanedCitadelPython;
   WaitForCitadelHostExit;
 end;
 
