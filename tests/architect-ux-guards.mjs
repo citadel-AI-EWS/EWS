@@ -379,6 +379,19 @@ assert.match(index, /async function expireStaleCommands/);
 assert.match(index, /await expireStaleCommands\(env\)/);
 assert.match(index, /command\.expired/);
 assert.match(index, /test_node_excluded/);
+assert.match(index, /lmstudio_state_unknown/);
+assert.match(index, /lmstudio_state_updated_at/);
+assert.match(architect, /lmstudio_state_unknown/);
+assert.match(architect, /Проект сохранён и ждёт/);
+{
+  const start = index.indexOf("async function architectCreateProject");
+  const end = index.indexOf("async function architectListProjects", start);
+  assert.ok(start >= 0 && end > start, "architectCreateProject function missing");
+  const createProjectBlock = index.slice(start, end);
+  assert.doesNotMatch(createProjectBlock, /throw new ApiError\(409, "no_available_nodes"\)/);
+  assert.doesNotMatch(createProjectBlock, /throw new ApiError\(409, "no_ready_workers_check_agent_and_loaded_model"\)/);
+  assert.match(createProjectBlock, /hub_plan_saved_waiting_for_ready_lmstudio_worker/);
+}
 assert.match(index, /compliance_in_scope/);
 assert.match(index, /nodes_updateable_now/);
 assert.match(architect, /function nodeOperationalState/);
