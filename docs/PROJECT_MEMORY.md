@@ -547,3 +547,12 @@ Decision and implementation:
 - A persistent STOP marker from signed uninstall is respected across reboot; local administrator repair clears it explicitly.
 - LM Studio remains the reviewed headless/llmster integration. Under the Core Service it is service-profile scoped and does not depend on an interactive desktop session.
 - No arbitrary shell, WinRM, credential collection, hidden persistence or inbound management port was added.
+
+## 2026-09-28 — Daily engineering control: retention and AEGIS UI
+
+- Baseline: `main` at `b0fbf0804aad7074ef1afd4d6d1187c003f287ae`; checked-in agent release 0.3.19. Main CI, Cloudflare TEST deployment and synthetic checks are green. The verified live smoke reports nine registered nodes, four online nodes, four Python-ready workers and zero AI-ready workers; AI execution is correctly reported as waiting for an AI worker rather than simulated READY.
+- CodeRabbit PR #133 finding remains valid on current main: age-based telemetry deletion was still triggered by a node-controlled `event_id` suffix. The correction removes that trigger and runs the existing indexed seven-day prune from an hourly Cloudflare scheduled handler.
+- AEGIS regression remains valid on current main: `operations.html` exposed a Tailscale-specific IP row even though PR #83 requires no Tailscale UI. The row is removed and the source/build guard now covers Operations as well as Hub and Architect. Agent-side network collection and signed Controller data remain unchanged.
+- Verification: full `scripts/validate.sh`, seven npm integration/regression suites, static site build, pinned Wrangler dry-run, Windows and Linux 0.3.19 package builders, npm high-severity audit, pip-audit, Bandit, cfn-lint and `git diff --check` passed locally.
+- Rollback: revert the scoped telemetry cron/ingestion/test changes and the Operations UI row removal. No database migration, agent binary, release metadata, command protocol or stored Controller record is changed.
+- Release status at branch creation: pending PR CI, merge, post-merge deployment and live smoke. Related CodeRabbit email remains in Inbox until those gates finish.

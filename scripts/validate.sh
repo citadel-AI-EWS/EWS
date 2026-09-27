@@ -158,6 +158,7 @@ for required in ('data-lang="ru"', 'data-lang="en"', 'data-lang="he"', "missionN
 
 logs = Path("architect-logs.html").read_text(encoding="utf-8")
 home = Path("live-index.html").read_text(encoding="utf-8")
+operations = Path("operations.html").read_text(encoding="utf-8")
 for page_name, page in (("home", home), ("hub", hub), ("architect", architect), ("logs", logs)):
     if 'id="siteClock"' not in page:
         raise SystemExit(f"{page_name} missing current date/time clock")
@@ -169,7 +170,7 @@ for forbidden in ("Command feed", "Audit feed", "commandTimeline", "auditTimelin
     if forbidden in hub:
         raise SystemExit(f"obsolete Hub feed surfaced again: {forbidden}")
 
-for page_name, page in (("hub", hub), ("architect", architect)):
+for page_name, page in (("hub", hub), ("architect", architect), ("operations", operations)):
     for forbidden in ("Tailscale", "tailscale_ipv4"):
         if forbidden in page:
             raise SystemExit(f"{page_name} must not expose Tailscale-specific UI: {forbidden}")

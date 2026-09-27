@@ -196,7 +196,6 @@ for (const required of [
   'id="detailUninstall"',
   "/details",
   "LAN IP",
-  "Tailscale IP",
   "MAC",
   "lmstudio_install",
   "lmstudio_probe",

@@ -343,6 +343,9 @@ state.logs.push({
   received_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString()
 });
 
+await worker.scheduled({}, env);
+assert.equal(state.logs.some((item) => item.event_id === "expired_event"), false);
+
 const architectHeaders = { authorization: `Bearer ${architectToken}` };
 response = await worker.fetch(new Request(
   "https://example.test/api/v1/architect/logs?limit=1",
