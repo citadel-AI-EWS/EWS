@@ -48,11 +48,11 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.19"
+VERSION = "0.3.20"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}
+SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_prepare", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}
 CORE_UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
 UPDATE_FILE_NAMES = CORE_UPDATE_FILE_NAMES | {"windows_enterprise_probe.ps1"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -1076,6 +1076,7 @@ class Agent:
             )
             self.run_lms(["daemon", "up"], timeout=120)
             self.run_lms(["server", "start", "--port", "1234"], timeout=120)
+            self.wait_lmstudio_http_ready(timeout_seconds=45)
             snapshot = self.probe_lmstudio()
             if not snapshot.get("server_running"):
                 self.report_ai_state(
@@ -1437,6 +1438,9 @@ class Agent:
         elif command_type == "lmstudio_install":
             if not self.validate_lmstudio_install_payload(payload):
                 return False
+        elif command_type == "lmstudio_prepare":
+            if not self.validate_lmstudio_prepare_payload(payload):
+                return False
         elif command_type == "lmstudio_uninstall":
             if not self.validate_lmstudio_uninstall_payload(payload):
                 return False
@@ -1515,35 +1519,6 @@ class Agent:
             return False
         return address.version == 4 and address.is_private
 
-    @staticmethod
-    def validate_lmstudio_install_payload(payload: dict[str, Any]) -> bool:
-        asset = payload.get("asset")
-        if not isinstance(asset, dict):
-            return False
-        name = asset.get("path")
-        url = asset.get("url")
-        digest = asset.get("sha256")
-        if name not in LMSTUDIO_INSTALL_FILE_NAMES:
-            return False
-        parsed = urllib.parse.urlsplit(url) if isinstance(url, str) else None
-        if (
-            parsed is None
-            or parsed.scheme != "https"
-            or parsed.hostname != "raw.githubusercontent.com"
-            or parsed.path != f"/citadel-AI-EWS/EWS/main/agent/lmstudio/{name}"
-            or not isinstance(digest, str)
-            or len(digest) != 64
-            or any(char not in "0123456789abcdef" for char in digest)
-        ):
-            return False
-        expected = "install_llmstudio_headless.ps1" if os.name == "nt" else "install_llmstudio_headless.sh"
-        return name == expected
-
-    @staticmethod
-    def validate_lmstudio_model_payload(payload: dict[str, Any]) -> bool:
-        model = payload.get("model")
-        return isinstance(model, str) and bool(LMSTUDIO_MODEL_RE.fullmatch(model))
-
     def lmstudio_state(self) -> dict[str, Any]:
         state = load_json(self.lmstudio_state_path, {}) or {}
         return state if isinstance(state, dict) else {}
@@ -1603,6 +1578,12 @@ class Agent:
         runtime_home = str(self.lmstudio_runtime_home())
         env["CITADEL_LMSTUDIO_HOME"] = runtime_home
         env["HOME"] = runtime_home
+        if os.name == "nt":
+            env["USERPROFILE"] = runtime_home
+            drive, tail = os.path.splitdrive(runtime_home)
+            if drive:
+                env["HOMEDRIVE"] = drive
+                env["HOMEPATH"] = tail or "\\"
         env["LMS_NO_MODIFY_PATH"] = "1"
         return env
 
@@ -1653,6 +1634,19 @@ class Agent:
             return value if isinstance(value, dict) else {"items": value}
         finally:
             connection.close()
+
+    def wait_lmstudio_http_ready(self, timeout_seconds: int = 60) -> None:
+        deadline = time.monotonic() + max(5, timeout_seconds)
+        last_error = "lmstudio_server_http_unavailable"
+        while time.monotonic() < deadline:
+            try:
+                self.lmstudio_http_json("GET", "/v1/models", timeout=5)
+                return
+            except Exception as error:
+                last_error = local_error_code(error)
+                time.sleep(1)
+        self.log.write("lmstudio_server_http_unavailable", error=last_error)
+        raise RuntimeError("lmstudio_server_http_unavailable")
 
     @staticmethod
     def _loaded_model_name(item: Any) -> str | None:
@@ -1778,6 +1772,23 @@ class Agent:
             return False
         return True
 
+    def validate_lmstudio_prepare_payload(self, payload: dict[str, Any]) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        allowed = {"asset", "model", "source", "quantization", "settings"}
+        if any(key not in allowed for key in payload):
+            return False
+        install_payload = {"asset": payload.get("asset")}
+        model_payload = {
+            key: payload[key]
+            for key in ("model", "source", "quantization", "settings")
+            if key in payload
+        }
+        return (
+            self.validate_lmstudio_install_payload(install_payload)
+            and self.validate_lmstudio_model_payload(model_payload)
+        )
+
     @staticmethod
     def validate_hybrid_payload(payload: dict[str, Any]) -> bool:
         mode = payload.get("mode")
@@ -1822,14 +1833,14 @@ class Agent:
         asset = payload["asset"]
         self.report_ai_state(
             installed=False, last_action="installing",
-            progress_phase="helper_download", progress_current=0, progress_total=5,
+            progress_phase="helper_download", progress_current=0, progress_total=6,
             progress_detail="Downloading reviewed CITADEL installer helper",
         )
         data = self.download_update_file(asset["url"])
         if hashlib.sha256(data).hexdigest() != asset["sha256"]:
             raise RuntimeError("lmstudio installer helper hash mismatch")
         self.report_ai_state(
-            progress_phase="helper_verified", progress_current=1, progress_total=5,
+            progress_phase="helper_verified", progress_current=1, progress_total=6,
             progress_detail="Installer helper SHA-256 verified",
         )
         suffix = ".ps1" if os.name == "nt" else ".sh"
@@ -1849,7 +1860,7 @@ class Agent:
                     raise RuntimeError("bash unavailable")
                 argv = [bash, str(helper)]
             self.report_ai_state(
-                progress_phase="upstream_installer", progress_current=2, progress_total=5,
+                progress_phase="upstream_installer", progress_current=2, progress_total=6,
                 progress_detail="Official LM Studio / llmster installer is running",
             )
             result = subprocess.run(  # nosec B603
@@ -1866,24 +1877,119 @@ class Agent:
             if not self.find_lms():
                 raise RuntimeError("lms CLI unavailable after installation")
             self.report_ai_state(
-                installed=True, progress_phase="runtime_verified", progress_current=3, progress_total=5,
+                installed=True, progress_phase="runtime_verified", progress_current=3, progress_total=6,
                 progress_detail="lms CLI verified",
             )
             self.run_lms(["daemon", "up"], timeout=120)
             self.report_ai_state(
-                installed=True, progress_phase="daemon_running", progress_current=4, progress_total=5,
+                installed=True, progress_phase="daemon_running", progress_current=4, progress_total=6,
                 progress_detail="llmster daemon running",
             )
             self.run_lms(["server", "start", "--port", "1234"], timeout=120)
+            self.wait_lmstudio_http_ready(timeout_seconds=60)
+            self.report_ai_state(
+                installed=True, server_running=True,
+                progress_phase="api_ready", progress_current=5, progress_total=6,
+                progress_detail="LM Studio HTTP API responded on localhost:1234",
+            )
             self.report_ai_state(
                 installed=True, server_running=True, last_action="installed",
-                progress_phase="complete", progress_current=5, progress_total=5,
-                progress_detail="LM Studio server running on localhost:1234",
+                progress_phase="complete", progress_current=6, progress_total=6,
+                progress_detail="LM Studio runtime and local API are ready",
             )
             self.log.write("lmstudio_installed")
         finally:
             with contextlib.suppress(FileNotFoundError):
                 helper.unlink()
+
+    def prepare_lmstudio(self, payload: dict[str, Any]) -> None:
+        if not self.validate_lmstudio_prepare_payload(payload):
+            raise RuntimeError("invalid lmstudio prepare payload")
+        model_payload = {
+            "model": payload["model"],
+            "source": payload.get("source", "catalog"),
+            "quantization": payload.get("quantization"),
+            "settings": payload.get("settings") or {},
+        }
+        try:
+            self.report_ai_state(
+                last_action="preparing",
+                progress_phase="prepare_runtime",
+                progress_current=0,
+                progress_total=4,
+                progress_detail="Preparing LM Studio runtime",
+            )
+            if not self.find_lms():
+                self.install_lmstudio({"asset": payload["asset"]})
+            else:
+                self.run_lms(["daemon", "up"], timeout=120)
+                self.run_lms(["server", "start", "--port", "1234"], timeout=120)
+                self.wait_lmstudio_http_ready(timeout_seconds=60)
+
+            self.report_ai_state(
+                installed=True,
+                server_running=True,
+                last_action="preparing",
+                progress_phase="prepare_model_download",
+                progress_current=1,
+                progress_total=4,
+                progress_detail=f"Downloading baseline model: {model_payload['model']}",
+            )
+            self.download_lmstudio_model(model_payload)
+
+            self.report_ai_state(
+                installed=True,
+                server_running=True,
+                last_action="preparing",
+                progress_phase="prepare_model_load",
+                progress_current=2,
+                progress_total=4,
+                progress_detail=f"Loading baseline model: {model_payload['model']}",
+            )
+            self.load_lmstudio_model(model_payload)
+            snapshot = self.probe_lmstudio()
+            loaded_model = str(snapshot.get("loaded_model") or "").strip()
+            if not snapshot.get("server_running") or not loaded_model:
+                raise RuntimeError("lmstudio_model_not_loaded")
+
+            self.report_ai_state(
+                installed=True,
+                server_running=True,
+                loaded_model=loaded_model,
+                last_action="preparing",
+                progress_phase="prepare_inference_test",
+                progress_current=3,
+                progress_total=4,
+                progress_detail="Running real local inference readiness test",
+            )
+            answer, _usage = self._project_llm_chat(
+                loaded_model,
+                "You are a CITADEL readiness probe. Give a short non-empty reply.",
+                "Reply with CITADEL READY.",
+                max_tokens=24,
+                temperature=0.0,
+            )
+            if not answer.strip():
+                raise RuntimeError("lmstudio_empty_response")
+            self.report_ai_state(
+                installed=True,
+                server_running=True,
+                selected_model=str(snapshot.get("selected_model") or model_payload["model"]),
+                loaded_model=loaded_model,
+                last_action="prepared",
+                progress_phase="ready",
+                progress_current=4,
+                progress_total=4,
+                progress_detail=f"AI node READY: {loaded_model}",
+            )
+            self.log.write("lmstudio_prepared", model=loaded_model)
+        except Exception as error:
+            self.report_ai_state(
+                last_action="prepare_failed",
+                progress_phase="failed",
+                progress_detail=local_error_code(error),
+            )
+            raise
 
     def lmstudio_managed_roots(self) -> list[Path]:
         """Return only allowlisted LM Studio roots under CITADEL or the legacy user home."""
@@ -2582,6 +2688,8 @@ class Agent:
                     self.send_wake_packet(command.get("payload") or {})
                 elif command_type == "lmstudio_install":
                     self.install_lmstudio(command.get("payload") or {})
+                elif command_type == "lmstudio_prepare":
+                    self.prepare_lmstudio(command.get("payload") or {})
                 elif command_type == "lmstudio_uninstall":
                     self.uninstall_lmstudio(command.get("payload") or {})
                 elif command_type == "lmstudio_probe":
