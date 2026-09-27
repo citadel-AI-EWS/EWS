@@ -7,6 +7,7 @@ import socketserver
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -167,7 +168,111 @@ def main() -> int:
             "settings": {},
         }], reload_payloads
 
-        print("LM Studio REST + live preflight/self-heal protocols: PASS")
+        # Prefer the explicitly selected model when several models are live.
+        preference = node.Agent(config)
+        preference.save_lmstudio_state(selected_model="selected/model")
+        class FakeResult:
+            def __init__(self, stdout: str) -> None:
+                self.stdout = stdout
+        preference.find_lms = lambda: "lms"
+        def preference_run(args, timeout):
+            if args[:2] == ["server", "status"]:
+                return FakeResult('{"running":true}')
+            if args[:2] == ["ps", "--json"]:
+                return FakeResult('[{"model":"other/model"},{"model":"selected/model"}]')
+            raise AssertionError(args)
+        preference.run_lms = preference_run
+        preferred_snapshot = preference.probe_lmstudio()
+        assert preferred_snapshot["loaded_model"] == "selected/model", preferred_snapshot
+
+        # Actual inference must do another live preflight under the lifecycle lock.
+        guarded = node.Agent(config)
+        guard_calls: list[str] = []
+        guarded._ensure_lmstudio_ready_for_inference_locked = lambda: guard_calls.append("preflight") or "live/model"
+        guarded._project_llm_chat_unlocked = lambda model, *args, **kwargs: (model, None)
+        guarded_answer, _ = guarded._project_llm_chat("stale/model", "system", "user", max_tokens=8)
+        assert guarded_answer == "live/model", guarded_answer
+        assert guard_calls == ["preflight"], guard_calls
+
+        # Duplicate agent instances sharing a data_dir must serialize recovery.
+        first = node.Agent(config)
+        second = node.Agent(config)
+        runtime = {"server": False, "loaded": None, "server_starts": 0}
+        runtime_guard = threading.Lock()
+        def shared_probe():
+            with runtime_guard:
+                return {
+                    "installed": True,
+                    "server_running": runtime["server"],
+                    "loaded_model": runtime["loaded"],
+                    "selected_model": "test/model",
+                }
+        def shared_run(args, timeout):
+            if args[:2] == ["server", "start"]:
+                with runtime_guard:
+                    runtime["server_starts"] += 1
+                time.sleep(0.15)
+                with runtime_guard:
+                    runtime["server"] = True
+                    runtime["loaded"] = "test/model"
+            return None
+        for candidate in (first, second):
+            candidate.probe_lmstudio = shared_probe
+            candidate.run_lms = shared_run
+            candidate.save_lmstudio_state(selected_model="test/model")
+        barrier = threading.Barrier(3)
+        recovery_results: list[str] = []
+        recovery_errors: list[str] = []
+        def recover(candidate):
+            barrier.wait()
+            try:
+                recovery_results.append(candidate.ensure_lmstudio_ready_for_inference())
+            except Exception as error:
+                recovery_errors.append(str(error))
+        workers = [threading.Thread(target=recover, args=(candidate,)) for candidate in (first, second)]
+        for worker in workers:
+            worker.start()
+        barrier.wait()
+        for worker in workers:
+            worker.join(timeout=5)
+        assert not recovery_errors, recovery_errors
+        assert sorted(recovery_results) == ["test/model", "test/model"], recovery_results
+        assert runtime["server_starts"] == 1, runtime
+
+        # State updates serialize the read/merge/write transaction, not only os.replace().
+        state_agent = node.Agent(config)
+        original_atomic_write = node.atomic_write
+        write_guard = threading.Lock()
+        active_writes = 0
+        max_active_writes = 0
+        def slow_atomic_write(path, text, mode=0o600):
+            nonlocal active_writes, max_active_writes
+            with write_guard:
+                active_writes += 1
+                max_active_writes = max(max_active_writes, active_writes)
+            time.sleep(0.05)
+            try:
+                return original_atomic_write(path, text, mode)
+            finally:
+                with write_guard:
+                    active_writes -= 1
+        node.atomic_write = slow_atomic_write
+        try:
+            writers = [
+                threading.Thread(target=state_agent.save_lmstudio_state, kwargs={"race_a": "A"}),
+                threading.Thread(target=state_agent.save_lmstudio_state, kwargs={"race_b": "B"}),
+            ]
+            for worker in writers:
+                worker.start()
+            for worker in writers:
+                worker.join(timeout=5)
+        finally:
+            node.atomic_write = original_atomic_write
+        final_state = state_agent.lmstudio_state()
+        assert max_active_writes == 1, max_active_writes
+        assert final_state["race_a"] == "A" and final_state["race_b"] == "B", final_state
+
+        print("LM Studio REST + live preflight/self-heal/race guards: PASS")
         return 0
 
 
