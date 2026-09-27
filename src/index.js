@@ -1353,6 +1353,10 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
   `).bind(nodeId).first();
   if (!node || operationalNodeState(node) !== "live" || isTestNodeRecord(node)) return 0;
 
+  const canRunPython = projectNodeReady(node, "architect_python");
+  const canRunAi = projectNodeReady(node, "architect_manual");
+  if (!canRunPython && !canRunAi) return 0;
+
   const [planned, readyNodesQuery] = await Promise.all([
     env.DB.prepare(`
       SELECT w.work_item_id, w.project_id, w.sequence_no, w.role_name, w.task_text,
@@ -1362,10 +1366,14 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
       WHERE w.status = 'planned'
         AND p.status IN ('planned','running')
         AND (? IS NULL OR w.project_id = ?)
+        AND (
+          (p.source_type = 'architect_python' AND ? = 1)
+          OR (p.source_type != 'architect_python' AND ? = 1)
+        )
       ORDER BY CASE WHEN w.node_id = ? THEN 0 WHEN w.node_id IS NULL THEN 1 ELSE 2 END,
         datetime(p.created_at) ASC, w.sequence_no ASC
       LIMIT 32
-    `).bind(projectId, projectId, nodeId).all(),
+    `).bind(projectId, projectId, canRunPython ? 1 : 0, canRunAi ? 1 : 0, nodeId).all(),
     env.DB.prepare(`
       SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
         ai.installed, ai.loaded_model, ai.server_running
