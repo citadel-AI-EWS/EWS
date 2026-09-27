@@ -152,6 +152,17 @@ def migrate_identity(state_root: Path, profiles: list[dict[str, Any]]) -> str | 
 
 def stage_cutover(app_root: Path, state_root: Path, profiles_root: Path | None = None) -> dict[str, Any]:
     profiles = relevant_profiles(profiles_root)
+    destination_identity = read_identity(state_root / "identity.json")
+    needs_cutover = any(
+        layout["agent_root"].exists() or any(path.exists() for path in layout["startup_paths"])
+        for layout in profiles
+    ) or (
+        destination_identity is None
+        and any(read_identity(layout["state_root"] / "identity.json") for layout in profiles)
+    )
+    if not needs_cutover:
+        return {"active": False}
+
     expected_node_id = migrate_identity(state_root, profiles)
 
     # Preserve pause intent before the replacement supervisor starts.
@@ -172,6 +183,7 @@ def stage_cutover(app_root: Path, state_root: Path, profiles_root: Path | None =
 
     marker = {
         "schema": "citadel.windows-legacy-cutover.v1",
+        "active": True,
         "app_root": str(app_root.resolve()),
         "state_root": str(state_root.resolve()),
         "expected_node_id": expected_node_id,
@@ -337,6 +349,8 @@ def commit_cutover(
     profiles_root: Path | None = None,
 ) -> None:
     marker = load_marker(state_root)
+    if not marker.get("active"):
+        return
     expected_node_id = marker.get("expected_node_id") or read_identity(state_root / "identity.json")
     verify_agent_version(app_root, expected_version)
     wait_for_managed_tree(app_root, timeout_seconds)
