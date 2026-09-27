@@ -1342,6 +1342,10 @@ function projectNodeReady(node, sourceType) {
     (node.loaded_model || node.lmstudio_loaded_model).length > 0;
 }
 
+/**
+ * Materialize compatible planned project work for one live node.
+ * Compatibility is applied before the scan limit so mixed AI/Python queues cannot starve later work.
+ */
 async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
   await Promise.all([ensureProjectStorage(env), ensureNodeAiStorage(env)]);
   const node = await env.DB.prepare(`
@@ -1596,6 +1600,10 @@ async function architectCheckProject(request, env) {
   });
 }
 
+/**
+ * Create a durable Architect project after validation.
+ * The project remains planned with unassigned work when no execution-ready node exists yet.
+ */
 async function architectCreateProject(request, env) {
   await authenticateArchitect(request, env);
   const body = parseJsonObject(await readBodyText(request, 64 * 1024));
