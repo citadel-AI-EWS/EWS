@@ -51,10 +51,85 @@ Type: filesandordirs; Name: "{app}"
 const
   DefaultControllerUrl = 'https://citadel-ai.init1.workers.dev';
   ControllerPublicX = 'erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0';
+  InstallUpdateMutexName = 'Global\CitadelEWSInstallUpdateLock';
+  WaitObject0 = 0;
+  WaitAbandoned = 128;
+  WaitTimeout = 258;
 
 var
   StartupConfigured: Boolean;
   LegacyCutoverActive: Boolean;
+  InstallUpdateMutexHandle: THandle;
+
+function CreateMutex(lpMutexAttributes: LongWord; bInitialOwner: Boolean; lpName: string): THandle;
+  external 'CreateMutexW@kernel32.dll stdcall';
+function WaitForSingleObject(hHandle: THandle; dwMilliseconds: Cardinal): Cardinal;
+  external 'WaitForSingleObject@kernel32.dll stdcall';
+function ReleaseMutex(hMutex: THandle): Boolean;
+  external 'ReleaseMutex@kernel32.dll stdcall';
+function CloseHandle(hObject: THandle): Boolean;
+  external 'CloseHandle@kernel32.dll stdcall';
+
+function AcquireInstallUpdateMutex: Boolean;
+var
+  WaitResult: Cardinal;
+begin
+  Result := False;
+  InstallUpdateMutexHandle := CreateMutex(0, False, InstallUpdateMutexName);
+  if InstallUpdateMutexHandle = 0 then
+  begin
+    Log('CITADEL install/update mutex could not be opened; refusing concurrent lifecycle mutation.');
+    exit;
+  end;
+
+  WaitResult := WaitForSingleObject(InstallUpdateMutexHandle, 30000);
+  if (WaitResult = WaitObject0) or (WaitResult = WaitAbandoned) then
+  begin
+    if WaitResult = WaitAbandoned then
+      Log('CITADEL recovered an abandoned install/update mutex; installer is acting as repair authority.');
+    Result := True;
+    exit;
+  end;
+
+  if WaitResult = WaitTimeout then
+    Log('CITADEL install/update mutex is busy; another install/update/rollback is active.')
+  else
+    Log('CITADEL install/update mutex wait failed with code ' + IntToStr(WaitResult) + '.');
+
+  CloseHandle(InstallUpdateMutexHandle);
+  InstallUpdateMutexHandle := 0;
+end;
+
+procedure ReleaseInstallUpdateMutex;
+begin
+  if InstallUpdateMutexHandle <> 0 then
+  begin
+    ReleaseMutex(InstallUpdateMutexHandle);
+    CloseHandle(InstallUpdateMutexHandle);
+    InstallUpdateMutexHandle := 0;
+  end;
+end;
+
+function InitializeSetup: Boolean;
+begin
+  Result := AcquireInstallUpdateMutex;
+end;
+
+procedure DeinitializeSetup;
+begin
+  ReleaseInstallUpdateMutex;
+end;
+
+function InitializeUninstall: Boolean;
+begin
+  Result := AcquireInstallUpdateMutex;
+end;
+
+procedure DeinitializeUninstall;
+begin
+  ReleaseInstallUpdateMutex;
+end;
+
 
 function JsonEscape(Value: string): string;
 begin
