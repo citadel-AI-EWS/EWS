@@ -1310,6 +1310,7 @@
         ],
         project_text_missing: ["нет capability project_text","project_text capability missing","חסרה יכולת project_text"],
         project_python_missing: ["нет capability project_python","project_python capability missing","חסרה יכולת project_python"],
+        lmstudio_state_unknown: ["состояние LM Studio ещё не подтверждено — выполните проверку","LM Studio state is not confirmed yet — run a probe","מצב LM Studio עדיין לא אומת — יש להריץ בדיקה"],
         lmstudio_not_installed: ["LM Studio не установлен","LM Studio is not installed","LM Studio אינו מותקן"],
         lmstudio_server_stopped: ["LM Studio server не запущен","LM Studio server is stopped","שרת LM Studio אינו פועל"],
         lmstudio_model_not_loaded: ["языковая модель не загружена","no language model loaded","לא נטענה מודל שפה"],
@@ -1344,7 +1345,21 @@
           );
         } else {
           addText(row, "div", (worker.blockers || []).map((code) => workerBlockerText(code, worker)).join(" · "), "small");
-          const prepare = addText(row, "button", "Подготовить ноду в Hub", "secondary");
+          const blockers = worker.blockers || [];
+          const prepareLabel = blockers.includes("agent_outdated")
+            ? "Открыть Hub: обновить агент"
+            : blockers.includes("lmstudio_state_unknown")
+              ? "Открыть Hub: проверить LM Studio"
+              : blockers.includes("lmstudio_not_installed")
+                ? "Открыть Hub: установить LM Studio"
+                : blockers.includes("lmstudio_server_stopped")
+                  ? "Открыть Hub: проверить сервер LM Studio"
+                  : blockers.includes("lmstudio_model_not_loaded")
+                    ? "Открыть Hub: загрузить модель"
+                    : blockers.includes("offline")
+                      ? "Открыть Hub: проверить связь"
+                      : "Подготовить ноду в Hub";
+          const prepare = addText(row, "button", prepareLabel, "secondary");
           prepare.type = "button";
           prepare.style.marginTop = "8px";
           prepare.addEventListener("click", () => {
@@ -2791,10 +2806,13 @@
         ).join("\n");
         projectResult.textContent = [
           "Проект создан.",
-          `Hub выбрал узлов: ${p.worker_count}`,
+          `Hub выбрал READY-узлов сейчас: ${p.worker_count}`,
           `Рабочих блоков: ${p.work_item_count}`,
           assignments,
-          "Нажмите «Перейти к отчёту», чтобы увидеть живое состояние проекта."
+          p.worker_count > 0
+            ? "READY-нода найдена. Работа будет забрана ближайшим poll агента."
+            : "READY-ноды сейчас нет. Проект сохранён и ждёт: как только совместимая нода станет готова, агент заберёт работу сам.",
+          "Нажмите «Перейти к отчёту», чтобы увидеть живое состояние и точные blocker-ы."
         ].join("\n");
         projectResult.className = "status good";
         currentProjectCheck = null;
