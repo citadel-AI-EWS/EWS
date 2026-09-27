@@ -444,3 +444,129 @@ assert.match(architect, /event\.key !== "Escape"/);
 assert.doesNotMatch(architect, /if \(!openingBriefShown\) showOperationsBrief\(data\.nodes \|\| \[\]\)/);
 assert.match(architect, /PLAN \/ WAITING/);
 assert.match(architect, /Controller покажет READY-ноды и точный blocker/);
+
+
+// Behavioral guard: a valid AI project is durable even when no execution-ready
+// worker exists at creation time. This exercises the HTTP handler instead of
+// relying only on source-string assertions above.
+{
+  const workerModule = await import(new URL("../src/index.js", import.meta.url));
+  const projectWorker = workerModule.default;
+  const architectToken = "test-architect-token-with-enough-entropy";
+  const architectHash = Buffer.from(await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(architectToken)
+  )).toString("hex");
+  const persisted = { project: null, workItems: 0 };
+
+  function compactSql(sql) {
+    return sql.replace(/\s+/g, " ").trim();
+  }
+
+  class ProjectStatement {
+    constructor(sql) {
+      this.sql = compactSql(sql);
+      this.args = [];
+    }
+    bind(...args) {
+      this.args = args;
+      return this;
+    }
+    async first() {
+      if (this.sql.includes("FROM architect_auth_state WHERE singleton_id = 1")) {
+        return {
+          token_hash: architectHash,
+          bootstrap_mode: 0,
+          recovery_hash: null,
+          recovery_used: 1,
+          token_rotated_at: null,
+          recovery_created_at: null,
+          updated_at: new Date().toISOString()
+        };
+      }
+      if (
+        this.sql.includes("SELECT project_id, status FROM architect_projects") &&
+        this.sql.includes("task_sha256 = ?")
+      ) {
+        return null;
+      }
+      throw new Error(`Unhandled project first(): ${this.sql}`);
+    }
+    async all() {
+      if (
+        this.sql.includes("FROM nodes AS n") &&
+        this.sql.includes("WHERE n.status = 'online'")
+      ) {
+        return { results: [] };
+      }
+      throw new Error(`Unhandled project all(): ${this.sql}`);
+    }
+    async run() {
+      if (this.sql.startsWith("CREATE TABLE") || this.sql.startsWith("CREATE INDEX")) {
+        return { meta: { changes: 0 } };
+      }
+      if (this.sql.startsWith("INSERT OR IGNORE INTO architect_auth_state")) {
+        return { meta: { changes: 0 } };
+      }
+      if (this.sql.startsWith("INSERT INTO architect_projects")) {
+        persisted.project = {
+          project_id: this.args[0],
+          worker_count: this.args[this.args.length - 1]
+        };
+        return { meta: { changes: 1 } };
+      }
+      if (this.sql.startsWith("INSERT INTO project_work_items")) {
+        persisted.workItems += 1;
+        return { meta: { changes: 1 } };
+      }
+      if (
+        this.sql.startsWith("INSERT INTO project_specializations") ||
+        this.sql.startsWith("INSERT INTO audit_events")
+      ) {
+        return { meta: { changes: 1 } };
+      }
+      throw new Error(`Unhandled project run(): ${this.sql}`);
+    }
+  }
+
+  const projectEnv = {
+    ARCHITECT_TOKEN_HASH: architectHash,
+    DB: {
+      prepare(sql) {
+        return new ProjectStatement(sql);
+      },
+      async batch(statements) {
+        const results = [];
+        for (const statement of statements) results.push(await statement.run());
+        return results;
+      }
+    },
+    ASSETS: { fetch() { return new Response("asset"); } }
+  };
+
+  const response = await projectWorker.fetch(new Request(
+    "https://example.test/api/v1/architect/projects",
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${architectToken}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        source_type: "architect_manual",
+        title: "Waiting-worker behavior",
+        task_text: "Explain why bounded queues should not starve compatible work."
+      })
+    }
+  ), projectEnv);
+
+  assert.equal(response.status, 201);
+  const body = await response.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.project.worker_count, 0);
+  assert.equal(body.execution.detail, "hub_plan_saved_waiting_for_ready_lmstudio_worker");
+  assert.ok(body.project.work_item_count >= 1);
+  assert.equal(persisted.project?.worker_count, 0);
+  assert.equal(persisted.workItems, body.project.work_item_count);
+  assert.ok(body.project.work_items.every((item) => item.node_id === null));
+}
