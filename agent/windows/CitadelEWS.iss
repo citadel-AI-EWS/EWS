@@ -215,6 +215,9 @@ begin
   Icacls := ExpandConstant('{sys}\icacls.exe');
   AppRoot := ExpandConstant('{app}');
   StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\state');
+  ForceDirectories(StateRoot);
+  if not DirExists(StateRoot) then
+    RaiseException('Unable to create the CITADEL state directory.');
 
   RequireExec(
     Icacls,
