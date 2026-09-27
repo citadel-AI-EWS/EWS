@@ -77,12 +77,12 @@ function CloseHandle(hObject: THandle): Boolean;
 
 function InstallUpdateLockPath: string;
 begin
-  Result := ExpandConstant('{commonappdata}\CitadelEWS\state\install-update.lock');
+  Result := ExpandConstant('{commonappdata}\CitadelEWS\lifecycle\install-update.lock');
 end;
 
 function InstallUpdateMarkerPath: string;
 begin
-  Result := ExpandConstant('{commonappdata}\CitadelEWS\state\install-update-active.json');
+  Result := ExpandConstant('{commonappdata}\CitadelEWS\lifecycle\install-update-active.json');
 end;
 
 function SecureInstallUpdateStateRoot: Boolean;
@@ -91,7 +91,7 @@ var
   ResultCode: Integer;
 begin
   Result := False;
-  StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\state');
+  StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\lifecycle');
   Icacls := ExpandConstant('{sys}\icacls.exe');
   ForceDirectories(StateRoot);
   if not DirExists(StateRoot) then exit;
@@ -317,7 +317,7 @@ begin
   PythonExe := ExpandConstant('{app}\runtime\python.exe');
   ScriptPath := ExpandConstant('{app}\windows_legacy_cutover.py');
   AppRoot := ExpandConstant('{app}');
-  StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\state');
+  StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\lifecycle');
   Params :=
     '"' + ScriptPath + '" ' + Action +
     ' --app-root "' + AppRoot + '"' +
@@ -335,7 +335,7 @@ begin
   if not FileExists(PythonExe) or not FileExists(ScriptPath) then
     exit;
   AppRoot := ExpandConstant('{app}');
-  StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\state');
+  StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\lifecycle');
   Params :=
     '"' + ScriptPath + '" ' + Action +
     ' --app-root "' + AppRoot + '"' +
@@ -375,7 +375,7 @@ procedure WriteDefaultConfig;
 var
   StateRoot, ConfigPath, ConfigText, ControllerUrl: string;
 begin
-  StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\state');
+  StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\lifecycle');
   ControllerUrl := ExpandConstant('{param:CONTROLLERURL|' + DefaultControllerUrl + '}');
   ConfigPath := StateRoot + '\config.json';
   ForceDirectories(StateRoot);
@@ -408,7 +408,7 @@ var
 begin
   Icacls := ExpandConstant('{sys}\icacls.exe');
   AppRoot := ExpandConstant('{app}');
-  StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\state');
+  StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\lifecycle');
   ForceDirectories(StateRoot);
   if not DirExists(StateRoot) then
     RaiseException('Unable to create the CITADEL state directory.');
