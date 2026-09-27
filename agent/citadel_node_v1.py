@@ -300,7 +300,11 @@ def _local_file_lock(path: Path) -> threading.RLock:
 
 
 def windows_install_update_paths() -> tuple[Path, Path]:
-    """Return the protected machine-wide lock and crash-marker paths."""
+    """Return the canonical protected machine-wide lock and crash-marker paths.
+
+    This path is intentionally independent from config.data_dir. Every supported
+    Windows installer provisions the same ACL-protected machine lifecycle root.
+    """
     program_data = os.environ.get("PROGRAMDATA") or os.environ.get("ALLUSERSPROFILE")
     if not program_data:
         raise RuntimeError("install_update_lock_root_unavailable")
@@ -311,15 +315,37 @@ def windows_install_update_paths() -> tuple[Path, Path]:
     )
 
 
+def begin_install_update_mutation(operation: str) -> None:
+    """Persist fail-closed evidence immediately before the first live-tree write."""
+    _, marker_path = windows_install_update_paths()
+    if marker_path.exists():
+        raise RuntimeError("install_update_lock_abandoned")
+    marker = {
+        "schema": "citadel.install-update-lock.v1",
+        "pid": os.getpid(),
+        "version": VERSION,
+        "operation": str(operation or "unknown")[:64],
+        "started_at": now_iso(),
+    }
+    atomic_write(marker_path, json.dumps(marker, sort_keys=True) + "\n")
+
+
+def complete_install_update_mutation() -> None:
+    """Clear crash evidence only after success or a verified complete rollback."""
+    _, marker_path = windows_install_update_paths()
+    try:
+        marker_path.unlink()
+    except FileNotFoundError:
+        return
+
+
 @contextlib.contextmanager
 def install_update_mutex(timeout_seconds: float = 30.0):
     """Serialize Windows installer/update/rollback operations machine-wide.
 
-    The lock is an exclusive Win32 file handle under the ACL-protected machine
-    state directory. A crash marker is written only after ownership is acquired.
-    If an updater dies after that point, the marker survives while the kernel
-    closes the file handle; subsequent remote updates fail closed until a full
-    installer performs repair.
+    The exclusive file handle lives under the ACL-protected canonical machine
+    lifecycle root. This context manager never clears mutation evidence. The
+    caller must explicitly begin and complete a mutation around live-tree writes.
     """
     if os.name != "nt":
         yield
@@ -350,7 +376,7 @@ def install_update_mutex(timeout_seconds: float = 30.0):
     open_always = 4
     file_attribute_hidden = 0x00000002
     invalid_handle_value = ctypes.c_void_p(-1).value
-    retryable_errors = {32, 33}  # sharing / lock violation
+    retryable_errors = {32, 33}
     deadline = time.monotonic() + max(0.0, float(timeout_seconds))
     handle = None
 
@@ -359,7 +385,7 @@ def install_update_mutex(timeout_seconds: float = 30.0):
         candidate = create_file(
             str(lock_path),
             generic_read | generic_write,
-            0,  # no sharing: exactly one lifecycle writer machine-wide
+            0,
             None,
             open_always,
             file_attribute_hidden,
@@ -376,24 +402,11 @@ def install_update_mutex(timeout_seconds: float = 30.0):
             raise RuntimeError("install_update_lock_busy")
         time.sleep(0.1)
 
-    marker_written = False
     try:
         if marker_path.exists():
             raise RuntimeError("install_update_lock_abandoned")
-
-        marker = {
-            "schema": "citadel.install-update-lock.v1",
-            "pid": os.getpid(),
-            "version": VERSION,
-            "started_at": now_iso(),
-        }
-        atomic_write(marker_path, json.dumps(marker, sort_keys=True) + "\n")
-        marker_written = True
         yield
     finally:
-        if marker_written:
-            with contextlib.suppress(FileNotFoundError):
-                marker_path.unlink()
         if handle not in (None, 0, invalid_handle_value):
             close_handle(handle)
 
@@ -2607,6 +2620,10 @@ class Agent:
                 current_core = install_root / core_name
                 if current_core.is_file():
                     shutil.copy2(current_core, backup / core_name)
+
+            # From this point a process crash can leave the live tree changed.
+            # Persist fail-closed evidence before the first replacement.
+            begin_install_update_mutation("remote_update")
             for item in changed_items:
                 name = item["path"]
                 current = install_root / name
@@ -2638,17 +2655,47 @@ class Agent:
                     version=payload["version"],
                     files=replaced,
                 )
+            complete_install_update_mutation()
             self.log.write("agent_updated", version=payload["version"], files=replaced)
-        except Exception:
-            for name in replaced:
-                saved = backup / name
-                if saved.exists():
-                    shutil.copy2(saved, install_root / name)
-                elif not existed_before.get(name, False):
-                    with contextlib.suppress(FileNotFoundError):
-                        (install_root / name).unlink()
-            self.log.write("agent_update_rolled_back", files=replaced)
-            raise
+        except Exception as update_error:
+            rollback_complete = True
+            rollback_error: Exception | None = None
+            try:
+                for name in replaced:
+                    saved = backup / name
+                    target = install_root / name
+                    if saved.exists():
+                        shutil.copy2(saved, target)
+                    elif not existed_before.get(name, False):
+                        with contextlib.suppress(FileNotFoundError):
+                            target.unlink()
+
+                # Do not clear crash evidence until the restored live files are
+                # verified against the backup (or verified absent).
+                for name in replaced:
+                    saved = backup / name
+                    target = install_root / name
+                    if saved.exists():
+                        if not target.is_file():
+                            raise RuntimeError(f"rollback restore missing: {name}")
+                        if hashlib.sha256(target.read_bytes()).hexdigest() != hashlib.sha256(saved.read_bytes()).hexdigest():
+                            raise RuntimeError(f"rollback restore hash mismatch: {name}")
+                    elif not existed_before.get(name, False) and target.exists():
+                        raise RuntimeError(f"rollback restore unexpected file: {name}")
+            except Exception as error:
+                rollback_complete = False
+                rollback_error = error
+
+            if rollback_complete and replaced:
+                complete_install_update_mutation()
+                self.log.write("agent_update_rolled_back", files=replaced)
+            elif replaced:
+                self.log.write(
+                    "agent_update_rollback_incomplete",
+                    files=replaced,
+                    error=str(rollback_error or update_error)[:300],
+                )
+            raise update_error
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
@@ -2681,8 +2728,18 @@ class Agent:
             )
             if result.returncode != 0:
                 raise RuntimeError("rollback backup self-test failed")
+
+            begin_install_update_mutation("manual_rollback")
             for name in sorted(rollback_names):
                 shutil.copy2(staging / name, install_root / name)
+
+            for name in sorted(rollback_names):
+                expected = hashlib.sha256((staging / name).read_bytes()).hexdigest()
+                actual = hashlib.sha256((install_root / name).read_bytes()).hexdigest()
+                if actual != expected:
+                    raise RuntimeError(f"manual rollback verification failed: {name}")
+
+            complete_install_update_mutation()
             self.log.write(
                 "agent_update_manual_rollback",
                 files=sorted(rollback_names),
