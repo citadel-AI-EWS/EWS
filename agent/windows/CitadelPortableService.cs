@@ -203,40 +203,27 @@ namespace CitadelEws
             return job;
         }
 
-        private void AssignChildToTaskJob(Process current)
-        {
-            if (!taskMode) return;
-            if (taskJob == IntPtr.Zero)
-                throw new InvalidOperationException("Task-host Job Object is not initialized.");
-
-            if (!AssignProcessToJobObject(taskJob, current.Handle))
-            {
-                var error = Marshal.GetLastWin32Error();
-                if (current.HasExited) return;
-                try { current.Kill(); } catch { }
-                throw new Win32Exception(error, "Unable to attach CITADEL agent to task-host Job Object.");
-            }
-        }
-
         internal int RunTaskHost()
         {
             paths.Validate();
             DeleteLifecycleStopFile();
             stopping = false;
             taskJob = CreateKillOnCloseJob();
-            try
+            if (!AssignProcessToJobObject(taskJob, Process.GetCurrentProcess().Handle))
             {
-                Supervise();
-                return 0;
+                var error = Marshal.GetLastWin32Error();
+                CloseHandle(taskJob);
+                taskJob = IntPtr.Zero;
+                throw new Win32Exception(error, "Unable to attach CITADEL task host to its Job Object.");
             }
-            finally
-            {
-                if (taskJob != IntPtr.Zero)
-                {
-                    CloseHandle(taskJob);
-                    taskJob = IntPtr.Zero;
-                }
-            }
+
+            // Keep the final Job Object handle open for the entire task-host
+            // lifetime. The host is itself in the job, so every Process.Start
+            // child inherits membership before user code can run. Process
+            // teardown closes the handle and KILL_ON_JOB_CLOSE removes any
+            // surviving child without a post-creation assignment race.
+            Supervise();
+            return 0;
         }
 
         private void Supervise()
@@ -258,7 +245,6 @@ namespace CitadelEws
                         current = Process.Start(BuildChildStartInfo());
                         if (current == null)
                             throw new InvalidOperationException("Unable to start CITADEL agent child.");
-                        AssignChildToTaskJob(current);
                         child = current;
                     }
 
