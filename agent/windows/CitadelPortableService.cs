@@ -1,6 +1,8 @@
 using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.ServiceProcess;
 using System.Threading;
 
@@ -53,12 +55,68 @@ namespace CitadelEws
         public const string ServiceId = "CitadelEWSNode";
         private const int RestartExitCode = 75;
         private const int StopExitCode = 76;
+        private const uint JobObjectLimitKillOnJobClose = 0x00002000;
+        private const int JobObjectExtendedLimitInformation = 9;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JobObjectBasicLimitInformation
+        {
+            public long PerProcessUserTimeLimit;
+            public long PerJobUserTimeLimit;
+            public uint LimitFlags;
+            public UIntPtr MinimumWorkingSetSize;
+            public UIntPtr MaximumWorkingSetSize;
+            public uint ActiveProcessLimit;
+            public UIntPtr Affinity;
+            public uint PriorityClass;
+            public uint SchedulingClass;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct IoCounters
+        {
+            public ulong ReadOperationCount;
+            public ulong WriteOperationCount;
+            public ulong OtherOperationCount;
+            public ulong ReadTransferCount;
+            public ulong WriteTransferCount;
+            public ulong OtherTransferCount;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JobObjectExtendedLimitInformation
+        {
+            public JobObjectBasicLimitInformation BasicLimitInformation;
+            public IoCounters IoInfo;
+            public UIntPtr ProcessMemoryLimit;
+            public UIntPtr JobMemoryLimit;
+            public UIntPtr PeakProcessMemoryUsed;
+            public UIntPtr PeakJobMemoryUsed;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateJobObject(IntPtr jobAttributes, string name);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetInformationJobObject(
+            IntPtr job,
+            int informationClass,
+            ref JobObjectExtendedLimitInformation information,
+            uint informationLength
+        );
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr handle);
 
         private readonly PortablePaths paths;
         private readonly bool taskMode;
         private readonly object sync = new object();
         private Thread supervisor;
         private Process child;
+        private IntPtr taskJob = IntPtr.Zero;
         private volatile bool stopping;
 
         internal CitadelPortableService(PortablePaths paths, bool taskMode = false)
@@ -127,13 +185,58 @@ namespace CitadelEws
                 File.Delete(paths.LifecycleStopFile);
         }
 
+        private static IntPtr CreateKillOnCloseJob()
+        {
+            var job = CreateJobObject(IntPtr.Zero, null);
+            if (job == IntPtr.Zero)
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Unable to create CITADEL task-host Job Object.");
+
+            var information = new JobObjectExtendedLimitInformation();
+            information.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose;
+            var size = (uint)Marshal.SizeOf(typeof(JobObjectExtendedLimitInformation));
+            if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref information, size))
+            {
+                var error = Marshal.GetLastWin32Error();
+                CloseHandle(job);
+                throw new Win32Exception(error, "Unable to configure CITADEL task-host Job Object.");
+            }
+            return job;
+        }
+
+        private void AssignChildToTaskJob(Process current)
+        {
+            if (!taskMode) return;
+            if (taskJob == IntPtr.Zero)
+                throw new InvalidOperationException("Task-host Job Object is not initialized.");
+
+            if (!AssignProcessToJobObject(taskJob, current.Handle))
+            {
+                var error = Marshal.GetLastWin32Error();
+                if (current.HasExited) return;
+                try { current.Kill(); } catch { }
+                throw new Win32Exception(error, "Unable to attach CITADEL agent to task-host Job Object.");
+            }
+        }
+
         internal int RunTaskHost()
         {
             paths.Validate();
             DeleteLifecycleStopFile();
             stopping = false;
-            Supervise();
-            return 0;
+            taskJob = CreateKillOnCloseJob();
+            try
+            {
+                Supervise();
+                return 0;
+            }
+            finally
+            {
+                if (taskJob != IntPtr.Zero)
+                {
+                    CloseHandle(taskJob);
+                    taskJob = IntPtr.Zero;
+                }
+            }
         }
 
         private void Supervise()
@@ -153,6 +256,9 @@ namespace CitadelEws
                     {
                         if (stopping) return;
                         current = Process.Start(BuildChildStartInfo());
+                        if (current == null)
+                            throw new InvalidOperationException("Unable to start CITADEL agent child.");
+                        AssignChildToTaskJob(current);
                         child = current;
                     }
 
