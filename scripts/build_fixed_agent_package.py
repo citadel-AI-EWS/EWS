@@ -20,6 +20,7 @@ DIST = ROOT / "dist"
 PACKAGE_NAME = "CITADEL_FIXED_AGENT_0.3.18_2026-09-27"
 STAGE = DIST / PACKAGE_NAME
 ZIP_PATH = DIST / f"{PACKAGE_NAME}.zip"
+PORTABLE_WINDOWS = ROOT / ".portable" / "windows"
 
 
 def must_replace(text: str, old: str, new: str, label: str) -> str:
@@ -274,10 +275,16 @@ def write_extras() -> None:
         newline="",
     )
     readme = (
-        "CITADEL/EWS — исправленный самодостаточный пакет 0.3.18\n\n"
+        "CITADEL/EWS — автономный Windows-пакет 0.3.18\n\n"
+        "Обычная установка без администратора:\n"
         "1. Распакуйте ZIP полностью.\n"
         "2. Запустите START_HERE.cmd.\n"
-        "3. Агент использует HTTPS Controller: https://citadel-ai.init1.workers.dev\n\n"
+        "3. Встроенный Python и зависимости уже находятся внутри пакета.\n"
+        "   winget, системный Python, pip и PowerShell для обычной установки не нужны.\n\n"
+        "Дополнительно: Install Windows Core Service.cmd устанавливает Core Service\n"
+        "и требует одно штатное подтверждение администратора Windows. Он также использует\n"
+        "только встроенный Python и не устанавливает Python через интернет.\n\n"
+        "Controller: https://citadel-ai.init1.workers.dev\n\n"
         "Исправлено в этом пакете:\n"
         "- JSON с UTF-8 BOM больше не ломает загрузку конфигурации.\n"
         "- При каждом запуске агент один раз сверяет node_id с Controller по Ed25519 public key; старый локальный ID автоматически исправляется.\n"
@@ -321,8 +328,10 @@ def build() -> Path:
     for name in (
         "citadel_node_v1.py",
         "citadel_node_v2.py",
+        "windows_bootstrap.py",
         "setup_windows.ps1",
         "Install Windows Node.cmd",
+        "Install Windows Core Service.cmd",
         "CitadelNodeService.cs",
         "windows_service.ps1",
         "windows_enterprise_probe.ps1",
@@ -330,6 +339,16 @@ def build() -> Path:
         "requirements-win32.txt",
     ):
         shutil.copy2(ROOT / "agent" / name, STAGE / name)
+
+    runtime_target = STAGE / "python_runtime"
+    for arch in ("amd64", "win32"):
+        runtime_source = PORTABLE_WINDOWS / arch
+        if not (runtime_source / "python.exe").is_file() or not (runtime_source / "SHA256SUMS.txt").is_file():
+            raise RuntimeError(
+                f"portable Windows runtime is missing for {arch}; "
+                "run scripts/build_windows_portable_runtime.py first"
+            )
+        shutil.copytree(runtime_source, runtime_target / arch)
 
     v1_path = STAGE / "citadel_node_v1.py"
     v2_path = STAGE / "citadel_node_v2.py"
@@ -361,18 +380,22 @@ def build() -> Path:
         raise RuntimeError("setup_windows.ps1 release version is not 0.3.18")
     write_extras()
 
-    manifest_names = sorted(
-        path.name for path in STAGE.iterdir()
-        if path.is_file() and path.name != "SHA256SUMS.txt"
+    manifest_paths = sorted(
+        path for path in STAGE.rglob("*")
+        if path.is_file() and path != (STAGE / "SHA256SUMS.txt")
     )
-    manifest = "".join(f"{sha256(STAGE / name)}  {name}\n" for name in manifest_names)
+    manifest = "".join(
+        f"{sha256(path)}  {path.relative_to(STAGE).as_posix()}\n"
+        for path in manifest_paths
+    )
     (STAGE / "SHA256SUMS.txt").write_text(manifest, encoding="utf-8", newline="\n")
 
     if ZIP_PATH.exists():
         ZIP_PATH.unlink()
     with zipfile.ZipFile(ZIP_PATH, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        for path in sorted(STAGE.iterdir()):
-            archive.write(path, f"{PACKAGE_NAME}/{path.name}")
+        for path in sorted(STAGE.rglob("*")):
+            if path.is_file():
+                archive.write(path, f"{PACKAGE_NAME}/{path.relative_to(STAGE).as_posix()}")
     print(ZIP_PATH)
     print("v1_sha256", v1_hash)
     print("v2_sha256", v2_hash)
