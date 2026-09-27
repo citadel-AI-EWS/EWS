@@ -36,6 +36,8 @@ const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "r
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
   version: "0.3.21",
+  delivery: "full_installer_required",
+  transition_reason: "0.3.21 installs the lifecycle lock, locked uninstaller, and LocalService update ACL before remote updates are safe",
   files: [
     {
       path: "citadel_node_v1.py",
@@ -661,6 +663,14 @@ async function ensureRolloutStorage(env) {
 
 async function startUpdateAllRollout(request, env) {
   await authenticateArchitect(request, env);
+  if (LATEST_NODE_RELEASE.delivery !== "remote") {
+    return json({
+      ok: false,
+      error: "full_installer_required",
+      target_version: LATEST_NODE_RELEASE.version,
+      reason: LATEST_NODE_RELEASE.transition_reason
+    }, 409);
+  }
   await ensureRolloutStorage(env);
   const releaseJson = JSON.stringify(LATEST_NODE_RELEASE);
   const rolloutId = "rollout_" + crypto.randomUUID();
@@ -704,6 +714,7 @@ async function startUpdateAllRollout(request, env) {
 }
 
 async function ensureRolloutCommandForNode(env, nodeId) {
+  if (LATEST_NODE_RELEASE.delivery !== "remote") return;
   await Promise.all([ensureRolloutStorage(env), ensureCommandStorage(env)]);
   const [rollout, node, pending, recentCompletedUpdate] = await Promise.all([
     env.DB.prepare(
