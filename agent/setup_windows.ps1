@@ -13,7 +13,6 @@ Set-StrictMode -Version Latest
 
 $ServiceName = "CitadelEWSNode"
 $ServiceDisplayName = "CITADEL EWS Node"
-$PythonWingetId = "Python.Python.3.14"
 $ReleaseVersion = "0.3.18"
 $ExpectedV1Sha256 = "41d3b893eceb8262873158636d2576b415c9860138b5d1fe5855d4d582f09192"
 $ExpectedV2Sha256 = "88a4406299df36c2d5c411ad4ad835585f78446a4ce0ff2731cd2341353bad3e"
@@ -105,6 +104,7 @@ $LegacyStateRoot = Join-Path $LegacyProfileRoot "AppData\Local\CitadelEWS\state"
 $LegacyAgentRoot = Join-Path $LegacyProfileRoot "AppData\Local\CitadelEWS\agent"
 $LegacyStartupDir = Join-Path $LegacyProfileRoot "AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
 $LegacyShortcutPath = Join-Path $LegacyStartupDir "CITADEL EWS Agent.lnk"
+$LegacyStartupCmdPath = Join-Path $LegacyStartupDir "CITADEL EWS Agent.cmd"
 
 function Set-CitadelDirectoryAcl {
   param([Parameter(Mandatory = $true)][string]$Path)
@@ -152,21 +152,66 @@ function Copy-VerifiedReleaseFile {
   if ((Get-Sha256 $Destination) -ne $ExpectedHash) { throw "Installed file verification failed: $Name" }
 }
 
-function Find-MachinePython314 {
-  $Candidate = Join-Path $env:ProgramFiles "Python314\python.exe"
-  if (Test-Path -LiteralPath $Candidate) { return $Candidate }
-  $Launcher = Get-Command py -ErrorAction SilentlyContinue
-  if ($null -ne $Launcher) {
-    $Resolved = & $Launcher.Source -3.14 -c "import sys; print(sys.executable)" 2>$null
-    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($Resolved)) {
-      $Resolved = $Resolved.Trim()
-      if ($Resolved.StartsWith($env:ProgramFiles, [System.StringComparison]::OrdinalIgnoreCase)) { return $Resolved }
-    }
+function Get-BundledRuntimeSource {
+  $RuntimeName = "amd64"
+  if ($env:PROCESSOR_ARCHITECTURE -eq "x86" -and [string]::IsNullOrWhiteSpace($env:PROCESSOR_ARCHITEW6432)) {
+    $RuntimeName = "win32"
   }
-  return $null
+  $RuntimeRoot = Join-Path $SourceRoot ("python_runtime\" + $RuntimeName)
+  $RuntimePython = Join-Path $RuntimeRoot "python.exe"
+  $RuntimePythonw = Join-Path $RuntimeRoot "pythonw.exe"
+  if (-not (Test-Path -LiteralPath $RuntimePython) -or -not (Test-Path -LiteralPath $RuntimePythonw)) {
+    throw "Bundled Python runtime is missing for $RuntimeName."
+  }
+  return $RuntimeRoot
 }
 
-function Find-FrameworkCompiler {
+function Assert-BundledRuntimeManifest {
+  param([Parameter(Mandatory = $true)][string]$RuntimeRoot)
+
+  $RuntimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot).TrimEnd('\')
+  $RuntimePrefix = $RuntimeRoot + '\'
+  $ManifestPath = Join-Path $RuntimeRoot "SHA256SUMS.txt"
+  if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+    throw "Bundled Python runtime manifest is missing."
+  }
+
+  $Seen = @{}
+  foreach ($Line in Get-Content -LiteralPath $ManifestPath) {
+    if ([string]::IsNullOrWhiteSpace($Line)) { continue }
+    $Parts = $Line -split "  ", 2
+    if ($Parts.Count -ne 2) { throw "Invalid bundled runtime manifest line: $Line" }
+    $Expected = $Parts[0].Trim().ToLowerInvariant()
+    if ($Expected -notmatch '^[0-9a-f]{64}$') { throw "Invalid bundled runtime SHA-256 entry." }
+
+    $Relative = $Parts[1].Trim().Replace('/', '\')
+    if ([string]::IsNullOrWhiteSpace($Relative) -or
+        [System.IO.Path]::IsPathRooted($Relative) -or
+        (($Relative -split '[\\/]') -contains '..')) {
+      throw "Unsafe bundled runtime manifest path: $Relative"
+    }
+
+    $Candidate = [System.IO.Path]::GetFullPath((Join-Path $RuntimeRoot $Relative))
+    if (-not $Candidate.StartsWith($RuntimePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw "Bundled runtime manifest path escaped its root: $Relative"
+    }
+    if (-not (Test-Path -LiteralPath $Candidate -PathType Leaf)) {
+      throw "Bundled runtime file is missing: $Relative"
+    }
+    if ((Get-Sha256 $Candidate) -ne $Expected) {
+      throw "Bundled runtime integrity check failed: $Relative"
+    }
+    $Seen[$Relative.ToLowerInvariant()] = $true
+  }
+
+  foreach ($Required in @("python.exe", "pythonw.exe", "CITADEL_RUNTIME.json")) {
+    if (-not $Seen.ContainsKey($Required.ToLowerInvariant())) {
+      throw "Bundled runtime manifest does not cover required file: $Required"
+    }
+  }
+}
+
+function Find-FrameworkCompiler {function Find-FrameworkCompiler {
   foreach ($Candidate in @(
     (Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"),
     (Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\csc.exe")
@@ -213,8 +258,10 @@ if ($Uninstall) {
   foreach ($Process in (Get-RunningLegacyCitadelAgents)) {
     Stop-Process -Id $Process.ProcessId -Force -ErrorAction SilentlyContinue
   }
-  if (Test-Path -LiteralPath $LegacyShortcutPath) {
-    Remove-Item -LiteralPath $LegacyShortcutPath -Force
+  foreach ($LegacyStartupPath in @($LegacyShortcutPath, $LegacyStartupCmdPath)) {
+    if (Test-Path -LiteralPath $LegacyStartupPath) {
+      Remove-Item -LiteralPath $LegacyStartupPath -Force
+    }
   }
   if (Test-Path -LiteralPath $InstallRoot) {
     Remove-Item -LiteralPath $InstallRoot -Recurse -Force
@@ -231,20 +278,16 @@ if ($Uninstall) {
   exit 0
 }
 
-$PythonPath = Find-MachinePython314
-if ($null -eq $PythonPath) {
-  $Winget = Get-Command winget -ErrorAction SilentlyContinue
-  if ($null -eq $Winget) {
-    throw "Python 3.14 machine installation is missing and Windows Package Manager is unavailable."
-  }
-  Write-Host "[CITADEL] Installing machine-wide Python 3.14..."
-  & $Winget.Source install --exact --id $PythonWingetId --source winget --scope machine --silent --accept-package-agreements --accept-source-agreements
-  if ($LASTEXITCODE -ne 0) { throw "Automatic machine-wide Python installation failed." }
-  $PythonPath = Find-MachinePython314
+$BundledRuntimeSource = Get-BundledRuntimeSource
+Assert-BundledRuntimeManifest -RuntimeRoot $BundledRuntimeSource
+$BundledPython = Join-Path $BundledRuntimeSource "python.exe"
+& $BundledPython -c "import cryptography, psutil" *> $null
+if ($LASTEXITCODE -ne 0) {
+  throw "Bundled Python runtime is present but its agent dependencies are not importable."
 }
-if ($null -eq $PythonPath) { throw "Machine-wide Python 3.14 is unavailable after installation." }
+Write-Host "[CITADEL] Using verified bundled offline Python runtime; no external Python installer is required."
 
-# Harden the machine destinations before any identity, queue, or executable is
+# Harden the machine destinations# Harden the machine destinations before any identity, queue, or executable is
 # copied into them. The DACL is rebuilt from scratch; unexpected explicit ACEs
 # are not retained.
 Set-CitadelDirectoryAcl -Path $InstallRoot
@@ -301,25 +344,15 @@ try {
 Copy-VerifiedReleaseFile "CitadelNodeService.cs" $ExpectedServiceHostSha256 $ReleaseRoot
 Copy-VerifiedReleaseFile "windows_service.ps1" $ExpectedServiceHelperSha256 $ReleaseRoot
 
-$RequirementsSource = Join-Path $SourceRoot "requirements.txt"
-$RequirementsPath = Join-Path $ReleaseRoot "requirements.txt"
-if (-not (Test-Path -LiteralPath $RequirementsSource)) { throw "Required package file is missing: requirements.txt" }
-$RequirementsHash = Get-Sha256 $RequirementsSource
-Copy-Item -LiteralPath $RequirementsSource -Destination $RequirementsPath -Force
-if ((Get-Sha256 $RequirementsPath) -ne $RequirementsHash) { throw "requirements.txt verification failed." }
-
-$Venv = Join-Path $ReleaseRoot ".venv"
-$VenvPython = Join-Path $Venv "Scripts\python.exe"
-& $PythonPath -m venv $Venv
-if ($LASTEXITCODE -ne 0) { throw "Unable to create Python virtual environment." }
-& $VenvPython -m pip install --disable-pip-version-check --upgrade pip
-if ($LASTEXITCODE -ne 0) { throw "pip update failed." }
-& $VenvPython -m pip install --disable-pip-version-check --requirement $RequirementsPath
-if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
+$RuntimeRoot = Join-Path $ReleaseRoot "python_runtime"
+Copy-Item -LiteralPath $BundledRuntimeSource -Destination $RuntimeRoot -Recurse -Force
+Assert-BundledRuntimeManifest -RuntimeRoot $RuntimeRoot
+$VenvPython = Join-Path $RuntimeRoot "python.exe"
+if (-not (Test-Path -LiteralPath $VenvPython)) { throw "Bundled Python copy failed." }
 & $VenvPython -c "import cryptography, psutil" *> $null
-if ($LASTEXITCODE -ne 0) { throw "Installed agent dependencies are not importable." }
+if ($LASTEXITCODE -ne 0) { throw "Bundled agent dependencies are not importable after copy." }
 
-$ConfigPath = Join-Path $ReleaseRoot "config.json"
+$ConfigPath = Join-Path $ReleaseRoot "config.json"$ConfigPath = Join-Path $ReleaseRoot "config.json"
 $ConfigJson = @{
   controller_url = $ControllerUrl.TrimEnd('/')
   data_dir = $StateRoot
@@ -388,6 +421,7 @@ if ($null -ne $ExistingService) {
 }
 $LegacyProcessesBeforeCutover = @(Get-RunningLegacyCitadelAgents)
 $LegacyShortcutExisted = Test-Path -LiteralPath $LegacyShortcutPath
+$LegacyStartupCmdExisted = Test-Path -LiteralPath $LegacyStartupCmdPath
 $CreatedService = $null -eq $ExistingService
 $CutoverCommitted = $false
 
@@ -514,6 +548,9 @@ try {
 
   if ($LegacyShortcutExisted -and (Test-Path -LiteralPath $LegacyShortcutPath)) {
     Remove-Item -LiteralPath $LegacyShortcutPath -Force
+  }
+  if ($LegacyStartupCmdExisted -and (Test-Path -LiteralPath $LegacyStartupCmdPath)) {
+    Remove-Item -LiteralPath $LegacyStartupCmdPath -Force
   }
 
   Remove-Item -LiteralPath $HoldPath -Force
