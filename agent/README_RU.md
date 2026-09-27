@@ -1,6 +1,6 @@
 # CITADEL/EWS Python Node v1
 
-## v0.3.20 — live-preflight и самовосстановление LM Studio
+## v0.3.21 — live-preflight и самовосстановление LM Studio
 
 - Перед каждым AI project assignment агент проверяет LM Studio вживую и больше не доверяет устаревшему локальному `loaded_model`.
 - Если llmster установлен, но API server остановлен, агент автоматически поднимает daemon и localhost:1234 и повторно проверяет состояние.
