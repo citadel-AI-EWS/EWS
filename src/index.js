@@ -1377,7 +1377,14 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
   const [planned, readyNodesQuery] = await Promise.all([
     env.DB.prepare(`
       SELECT w.work_item_id, w.project_id, w.sequence_no, w.role_name, w.task_text,
-        w.node_id AS preferred_node_id, p.title AS project_title, p.source_type
+        w.node_id AS preferred_node_id, p.title AS project_title, p.source_type,
+        p.checks_json,
+        (
+          SELECT COUNT(*) FROM project_work_items AS own
+          WHERE own.project_id = w.project_id
+            AND own.node_id = ?
+            AND own.status != 'cancelled'
+        ) AS node_project_work_count
       FROM project_work_items AS w
       JOIN architect_projects AS p ON p.project_id = w.project_id
       WHERE w.status = 'planned'
@@ -1390,7 +1397,7 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
       ORDER BY CASE WHEN w.node_id = ? THEN 0 WHEN w.node_id IS NULL THEN 1 ELSE 2 END,
         datetime(p.created_at) ASC, w.sequence_no ASC
       LIMIT 32
-    `).bind(projectId, projectId, canRunPython ? 1 : 0, canRunAi ? 1 : 0, nodeId).all(),
+    `).bind(nodeId, projectId, projectId, canRunPython ? 1 : 0, canRunAi ? 1 : 0, nodeId).all(),
     env.DB.prepare(`
       SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
         ai.installed, ai.loaded_model, ai.server_running
@@ -1405,6 +1412,9 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
   let created = 0;
   const candidates = (planned.results || []).filter((work) => {
     if (!projectNodeReady(node, work.source_type)) return false;
+    const checkState = safeJson(work.checks_json, {});
+    const explicitWorkers = Number(checkState?.execution_request?.requested_workers || 0);
+    if (explicitWorkers >= 1 && Number(work.node_project_work_count || 0) > 0) return false;
     const preferred = work.preferred_node_id ? readyNodes.get(work.preferred_node_id) : null;
     return !work.preferred_node_id ||
       work.preferred_node_id === nodeId ||
@@ -1662,7 +1672,12 @@ async function architectCreateProject(request, env) {
     : planProjectWork(taskText, effectiveRequestedRoles, effectiveRequestedWorkers);
   const workerCount = Math.min(nodes.length, plannedWork.length);
   const projectId = "project_" + crypto.randomUUID();
-  const checksJson = JSON.stringify(evaluated.checks);
+  const checksJson = JSON.stringify({
+    ...evaluated.checks,
+    execution_request: {
+      requested_workers: effectiveRequestedWorkers
+    }
+  });
   const selectedRoleNames = [...new Set(plannedWork.map((item) => item.role_name))];
   const specializationSummary = selectedRoleNames.map((roleName) => ({
     ...roleMetadata(roleName),
@@ -1694,7 +1709,9 @@ async function architectCreateProject(request, env) {
 
   const workItems = [];
   for (let index = 0; index < plannedWork.length; index += 1) {
-    const node = workerCount > 0 ? nodes[index % workerCount] : null;
+    const node = effectiveRequestedWorkers !== null
+      ? (index < workerCount ? nodes[index] : null)
+      : (workerCount > 0 ? nodes[index % workerCount] : null);
     const planned = plannedWork[index];
     const workItemId = "work_" + crypto.randomUUID();
     workItems.push({
