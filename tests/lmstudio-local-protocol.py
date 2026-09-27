@@ -134,6 +134,7 @@ def main() -> int:
         recovery.probe_lmstudio = lambda: next(recovery_states)
         recovery_commands: list[list[str]] = []
         recovery.run_lms = lambda args, timeout: recovery_commands.append(list(args))
+        recovery.wait_lmstudio_http_ready = lambda timeout_seconds=60: None
         assert recovery.ensure_lmstudio_ready_for_inference() == "test/model"
         assert recovery_commands == [
             ["daemon", "up"],
@@ -167,7 +168,51 @@ def main() -> int:
             "settings": {},
         }], reload_payloads
 
-        print("LM Studio REST + live preflight/self-heal protocols: PASS")
+        # One signed prepare command covers runtime/server/model/load and a real inference probe.
+        prepared = node.Agent(config)
+        prepared.find_lms = lambda: "/fake/lms"
+        prepared_commands: list[list[str]] = []
+        prepared.run_lms = lambda args, timeout: prepared_commands.append(list(args))
+        prepared.wait_lmstudio_http_ready = lambda timeout_seconds=60: None
+        prepared_downloads: list[dict[str, object]] = []
+        prepared_loads: list[dict[str, object]] = []
+        prepared.download_lmstudio_model = lambda payload: prepared_downloads.append(dict(payload))
+        prepared.load_lmstudio_model = lambda payload: prepared_loads.append(dict(payload))
+        prepared.probe_lmstudio = lambda: {
+            "installed": True,
+            "server_running": True,
+            "selected_model": "ibm/granite-4-micro",
+            "loaded_model": "ibm/granite-4-micro",
+        }
+        prepared._project_llm_chat = lambda *args, **kwargs: ("CITADEL READY", None)
+        helper = "install_llmstudio_headless.ps1" if node.os.name == "nt" else "install_llmstudio_headless.sh"
+        prepare_payload = {
+            "asset": {
+                "path": helper,
+                "url": "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/" + helper,
+                "sha256": "0" * 64,
+            },
+            "model": "ibm/granite-4-micro",
+            "source": "catalog",
+            "quantization": None,
+            "settings": {"context_length": 4096},
+        }
+        assert prepared.validate_lmstudio_prepare_payload(prepare_payload)
+        prepared.prepare_lmstudio(prepare_payload)
+        assert prepared_commands == [
+            ["daemon", "up"],
+            ["server", "start", "--port", "1234"],
+        ], prepared_commands
+        assert prepared_downloads == [{
+            "model": "ibm/granite-4-micro",
+            "source": "catalog",
+            "quantization": None,
+            "settings": {"context_length": 4096},
+        }]
+        assert prepared_loads == prepared_downloads
+        assert prepared.lmstudio_state()["progress_phase"] == "ready"
+
+        print("LM Studio REST + live preflight/self-heal + one-click prepare protocols: PASS")
         return 0
 
 
