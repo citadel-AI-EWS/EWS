@@ -247,6 +247,18 @@
           <option value="python">Python only · без ИИ</option>
         </select>
         <div id="projectExecutionHint" class="small">AI-режим использует локальную модель LM Studio. Python only выполняет только детерминированные операции и не вызывает LLM/OpenRouter.</div>
+        <label for="projectWorkerTarget">Сколько хостов использовать</label>
+        <select id="projectWorkerTarget" aria-describedby="projectWorkerHint">
+          <option value="auto">Auto</option>
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="10">10</option>
+          <option value="20">20</option>
+          <option value="50">50</option>
+          <option value="all">Все READY</option>
+        </select>
+        <div id="projectWorkerHint" class="small">Число означает столько разных готовых хостов; проект ждёт, пока они будут доступны. «Все READY» использует все готовые ноды на момент создания.</div>
         <label for="projectTaskText" data-i18n="task">Задание</label>
         <textarea id="projectTaskText" maxlength="20000" placeholder="Опишите, что должен сделать проект..."></textarea>
         <div class="voice-row">
@@ -511,6 +523,7 @@
     const projectTitle = document.getElementById("projectTitle");
     const projectExecutionMode = document.getElementById("projectExecutionMode");
     const projectExecutionHint = document.getElementById("projectExecutionHint");
+    const projectWorkerTarget = document.getElementById("projectWorkerTarget");
     const projectTaskText = document.getElementById("projectTaskText");
     const checkProjectButton = document.getElementById("checkProjectButton");
     const createProjectButton = document.getElementById("createProjectButton");
@@ -2765,7 +2778,8 @@
             title,
             task_text: taskText,
             source_type: projectSourceType(),
-            requested_roles: selectedProjectRoleIds()
+            requested_roles: selectedProjectRoleIds(),
+            worker_target: projectWorkerTarget.value
           })
         });
         renderProjectCheckResult(data);
@@ -2797,7 +2811,8 @@
             title,
             task_text: taskText,
             source_type: projectSourceType(),
-            requested_roles: selectedProjectRoleIds()
+            requested_roles: selectedProjectRoleIds(),
+            worker_target: projectWorkerTarget.value
           })
         });
         const p = data.project;
