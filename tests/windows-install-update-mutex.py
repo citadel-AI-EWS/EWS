@@ -82,6 +82,18 @@ def main() -> int:
         marker_path.unlink()
         with node.install_update_mutex(timeout_seconds=2):
             pass
+
+        # A BaseException is not a clean lifecycle completion. The crash marker
+        # must remain even though Python unwinds the context manager normally.
+        try:
+            with node.install_update_mutex(timeout_seconds=2):
+                raise KeyboardInterrupt()
+        except KeyboardInterrupt:
+            pass
+        assert marker_path.exists(), "BaseException incorrectly cleared the lifecycle crash marker"
+        marker_path.unlink()
+        with node.install_update_mutex(timeout_seconds=2):
+            pass
     finally:
         if child.poll() is None:
             child.kill()
