@@ -97,24 +97,15 @@ def terminate_old_user_agents(install_root: Path, state_root: Path) -> None:
 
     needles = {str(install_root).lower(), str(state_root).lower()}
 
-    def matches(process: psutil.Process) -> bool:
-        try:
-            cmd = " ".join(process.cmdline()).lower()
-        except psutil.NoSuchProcess:
-            return False
-        except psutil.AccessDenied as exc:
-            # We cannot safely prove an inaccessible Python process is unrelated
-            # if psutil already identified it as a candidate below.
-            raise RuntimeError(f"cannot inspect existing process {process.pid}") from exc
+    def info_matches(info: dict) -> bool:
+        cmd = " ".join(info.get("cmdline") or []).lower()
         return "citadel_node_v2.py" in cmd and any(needle in cmd for needle in needles)
 
-    candidates = []
-    for process in psutil.process_iter(["pid"]):
-        try:
-            if matches(process):
-                candidates.append(process)
-        except psutil.NoSuchProcess:
-            continue
+    candidates = [
+        process
+        for process in psutil.process_iter(["pid", "cmdline"], ad_value=None)
+        if info_matches(process.info)
+    ]
 
     for process in candidates:
         try:
@@ -132,13 +123,11 @@ def terminate_old_user_agents(install_root: Path, state_root: Path) -> None:
                 "refusing to start a duplicate"
             ) from exc
 
-    remaining = []
-    for process in psutil.process_iter(["pid"]):
-        try:
-            if matches(process):
-                remaining.append(process.pid)
-        except psutil.NoSuchProcess:
-            continue
+    remaining = [
+        process.info["pid"]
+        for process in psutil.process_iter(["pid", "cmdline"], ad_value=None)
+        if info_matches(process.info)
+    ]
     if remaining:
         raise RuntimeError(
             "existing CITADEL user agent is still running; refusing duplicate start: "
