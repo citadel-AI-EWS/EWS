@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 SOURCE = Path(__file__).resolve().parents[1] / 'agent/citadel_node_v1.py'
-parsed = ast.parse(SOURCE.read_text())
+parsed = ast.parse(SOURCE.read_text(encoding="utf-8"))
 agent = next(n for n in parsed.body if isinstance(n, ast.ClassDef) and n.name == 'Agent')
 methods = [n for n in agent.body if isinstance(n, ast.FunctionDef) and n.name in
            {'handle_commands', 'cycle', 'interruptible_sleep'}]
