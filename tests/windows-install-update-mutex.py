@@ -30,17 +30,6 @@ def holder() -> int:
     return 0
 
 
-def waiter() -> int:
-    node = load_agent_module()
-    try:
-        with node.install_update_mutex(timeout_seconds=10):
-            print("UNEXPECTED_ACQUIRE", flush=True)
-            return 3
-    except RuntimeError as error:
-        print(str(error), flush=True)
-        return 0 if str(error) == "install_update_lock_abandoned" else 4
-
-
 def main() -> int:
     if os.name != "nt":
         print("Windows install/update mutex test: SKIP (non-Windows)")
@@ -48,9 +37,6 @@ def main() -> int:
 
     if "--holder" in sys.argv:
         return holder()
-    if "--waiter" in sys.argv:
-        return waiter()
-
     node = load_agent_module()
     child = subprocess.Popen(
         [sys.executable, str(Path(__file__).resolve()), "--holder"],
@@ -70,24 +56,23 @@ def main() -> int:
         except RuntimeError as error:
             assert str(error) == "install_update_lock_busy", error
 
-        waiter_process = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve()), "--waiter"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        time.sleep(0.5)
         child.kill()
         child.wait(timeout=5)
 
-        # The waiter already has a handle to the mutex when the owner dies, so
-        # Windows must report WAIT_ABANDONED and remote update must fail closed.
-        waiter_out, waiter_err = waiter_process.communicate(timeout=5)
-        assert waiter_process.returncode == 0, (waiter_process.returncode, waiter_out, waiter_err)
-        assert "install_update_lock_abandoned" in waiter_out, waiter_out
+        # The kernel releases the exclusive file handle when the owner dies,
+        # but the crash marker remains. Remote update must fail closed instead
+        # of treating the newly free handle as proof of a clean previous exit.
+        try:
+            with node.install_update_mutex(timeout_seconds=2):
+                raise AssertionError("crash marker was ignored after updater death")
+        except RuntimeError as error:
+            assert str(error) == "install_update_lock_abandoned", error
 
-        # The abandoned ownership was released while failing closed, so a
-        # subsequent repair/update attempt can acquire a fresh clean mutex.
+        # A full installer is the repair authority for abandoned state. Simulate
+        # that repair here by clearing the protected marker, then require the
+        # next clean acquisition to succeed.
+        _, marker_path = node.windows_install_update_paths()
+        marker_path.unlink()
         with node.install_update_mutex(timeout_seconds=2):
             pass
     finally:
