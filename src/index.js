@@ -1614,9 +1614,10 @@ async function architectCreateProject(request, env) {
     "ORDER BY n.last_seen_at DESC, n.node_id ASC"
   ).all();
   const onlineNodes = (nodesQuery.results || []).filter((node) => !isTestNodeRecord(node));
-  if (!onlineNodes.length) throw new ApiError(409, "no_available_nodes");
+  // A project is durable work, not a one-shot dispatch request. Save it even when
+  // no executor is READY right now; normal node assignment polling will materialize
+  // the planned work as soon as a compatible live worker becomes ready.
   const nodes = onlineNodes.filter((node) => projectNodeReady(node, sourceType));
-  if (!nodes.length) throw new ApiError(409, "no_ready_workers_check_agent_and_loaded_model");
 
   const recommendedWork = executionMode === "python"
     ? [{ sequence_no: 1, role_name: "programmer", task_text: taskText, role_source: "hub_recommended" }]
@@ -1707,9 +1708,13 @@ async function architectCreateProject(request, env) {
       completed_work_items: 0,
       total_work_items: plannedWork.length,
       final_report_ready: false,
-      detail: executionMode === "python"
-        ? "hub_plan_created_waiting_for_python_worker_execution"
-        : "hub_plan_created_waiting_for_project_worker_execution"
+      detail: workerCount === 0
+        ? (executionMode === "python"
+            ? "hub_plan_saved_waiting_for_python_worker"
+            : "hub_plan_saved_waiting_for_ready_lmstudio_worker")
+        : executionMode === "python"
+          ? "hub_plan_created_waiting_for_python_worker_execution"
+          : "hub_plan_created_waiting_for_project_worker_execution"
     }
   }, 201);
 }
@@ -1750,7 +1755,8 @@ async function architectGetProject(request, env, projectId) {
         THEN 1 ELSE 0 END AS recently_seen,
       ai.installed AS lmstudio_installed,
       ai.loaded_model AS lmstudio_loaded_model,
-      ai.server_running AS lmstudio_server_running
+      ai.server_running AS lmstudio_server_running,
+      ai.updated_at AS lmstudio_state_updated_at
     FROM nodes AS n
     LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id
     LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
@@ -1766,6 +1772,7 @@ async function architectGetProject(request, env, projectId) {
     const hasProjectPython = Array.isArray(capabilities) && capabilities.includes("project_python");
     const live = Number(node.recently_seen || 0) === 1;
     const testNode = isTestNodeRecord(node);
+    const aiStateKnown = typeof node.lmstudio_state_updated_at === "string" && node.lmstudio_state_updated_at.length > 0;
     const installed = Number(node.lmstudio_installed || 0) === 1;
     const serverRunning = Number(node.lmstudio_server_running || 0) === 1;
     const loadedModel = typeof node.lmstudio_loaded_model === "string" && node.lmstudio_loaded_model.length > 0;
@@ -1780,8 +1787,11 @@ async function architectGetProject(request, env, projectId) {
       if (!hasProjectText) blockers.push(
         node.agent_version !== LATEST_NODE_RELEASE.version ? "agent_outdated" : "project_text_missing"
       );
-      if (!installed) blockers.push("lmstudio_not_installed");
-      else {
+      if (!aiStateKnown) {
+        blockers.push("lmstudio_state_unknown");
+      } else if (!installed) {
+        blockers.push("lmstudio_not_installed");
+      } else {
         if (!serverRunning) blockers.push("lmstudio_server_stopped");
         if (!loadedModel) blockers.push("lmstudio_model_not_loaded");
       }
@@ -1796,6 +1806,8 @@ async function architectGetProject(request, env, projectId) {
       execution_mode: executionMode,
       project_text: hasProjectText,
       project_python: hasProjectPython,
+      lmstudio_state_known: aiStateKnown,
+      lmstudio_state_updated_at: node.lmstudio_state_updated_at || null,
       lmstudio_installed: installed,
       lmstudio_server_running: serverRunning,
       lmstudio_loaded_model: node.lmstudio_loaded_model || null,
