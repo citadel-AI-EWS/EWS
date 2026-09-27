@@ -93,23 +93,57 @@ def run_checked(argv: list[str], timeout: int = 120) -> subprocess.CompletedProc
 
 
 def terminate_old_user_agents(install_root: Path, state_root: Path) -> None:
-    try:
-        import psutil
-    except Exception:
-        return
+    import psutil
+
     needles = {str(install_root).lower(), str(state_root).lower()}
-    for process in psutil.process_iter(["pid", "cmdline"]):
+
+    def matches(process: psutil.Process) -> bool:
         try:
-            cmd = " ".join(process.info.get("cmdline") or []).lower()
-            if "citadel_node_v2.py" in cmd and any(needle in cmd for needle in needles):
-                process.terminate()
-                try:
-                    process.wait(5)
-                except psutil.TimeoutExpired:
-                    process.kill()
-                    process.wait(5)
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+            cmd = " ".join(process.cmdline()).lower()
+        except psutil.NoSuchProcess:
+            return False
+        except psutil.AccessDenied as exc:
+            # We cannot safely prove an inaccessible Python process is unrelated
+            # if psutil already identified it as a candidate below.
+            raise RuntimeError(f"cannot inspect existing process {process.pid}") from exc
+        return "citadel_node_v2.py" in cmd and any(needle in cmd for needle in needles)
+
+    candidates = []
+    for process in psutil.process_iter(["pid"]):
+        try:
+            if matches(process):
+                candidates.append(process)
+        except psutil.NoSuchProcess:
             continue
+
+    for process in candidates:
+        try:
+            process.terminate()
+            try:
+                process.wait(5)
+            except psutil.TimeoutExpired:
+                process.kill()
+                process.wait(5)
+        except psutil.NoSuchProcess:
+            continue
+        except (psutil.AccessDenied, psutil.TimeoutExpired) as exc:
+            raise RuntimeError(
+                f"cannot stop existing CITADEL user agent process {process.pid}; "
+                "refusing to start a duplicate"
+            ) from exc
+
+    remaining = []
+    for process in psutil.process_iter(["pid"]):
+        try:
+            if matches(process):
+                remaining.append(process.pid)
+        except psutil.NoSuchProcess:
+            continue
+    if remaining:
+        raise RuntimeError(
+            "existing CITADEL user agent is still running; refusing duplicate start: "
+            + ",".join(str(pid) for pid in remaining)
+        )
 
 
 def write_json(path: Path, value: dict) -> None:
@@ -140,8 +174,11 @@ def install_user_mode(controller_url: str) -> dict:
 
     try:
         shutil.copytree(runtime_source, runtime_target)
+        verify_runtime(runtime_target)
         for name in PACKAGE_FILES:
             shutil.copy2(root / name, release_root / name)
+            if sha256(release_root / name) != sha256(root / name):
+                raise RuntimeError(f"installed file verification failed: {name}")
 
         config = {
             "controller_url": controller_url.rstrip("/"),
