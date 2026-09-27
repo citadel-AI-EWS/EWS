@@ -299,61 +299,103 @@ def _local_file_lock(path: Path) -> threading.RLock:
         return lock
 
 
-WINDOWS_INSTALL_UPDATE_MUTEX_NAME = r"Global\CitadelEWSInstallUpdateLock"
+def windows_install_update_paths() -> tuple[Path, Path]:
+    """Return the protected machine-wide lock and crash-marker paths."""
+    program_data = os.environ.get("PROGRAMDATA") or os.environ.get("ALLUSERSPROFILE")
+    if not program_data:
+        raise RuntimeError("install_update_lock_root_unavailable")
+    state_root = Path(program_data) / "CitadelEWS" / "state"
+    return (
+        state_root / "install-update.lock",
+        state_root / "install-update-active.json",
+    )
 
 
 @contextlib.contextmanager
 def install_update_mutex(timeout_seconds: float = 30.0):
     """Serialize Windows installer/update/rollback operations machine-wide.
 
-    A Windows named mutex is used instead of a lock file so the kernel releases
-    ownership automatically if the owning process crashes. If the previous
-    owner died while holding the mutex, remote update fails closed; a full
-    installer rerun is the repair authority for that case.
+    The lock is an exclusive Win32 file handle under the ACL-protected machine
+    state directory. A crash marker is written only after ownership is acquired.
+    If an updater dies after that point, the marker survives while the kernel
+    closes the file handle; subsequent remote updates fail closed until a full
+    installer performs repair.
     """
     if os.name != "nt":
         yield
         return
 
+    lock_path, marker_path = windows_install_update_paths()
+    if not lock_path.parent.is_dir():
+        raise RuntimeError("install_update_lock_root_unavailable")
+
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    create_mutex = kernel32.CreateMutexW
-    create_mutex.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
-    create_mutex.restype = ctypes.c_void_p
-    wait_for_single_object = kernel32.WaitForSingleObject
-    wait_for_single_object.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-    wait_for_single_object.restype = ctypes.c_uint32
-    release_mutex = kernel32.ReleaseMutex
-    release_mutex.argtypes = [ctypes.c_void_p]
-    release_mutex.restype = ctypes.c_bool
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+    ]
+    create_file.restype = ctypes.c_void_p
     close_handle = kernel32.CloseHandle
     close_handle.argtypes = [ctypes.c_void_p]
     close_handle.restype = ctypes.c_bool
 
-    handle = create_mutex(None, False, WINDOWS_INSTALL_UPDATE_MUTEX_NAME)
-    if not handle:
-        raise RuntimeError("install_update_lock_unavailable")
+    generic_read = 0x80000000
+    generic_write = 0x40000000
+    open_always = 4
+    file_attribute_hidden = 0x00000002
+    invalid_handle_value = ctypes.c_void_p(-1).value
+    retryable_errors = {32, 33}  # sharing / lock violation
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    handle = None
 
-    wait_object_0 = 0x00000000
-    wait_abandoned = 0x00000080
-    wait_timeout = 0x00000102
-    timeout_ms = max(0, min(0xFFFFFFFE, int(float(timeout_seconds) * 1000)))
-    acquired = False
-    try:
-        result = wait_for_single_object(handle, timeout_ms)
-        if result == wait_abandoned:
-            acquired = True
-            raise RuntimeError("install_update_lock_abandoned")
-        if result == wait_timeout:
+    while True:
+        ctypes.set_last_error(0)
+        candidate = create_file(
+            str(lock_path),
+            generic_read | generic_write,
+            0,  # no sharing: exactly one lifecycle writer machine-wide
+            None,
+            open_always,
+            file_attribute_hidden,
+            None,
+        )
+        if candidate not in (None, 0, invalid_handle_value):
+            handle = candidate
+            break
+
+        error = ctypes.get_last_error()
+        if error not in retryable_errors:
+            raise RuntimeError("install_update_lock_unavailable")
+        if time.monotonic() >= deadline:
             raise RuntimeError("install_update_lock_busy")
-        if result != wait_object_0:
-            raise RuntimeError("install_update_lock_failed")
-        acquired = True
+        time.sleep(0.1)
+
+    marker_written = False
+    try:
+        if marker_path.exists():
+            raise RuntimeError("install_update_lock_abandoned")
+
+        marker = {
+            "schema": "citadel.install-update-lock.v1",
+            "pid": os.getpid(),
+            "version": VERSION,
+            "started_at": now_iso(),
+        }
+        atomic_write(marker_path, json.dumps(marker, sort_keys=True) + "\n")
+        marker_written = True
         yield
     finally:
-        if acquired:
-            with contextlib.suppress(Exception):
-                release_mutex(handle)
-        close_handle(handle)
+        if marker_written:
+            with contextlib.suppress(FileNotFoundError):
+                marker_path.unlink()
+        if handle not in (None, 0, invalid_handle_value):
+            close_handle(handle)
 
 
 @contextlib.contextmanager
