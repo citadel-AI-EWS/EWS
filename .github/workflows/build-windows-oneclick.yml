@@ -235,7 +235,9 @@ jobs:
           if ($principal.UserId -notin @('S-1-5-19', 'LOCAL SERVICE', 'NT AUTHORITY\LOCAL SERVICE')) {
             throw "Fallback task must use LocalService, not SYSTEM."
           }
-          if (-not $taskXml.Task.Triggers.BootTrigger) { throw "Boot trigger missing." }
+          if ($null -eq $taskXml.SelectSingleNode("//*[local-name()='Triggers']/*[local-name()='BootTrigger']")) {
+            throw "Boot trigger missing."
+          }
           # Recover a failed child and verify the host never creates duplicates.
           $oldPid = $children[0].ProcessId
           Stop-Process -Id $oldPid -Force
