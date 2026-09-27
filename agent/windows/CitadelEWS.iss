@@ -51,10 +51,144 @@ Type: filesandordirs; Name: "{app}"
 const
   DefaultControllerUrl = 'https://citadel-ai.init1.workers.dev';
   ControllerPublicX = 'erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0';
+  GenericRead = $80000000;
+  GenericWrite = $40000000;
+  OpenAlways = 4;
+  FileAttributeHidden = 2;
+  InvalidHandleValue = -1;
 
 var
   StartupConfigured: Boolean;
   LegacyCutoverActive: Boolean;
+  InstallUpdateLockHandle: THandle;
+
+function CreateFile(
+  lpFileName: string;
+  dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition,
+  dwFlagsAndAttributes: Cardinal;
+  hTemplateFile: THandle
+): THandle;
+  external 'CreateFileW@kernel32.dll stdcall';
+function CloseHandle(hObject: THandle): Boolean;
+  external 'CloseHandle@kernel32.dll stdcall';
+
+function InstallUpdateLockPath: string;
+begin
+  Result := ExpandConstant('{commonappdata}\CitadelEWS\state\install-update.lock');
+end;
+
+function InstallUpdateMarkerPath: string;
+begin
+  Result := ExpandConstant('{commonappdata}\CitadelEWS\state\install-update-active.json');
+end;
+
+function SecureInstallUpdateStateRoot: Boolean;
+var
+  StateRoot, Icacls: string;
+  ResultCode: Integer;
+begin
+  Result := False;
+  StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\state');
+  Icacls := ExpandConstant('{sys}\icacls.exe');
+  ForceDirectories(StateRoot);
+  if not DirExists(StateRoot) then exit;
+
+  if not Exec(
+    Icacls,
+    '"' + StateRoot + '" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-19:(OI)(CI)M"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode
+  ) then exit;
+  Result := ResultCode = 0;
+end;
+
+function AcquireInstallUpdateMutex: Boolean;
+var
+  Attempt: Integer;
+  Marker: string;
+begin
+  Result := False;
+  InstallUpdateLockHandle := 0;
+
+  if not SecureInstallUpdateStateRoot then
+  begin
+    Log('CITADEL install/update lock directory could not be secured.');
+    exit;
+  end;
+
+  for Attempt := 1 to 300 do
+  begin
+    InstallUpdateLockHandle := CreateFile(
+      InstallUpdateLockPath,
+      GenericRead or GenericWrite,
+      0,
+      0,
+      OpenAlways,
+      FileAttributeHidden,
+      0
+    );
+    if (InstallUpdateLockHandle <> 0) and
+       (Integer(InstallUpdateLockHandle) <> InvalidHandleValue) then
+      break;
+    InstallUpdateLockHandle := 0;
+    Sleep(100);
+  end;
+
+  if InstallUpdateLockHandle = 0 then
+  begin
+    Log('CITADEL install/update lock is busy or unavailable.');
+    exit;
+  end;
+
+  if FileExists(InstallUpdateMarkerPath) then
+  begin
+    Log('CITADEL found an abandoned install/update marker; installer is acting as repair authority.');
+    DeleteFile(InstallUpdateMarkerPath);
+  end;
+
+  Marker :=
+    '{"schema":"citadel.install-update-lock.v1","owner":"inno","started_at":"' +
+    GetDateTimeString('yyyy-mm-dd"T"hh:nn:ss', '-', ':') + '"}' + #13#10;
+  if not SaveStringToFile(InstallUpdateMarkerPath, Marker, False) then
+  begin
+    CloseHandle(InstallUpdateLockHandle);
+    InstallUpdateLockHandle := 0;
+    Log('CITADEL could not write the install/update crash marker.');
+    exit;
+  end;
+
+  Result := True;
+end;
+
+procedure ReleaseInstallUpdateMutex;
+begin
+  if InstallUpdateLockHandle <> 0 then
+  begin
+    DeleteFile(InstallUpdateMarkerPath);
+    CloseHandle(InstallUpdateLockHandle);
+    InstallUpdateLockHandle := 0;
+  end;
+end;
+
+function InitializeSetup: Boolean;
+begin
+  Result := AcquireInstallUpdateMutex;
+end;
+
+procedure DeinitializeSetup;
+begin
+  ReleaseInstallUpdateMutex;
+end;
+
+function InitializeUninstall: Boolean;
+begin
+  Result := AcquireInstallUpdateMutex;
+end;
+
+procedure DeinitializeUninstall;
+begin
+  ReleaseInstallUpdateMutex;
+end;
+
 
 function JsonEscape(Value: string): string;
 begin
@@ -80,13 +214,50 @@ begin
   Exec(FileName, Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
+function CitadelHostRunning: Boolean;
+var
+  Cmd: string;
+  ResultCode: Integer;
+begin
+  Cmd := ExpandConstant('{cmd}');
+  Result :=
+    Exec(
+      Cmd,
+      '/C tasklist /FI "IMAGENAME eq CitadelNodeService.exe" /NH | findstr /I /C:"CitadelNodeService.exe" >NUL 2>&1',
+      '', SW_HIDE, ewWaitUntilTerminated, ResultCode
+    ) and (ResultCode = 0);
+end;
+
+procedure WaitForCitadelHostExit;
+var
+  Attempt: Integer;
+begin
+  for Attempt := 1 to 100 do
+  begin
+    if not CitadelHostRunning then exit;
+    Sleep(500);
+  end;
+  RaiseException('Existing CITADEL supervisor did not stop within 50 seconds.');
+end;
+
 procedure StopExistingService;
 var
-  Sc: string;
+  Sc, SchTasks, TaskKill: string;
 begin
   Sc := ExpandConstant('{sys}\sc.exe');
+  SchTasks := ExpandConstant('{sys}\schtasks.exe');
+  TaskKill := ExpandConstant('{sys}\taskkill.exe');
+
+  { Disable fallback before touching the Service so it cannot race the stop. }
+  TryExec(SchTasks, '/Change /TN "{#FallbackTaskName}" /DISABLE');
   TryExec(Sc, 'stop {#ServiceName}');
-  Sleep(1500);
+  Sleep(1000);
+
+  { Old releases do not know about the new lifecycle lock. Kill the supervised
+    host tree explicitly, then prove the executable is no longer running before
+    [Files] is allowed to replace the live install tree. }
+  TryExec(TaskKill, '/IM CitadelNodeService.exe /T /F');
+  WaitForCitadelHostExit;
 end;
 
 procedure StopFallbackTask;
@@ -95,13 +266,10 @@ var
 begin
   SchTasks := ExpandConstant('{sys}\schtasks.exe');
   TaskKill := ExpandConstant('{sys}\taskkill.exe');
-  { Prevent failure recovery from racing upgrade/uninstall cleanup. }
   TryExec(SchTasks, '/Change /TN "{#FallbackTaskName}" /DISABLE');
-  { Kill our host while it is still the parent so /T also terminates the agent child. }
-  TryExec(TaskKill, '/IM CitadelNodeService.exe /T /F');
-  Sleep(500);
   TryExec(SchTasks, '/End /TN "{#FallbackTaskName}"');
-  Sleep(500);
+  TryExec(TaskKill, '/IM CitadelNodeService.exe /T /F');
+  WaitForCitadelHostExit;
 end;
 
 procedure DeleteFallbackTask;
@@ -388,8 +556,7 @@ begin
   if CurUninstallStep = usUninstall then
   begin
     Sc := ExpandConstant('{sys}\sc.exe');
-    TryExec(Sc, 'stop {#ServiceName}');
-    Sleep(1000);
+    StopExistingService;
     TryExec(Sc, 'delete {#ServiceName}');
     StopFallbackTask;
     DeleteFallbackTask;
