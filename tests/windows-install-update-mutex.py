@@ -30,6 +30,17 @@ def holder() -> int:
     return 0
 
 
+def waiter() -> int:
+    node = load_agent_module()
+    try:
+        with node.install_update_mutex(timeout_seconds=10):
+            print("UNEXPECTED_ACQUIRE", flush=True)
+            return 3
+    except RuntimeError as error:
+        print(str(error), flush=True)
+        return 0 if str(error) == "install_update_lock_abandoned" else 4
+
+
 def main() -> int:
     if os.name != "nt":
         print("Windows install/update mutex test: SKIP (non-Windows)")
@@ -37,6 +48,8 @@ def main() -> int:
 
     if "--holder" in sys.argv:
         return holder()
+    if "--waiter" in sys.argv:
+        return waiter()
 
     node = load_agent_module()
     child = subprocess.Popen(
@@ -57,17 +70,21 @@ def main() -> int:
         except RuntimeError as error:
             assert str(error) == "install_update_lock_busy", error
 
+        waiter_process = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "--waiter"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        time.sleep(0.5)
         child.kill()
         child.wait(timeout=5)
 
-        # The first waiter after an owner crash receives WAIT_ABANDONED. Remote
-        # update must fail closed rather than silently continue over a possibly
-        # torn install tree.
-        try:
-            with node.install_update_mutex(timeout_seconds=2):
-                raise AssertionError("abandoned mutex was treated as a clean update slot")
-        except RuntimeError as error:
-            assert str(error) == "install_update_lock_abandoned", error
+        # The waiter already has a handle to the mutex when the owner dies, so
+        # Windows must report WAIT_ABANDONED and remote update must fail closed.
+        waiter_out, waiter_err = waiter_process.communicate(timeout=5)
+        assert waiter_process.returncode == 0, (waiter_process.returncode, waiter_out, waiter_err)
+        assert "install_update_lock_abandoned" in waiter_out, waiter_out
 
         # The abandoned ownership was released while failing closed, so a
         # subsequent repair/update attempt can acquire a fresh clean mutex.
