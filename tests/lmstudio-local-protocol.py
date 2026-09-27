@@ -66,12 +66,14 @@ def main() -> int:
             controller_public_x="erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0",
         )
         agent = node.Agent(config)
-        agent.probe_lmstudio = lambda: {
+        ready_snapshot = {
             "installed": True,
             "daemon_running": True,
             "server_running": True,
             "loaded_model": "test/model",
         }
+        agent.probe_lmstudio = lambda: dict(ready_snapshot)
+        agent.ensure_lmstudio_ready = lambda require_model=False: dict(ready_snapshot)
         agent.save_lmstudio_state(loaded_model="test/model", selected_model="test/model")
 
         with ReusableTCPServer(("127.0.0.1", 1234), Handler) as server:
@@ -113,7 +115,29 @@ def main() -> int:
         assert project_body["model"] == "test/model"
         assert project_body["messages"][-1]["content"] == "Return PROJECT OK"
 
-        print("LM Studio REST + OpenAI-compatible local protocols: PASS")
+        heal_root = root / "heal"
+        heal_root.mkdir()
+        heal_agent = node.Agent(node.AgentConfig(
+            "https://example.invalid",
+            heal_root,
+            controller_public_x="erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0",
+        ))
+        heal_agent.find_lms = lambda: Path("/fake/lms")
+        probes = iter([
+            {"installed": True, "server_running": False, "loaded_model": None},
+            {"installed": True, "server_running": True, "loaded_model": "test/model"},
+        ])
+        heal_agent.probe_lmstudio = lambda: dict(next(probes))
+        lms_calls: list[list[str]] = []
+        heal_agent.run_lms = lambda args, timeout=0: lms_calls.append(list(args))
+        heal_agent.report_ai_state = lambda **updates: None
+        healed = heal_agent.ensure_lmstudio_ready(require_model=True)
+        assert healed["server_running"] is True
+        assert healed["loaded_model"] == "test/model"
+        assert ["daemon", "up"] in lms_calls
+        assert ["server", "start", "--port", "1234"] in lms_calls
+
+        print("LM Studio REST + OpenAI-compatible local protocols + self-heal: PASS")
         return 0
 
 
