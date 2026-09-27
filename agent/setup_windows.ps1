@@ -138,6 +138,71 @@ function Set-CitadelDirectoryAcl {
   }
 }
 
+$LifecycleRoot = Join-Path $ProgramDataBase "CitadelEWS\lifecycle"
+$LifecycleLockPath = Join-Path $LifecycleRoot "install-update.lock"
+$LifecycleMarkerPath = Join-Path $LifecycleRoot "install-update-active.json"
+$script:LifecycleLockStream = $null
+$script:LifecycleMutationStarted = $false
+$script:LifecycleRepairRequired = $false
+
+function Acquire-CitadelLifecycleLock {
+  Set-CitadelDirectoryAcl -Path $LifecycleRoot
+  $Deadline = [DateTime]::UtcNow.AddSeconds(30)
+  while ($null -eq $script:LifecycleLockStream) {
+    try {
+      $script:LifecycleLockStream = [System.IO.File]::Open(
+        $LifecycleLockPath,
+        [System.IO.FileMode]::OpenOrCreate,
+        [System.IO.FileAccess]::ReadWrite,
+        [System.IO.FileShare]::None
+      )
+    } catch [System.IO.IOException] {
+      if ([DateTime]::UtcNow -ge $Deadline) {
+        throw "CITADEL lifecycle lock is busy."
+      }
+      Start-Sleep -Milliseconds 100
+    }
+  }
+  $script:LifecycleRepairRequired = Test-Path -LiteralPath $LifecycleMarkerPath
+  if ($script:LifecycleRepairRequired) {
+    Write-Warning "[CITADEL] Abandoned lifecycle mutation evidence found; this full installer will preserve it until repair succeeds."
+  }
+}
+
+function Begin-CitadelLifecycleMutation {
+  param([Parameter(Mandatory = $true)][string]$Operation)
+  if ($script:LifecycleMutationStarted) { return }
+  $Marker = @{
+    schema = "citadel.install-update-lock.v1"
+    owner = "setup_windows.ps1"
+    operation = $Operation
+    repair_required = $script:LifecycleRepairRequired
+    version = $ReleaseVersion
+    pid = $PID
+    started_at = [DateTime]::UtcNow.ToString("o")
+  } | ConvertTo-Json -Compress
+  $Utf8 = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($LifecycleMarkerPath, $Marker + [Environment]::NewLine, $Utf8)
+  $script:LifecycleMutationStarted = $true
+}
+
+function Complete-CitadelLifecycleMutation {
+  if ($script:LifecycleMutationStarted -and (Test-Path -LiteralPath $LifecycleMarkerPath)) {
+    Remove-Item -LiteralPath $LifecycleMarkerPath -Force -ErrorAction Stop
+  }
+  $script:LifecycleMutationStarted = $false
+  $script:LifecycleRepairRequired = $false
+}
+
+function Release-CitadelLifecycleLock {
+  if ($null -ne $script:LifecycleLockStream) {
+    $script:LifecycleLockStream.Dispose()
+    $script:LifecycleLockStream = $null
+  }
+}
+
+Acquire-CitadelLifecycleLock
+
 function Copy-VerifiedReleaseFile {
   param(
     [Parameter(Mandatory = $true)][string]$Name,
@@ -208,6 +273,7 @@ function Quote-CitadelServiceArg {
 }
 
 if ($Uninstall) {
+  Begin-CitadelLifecycleMutation -Operation "powershell_uninstall"
   Stop-CitadelServiceIfPresent
   Remove-CitadelServiceDefinition -Name $ServiceName
   foreach ($Process in (Get-RunningLegacyCitadelAgents)) {
@@ -226,6 +292,8 @@ if ($Uninstall) {
       }
     }
   }
+  Complete-CitadelLifecycleMutation
+  Release-CitadelLifecycleLock
   Write-Host "[CITADEL] Windows Core Service uninstalled."
   if ($PreserveState) { Write-Host "[CITADEL] Node state was preserved by explicit request." }
   exit 0
@@ -414,6 +482,8 @@ $BinPath = (Quote-CitadelServiceArg $ServiceExe) +
   " --hold-file " + (Quote-CitadelServiceArg $HoldPath) +
   " --ready-file " + (Quote-CitadelServiceArg $ReadyPath)
 
+Begin-CitadelLifecycleMutation -Operation "powershell_install_cutover"
+
 try {
   if ($null -ne $ExistingService) {
     Stop-CitadelServiceIfPresent
@@ -590,6 +660,9 @@ try {
   }
   throw $CutoverError
 }
+
+Complete-CitadelLifecycleMutation
+Release-CitadelLifecycleLock
 
 Write-Host ""
 Write-Host "[CITADEL] Setup/repair complete."
