@@ -43,7 +43,7 @@ def main() -> int:
     old_program_data = os.environ.get("PROGRAMDATA")
     temp_root = tempfile.TemporaryDirectory(prefix="citadel-mutex-test-")
     os.environ["PROGRAMDATA"] = temp_root.name
-    (Path(temp_root.name) / "CitadelEWS" / "state").mkdir(parents=True, exist_ok=True)
+    (Path(temp_root.name) / "CitadelEWS" / "lifecycle").mkdir(parents=True, exist_ok=True)
 
     child = subprocess.Popen(
         [sys.executable, str(Path(__file__).resolve()), "--holder"],
