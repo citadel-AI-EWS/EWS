@@ -37,6 +37,7 @@ jobs:
       - run: python -m pip install --disable-pip-version-check --requirement requirements-dev.txt
       - run: pip-audit --requirement agent/requirements.txt
       - run: scripts/validate.sh
+      - run: python tests/windows-release-state.py
       - run: npm run build && npm run check:cloudflare
       - run: bandit -q controller_app.py agent/citadel_node_v1.py agent/citadel_node_v2.py
       - run: node --check scripts/smoke_test.mjs
@@ -150,6 +151,8 @@ jobs:
           python tests/lmstudio-local-protocol.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/windows-install-update-mutex.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/windows-release-state.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Validate Windows Enterprise Probe and legacy-upgrade bootstrap
         shell: pwsh
