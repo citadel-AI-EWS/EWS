@@ -9,6 +9,7 @@ $RuntimeHome = if (-not [string]::IsNullOrWhiteSpace($env:CITADEL_LMSTUDIO_HOME)
 if ([string]::IsNullOrWhiteSpace($RuntimeHome)) { throw "LM Studio runtime HOME is unavailable." }
 New-Item -ItemType Directory -Force -Path $RuntimeHome | Out-Null
 $env:HOME = $RuntimeHome
+$env:USERPROFILE = $RuntimeHome
 $env:LMS_NO_MODIFY_PATH = "1"
 
 try {
