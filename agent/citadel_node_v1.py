@@ -30,6 +30,7 @@ import socket
 import subprocess  # nosec B404
 import sys
 import tempfile
+import threading
 import time
 import urllib.parse
 import uuid
@@ -48,7 +49,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.19"
+VERSION = "0.3.20"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -281,6 +282,62 @@ def atomic_write(path: Path, text: str, mode: int = 0o600) -> None:
     finally:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(temp_name)
+
+
+
+_LMSTUDIO_LOCKS_GUARD = threading.Lock()
+_LMSTUDIO_LOCAL_LOCKS: dict[str, threading.RLock] = {}
+
+
+def _local_file_lock(path: Path) -> threading.RLock:
+    key = str(path.resolve())
+    with _LMSTUDIO_LOCKS_GUARD:
+        lock = _LMSTUDIO_LOCAL_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _LMSTUDIO_LOCAL_LOCKS[key] = lock
+        return lock
+
+
+@contextlib.contextmanager
+def exclusive_file_lock(path: Path, timeout_seconds: float = 120.0):
+    """Cross-process advisory lock using only Python stdlib primitives."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+    with _local_file_lock(path):
+        with path.open("a+b") as stream:
+            with contextlib.suppress(OSError):
+                os.chmod(path, 0o600)
+            stream.seek(0, os.SEEK_END)
+            if stream.tell() == 0:
+                stream.write(b"\\0")
+                stream.flush()
+            while True:
+                try:
+                    stream.seek(0)
+                    if os.name == "nt":
+                        import msvcrt
+                        msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError as error:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("lmstudio_lock_timeout") from error
+                    time.sleep(0.1)
+            try:
+                yield
+            finally:
+                stream.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    with contextlib.suppress(OSError):
+                        msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    with contextlib.suppress(OSError):
+                        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
 def load_json(path: Path, default: Any) -> Any:
@@ -889,6 +946,8 @@ class Agent:
         self.service_ready_path = Path(service_ready).resolve() if service_ready else None
         self.paused_path = config.data_dir / "PAUSED"
         self.lmstudio_state_path = config.data_dir / "lmstudio-state.json"
+        self.lmstudio_state_lock_path = config.data_dir / "lmstudio-state.lock"
+        self.lmstudio_runtime_lock_path = config.data_dir / "lmstudio-runtime.lock"
         self.network_recovery_path = config.data_dir / "network-recovery.json"
         self.last_network_recovery = 0.0
         self.last_network_remember = 0.0
@@ -999,6 +1058,27 @@ class Agent:
         max_tokens: int,
         temperature: float = 0.2,
     ) -> tuple[str, dict[str, int] | None]:
+        # Re-check live readiness immediately before inference and keep lifecycle
+        # mutations from another CITADEL process out of the request window.
+        with exclusive_file_lock(self.lmstudio_runtime_lock_path, timeout_seconds=1900):
+            live_model = self._ensure_lmstudio_ready_for_inference_locked()
+            return self._project_llm_chat_unlocked(
+                live_model,
+                system_prompt,
+                user_prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+
+    def _project_llm_chat_unlocked(
+        self,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens: int,
+        temperature: float = 0.2,
+    ) -> tuple[str, dict[str, int] | None]:
         request_body = json_text({
             "model": model,
             "messages": [
@@ -1055,6 +1135,11 @@ class Agent:
         return content.strip(), measured
 
     def ensure_lmstudio_ready_for_inference(self) -> str:
+        """Serialize LM Studio recovery across duplicate agent processes."""
+        with exclusive_file_lock(self.lmstudio_runtime_lock_path, timeout_seconds=1900):
+            return self._ensure_lmstudio_ready_for_inference_locked()
+
+    def _ensure_lmstudio_ready_for_inference_locked(self) -> str:
         """Use live LM Studio state and repair daemon/server/model drift before inference."""
         previous = self.lmstudio_state()
         snapshot = self.probe_lmstudio()
@@ -1104,7 +1189,7 @@ class Agent:
                     progress_detail=f"Reloading selected model: {selected}",
                 )
                 try:
-                    self.load_lmstudio_model({
+                    self._load_lmstudio_model_unlocked({
                         "model": selected,
                         "source": "catalog",
                         "settings": {},
@@ -1549,10 +1634,12 @@ class Agent:
         return state if isinstance(state, dict) else {}
 
     def save_lmstudio_state(self, **updates: Any) -> None:
-        state = self.lmstudio_state()
-        state.update(updates)
-        state["updated_at"] = now_iso()
-        atomic_write(self.lmstudio_state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+        # atomic_write protects replacement; this lock protects the whole read/merge/write transaction.
+        with exclusive_file_lock(self.lmstudio_state_lock_path, timeout_seconds=30):
+            state = self.lmstudio_state()
+            state.update(updates)
+            state["updated_at"] = now_iso()
+            atomic_write(self.lmstudio_state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
 
     def report_ai_state(self, **updates: Any) -> None:
         self.save_lmstudio_state(**updates)
@@ -1687,7 +1774,12 @@ class Agent:
                             loaded_models.append(name)
                 except Exception:
                     loaded_models = []
-        loaded_model = loaded_models[0] if loaded_models else None
+        selected_model = str(state.get("selected_model") or "").strip()
+        loaded_model = (
+            selected_model
+            if selected_model and selected_model in loaded_models
+            else loaded_models[0] if loaded_models else None
+        )
         snapshot = {
             "installed": installed,
             "selected_model": state.get("selected_model"),
@@ -1817,6 +1909,10 @@ class Agent:
         return True
 
     def install_lmstudio(self, payload: dict[str, Any]) -> None:
+        with exclusive_file_lock(self.lmstudio_runtime_lock_path, timeout_seconds=1900):
+            return self._install_lmstudio_unlocked(payload)
+
+    def _install_lmstudio_unlocked(self, payload: dict[str, Any]) -> None:
         if not self.validate_lmstudio_install_payload(payload):
             raise RuntimeError("invalid lmstudio installer payload")
         asset = payload["asset"]
@@ -1922,6 +2018,10 @@ class Agent:
         return safe
 
     def uninstall_lmstudio(self, payload: dict[str, Any]) -> None:
+        with exclusive_file_lock(self.lmstudio_runtime_lock_path, timeout_seconds=1900):
+            return self._uninstall_lmstudio_unlocked(payload)
+
+    def _uninstall_lmstudio_unlocked(self, payload: dict[str, Any]) -> None:
         """Remove the CITADEL-managed LM Studio runtime without touching the agent."""
         if not self.validate_lmstudio_uninstall_payload(payload):
             raise RuntimeError("invalid lmstudio uninstall payload")
@@ -2013,6 +2113,10 @@ class Agent:
         return model + (("@" + quantization.lower()) if quantization else "")
 
     def download_lmstudio_model(self, payload: dict[str, Any]) -> None:
+        with exclusive_file_lock(self.lmstudio_runtime_lock_path, timeout_seconds=1900):
+            return self._download_lmstudio_model_unlocked(payload)
+
+    def _download_lmstudio_model_unlocked(self, payload: dict[str, Any]) -> None:
         if not self.validate_lmstudio_model_payload(payload):
             raise RuntimeError("invalid lmstudio model")
         model = payload["model"]
@@ -2066,6 +2170,10 @@ class Agent:
         self.log.write("lmstudio_model_downloaded", model=model_key)
 
     def load_lmstudio_model(self, payload: dict[str, Any]) -> None:
+        with exclusive_file_lock(self.lmstudio_runtime_lock_path, timeout_seconds=1900):
+            return self._load_lmstudio_model_unlocked(payload)
+
+    def _load_lmstudio_model_unlocked(self, payload: dict[str, Any]) -> None:
         if not self.validate_lmstudio_model_payload(payload):
             raise RuntimeError("invalid lmstudio model")
         model = payload["model"]
@@ -2203,10 +2311,20 @@ class Agent:
         request_id: str,
         python_context: str | None = None,
     ) -> str:
-        state = self.probe_lmstudio()
-        model = str(state.get("loaded_model") or state.get("selected_model") or "").strip()
-        if not model:
-            raise RuntimeError("lmstudio_model_not_loaded")
+        with exclusive_file_lock(self.lmstudio_runtime_lock_path, timeout_seconds=1900):
+            model = self._ensure_lmstudio_ready_for_inference_locked()
+            return self._stream_lmstudio_answer_locked(
+                prompt, settings, request_id, model, python_context=python_context
+            )
+
+    def _stream_lmstudio_answer_locked(
+        self,
+        prompt: str,
+        settings: dict[str, Any],
+        request_id: str,
+        model: str,
+        python_context: str | None = None,
+    ) -> str:
         body: dict[str, Any] = {
             "model": model,
             "input": prompt,
