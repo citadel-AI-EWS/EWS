@@ -61,6 +61,9 @@ var
   StartupConfigured: Boolean;
   LegacyCutoverActive: Boolean;
   InstallUpdateLockHandle: THandle;
+  LifecycleMutationStarted: Boolean;
+  LifecycleMutationCommitted: Boolean;
+  RepairRequiredAtStart: Boolean;
 
 function CreateFile(
   lpFileName: string;
@@ -93,9 +96,15 @@ begin
   ForceDirectories(StateRoot);
   if not DirExists(StateRoot) then exit;
 
+  { Rebuild rather than merely append grants: legacy explicit ACEs and an
+    untrusted owner must not be allowed to tamper with the lifecycle lock. }
+  if not Exec(Icacls, '"' + StateRoot + '" /setowner "*S-1-5-32-544" /T /C', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then exit;
+  if ResultCode <> 0 then exit;
+  if not Exec(Icacls, '"' + StateRoot + '" /reset /T /C', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then exit;
+  if ResultCode <> 0 then exit;
   if not Exec(
     Icacls,
-    '"' + StateRoot + '" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-19:(OI)(CI)M"',
+    '"' + StateRoot + '" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-19:(OI)(CI)M" /T /C',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode
   ) then exit;
   Result := ResultCode = 0;
@@ -104,10 +113,12 @@ end;
 function AcquireInstallUpdateMutex: Boolean;
 var
   Attempt: Integer;
-  Marker: string;
 begin
   Result := False;
   InstallUpdateLockHandle := 0;
+  LifecycleMutationStarted := False;
+  LifecycleMutationCommitted := False;
+  RepairRequiredAtStart := False;
 
   if not SecureInstallUpdateStateRoot then
   begin
@@ -139,31 +150,44 @@ begin
     exit;
   end;
 
-  if FileExists(InstallUpdateMarkerPath) then
-  begin
-    Log('CITADEL found an abandoned install/update marker; installer is acting as repair authority.');
-    DeleteFile(InstallUpdateMarkerPath);
-  end;
-
-  Marker :=
-    '{"schema":"citadel.install-update-lock.v1","owner":"inno","started_at":"' +
-    GetDateTimeString('yyyy-mm-dd"T"hh:nn:ss', '-', ':') + '"}' + #13#10;
-  if not SaveStringToFile(InstallUpdateMarkerPath, Marker, False) then
-  begin
-    CloseHandle(InstallUpdateLockHandle);
-    InstallUpdateLockHandle := 0;
-    Log('CITADEL could not write the install/update crash marker.');
-    exit;
-  end;
+  RepairRequiredAtStart := FileExists(InstallUpdateMarkerPath);
+  if RepairRequiredAtStart then
+    Log('CITADEL found abandoned lifecycle mutation evidence; installer will preserve it until repair completes.');
 
   Result := True;
 end;
 
+procedure BeginInstallUpdateMutation(Operation: string);
+var
+  Marker: string;
+begin
+  if LifecycleMutationStarted then exit;
+  Marker :=
+    '{"schema":"citadel.install-update-lock.v1","owner":"inno","operation":"' +
+    JsonEscape(Operation) + '","repair_required":' +
+    Lowercase(BoolToStr(RepairRequiredAtStart, True)) + ',"started_at":"' +
+    GetDateTimeString('yyyy-mm-dd"T"hh:nn:ss', '-', ':') + '"}' + #13#10;
+  if not SaveStringToFile(InstallUpdateMarkerPath, Marker, False) then
+    RaiseException('Unable to persist CITADEL lifecycle mutation marker.');
+  LifecycleMutationStarted := True;
+end;
+
+procedure CompleteInstallUpdateMutation;
+begin
+  if LifecycleMutationStarted then
+  begin
+    if not DeleteFile(InstallUpdateMarkerPath) and FileExists(InstallUpdateMarkerPath) then
+      RaiseException('Unable to clear CITADEL lifecycle mutation marker after verified completion.');
+  end;
+  LifecycleMutationCommitted := True;
+end;
+
 procedure ReleaseInstallUpdateMutex;
 begin
+  { Never delete mutation evidence here. Setup/uninstall may be exiting because
+    repair failed; only CompleteInstallUpdateMutation is allowed to clear it. }
   if InstallUpdateLockHandle <> 0 then
   begin
-    DeleteFile(InstallUpdateMarkerPath);
     CloseHandle(InstallUpdateLockHandle);
     InstallUpdateLockHandle := 0;
   end;
@@ -338,7 +362,9 @@ end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  { Stop either installation mode before [Files] replaces bundled binaries. }
+  { From here onward a crash can leave the in-place release changed. }
+  BeginInstallUpdateMutation('inno_install_update');
+  { Stop either installation mode before bundled binaries are replaced. }
   StopExistingService;
   StopFallbackTask;
   DeleteFallbackTask;
@@ -389,7 +415,7 @@ begin
 
   RequireExec(
     Icacls,
-    '"' + AppRoot + '" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-19:(OI)(CI)RX"',
+    '"' + AppRoot + '" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-19:(OI)(CI)M"',
     'Unable to secure the CITADEL program directory'
   );
 
@@ -535,6 +561,7 @@ begin
       if LegacyCutoverActive then
         RequireLegacyCutover('commit', ' --expected-version "{#MyVersion}"');
       StartupConfigured := True;
+      CompleteInstallUpdateMutation;
     except
       if LegacyCutoverActive then
         AbortLegacyMigrationLifecycle;
@@ -555,11 +582,16 @@ var
 begin
   if CurUninstallStep = usUninstall then
   begin
+    BeginInstallUpdateMutation('inno_uninstall');
     Sc := ExpandConstant('{sys}\sc.exe');
     StopExistingService;
     TryExec(Sc, 'delete {#ServiceName}');
     StopFallbackTask;
     DeleteFallbackTask;
     TryLegacyCutover('uninstall', '');
+  end
+  else if CurUninstallStep = usPostUninstall then
+  begin
+    CompleteInstallUpdateMutation;
   end;
 end;
