@@ -10,6 +10,8 @@ import citadel_node_v1 as node
 with tempfile.TemporaryDirectory() as temp:
     agent=node.Agent(node.AgentConfig('https://example.invalid',Path(temp)))
     agent.save_lmstudio_state(loaded_model='test/model')
+    # This unit test isolates mini-agent fan-out from the separate live LM Studio preflight tests.
+    agent.ensure_lmstudio_ready_for_inference=lambda: 'test/model'
     calls=[]
     def answer(*args,**kwargs):
         calls.append(kwargs)
