@@ -7,7 +7,6 @@ const outDir = process.env.SYNTHETIC_OUT_DIR || "synthetic-artifacts";
 const timeout = Number(process.env.SYNTHETIC_TIMEOUT_MS || 20000);
 
 await fs.mkdir(outDir, { recursive: true });
-
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({
   viewport: { width: 1365, height: 900 },
@@ -28,18 +27,12 @@ const report = {
   findings: []
 };
 
-const forbiddenActionPattern = /(wipe|delete|shutdown|reboot|uninstall|terminate|stop all|pause all|update all|стер|удал|выключ|перезагруз|отключ|עצור|כבה)/i;
-
 function addFinding(kind, page, detail) {
   report.ok = false;
   report.findings.push({ kind, page, detail });
 }
 
-async function inspectPage(route, interact) {
-  const page = await context.newPage();
-  const entry = { route, url: baseUrl + route, console_errors: [], page_errors: [], failed_requests: [], server_errors: [], auth_probe_active: false, expected_auth_401: 0, expected_auth_console_errors: 0 };
-  report.pages.push(entry);
-
+function attachObservers(page, entry) {
   page.on("console", msg => {
     if (msg.type() !== "error") return;
     const value = msg.text().slice(0, 1000);
@@ -51,188 +44,163 @@ async function inspectPage(route, interact) {
   });
   page.on("pageerror", error => entry.page_errors.push(String(error).slice(0, 1000)));
   page.on("requestfailed", request => {
-    const failure = request.failure()?.errorText || "request failed";
-    if (!request.url().startsWith("data:")) entry.failed_requests.push({ url: request.url(), failure });
+    if (!request.url().startsWith("data:")) {
+      entry.failed_requests.push({
+        url: request.url(),
+        failure: request.failure()?.errorText || "request failed"
+      });
+    }
   });
   page.on("response", response => {
     if (entry.auth_probe_active && response.status() === 401) {
       entry.expected_auth_401 += 1;
       return;
     }
-    if (response.status() >= 500) entry.server_errors.push({ url: response.url(), status: response.status() });
+    if (response.status() >= 500) {
+      entry.server_errors.push({ url: response.url(), status: response.status() });
+    }
   });
+}
 
+async function open(route, expectedHash = "") {
+  const page = await context.newPage();
+  const entry = {
+    route,
+    url: baseUrl + route,
+    console_errors: [],
+    page_errors: [],
+    failed_requests: [],
+    server_errors: [],
+    auth_probe_active: false,
+    expected_auth_401: 0,
+    expected_auth_console_errors: 0
+  };
+  report.pages.push(entry);
+  attachObservers(page, entry);
+
+  const response = await page.goto(baseUrl + route, { waitUntil: "domcontentloaded", timeout });
+  if (!response || response.status() >= 400) {
+    throw new Error(`navigation HTTP ${response?.status() ?? "no response"}`);
+  }
+  await page.locator("body").waitFor({ state: "visible", timeout });
+  await page.locator("#login").waitFor({ state: "visible", timeout });
+
+  const visible = new URL(page.url());
+  if (visible.pathname !== "/" || visible.search || visible.hash !== expectedHash) {
+    addFinding("unexpected_console_route", route, `expected /${expectedHash}, got ${visible.pathname}${visible.search}${visible.hash}`);
+  }
+  if (!(await page.title()).trim()) addFinding("missing_title", route, "Document title is empty");
+
+  const bodyText = (await page.locator("body").innerText()).trim();
+  if (bodyText.length < 20) addFinding("empty_page", route, "Visible page text is unexpectedly short");
+
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  if (overflow > 40) addFinding("desktop_horizontal_overflow", route, `horizontal overflow ${overflow}px`);
+
+  return { page, entry };
+}
+
+async function closeChecked(page, entry, route, screenshotName) {
+  if (entry.console_errors.length) addFinding("console_error", route, entry.console_errors.join(" | ").slice(0, 1600));
+  if (entry.page_errors.length) addFinding("page_error", route, entry.page_errors.join(" | ").slice(0, 1600));
+  if (entry.server_errors.length) addFinding("server_5xx", route, JSON.stringify(entry.server_errors).slice(0, 1600));
+  await page.screenshot({ path: path.join(outDir, screenshotName), fullPage: true });
+  await page.close();
+}
+
+// The deployed product is the consolidated Operations console at /.
+// It must remain locked until a valid Architect token is supplied.
+{
+  const { page, entry } = await open("/");
   try {
-    const response = await page.goto(baseUrl + route, { waitUntil: "domcontentloaded", timeout });
-    if (!response || response.status() >= 400) throw new Error(`navigation HTTP ${response?.status() ?? "no response"}`);
-    await page.locator("body").waitFor({ state: "visible", timeout });
-    await page.waitForTimeout(1200);
+    if (!(await page.locator("#auth").isVisible())) addFinding("auth_not_visible", "/", "login panel is not visible");
+    if (await page.locator("#machines").isVisible()) addFinding("machines_exposed", "/", "machine controls visible before authentication");
+    if (await page.locator("#logs").isVisible()) addFinding("logs_exposed", "/", "logs visible before authentication");
 
-    const title = await page.title();
-    if (!title.trim()) addFinding("missing_title", route, "Document title is empty");
-
-    const bodyText = (await page.locator("body").innerText()).trim();
-    if (bodyText.length < 20) addFinding("empty_page", route, "Visible page text is unexpectedly short");
-
-    const visibleUrl = new URL(page.url());
-    if (visibleUrl.pathname !== "/" || visibleUrl.search || visibleUrl.hash) {
-      addFinding("non_root_browser_url", route, `visible URL must stay at root, got ${visibleUrl.pathname}${visibleUrl.search}${visibleUrl.hash}`);
-    }
-    if (await page.locator("#homeButton").count() !== 1) {
-      addFinding("missing_home_button", route, "every user-facing view must expose one Home button");
+    for (const selector of ["#refresh", "#submitTask", "#lmInstall", "#nodeQuery", "#detailShutdown", "#detailUninstall"]) {
+      if (await page.locator(selector).count() !== 1) addFinding("missing_control", "/", selector);
     }
 
-    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-    if (overflow > 40) addFinding("desktop_horizontal_overflow", route, `horizontal overflow ${overflow}px`);
+    entry.auth_probe_active = true;
+    await page.locator("#token").fill("synthetic-invalid-token");
+    await page.locator("#login").evaluate(form => form.requestSubmit());
+    await page.waitForTimeout(900);
+    entry.auth_probe_active = false;
 
-    if (interact) await interact(page, entry);
+    if (entry.expected_auth_401 < 1) {
+      addFinding("invalid_auth_not_rejected", "/", "invalid token produced no HTTP 401");
+    }
+    if (!(await page.locator("#auth").isVisible())) {
+      addFinding("invalid_auth_unlocked", "/", "invalid token hid login panel");
+    }
+    if (await page.locator("#machines").isVisible()) {
+      addFinding("invalid_auth_exposed_controls", "/", "invalid token exposed machine controls");
+    }
+  } catch (error) {
+    addFinding("scenario_failure", "/", String(error).slice(0, 1600));
+  }
+  await closeChecked(page, entry, "/", "root.png");
+}
 
-    if (entry.console_errors.length) addFinding("console_error", route, entry.console_errors.join(" | ").slice(0, 1600));
-    if (entry.page_errors.length) addFinding("page_error", route, entry.page_errors.join(" | ").slice(0, 1600));
-    if (entry.server_errors.length) addFinding("server_5xx", route, JSON.stringify(entry.server_errors).slice(0, 1600));
-
-    await page.screenshot({ path: path.join(outDir, route.replaceAll("/", "_") || "_root") + ".png", fullPage: true });
+// Compatibility URLs must land on the same deployed console, not revive stale pages.
+for (const route of ["/hub/", "/architect/"]) {
+  let page, entry;
+  try {
+    ({ page, entry } = await open(route));
+    if (!(await page.locator("#auth").isVisible())) {
+      addFinding("compatibility_route_not_locked", route, "redirected console is not showing login");
+    }
   } catch (error) {
     addFinding("scenario_failure", route, String(error).slice(0, 1600));
-    try {
-      await page.screenshot({ path: path.join(outDir, "failure" + route.replaceAll("/", "_") + ".png"), fullPage: true });
-    } catch {}
-  } finally {
-    await page.close();
   }
+  if (page) await closeChecked(page, entry, route, route.includes("hub") ? "compat-hub.png" : "compat-architect.png");
 }
 
-await inspectPage("/", async page => {
-  await page.locator("#controllerStatus").waitFor({ state: "visible", timeout });
-  await page.waitForFunction(() => {
-    const el = document.getElementById("controllerStatus");
-    return el && !el.textContent.includes("בודק");
-  }, { timeout });
-
-  for (const href of ["/hub/", "/architect/"]) {
-    const link = page.locator(`a[href="${href}"]`);
-    if (await link.count() !== 1) addFinding("missing_navigation_link", "/", href);
+// Logs compatibility URL intentionally resolves to /#logs. Authentication still gates the data.
+{
+  let page, entry;
+  try {
+    ({ page, entry } = await open("/architect/logs/", "#logs"));
+    if (!(await page.locator("#auth").isVisible())) addFinding("logs_auth_missing", "/architect/logs/", "login panel is not visible");
+    if (await page.locator("#logs").isVisible()) addFinding("logs_exposed", "/architect/logs/", "logs visible without authentication");
+  } catch (error) {
+    addFinding("scenario_failure", "/architect/logs/", String(error).slice(0, 1600));
   }
-  if (await page.locator('a[href="/architect/logs/"]').count()) {
-    addFinding("global_logs_link_visible", "/", "global logs should stay hidden from normal navigation");
-  }
-
-  await page.locator('a[href="/hub/"]').click();
-  await page.locator("#refreshButton").waitFor({ state: "visible", timeout });
-  const afterHubNavigation = new URL(page.url());
-  if (afterHubNavigation.pathname !== "/" || afterHubNavigation.search || afterHubNavigation.hash) {
-    addFinding("root_navigation_exposed_subpath", "/", page.url());
-  }
-});
-
-await inspectPage("/hub/", async (page, entry) => {
-  await page.locator("#refreshButton").click();
-  await page.waitForTimeout(700);
-
-  const firstToggle = page.locator(".panelToggle").first();
-  if (await firstToggle.count()) {
-    await firstToggle.click();
-    const collapsed = await firstToggle.getAttribute("aria-expanded");
-    if (collapsed !== "false") addFinding("hub_collapse_broken", "/hub/", "panel toggle did not collapse");
-    await firstToggle.click();
-    const expanded = await firstToggle.getAttribute("aria-expanded");
-    if (expanded !== "true") addFinding("hub_expand_broken", "/hub/", "panel toggle did not expand");
-  }
-
-  const search = page.locator("#nodeSearch");
-  await search.fill("synthetic-no-such-node");
-  await page.waitForTimeout(250);
-  await search.fill("");
-
-  const publicMode = (await page.locator("#modeLabel").innerText()).trim();
-  if (publicMode !== "PUBLIC") addFinding("hub_public_mode", "/hub/", `expected PUBLIC, got ${publicMode}`);
-
-  for (const id of ["exportButton", "updateAllButton", "pauseAllButton"]) {
-    if (!(await page.locator("#" + id).isDisabled())) addFinding("privileged_button_enabled", "/hub/", id);
-  }
-
-  await page.locator("#sshHost").fill("ssh.example.invalid");
-  await page.locator("#sshUser").fill("synthetic-user");
-  const sshCommand = await page.locator("#sshCommand").innerText();
-  if (!sshCommand.includes("ssh.example.invalid") || !sshCommand.includes("synthetic-user")) {
-    addFinding("ssh_preview_broken", "/hub/", sshCommand.slice(0, 500));
-  }
-  await page.locator("#sshHost").fill("");
-  await page.locator("#sshUser").fill("");
-
-  const english = page.locator('button[data-lang="en"]');
-  if (await english.count()) {
-    await english.click();
-    await page.waitForTimeout(150);
-    const htmlLang = await page.locator("html").getAttribute("lang");
-    if (htmlLang !== "en") addFinding("language_toggle_no_effect", "/hub/", `html lang became ${htmlLang}`);
-    await page.locator('button[data-lang="ru"]').click();
-  }
-
-  entry.auth_probe_active = true;
-  await page.locator("#architectToken").fill("synthetic-invalid-token");
-  await page.locator("#loginButton").click();
-  await page.waitForTimeout(900);
-  entry.auth_probe_active = false;
-  if (entry.expected_auth_401 < 1) addFinding("hub_invalid_auth_not_rejected", "/hub/", "invalid token produced no HTTP 401");
-  const afterInvalidLogin = (await page.locator("#modeLabel").innerText()).trim();
-  if (afterInvalidLogin !== "PUBLIC") addFinding("invalid_auth_escalated", "/hub/", `mode became ${afterInvalidLogin}`);
-
-  const buttons = await page.locator("button:visible").allTextContents();
-  for (const label of buttons) {
-    if (forbiddenActionPattern.test(label)) {
-      // Presence is expected; synthetic user deliberately never executes destructive actions.
-      continue;
-    }
-  }
-});
-
-await inspectPage("/architect/", async (page, entry) => {
-  const restrictedVisible = await page.locator("#dashboard:not(.hidden)").count();
-  if (restrictedVisible) addFinding("architect_content_exposed", "/architect/", "secure content visible before authentication");
-
-  entry.auth_probe_active = true;
-  await page.locator("#token").fill("synthetic-invalid-token");
-  await page.locator("#loginButton").click();
-  await page.waitForTimeout(900);
-  entry.auth_probe_active = false;
-  if (entry.expected_auth_401 < 1) addFinding("architect_invalid_auth_not_rejected", "/architect/", "invalid token produced no HTTP 401");
-  const stillLocked = await page.locator("#loginCard").isVisible();
-  if (!stillLocked) addFinding("architect_invalid_auth", "/architect/", "invalid token appears to unlock Architect");
-
-  const dangerous = ["#pauseButton", "#resumeButton", "#updateButton", "#updateAllAgentsButton", "#restartButton", "#stopButton", "#rollbackButton", "#rebootButton", "#shutdownButton", "#disconnectButton"];
-  for (const selector of dangerous) {
-    if (await page.locator(selector).count()) {
-      const disabled = await page.locator(selector).isDisabled().catch(() => true);
-      if (!disabled && await page.locator("#dashboard").isVisible().catch(() => false)) {
-        addFinding("dangerous_control_available_unauthenticated", "/architect/", selector);
-      }
-    }
-  }
-});
-
-await inspectPage("/architect/logs/", async page => {
-  const passwordInputs = await page.locator('input[type="password"]').count();
-  if (passwordInputs < 1) addFinding("logs_auth_missing", "/architect/logs/", "no password/token input found");
-});
-
-const mobile = await context.newPage();
-const mobileEntry = { route: "/hub/ mobile", url: baseUrl + "/hub/", console_errors: [], page_errors: [], failed_requests: [], server_errors: [] };
-report.pages.push(mobileEntry);
-mobile.on("console", msg => { if (msg.type() === "error") mobileEntry.console_errors.push(msg.text().slice(0, 1000)); });
-mobile.on("pageerror", error => mobileEntry.page_errors.push(String(error).slice(0, 1000)));
-try {
-  await mobile.setViewportSize({ width: 390, height: 844 });
-  const response = await mobile.goto(baseUrl + "/hub/", { waitUntil: "domcontentloaded", timeout });
-  if (!response || response.status() >= 400) throw new Error(`mobile navigation HTTP ${response?.status() ?? "no response"}`);
-  await mobile.waitForTimeout(800);
-  const overflow = await mobile.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  if (overflow > 20) addFinding("mobile_horizontal_overflow", "/hub/", `horizontal overflow ${overflow}px at 390px viewport`);
-  await mobile.screenshot({ path: path.join(outDir, "hub-mobile.png"), fullPage: true });
-} catch (error) {
-  addFinding("mobile_scenario_failure", "/hub/", String(error).slice(0, 1600));
+  if (page) await closeChecked(page, entry, "/architect/logs/", "compat-logs.png");
 }
-await mobile.close();
+
+// Mobile acceptance tests the actual root console.
+{
+  const page = await context.newPage();
+  const entry = {
+    route: "/ mobile",
+    url: baseUrl + "/",
+    console_errors: [],
+    page_errors: [],
+    failed_requests: [],
+    server_errors: [],
+    auth_probe_active: false,
+    expected_auth_401: 0,
+    expected_auth_console_errors: 0
+  };
+  report.pages.push(entry);
+  attachObservers(page, entry);
+  try {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const response = await page.goto(baseUrl + "/", { waitUntil: "domcontentloaded", timeout });
+    if (!response || response.status() >= 400) throw new Error(`mobile navigation HTTP ${response?.status() ?? "no response"}`);
+    await page.locator("#login").waitFor({ state: "visible", timeout });
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    if (overflow > 20) addFinding("mobile_horizontal_overflow", "/", `horizontal overflow ${overflow}px at 390px viewport`);
+    await page.screenshot({ path: path.join(outDir, "root-mobile.png"), fullPage: true });
+  } catch (error) {
+    addFinding("mobile_scenario_failure", "/", String(error).slice(0, 1600));
+  }
+  if (entry.console_errors.length) addFinding("mobile_console_error", "/", entry.console_errors.join(" | ").slice(0, 1600));
+  if (entry.page_errors.length) addFinding("mobile_page_error", "/", entry.page_errors.join(" | ").slice(0, 1600));
+  if (entry.server_errors.length) addFinding("mobile_server_5xx", "/", JSON.stringify(entry.server_errors).slice(0, 1600));
+  await page.close();
+}
 
 report.finished_at = new Date().toISOString();
 await fs.writeFile(path.join(outDir, "synthetic-user-report.json"), JSON.stringify(report, null, 2) + "\n", "utf8");
