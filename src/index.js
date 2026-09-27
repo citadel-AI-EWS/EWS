@@ -40,7 +40,7 @@ const LATEST_NODE_RELEASE = Object.freeze({
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "ba883f3422881c9fca01880b774e20de3e5001412f3c7a5fd1bb19aa65152fb3"
+      sha256: "7ad09c3b0d70f7397100b52819a92da6c6920d87adf624c4be6999bf01ad5d81"
     },
     {
       path: "citadel_node_v2.py",
