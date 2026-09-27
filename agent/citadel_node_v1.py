@@ -1655,8 +1655,11 @@ class Agent:
             self.run_lms(["daemon", "up"], timeout=120)
             try:
                 self.run_lms(["server", "start", "--port", "1234"], timeout=120)
-            except Exception:
-                pass
+            except Exception as error:
+                self.log.write(
+                    "lmstudio_server_start_warning",
+                    error=local_error_code(error),
+                )
             deadline = time.monotonic() + 60
             while True:
                 snapshot = self.probe_lmstudio()
