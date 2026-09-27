@@ -147,6 +147,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python agent/citadel_node_v2.py self-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/lmstudio-local-protocol.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Validate Windows Enterprise Probe and legacy-upgrade bootstrap
         shell: pwsh
         run: |
