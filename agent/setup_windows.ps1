@@ -159,8 +159,7 @@ function Get-BundledRuntimeSource {
   }
   $RuntimeRoot = Join-Path $SourceRoot ("python_runtime\" + $RuntimeName)
   $RuntimePython = Join-Path $RuntimeRoot "python.exe"
-  $RuntimePythonw = Join-Path $RuntimeRoot "pythonw.exe"
-  if (-not (Test-Path -LiteralPath $RuntimePython) -or -not (Test-Path -LiteralPath $RuntimePythonw)) {
+  if (-not (Test-Path -LiteralPath $RuntimePython)) {
     throw "Bundled Python runtime is missing for $RuntimeName."
   }
   return $RuntimeRoot
@@ -204,7 +203,7 @@ function Assert-BundledRuntimeManifest {
     $Seen[$Relative.ToLowerInvariant()] = $true
   }
 
-  foreach ($Required in @("python.exe", "pythonw.exe", "CITADEL_RUNTIME.json")) {
+  foreach ($Required in @("python.exe", "CITADEL_RUNTIME.json")) {
     if (-not $Seen.ContainsKey($Required.ToLowerInvariant())) {
       throw "Bundled runtime manifest does not cover required file: $Required"
     }
