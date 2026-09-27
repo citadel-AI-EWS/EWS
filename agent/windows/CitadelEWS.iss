@@ -230,7 +230,7 @@ end;
 procedure InstallFallbackTask;
 var
   SchTasks, Sc, HostExe, TaskXml, TaskXmlPath: string;
-  TaskLines: TArrayOfString;
+  FileSystem, XmlFile: Variant;
 begin
   StopExistingService;
   Sc := ExpandConstant('{sys}\sc.exe');
@@ -243,7 +243,7 @@ begin
   { Explicit settings avoid the Scheduler defaults (72-hour limit and AC only).
     LocalService matches the preferred service account and existing directory ACLs. }
   TaskXml :=
-    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<?xml version="1.0" encoding="UTF-16"?>' +
     '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">' +
     '<Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>' +
     '<Principals><Principal id="Agent"><UserId>S-1-5-19</UserId>' +
@@ -258,10 +258,14 @@ begin
     '</Command><Arguments>--task-host</Arguments><WorkingDirectory>' +
     XmlEscape(ExpandConstant('{app}')) +
     '</WorkingDirectory></Exec></Actions></Task>';
-  SetArrayLength(TaskLines, 1);
-  TaskLines[0] := TaskXml;
-  if not SaveStringsToUTF8File(TaskXmlPath, TaskLines, False) then
-    RaiseException('Unable to write CITADEL fallback task definition.');
+  { SchTasks consumes a Unicode XML file; FSO writes UTF-16LE with a BOM. }
+  FileSystem := CreateOleObject('Scripting.FileSystemObject');
+  XmlFile := FileSystem.CreateTextFile(TaskXmlPath, True, True);
+  try
+    XmlFile.Write(TaskXml);
+  finally
+    XmlFile.Close;
+  end;
 
   DeleteFallbackTask;
   try
