@@ -96,6 +96,23 @@ jobs:
           ./scripts/build_windows_oneclick.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Seed legacy user-mode lifecycle for migration test
+        shell: pwsh
+        run: |
+          $legacyRoot = Join-Path $env:LOCALAPPDATA "CitadelEWS\agent\legacy-ci"
+          $legacyState = Join-Path $env:LOCALAPPDATA "CitadelEWS\state"
+          $startupDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup"
+          $startup = Join-Path $startupDir "CITADEL EWS Agent.cmd"
+          New-Item -ItemType Directory -Force -Path $legacyRoot, $legacyState, $startupDir | Out-Null
+          $legacyAgent = Join-Path $legacyRoot "citadel_node_v2.py"
+          Set-Content -LiteralPath $legacyAgent -Encoding UTF8 -Value "import time; time.sleep(600)"
+          Set-Content -LiteralPath $startup -Encoding ASCII -Value "@echo off"
+          $legacy = Start-Process -FilePath python -ArgumentList @($legacyAgent) -PassThru
+          Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP "citadel-legacy-pid.txt") -Value $legacy.Id -Encoding ASCII
+          Start-Sleep -Seconds 1
+          if ($legacy.HasExited) { throw "Legacy fixture process did not stay alive." }
+          Write-Host "Legacy user-mode fixture PID $($legacy.Id)"
+
       - name: Silent install smoke test
         shell: pwsh
         run: |
@@ -153,7 +170,19 @@ jobs:
           $mode = (Get-Content -LiteralPath (Join-Path $stateRoot "install-mode.txt") -Raw).Trim()
           if ($mode -ne "windows_service") { throw "Installer did not record Windows Service mode." }
 
-          Write-Host "Windows one-click silent installation: PASS"
+          $startup = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup\CITADEL EWS Agent.cmd"
+          if (Test-Path -LiteralPath $startup) { throw "Legacy Startup command survived machine cutover." }
+          if (Test-Path -LiteralPath (Join-Path $stateRoot "SERVICE_HOLD")) { throw "Cutover HOLD marker survived successful install." }
+          if (Test-Path -LiteralPath (Join-Path $stateRoot "legacy-cutover.json")) { throw "Legacy cutover marker survived successful install." }
+          $legacyPidPath = Join-Path $env:RUNNER_TEMP "citadel-legacy-pid.txt"
+          if (Test-Path -LiteralPath $legacyPidPath) {
+            $legacyPid = [int](Get-Content -LiteralPath $legacyPidPath -Raw).Trim()
+            if (Get-Process -Id $legacyPid -ErrorAction SilentlyContinue) {
+              throw "Legacy user-mode agent process survived machine cutover."
+            }
+          }
+
+          Write-Host "Windows one-click silent installation + legacy cutover: PASS"
 
       - name: Uninstall smoke test
         if: always()
@@ -170,6 +199,12 @@ jobs:
           }
           if (Get-Service -Name CitadelEWSNode -ErrorAction SilentlyContinue) {
             throw "CITADEL service remained registered after uninstall."
+          }
+          $startupDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup"
+          foreach ($name in @("CITADEL EWS Agent.cmd", "CITADEL EWS Agent.lnk")) {
+            if (Test-Path -LiteralPath (Join-Path $startupDir $name)) {
+              throw "Legacy Startup artifact survived uninstall: $name"
+            }
           }
 
       - name: Forced fallback install smoke test
