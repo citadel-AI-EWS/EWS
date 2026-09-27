@@ -303,12 +303,12 @@ def windows_install_update_paths() -> tuple[Path, Path]:
     """Return the canonical protected machine-wide lock and crash-marker paths.
 
     This path is intentionally independent from config.data_dir. Every supported
-    Windows installer provisions the same ACL-protected machine lifecycle root.
+    Windows installer provisions the same dedicated ACL-protected machine lifecycle root.
     """
     program_data = os.environ.get("PROGRAMDATA") or os.environ.get("ALLUSERSPROFILE")
     if not program_data:
         raise RuntimeError("install_update_lock_root_unavailable")
-    state_root = Path(program_data) / "CitadelEWS" / "state"
+    state_root = Path(program_data) / "CitadelEWS" / "lifecycle"
     return (
         state_root / "install-update.lock",
         state_root / "install-update-active.json",
