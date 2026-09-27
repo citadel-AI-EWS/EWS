@@ -442,7 +442,7 @@ begin
     except
       if LegacyCutoverActive then
         AbortLegacyMigrationLifecycle;
-      raise;
+      RaiseException('CITADEL post-install lifecycle cutover failed.');
     end;
   end;
 end;
