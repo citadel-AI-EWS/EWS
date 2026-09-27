@@ -809,13 +809,43 @@ function schedulingFromChecks(checksJson) {
   };
 }
 
-function targetProjectWork(taskText, requestedRoles, executionMode, desiredWorkers) {
+function targetProjectWork(taskText, requestedRoles, executionMode, desiredWorkers, targetMode = "auto") {
   const sourceText = String(taskText || "").trim();
+  const target = Number.isInteger(desiredWorkers)
+    ? Math.max(1, Math.min(50, desiredWorkers))
+    : null;
+
+  // Fixed/all means host fanout: every selected host receives the complete
+  // original task. Never slice a long prompt and silently drop its tail.
+  if (target !== null && targetMode !== "auto") {
+    const profile = executionMode === "python"
+      ? { suggested_roles: ["programmer"] }
+      : projectWorkerProfile(sourceText, requestedRoles);
+    const rolePool = [...new Set([
+      ...requestedRoles,
+      ...(profile.suggested_roles || []),
+      executionMode === "python" ? "programmer" : classifyWorkRole(sourceText),
+      "verifier",
+      "reporter"
+    ].filter(Boolean))];
+    return Array.from({ length: target }, (_, index) => {
+      const roleName = rolePool[index % Math.max(1, rolePool.length)] || "planner";
+      const task = target === 1
+        ? sourceText
+        : "Act as an independent CITADEL worker in a multi-host run. Analyze the complete original task from your assigned role, avoid generic duplication, and return evidence, reasoning, edge cases or a concrete solution that improves the final synthesis.\n\nWorker " + (index + 1) + " of " + target + " · role: " + roleName + "\n\nOriginal task:\n" + sourceText;
+      return {
+        sequence_no: index + 1,
+        role_name: roleName,
+        task_text: task,
+        role_source: requestedRoles.includes(roleName) ? "architect_added" : "hub_recommended"
+      };
+    });
+  }
+
   let items = executionMode === "python"
     ? [{ sequence_no: 1, role_name: "programmer", task_text: sourceText, role_source: "hub_recommended" }]
     : planProjectWork(sourceText, requestedRoles);
-  if (!Number.isInteger(desiredWorkers)) return items;
-  const target = Math.max(1, Math.min(50, desiredWorkers));
+  if (target === null) return items;
   if (items.length > target) items = items.slice(0, target);
   const roles = items.map((item) => item.role_name).filter(Boolean);
   const fallbackRoles = roles.length ? roles : (executionMode === "python" ? ["programmer"] : ["planner"]);
@@ -1420,7 +1450,10 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
       SELECT w.work_item_id, w.project_id, w.sequence_no, w.role_name, w.task_text,
         w.node_id AS preferred_node_id, p.title AS project_title, p.source_type, p.checks_json,
         (SELECT COUNT(*) FROM project_work_items AS owned
-          WHERE owned.project_id = w.project_id AND owned.node_id = ?) AS node_project_work_count
+          WHERE owned.project_id = w.project_id
+            AND owned.node_id = ?
+            AND owned.work_item_id != w.work_item_id
+            AND owned.status != 'cancelled') AS node_project_work_count
       FROM project_work_items AS w
       JOIN architect_projects AS p ON p.project_id = w.project_id
       WHERE w.status = 'planned'
@@ -1432,7 +1465,7 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
         )
       ORDER BY CASE WHEN w.node_id = ? THEN 0 WHEN w.node_id IS NULL THEN 1 ELSE 2 END,
         datetime(p.created_at) ASC, w.sequence_no ASC
-      LIMIT 32
+      LIMIT 64
     `).bind(nodeId, projectId, projectId, canRunPython ? 1 : 0, canRunAi ? 1 : 0, nodeId).all(),
     env.DB.prepare(`
       SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
@@ -1452,7 +1485,7 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
     if (scheduling.target_mode !== "auto" && scheduling.desired_workers) {
       const readyDistinct = [...readyNodes.values()].filter((candidate) => projectNodeReady(candidate, work.source_type)).length;
       if (readyDistinct < scheduling.desired_workers) return false;
-      if (Number(work.node_project_work_count || 0) > 0 && work.preferred_node_id !== nodeId) return false;
+      if (Number(work.node_project_work_count || 0) > 0) return false;
     }
     const preferred = work.preferred_node_id ? readyNodes.get(work.preferred_node_id) : null;
     return !work.preferred_node_id || work.preferred_node_id === nodeId || !projectNodeReady(preferred, work.source_type);
@@ -1478,7 +1511,20 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
         UPDATE project_work_items
         SET node_id = ?, status = 'assigned', updated_at = CURRENT_TIMESTAMP
         WHERE work_item_id = ? AND status = 'planned'
-      `).bind(nodeId, work.work_item_id),
+          AND (
+            COALESCE(json_extract((
+              SELECT p.checks_json FROM architect_projects AS p
+              WHERE p.project_id = project_work_items.project_id
+            ), '$.scheduling.target_mode'), 'auto') = 'auto'
+            OR NOT EXISTS (
+              SELECT 1 FROM project_work_items AS own
+              WHERE own.project_id = project_work_items.project_id
+                AND own.node_id = ?
+                AND own.work_item_id != project_work_items.work_item_id
+                AND own.status != 'cancelled'
+            )
+          )
+      `).bind(nodeId, work.work_item_id, nodeId),
       env.DB.prepare(`
         INSERT OR IGNORE INTO missions (
           mission_id, title, role_name, mission_type, payload_json,
@@ -1639,7 +1685,13 @@ async function architectCheckProject(request, env) {
     : planProjectWork(taskText);
   const autoDesiredWorkers = executionMode === "python" ? 1 : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers;
   const previewDesiredWorkers = workerTarget.mode === "fixed" ? workerTarget.count : autoDesiredWorkers;
-  const plannedWork = targetProjectWork(taskText, effectiveRequestedRoles, executionMode, workerTarget.mode === "all" ? null : previewDesiredWorkers);
+  const plannedWork = targetProjectWork(
+    taskText,
+    effectiveRequestedRoles,
+    executionMode,
+    workerTarget.mode === "all" ? null : previewDesiredWorkers,
+    workerTarget.mode
+  );
   const recommendedRolePlan = rolePlanSummary(recommendedWork);
   const selectedRolePlan = rolePlanSummary(plannedWork);
   return json({
@@ -1708,7 +1760,7 @@ async function architectCreateProject(request, env) {
     : workerTarget.mode === "all"
       ? Math.max(1, Math.min(50, nodes.length))
       : autoDesiredWorkers;
-  const plannedWork = targetProjectWork(taskText, effectiveRequestedRoles, executionMode, desiredWorkers);
+  const plannedWork = targetProjectWork(taskText, effectiveRequestedRoles, executionMode, desiredWorkers, workerTarget.mode);
   const workerCount = Math.min(nodes.length, desiredWorkers);
   const projectId = "project_" + crypto.randomUUID();
   const checksJson = JSON.stringify({
@@ -5647,6 +5699,7 @@ export {
   classifyWorkRole,
   projectWorkerProfile,
   planProjectWork,
+  targetProjectWork,
   projectFinalText
 };
 
