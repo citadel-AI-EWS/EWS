@@ -299,6 +299,62 @@ def _local_file_lock(path: Path) -> threading.RLock:
         return lock
 
 
+WINDOWS_INSTALL_UPDATE_MUTEX_NAME = r"Global\CitadelEWSInstallUpdateLock"
+
+
+@contextlib.contextmanager
+def install_update_mutex(timeout_seconds: float = 30.0):
+    """Serialize Windows installer/update/rollback operations machine-wide.
+
+    A Windows named mutex is used instead of a lock file so the kernel releases
+    ownership automatically if the owning process crashes. If the previous
+    owner died while holding the mutex, remote update fails closed; a full
+    installer rerun is the repair authority for that case.
+    """
+    if os.name != "nt":
+        yield
+        return
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_mutex = kernel32.CreateMutexW
+    create_mutex.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
+    create_mutex.restype = ctypes.c_void_p
+    wait_for_single_object = kernel32.WaitForSingleObject
+    wait_for_single_object.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    wait_for_single_object.restype = ctypes.c_uint32
+    release_mutex = kernel32.ReleaseMutex
+    release_mutex.argtypes = [ctypes.c_void_p]
+    release_mutex.restype = ctypes.c_bool
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [ctypes.c_void_p]
+    close_handle.restype = ctypes.c_bool
+
+    handle = create_mutex(None, False, WINDOWS_INSTALL_UPDATE_MUTEX_NAME)
+    if not handle:
+        raise RuntimeError("install_update_lock_unavailable")
+
+    wait_object_0 = 0x00000000
+    wait_abandoned = 0x00000080
+    wait_timeout = 0x00000102
+    timeout_ms = max(0, min(0xFFFFFFFE, int(float(timeout_seconds) * 1000)))
+    acquired = False
+    try:
+        result = wait_for_single_object(handle, timeout_ms)
+        if result == wait_abandoned:
+            raise RuntimeError("install_update_lock_abandoned")
+        if result == wait_timeout:
+            raise RuntimeError("install_update_lock_busy")
+        if result != wait_object_0:
+            raise RuntimeError("install_update_lock_failed")
+        acquired = True
+        yield
+    finally:
+        if acquired:
+            with contextlib.suppress(Exception):
+                release_mutex(handle)
+        close_handle(handle)
+
+
 @contextlib.contextmanager
 def exclusive_file_lock(path: Path, timeout_seconds: float = 120.0):
     """Cross-process advisory lock using only Python stdlib primitives."""
@@ -2463,6 +2519,10 @@ class Agent:
             connection.close()
 
     def apply_update(self, payload: dict[str, Any]) -> None:
+        with install_update_mutex(timeout_seconds=30):
+            return self._apply_update_locked(payload)
+
+    def _apply_update_locked(self, payload: dict[str, Any]) -> None:
         if not self.validate_update_payload(payload):
             raise RuntimeError("invalid update payload")
         install_root = Path(__file__).resolve().parent
@@ -2550,6 +2610,10 @@ class Agent:
             shutil.rmtree(staging, ignore_errors=True)
 
     def rollback_last_update(self) -> None:
+        with install_update_mutex(timeout_seconds=30):
+            return self._rollback_last_update_locked()
+
+    def _rollback_last_update_locked(self) -> None:
         install_root = Path(__file__).resolve().parent
         backup = self.config.data_dir / "update-backup"
         missing_core = [name for name in CORE_UPDATE_FILE_NAMES if not (backup / name).is_file()]
