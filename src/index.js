@@ -1283,21 +1283,33 @@ function projectFinalText(sections) {
 function planProjectWork(text, requestedRoles = [], requestedWorkers = null) {
   const sourceText = String(text || "").trim();
   const profile = projectWorkerProfile(sourceText, requestedRoles, requestedWorkers);
-  const blocks = splitProjectText(sourceText);
-  const items = blocks.map((taskText, index) => ({
-    sequence_no: index + 1,
-    role_name: blocks.length === 1 && index === 0
-      ? (profile.suggested_roles[0] || classifyWorkRole(taskText))
-      : classifyWorkRole(taskText),
-    task_text: taskText,
-    role_source: "hub_recommended"
-  }));
+  const target = profile.desired_workers;
+  const blocks = splitProjectText(sourceText).slice(0, target);
+  const suggested = profile.suggested_roles.length ? profile.suggested_roles : [classifyWorkRole(sourceText)];
+  const items = [];
 
-  const usedRoles = new Set(items.map((item) => item.role_name));
-  const roleQueue = [...profile.suggested_roles, ...requestedRoles];
-  for (const roleName of roleQueue) {
-    if (items.length >= profile.desired_workers && requestedRoles.every((role) => usedRoles.has(role))) break;
-    if (usedRoles.has(roleName)) continue;
+  for (let index = 0; index < target; index += 1) {
+    const taskText = blocks[index] || sourceText;
+    const roleName = suggested[index % suggested.length] || classifyWorkRole(taskText) || "planner";
+    items.push({
+      sequence_no: index + 1,
+      role_name: roleName,
+      task_text: blocks[index]
+        ? taskText
+        : `Provide an independent ${roleName} analysis of the original task.\n\nOriginal task:\n${sourceText}`,
+      role_source: "hub_recommended"
+    });
+  }
+
+  const explicitRoles = [...new Set(requestedRoles)].slice(0, target);
+  for (let index = 0; index < explicitRoles.length; index += 1) {
+    const roleName = explicitRoles[index];
+    const existing = items.findIndex((item) => item.role_name === roleName);
+    if (existing >= 0) {
+      items[existing] = { ...items[existing], role_source: "architect_added" };
+      continue;
+    }
+    const slot = Math.max(0, target - explicitRoles.length + index);
     const prefix = roleName === "verifier"
       ? "Independently verify the reasoning and identify any errors or unsupported claims."
       : roleName === "researcher"
@@ -1305,28 +1317,16 @@ function planProjectWork(text, requestedRoles = [], requestedWorkers = null) {
         : roleName === "reporter"
           ? "Produce a concise synthesis suitable for the final project report."
           : `Analyze this task from the ${roleName} specialization.`;
-    items.push({
-      sequence_no: items.length + 1,
+    items[slot] = {
+      sequence_no: slot + 1,
       role_name: roleName,
       task_text: `${prefix}\n\nOriginal task:\n${sourceText}`,
-      role_source: requestedRoles.includes(roleName) ? "architect_added" : "hub_recommended"
-    });
-    usedRoles.add(roleName);
-  }
-
-  while (items.length < profile.desired_workers) {
-    const roleName = profile.suggested_roles[items.length % Math.max(1, profile.suggested_roles.length)] || "planner";
-    items.push({
-      sequence_no: items.length + 1,
-      role_name: roleName,
-      task_text: `Provide an independent ${roleName} analysis of the original task.\n\nOriginal task:\n${sourceText}`,
-      role_source: "hub_recommended"
-    });
+      role_source: "architect_added"
+    };
   }
 
   return items.map((item, index) => ({ ...item, sequence_no: index + 1 }));
 }
-
 function projectMissionId(workItemId) {
   return "mission_" + workItemId;
 }
@@ -1383,6 +1383,7 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
           SELECT COUNT(*) FROM project_work_items AS own
           WHERE own.project_id = w.project_id
             AND own.node_id = ?
+            AND own.work_item_id != w.work_item_id
             AND own.status != 'cancelled'
         ) AS node_project_work_count
       FROM project_work_items AS w
@@ -1439,7 +1440,20 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
         UPDATE project_work_items
         SET node_id = ?, status = 'assigned', updated_at = CURRENT_TIMESTAMP
         WHERE work_item_id = ? AND status = 'planned'
-      `).bind(nodeId, work.work_item_id),
+          AND (
+            CAST(json_extract((
+              SELECT p.checks_json FROM architect_projects AS p
+              WHERE p.project_id = project_work_items.project_id
+            ), '$.execution_request.requested_workers') AS INTEGER) IS NULL
+            OR NOT EXISTS (
+              SELECT 1 FROM project_work_items AS own
+              WHERE own.project_id = project_work_items.project_id
+                AND own.node_id = ?
+                AND own.work_item_id != project_work_items.work_item_id
+                AND own.status != 'cancelled'
+            )
+          )
+      `).bind(nodeId, work.work_item_id, nodeId),
       env.DB.prepare(`
         INSERT OR IGNORE INTO missions (
           mission_id, title, role_name, mission_type, payload_json,
