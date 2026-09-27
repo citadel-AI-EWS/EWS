@@ -50,6 +50,7 @@ if ($LASTEXITCODE -ne 0) { throw "Unable to freeze Windows agent dependencies." 
 foreach ($Name in @("citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1")) {
   Copy-Item -LiteralPath (Join-Path $RepoRoot "agent\$Name") -Destination (Join-Path $Payload $Name) -Force
 }
+Copy-Item -LiteralPath (Join-Path $RepoRoot "agent\windows\legacy_cutover.py") -Destination (Join-Path $Payload "windows_legacy_cutover.py") -Force
 New-Item -ItemType Directory -Force -Path (Join-Path $Payload "lmstudio") | Out-Null
 Copy-Item -LiteralPath (Join-Path $RepoRoot "agent\lmstudio\install_llmstudio_headless.ps1") -Destination (Join-Path $Payload "lmstudio\install_llmstudio_headless.ps1") -Force
 
@@ -78,6 +79,8 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "Bundled agent self-test failed." }
   & $RuntimePython (Join-Path $Payload "citadel_node_v2.py") doctor --config $ConfigProbe
   if ($LASTEXITCODE -ne 0) { throw "Bundled agent doctor failed." }
+  & $RuntimePython (Join-Path $Payload "windows_legacy_cutover.py") self-test
+  if ($LASTEXITCODE -ne 0) { throw "Legacy cutover helper self-test failed." }
 } finally {
   $env:PYTHONHOME = $OldPythonHome
 }
