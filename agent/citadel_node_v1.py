@@ -49,7 +49,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.20"
+VERSION = "0.3.21"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -297,6 +297,105 @@ def _local_file_lock(path: Path) -> threading.RLock:
             lock = threading.RLock()
             _LMSTUDIO_LOCAL_LOCKS[key] = lock
         return lock
+
+
+def windows_install_update_paths() -> tuple[Path, Path]:
+    """Return the protected machine-wide lock and crash-marker paths."""
+    program_data = os.environ.get("PROGRAMDATA") or os.environ.get("ALLUSERSPROFILE")
+    if not program_data:
+        raise RuntimeError("install_update_lock_root_unavailable")
+    state_root = Path(program_data) / "CitadelEWS" / "state"
+    return (
+        state_root / "install-update.lock",
+        state_root / "install-update-active.json",
+    )
+
+
+@contextlib.contextmanager
+def install_update_mutex(timeout_seconds: float = 30.0):
+    """Serialize Windows installer/update/rollback operations machine-wide.
+
+    The lock is an exclusive Win32 file handle under the ACL-protected machine
+    state directory. A crash marker is written only after ownership is acquired.
+    If an updater dies after that point, the marker survives while the kernel
+    closes the file handle; subsequent remote updates fail closed until a full
+    installer performs repair.
+    """
+    if os.name != "nt":
+        yield
+        return
+
+    lock_path, marker_path = windows_install_update_paths()
+    if not lock_path.parent.is_dir():
+        raise RuntimeError("install_update_lock_root_unavailable")
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+    ]
+    create_file.restype = ctypes.c_void_p
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [ctypes.c_void_p]
+    close_handle.restype = ctypes.c_bool
+
+    generic_read = 0x80000000
+    generic_write = 0x40000000
+    open_always = 4
+    file_attribute_hidden = 0x00000002
+    invalid_handle_value = ctypes.c_void_p(-1).value
+    retryable_errors = {32, 33}  # sharing / lock violation
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    handle = None
+
+    while True:
+        ctypes.set_last_error(0)
+        candidate = create_file(
+            str(lock_path),
+            generic_read | generic_write,
+            0,  # no sharing: exactly one lifecycle writer machine-wide
+            None,
+            open_always,
+            file_attribute_hidden,
+            None,
+        )
+        if candidate not in (None, 0, invalid_handle_value):
+            handle = candidate
+            break
+
+        error = ctypes.get_last_error()
+        if error not in retryable_errors:
+            raise RuntimeError("install_update_lock_unavailable")
+        if time.monotonic() >= deadline:
+            raise RuntimeError("install_update_lock_busy")
+        time.sleep(0.1)
+
+    marker_written = False
+    try:
+        if marker_path.exists():
+            raise RuntimeError("install_update_lock_abandoned")
+
+        marker = {
+            "schema": "citadel.install-update-lock.v1",
+            "pid": os.getpid(),
+            "version": VERSION,
+            "started_at": now_iso(),
+        }
+        atomic_write(marker_path, json.dumps(marker, sort_keys=True) + "\n")
+        marker_written = True
+        yield
+    finally:
+        if marker_written:
+            with contextlib.suppress(FileNotFoundError):
+                marker_path.unlink()
+        if handle not in (None, 0, invalid_handle_value):
+            close_handle(handle)
 
 
 @contextlib.contextmanager
@@ -2463,6 +2562,10 @@ class Agent:
             connection.close()
 
     def apply_update(self, payload: dict[str, Any]) -> None:
+        with install_update_mutex(timeout_seconds=30):
+            return self._apply_update_locked(payload)
+
+    def _apply_update_locked(self, payload: dict[str, Any]) -> None:
         if not self.validate_update_payload(payload):
             raise RuntimeError("invalid update payload")
         install_root = Path(__file__).resolve().parent
@@ -2550,6 +2653,10 @@ class Agent:
             shutil.rmtree(staging, ignore_errors=True)
 
     def rollback_last_update(self) -> None:
+        with install_update_mutex(timeout_seconds=30):
+            return self._rollback_last_update_locked()
+
+    def _rollback_last_update_locked(self) -> None:
         install_root = Path(__file__).resolve().parent
         backup = self.config.data_dir / "update-backup"
         missing_core = [name for name in CORE_UPDATE_FILE_NAMES if not (backup / name).is_file()]
