@@ -253,7 +253,7 @@ begin
     '<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>' +
     '<StartWhenAvailable>true</StartWhenAvailable>' +
     '<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>' +
-    '<RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>' +
+    '<RestartOnFailure><Interval>PT1M</Interval><Count>255</Count></RestartOnFailure>' +
     '</Settings><Actions Context="Agent"><Exec><Command>' + XmlEscape(HostExe) +
     '</Command><Arguments>--task-host</Arguments><WorkingDirectory>' +
     XmlEscape(ExpandConstant('{app}')) +

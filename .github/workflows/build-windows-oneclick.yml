@@ -227,7 +227,7 @@ jobs:
               $settings.StopIfGoingOnBatteries -ne "false" -or
               $settings.StartWhenAvailable -ne "true" -or
               $settings.RestartOnFailure.Interval -ne "PT1M" -or
-              [int]$settings.RestartOnFailure.Count -ne 999 -or
+              [int]$settings.RestartOnFailure.Count -ne 255 -or
               $settings.MultipleInstancesPolicy -ne "IgnoreNew") {
             throw "Fallback task persistence/recovery settings differ from the required contract."
           }
