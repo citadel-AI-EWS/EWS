@@ -207,6 +207,69 @@ function Quote-CitadelServiceArg {
   return '"' + $Value + '"'
 }
 
+function Enter-CitadelLifecycleLock {
+  Set-CitadelDirectoryAcl -Path $StateRoot
+  $LockPath = Join-Path $StateRoot "install-update.lock"
+  $MarkerPath = Join-Path $StateRoot "install-update-active.json"
+  $Deadline = [DateTime]::UtcNow.AddSeconds(30)
+  $Stream = $null
+
+  do {
+    try {
+      $Stream = [System.IO.FileStream]::new(
+        $LockPath,
+        [System.IO.FileMode]::OpenOrCreate,
+        [System.IO.FileAccess]::ReadWrite,
+        [System.IO.FileShare]::None
+      )
+      break
+    } catch [System.IO.IOException] {
+      if ([DateTime]::UtcNow -ge $Deadline) {
+        throw "CITADEL install/update lock is busy; another lifecycle writer is active."
+      }
+      Start-Sleep -Milliseconds 100
+    }
+  } while ($true)
+
+  try {
+    if (Test-Path -LiteralPath $MarkerPath) {
+      Write-Warning "[CITADEL] Abandoned lifecycle marker found. setup_windows.ps1 is acting as repair authority."
+      Remove-Item -LiteralPath $MarkerPath -Force
+    }
+    $Marker = @{
+      schema = "citadel.install-update-lock.v1"
+      owner = "setup_windows.ps1"
+      pid = $PID
+      version = $ReleaseVersion
+      started_at = [DateTime]::UtcNow.ToString("o")
+    } | ConvertTo-Json -Compress
+    [System.IO.File]::WriteAllText($MarkerPath, $Marker + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
+    return $Stream
+  } catch {
+    if ($null -ne $Stream) { $Stream.Dispose() }
+    throw
+  }
+}
+
+function Exit-CitadelLifecycleLock {
+  param(
+    [Parameter(Mandatory = $true)][System.IO.FileStream]$Stream,
+    [Parameter(Mandatory = $true)][bool]$CleanExit
+  )
+  $MarkerPath = Join-Path $StateRoot "install-update-active.json"
+  try {
+    if ($CleanExit -and (Test-Path -LiteralPath $MarkerPath)) {
+      Remove-Item -LiteralPath $MarkerPath -Force
+    }
+  } finally {
+    $Stream.Dispose()
+  }
+}
+
+$LifecycleLock = Enter-CitadelLifecycleLock
+$LifecycleCleanExit = $false
+try {
+
 if ($Uninstall) {
   Stop-CitadelServiceIfPresent
   Remove-CitadelServiceDefinition -Name $ServiceName
@@ -228,6 +291,7 @@ if ($Uninstall) {
   }
   Write-Host "[CITADEL] Windows Core Service uninstalled."
   if ($PreserveState) { Write-Host "[CITADEL] Node state was preserved by explicit request." }
+  $LifecycleCleanExit = $true
   exit 0
 }
 
@@ -599,3 +663,7 @@ Write-Host "[CITADEL] Release: $ReleaseRoot"
 Write-Host "[CITADEL] Windows service: $ServiceName / LocalService / Automatic (Delayed Start)"
 Write-Host "[CITADEL] SCM process and managed Python child were verified after cutover."
 Write-Host "[CITADEL] Re-running this installer stages and verifies a new release before touching the running lifecycle."
+$LifecycleCleanExit = $true
+} finally {
+  Exit-CitadelLifecycleLock -Stream $LifecycleLock -CleanExit $LifecycleCleanExit
+}
