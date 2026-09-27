@@ -341,6 +341,7 @@ def install_update_mutex(timeout_seconds: float = 30.0):
     try:
         result = wait_for_single_object(handle, timeout_ms)
         if result == wait_abandoned:
+            acquired = True
             raise RuntimeError("install_update_lock_abandoned")
         if result == wait_timeout:
             raise RuntimeError("install_update_lock_busy")
