@@ -10,6 +10,7 @@ import citadel_node_v1 as node
 with tempfile.TemporaryDirectory() as temp:
     agent=node.Agent(node.AgentConfig('https://example.invalid',Path(temp)))
     agent.save_lmstudio_state(loaded_model='test/model')
+    agent.ensure_lmstudio_ready=lambda require_model=False:{'installed':True,'server_running':True,'loaded_model':'test/model'}
     calls=[]
     def answer(*args,**kwargs):
         calls.append(kwargs)
