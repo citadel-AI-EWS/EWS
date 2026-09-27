@@ -160,7 +160,7 @@ def main() -> int:
         ])
         reload_agent.probe_lmstudio = lambda: next(reload_states)
         reload_payloads: list[dict[str, object]] = []
-        reload_agent.load_lmstudio_model = lambda payload: reload_payloads.append(dict(payload))
+        reload_agent._load_lmstudio_model_unlocked = lambda payload: reload_payloads.append(dict(payload))
         assert reload_agent.ensure_lmstudio_ready_for_inference() == "test/model"
         assert reload_payloads == [{
             "model": "test/model",
