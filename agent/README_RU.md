@@ -1,5 +1,12 @@
 # CITADEL/EWS Python Node v1
 
+## v0.3.19 — LM Studio live READY и self-heal
+
+- Перед AI-проектом агент проверяет реальное состояние LM Studio, а не только сохранённый state.
+- Если daemon/server остановлен, агент пытается безопасно поднять его и подтверждает live status на localhost:1234.
+- После загрузки модели выполняется короткий локальный inference-probe; READY выставляется только после реального ответа модели.
+- Ошибки LM Studio отражаются в AI state как failed с конкретным error code.
+
 ## v0.3.18 — always-on и приоритетное восстановление сети
 
 - Сохраняет возможности 0.3.17, включая измеренный token usage LM Studio.
