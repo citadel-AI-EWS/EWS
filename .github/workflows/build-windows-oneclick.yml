@@ -112,7 +112,7 @@ jobs:
             "/LOG=$log"
           ) -Wait -PassThru
           if ($process.ExitCode -ne 0) {
-            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log }
+            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 100 }
             throw "Silent installer failed with exit code $($process.ExitCode)."
           }
 
@@ -189,7 +189,7 @@ jobs:
             "/LOG=$log"
           ) -Wait -PassThru
           if ($p.ExitCode -ne 0) {
-            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log }
+            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 100 }
             throw "Fallback installer failed with exit code $($p.ExitCode)."
           }
           if (Get-Service -Name CitadelEWSNode -ErrorAction SilentlyContinue) {
@@ -197,7 +197,7 @@ jobs:
           }
           schtasks.exe /Query /TN "CitadelEWSNodeFallback" | Out-Null
           if ($LASTEXITCODE -ne 0) {
-            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log }
+            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 100 }
             throw "Fallback startup task was not registered."
           }
           $modePath = Join-Path $env:ProgramData "CitadelEWS\state\install-mode.txt"

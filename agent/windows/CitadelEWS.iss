@@ -52,6 +52,9 @@ const
   DefaultControllerUrl = 'https://citadel-ai.init1.workers.dev';
   ControllerPublicX = 'erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0';
 
+var
+  StartupConfigured: Boolean;
+
 function JsonEscape(Value: string): string;
 begin
   StringChangeEx(Value, '\', '\\', True);
@@ -63,7 +66,7 @@ procedure RequireExec(FileName, Params, ErrorText: string);
 var
   ResultCode: Integer;
 begin
-  if not Exec(FileName, Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  if not ExecAndLogOutput(FileName, Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode, nil) then
     RaiseException(ErrorText + ' (unable to start)');
   if ResultCode <> 0 then
     RaiseException(ErrorText + ' (exit code ' + IntToStr(ResultCode) + ')');
@@ -264,7 +267,7 @@ begin
   try
     RequireExec(
       SchTasks,
-      '/Create /TN "{#FallbackTaskName}" /XML "' + TaskXmlPath + '" /F',
+      '/Create /TN "{#FallbackTaskName}" /XML "' + TaskXmlPath + '" /RU "NT AUTHORITY\LOCALSERVICE" /F',
       'Unable to register CITADEL fallback startup task'
     );
   finally
@@ -294,7 +297,14 @@ begin
       Log('CITADEL Windows Service path unavailable; switching to bounded LocalService boot-task fallback.');
       InstallFallbackTask;
     end;
+    StartupConfigured := True;
   end;
+end;
+
+function GetCustomSetupExitCode: Integer;
+begin
+  { ssPostInstall exceptions alone can otherwise leave a false success code. }
+  if StartupConfigured then Result := 0 else Result := 1;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
