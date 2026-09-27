@@ -20,3 +20,15 @@ for(const requested of explicitWorkerCounts){
  assert.equal(profile.desired_workers,requested,`requested worker profile mismatch for ${requested}`);
  assert.equal(plan.length,requested,`requested worker plan mismatch for ${requested}`);
 }
+
+const cappedRoles=planProjectWork(
+ "first block\nsecond block\nthird block",
+ ["security_analyst","verifier","researcher"],
+ 2
+);
+assert.equal(cappedRoles.length,2,"explicit fanout must cap the work plan");
+assert.deepEqual(new Set(cappedRoles.map(item=>item.role_name)),new Set(["security_analyst","verifier"]));
+
+const workerSource=await readFile(new URL("../src/index.js",import.meta.url),"utf8");
+assert.match(workerSource,/node_project_work_count/,"distinct-host scheduler guard missing");
+assert.match(workerSource,/own\.work_item_id != project_work_items\.work_item_id/,"atomic distinct-host assignment guard missing");
