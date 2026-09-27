@@ -56,7 +56,7 @@ namespace CitadelEws
         private const int RestartExitCode = 75;
         private const int StopExitCode = 76;
         private const uint JobObjectLimitKillOnJobClose = 0x00002000;
-        private const int JobObjectExtendedLimitInformation = 9;
+        private const int JobObjectExtendedLimitInformationClass = 9;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct JobObjectBasicLimitInformation
@@ -194,7 +194,7 @@ namespace CitadelEws
             var information = new JobObjectExtendedLimitInformation();
             information.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose;
             var size = (uint)Marshal.SizeOf(typeof(JobObjectExtendedLimitInformation));
-            if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref information, size))
+            if (!SetInformationJobObject(job, JobObjectExtendedLimitInformationClass, ref information, size))
             {
                 var error = Marshal.GetLastWin32Error();
                 CloseHandle(job);
