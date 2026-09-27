@@ -2830,7 +2830,7 @@ class Agent:
     def interruptible_sleep(self, seconds: float) -> None:
         deadline = time.monotonic() + max(0.0, seconds)
         while True:
-            if self.lifecycle_stop_requested():
+            if self.lifecycle_stop_requested() or self.stop_path.exists():
                 raise SystemExit(0)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -2838,10 +2838,10 @@ class Agent:
             time.sleep(min(0.5, remaining))
 
     def cycle(self) -> None:
-        self.enforce_power_guard()
-        self.enroll()
         if self.lifecycle_stop_requested() or self.stop_path.exists():
             raise SystemExit(0)
+        self.enforce_power_guard()
+        self.enroll()
         if self.service_hold_requested():
             if time.monotonic() - self.last_heartbeat >= self.config.heartbeat_seconds:
                 self.heartbeat()

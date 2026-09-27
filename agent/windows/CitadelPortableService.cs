@@ -110,10 +110,11 @@ namespace CitadelEws
                 CreateNoWindow = true
             };
             start.EnvironmentVariables["PYTHONHOME"] = Path.Combine(paths.AppRoot, "runtime");
+            // Both supervisors use the agent's managed exit-code protocol (75/76).
+            start.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] = "1";
+            start.EnvironmentVariables.Remove("CITADEL_TASK_MANAGED");
             if (taskMode)
                 start.EnvironmentVariables["CITADEL_TASK_MANAGED"] = "1";
-            else
-                start.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] = "1";
             start.EnvironmentVariables["CITADEL_SERVICE_STOP_FILE"] = paths.LifecycleStopFile;
             start.EnvironmentVariables["CITADEL_SERVICE_HOLD_FILE"] = paths.HoldFile;
             start.EnvironmentVariables["CITADEL_SERVICE_READY_FILE"] = paths.ReadyFile;
@@ -272,7 +273,7 @@ namespace CitadelEws
                 var taskHost = new CitadelPortableService(paths, true);
                 var taskStart = taskHost.BuildChildStartInfo();
                 if (taskStart.EnvironmentVariables["CITADEL_TASK_MANAGED"] != "1" ||
-                    taskStart.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] != null)
+                    taskStart.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] != "1")
                     throw new InvalidOperationException("Portable fallback task child contract failed.");
 
                 Console.WriteLine("CITADEL portable Windows service/task-host SELF TEST: PASS");

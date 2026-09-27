@@ -7,6 +7,7 @@ on:
       - "scripts/build_windows_oneclick.ps1"
       - "tests/lmstudio-local-protocol.py"
       - "tests/network-recovery-priority.py"
+      - "tests/windows-managed-lifecycle.py"
       - "src/quality/openrouter.js"
       - "tests/openrouter-quality-gate.mjs"
       - ".github/workflows/build-windows-oneclick.yml"
@@ -59,6 +60,8 @@ jobs:
           python agent/citadel_node_v2.py self-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/lmstudio-local-protocol.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/windows-managed-lifecycle.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/network-recovery-priority.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -203,7 +206,62 @@ jobs:
             $_.Name -eq "CitadelNodeService.exe" -and $_.CommandLine -like "*--task-host*"
           } | Select-Object -First 1
           if (-not $taskHost) { throw "Fallback task host is not running." }
-          Write-Host "Windows fallback startup task: PASS"
+          $agentRoot = Join-Path $env:ProgramData "CitadelEWS\agent"
+          function Get-AgentChild {
+            @(Get-CimInstance Win32_Process | Where-Object {
+              $_.ExecutablePath -eq (Join-Path $agentRoot "runtime\python.exe") -and
+              $_.CommandLine -like "*citadel_node_v2.py*"
+            })
+          }
+          $children = @(Get-AgentChild)
+          if ($children.Count -ne 1 -or $children[0].ParentProcessId -ne $taskHost.ProcessId) {
+            throw "Expected exactly one bundled Python agent owned by the fallback host."
+          }
+          [xml]$taskXml = Export-ScheduledTask -TaskName CitadelEWSNodeFallback
+          $settings = $taskXml.Task.Settings
+          if ($settings.ExecutionTimeLimit -ne "PT0S" -or
+              $settings.DisallowStartIfOnBatteries -ne "false" -or
+              $settings.StopIfGoingOnBatteries -ne "false" -or
+              $settings.StartWhenAvailable -ne "true" -or
+              $settings.RestartOnFailure.Interval -ne "PT1M" -or
+              [int]$settings.RestartOnFailure.Count -ne 999 -or
+              $settings.MultipleInstancesPolicy -ne "IgnoreNew") {
+            throw "Fallback task persistence/recovery settings differ from the required contract."
+          }
+          $principal = (Get-ScheduledTask -TaskName CitadelEWSNodeFallback).Principal
+          if ($principal.UserId -notin @('S-1-5-19', 'LOCAL SERVICE', 'NT AUTHORITY\LOCAL SERVICE')) {
+            throw "Fallback task must use LocalService, not SYSTEM."
+          }
+          if (-not $taskXml.Task.Triggers.BootTrigger) { throw "Boot trigger missing." }
+          # Recover a failed child and verify the host never creates duplicates.
+          $oldPid = $children[0].ProcessId
+          Stop-Process -Id $oldPid -Force
+          $deadline = (Get-Date).AddSeconds(30)
+          do {
+            Start-Sleep -Seconds 1
+            $children = @(Get-AgentChild)
+          } until (($children.Count -eq 1 -and $children[0].ProcessId -ne $oldPid) -or (Get-Date) -gt $deadline)
+          if ($children.Count -ne 1 -or $children[0].ProcessId -eq $oldPid -or
+              $children[0].ParentProcessId -ne $taskHost.ProcessId) {
+            throw "Child crash recovery failed or created an unmanaged process."
+          }
+          # A persistent stop marker must prevent the supervisor from respawning.
+          $stopFile = Join-Path $env:ProgramData "CitadelEWS\state\STOP"
+          Set-Content -LiteralPath $stopFile -Value "CI lifecycle stop"
+          try {
+            $deadline = (Get-Date).AddSeconds(75)
+            do { Start-Sleep -Seconds 1 } until (@(Get-AgentChild).Count -eq 0 -or (Get-Date) -gt $deadline)
+            if (@(Get-AgentChild).Count -ne 0) { throw "Agent did not obey stop marker." }
+            Start-Sleep -Seconds 7
+            if (@(Get-AgentChild).Count -ne 0) { throw "Stopped agent was respawned." }
+          } finally {
+            Remove-Item -LiteralPath $stopFile -Force -ErrorAction SilentlyContinue
+          }
+          $deadline = (Get-Date).AddSeconds(30)
+          do { Start-Sleep -Seconds 1 } until (@(Get-AgentChild).Count -eq 1 -or (Get-Date) -gt $deadline)
+          if (@(Get-AgentChild).Count -ne 1) { throw "Agent did not resume after clearing stop marker." }
+          Write-Host "Windows fallback settings, child recovery, stop/resume: PASS"
+          # Actual OS reboot and signed hub stop/restart remain a clean-VM acceptance gate.
 
       - name: Fallback uninstall smoke test
         if: ${{ always() && steps.fallback_install.outcome != 'skipped' }}

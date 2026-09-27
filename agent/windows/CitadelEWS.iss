@@ -91,6 +91,8 @@ var
 begin
   SchTasks := ExpandConstant('{sys}\schtasks.exe');
   TaskKill := ExpandConstant('{sys}\taskkill.exe');
+  { Prevent failure recovery from racing upgrade/uninstall cleanup. }
+  TryExec(SchTasks, '/Change /TN "{#FallbackTaskName}" /DISABLE');
   { Kill our host while it is still the parent so /T also terminates the agent child. }
   TryExec(TaskKill, '/IM CitadelNodeService.exe /T /F');
   Sleep(500);
@@ -213,9 +215,19 @@ begin
   Result := True;
 end;
 
+function XmlEscape(Value: string): string;
+begin
+  StringChangeEx(Value, '&', '&amp;', True);
+  StringChangeEx(Value, '<', '&lt;', True);
+  StringChangeEx(Value, '>', '&gt;', True);
+  StringChangeEx(Value, '"', '&quot;', True);
+  Result := Value;
+end;
+
 procedure InstallFallbackTask;
 var
-  SchTasks, Sc, HostExe, TaskRun: string;
+  SchTasks, Sc, HostExe, TaskXml, TaskXmlPath: string;
+  TaskLines: TArrayOfString;
 begin
   StopExistingService;
   Sc := ExpandConstant('{sys}\sc.exe');
@@ -224,14 +236,40 @@ begin
 
   SchTasks := ExpandConstant('{sys}\schtasks.exe');
   HostExe := ExpandConstant('{app}\CitadelNodeService.exe');
-  TaskRun := '"' + HostExe + '" --task-host';
+  TaskXmlPath := ExpandConstant('{tmp}\citadel-fallback.xml');
+  { Explicit settings avoid the Scheduler defaults (72-hour limit and AC only).
+    LocalService matches the preferred service account and existing directory ACLs. }
+  TaskXml :=
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">' +
+    '<Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>' +
+    '<Principals><Principal id="Agent"><UserId>S-1-5-19</UserId>' +
+    '<RunLevel>LeastPrivilege</RunLevel></Principal></Principals>' +
+    '<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>' +
+    '<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>' +
+    '<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>' +
+    '<StartWhenAvailable>true</StartWhenAvailable>' +
+    '<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>' +
+    '<RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>' +
+    '</Settings><Actions Context="Agent"><Exec><Command>' + XmlEscape(HostExe) +
+    '</Command><Arguments>--task-host</Arguments><WorkingDirectory>' +
+    XmlEscape(ExpandConstant('{app}')) +
+    '</WorkingDirectory></Exec></Actions></Task>';
+  SetArrayLength(TaskLines, 1);
+  TaskLines[0] := TaskXml;
+  if not SaveStringsToUTF8File(TaskXmlPath, TaskLines, False) then
+    RaiseException('Unable to write CITADEL fallback task definition.');
 
   DeleteFallbackTask;
-  RequireExec(
-    SchTasks,
-    '/Create /TN "{#FallbackTaskName}" /SC ONSTART /RU SYSTEM /RL HIGHEST /TR "' + TaskRun + '" /F',
-    'Unable to register CITADEL fallback startup task'
-  );
+  try
+    RequireExec(
+      SchTasks,
+      '/Create /TN "{#FallbackTaskName}" /XML "' + TaskXmlPath + '" /F',
+      'Unable to register CITADEL fallback startup task'
+    );
+  finally
+    DeleteFile(TaskXmlPath);
+  end;
   RequireExec(
     SchTasks,
     '/Query /TN "{#FallbackTaskName}"',
@@ -253,7 +291,7 @@ begin
     HardenDirectories;
     if not TryInstallService then
     begin
-      Log('CITADEL Windows Service path unavailable; switching to bounded SYSTEM boot-task fallback.');
+      Log('CITADEL Windows Service path unavailable; switching to bounded LocalService boot-task fallback.');
       InstallFallbackTask;
     end;
   end;
