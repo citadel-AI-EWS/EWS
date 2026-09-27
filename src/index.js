@@ -790,6 +790,46 @@ function normalizeRequestedProjectRoles(value) {
   return roles;
 }
 
+function normalizeProjectWorkerTarget(value) {
+  if (value === undefined || value === null || value === "" || value === "auto") return { mode: "auto", count: null };
+  if (value === "all") return { mode: "all", count: null };
+  const count = Number(value);
+  if (!Number.isInteger(count) || count < 1 || count > 50) throw new ApiError(400, "invalid_worker_target");
+  return { mode: "fixed", count };
+}
+
+function schedulingFromChecks(checksJson) {
+  const checks = typeof checksJson === "string" ? safeJson(checksJson, {}) : (checksJson || {});
+  const scheduling = checks?.scheduling;
+  const mode = ["auto", "fixed", "all"].includes(scheduling?.target_mode) ? scheduling.target_mode : "auto";
+  const desired = Number(scheduling?.desired_workers);
+  return {
+    target_mode: mode,
+    desired_workers: Number.isInteger(desired) && desired >= 1 && desired <= 50 ? desired : null
+  };
+}
+
+function targetProjectWork(taskText, requestedRoles, executionMode, desiredWorkers) {
+  const sourceText = String(taskText || "").trim();
+  let items = executionMode === "python"
+    ? [{ sequence_no: 1, role_name: "programmer", task_text: sourceText, role_source: "hub_recommended" }]
+    : planProjectWork(sourceText, requestedRoles);
+  if (!Number.isInteger(desiredWorkers)) return items;
+  const target = Math.max(1, Math.min(50, desiredWorkers));
+  if (items.length > target) items = items.slice(0, target);
+  const roles = items.map((item) => item.role_name).filter(Boolean);
+  const fallbackRoles = roles.length ? roles : (executionMode === "python" ? ["programmer"] : ["planner"]);
+  while (items.length < target) {
+    const slot = items.length;
+    const roleName = fallbackRoles[slot % fallbackRoles.length];
+    const task = executionMode === "python"
+      ? sourceText
+      : "Act as an independent CITADEL worker in a multi-host run. Analyze the original task from your assigned role, avoid generic duplication, and return evidence, reasoning, edge cases or a concrete solution that improves the final synthesis.\n\nWorker " + (slot + 1) + " of " + target + " · role: " + roleName + "\n\nOriginal task:\n" + sourceText;
+    items.push({ sequence_no: slot + 1, role_name: roleName, task_text: task, role_source: "hub_recommended" });
+  }
+  return items.map((item, index) => ({ ...item, sequence_no: index + 1 }));
+}
+
 function roleMetadata(roleId) {
   return WORK_ROLE_REGISTRY.find((role) => role.id === roleId) || {
     id: roleId,
@@ -1261,10 +1301,24 @@ function projectWorkerProfile(text, requestedRoles = []) {
 }
 
 function projectFinalText(sections) {
-  return (sections || [])
-    .filter((item) => typeof item?.content === "string" && item.content.trim())
-    .map((item) => `#${item.sequence_no} ${item.role_name}\n${item.content.trim()}`)
-    .join("\n\n");
+  const maxSectionChars = 12000;
+  const maxCombinedChars = 180000;
+  const parts = [];
+  let used = 0;
+  for (const item of sections || []) {
+    if (typeof item?.content !== "string" || !item.content.trim()) continue;
+    const header = `#${item.sequence_no} ${item.role_name}\n`;
+    let body = item.content.trim();
+    if (body.length > maxSectionChars) body = body.slice(0, maxSectionChars) + "\n[worker output truncated]";
+    const remaining = maxCombinedChars - used - header.length - (parts.length ? 2 : 0);
+    if (remaining <= 0) break;
+    if (body.length > remaining) body = body.slice(0, Math.max(0, remaining)) + "\n[combined output truncated]";
+    const part = header + body;
+    parts.push(part);
+    used += part.length + (parts.length > 1 ? 2 : 0);
+    if (used >= maxCombinedChars) break;
+  }
+  return parts.join("\n\n");
 }
 
 function planProjectWork(text, requestedRoles = []) {
@@ -1364,7 +1418,9 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
   const [planned, readyNodesQuery] = await Promise.all([
     env.DB.prepare(`
       SELECT w.work_item_id, w.project_id, w.sequence_no, w.role_name, w.task_text,
-        w.node_id AS preferred_node_id, p.title AS project_title, p.source_type
+        w.node_id AS preferred_node_id, p.title AS project_title, p.source_type, p.checks_json,
+        (SELECT COUNT(*) FROM project_work_items AS owned
+          WHERE owned.project_id = w.project_id AND owned.node_id = ?) AS node_project_work_count
       FROM project_work_items AS w
       JOIN architect_projects AS p ON p.project_id = w.project_id
       WHERE w.status = 'planned'
@@ -1377,7 +1433,7 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
       ORDER BY CASE WHEN w.node_id = ? THEN 0 WHEN w.node_id IS NULL THEN 1 ELSE 2 END,
         datetime(p.created_at) ASC, w.sequence_no ASC
       LIMIT 32
-    `).bind(projectId, projectId, canRunPython ? 1 : 0, canRunAi ? 1 : 0, nodeId).all(),
+    `).bind(nodeId, projectId, projectId, canRunPython ? 1 : 0, canRunAi ? 1 : 0, nodeId).all(),
     env.DB.prepare(`
       SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
         ai.installed, ai.loaded_model, ai.server_running
@@ -1390,13 +1446,19 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
   const readyNodes = new Map((readyNodesQuery.results || []).map((candidate) => [candidate.node_id, candidate]));
 
   let created = 0;
-  const candidates = (planned.results || []).filter((work) => {
+  const eligible = (planned.results || []).filter((work) => {
     if (!projectNodeReady(node, work.source_type)) return false;
+    const scheduling = schedulingFromChecks(work.checks_json);
+    if (scheduling.target_mode !== "auto" && scheduling.desired_workers) {
+      const readyDistinct = [...readyNodes.values()].filter((candidate) => projectNodeReady(candidate, work.source_type)).length;
+      if (readyDistinct < scheduling.desired_workers) return false;
+      if (Number(work.node_project_work_count || 0) > 0 && work.preferred_node_id !== nodeId) return false;
+    }
     const preferred = work.preferred_node_id ? readyNodes.get(work.preferred_node_id) : null;
-    return !work.preferred_node_id ||
-      work.preferred_node_id === nodeId ||
-      !projectNodeReady(preferred, work.source_type);
-  }).slice(0, 2);
+    return !work.preferred_node_id || work.preferred_node_id === nodeId || !projectNodeReady(preferred, work.source_type);
+  });
+  const targeted = eligible.find((work) => schedulingFromChecks(work.checks_json).target_mode !== "auto");
+  const candidates = targeted ? [targeted] : eligible.slice(0, 2);
 
   for (const work of candidates) {
     const missionId = projectMissionId(work.work_item_id);
@@ -1568,15 +1630,16 @@ async function architectCheckProject(request, env) {
   const title = requireString(body.title, "title", 160);
   const taskText = requireString(body.task_text, "task_text", 20000);
   const requestedRoles = normalizeRequestedProjectRoles(body.requested_roles);
+  const workerTarget = normalizeProjectWorkerTarget(body.worker_target);
   const executionMode = projectExecutionMode(sourceType);
   const effectiveRequestedRoles = executionMode === "python" ? [] : requestedRoles;
   const result = await evaluateProjectChecks(env, sourceType, title, taskText);
   const recommendedWork = executionMode === "python"
     ? [{ sequence_no: 1, role_name: "programmer", task_text: taskText, role_source: "hub_recommended" }]
     : planProjectWork(taskText);
-  const plannedWork = executionMode === "python"
-    ? recommendedWork
-    : planProjectWork(taskText, effectiveRequestedRoles);
+  const autoDesiredWorkers = executionMode === "python" ? 1 : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers;
+  const previewDesiredWorkers = workerTarget.mode === "fixed" ? workerTarget.count : autoDesiredWorkers;
+  const plannedWork = targetProjectWork(taskText, effectiveRequestedRoles, executionMode, workerTarget.mode === "all" ? null : previewDesiredWorkers);
   const recommendedRolePlan = rolePlanSummary(recommendedWork);
   const selectedRolePlan = rolePlanSummary(plannedWork);
   return json({
@@ -1587,9 +1650,8 @@ async function architectCheckProject(request, env) {
     recommended_roles: Object.keys(recommendedRolePlan),
     requested_roles: effectiveRequestedRoles,
     selected_roles: Object.keys(selectedRolePlan),
-    desired_workers: executionMode === "python"
-      ? 1
-      : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers,
+    worker_target: workerTarget,
+    desired_workers: workerTarget.mode === "all" ? null : previewDesiredWorkers,
     role_plan: selectedRolePlan,
     work_preview: plannedWork.map(({ sequence_no, role_name, role_source }) => ({
       sequence_no,
@@ -1611,6 +1673,7 @@ async function architectCreateProject(request, env) {
   const title = requireString(body.title, "title", 160);
   const taskText = requireString(body.task_text, "task_text", 20000);
   const requestedRoles = normalizeRequestedProjectRoles(body.requested_roles);
+  const workerTarget = normalizeProjectWorkerTarget(body.worker_target);
   const executionMode = projectExecutionMode(sourceType);
   const effectiveRequestedRoles = executionMode === "python" ? [] : requestedRoles;
   const evaluated = await evaluateProjectChecks(env, sourceType, title, taskText);
@@ -1639,12 +1702,24 @@ async function architectCreateProject(request, env) {
     ? [{ sequence_no: 1, role_name: "programmer", task_text: taskText, role_source: "hub_recommended" }]
     : planProjectWork(taskText);
   const recommendedRoles = new Set(recommendedWork.map((item) => item.role_name));
-  const plannedWork = executionMode === "python"
-    ? recommendedWork
-    : planProjectWork(taskText, effectiveRequestedRoles);
-  const workerCount = Math.min(nodes.length, plannedWork.length);
+  const autoDesiredWorkers = executionMode === "python" ? 1 : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers;
+  const desiredWorkers = workerTarget.mode === "fixed"
+    ? workerTarget.count
+    : workerTarget.mode === "all"
+      ? Math.max(1, Math.min(50, nodes.length))
+      : autoDesiredWorkers;
+  const plannedWork = targetProjectWork(taskText, effectiveRequestedRoles, executionMode, desiredWorkers);
+  const workerCount = Math.min(nodes.length, desiredWorkers);
   const projectId = "project_" + crypto.randomUUID();
-  const checksJson = JSON.stringify(evaluated.checks);
+  const checksJson = JSON.stringify({
+    ...evaluated.checks,
+    scheduling: {
+      passed: true,
+      detail: workerTarget.mode === "auto" ? "automatic_worker_target" : "explicit_distinct_worker_target",
+      target_mode: workerTarget.mode,
+      desired_workers: desiredWorkers
+    }
+  });
   const selectedRoleNames = [...new Set(plannedWork.map((item) => item.role_name))];
   const specializationSummary = selectedRoleNames.map((roleName) => ({
     ...roleMetadata(roleName),
@@ -1664,7 +1739,9 @@ async function architectCreateProject(request, env) {
       work_items: plannedWork.length,
       roles: rolePlanSummary(plannedWork),
       requested_roles: effectiveRequestedRoles,
-      execution_mode: executionMode
+      execution_mode: executionMode,
+      worker_target: workerTarget,
+      desired_workers: desiredWorkers
     }))
   ];
   for (const specialization of specializationSummary) {
@@ -1675,7 +1752,9 @@ async function architectCreateProject(request, env) {
 
   const workItems = [];
   for (let index = 0; index < plannedWork.length; index += 1) {
-    const node = workerCount > 0 ? nodes[index % workerCount] : null;
+    const node = workerCount > 0
+      ? (workerTarget.mode === "auto" ? nodes[index % workerCount] : (index < workerCount ? nodes[index] : null))
+      : null;
     const planned = plannedWork[index];
     const workItemId = "work_" + crypto.randomUUID();
     workItems.push({
@@ -1707,9 +1786,8 @@ async function architectCreateProject(request, env) {
       status: "planned",
       architect_approved: true,
       worker_count: workerCount,
-      desired_workers: executionMode === "python"
-        ? 1
-        : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers,
+      worker_target: workerTarget,
+      desired_workers: desiredWorkers,
       work_item_count: plannedWork.length,
       role_plan: rolePlanSummary(plannedWork),
       recommended_roles: [...recommendedRoles],
@@ -1724,6 +1802,8 @@ async function architectCreateProject(request, env) {
       completed_work_items: 0,
       total_work_items: plannedWork.length,
       final_report_ready: false,
+      worker_target: workerTarget,
+      desired_workers: desiredWorkers,
       detail: workerCount === 0
         ? (executionMode === "python"
             ? "hub_plan_saved_waiting_for_python_worker"
@@ -1740,6 +1820,8 @@ async function architectListProjects(request, env) {
   await ensureProjectStorage(env);
   const rows = await env.DB.prepare(
     "SELECT p.project_id, p.title, p.source_type, p.status, p.worker_count, p.created_at, p.updated_at, " +
+    "COALESCE(CAST(json_extract(p.checks_json, '$.scheduling.desired_workers') AS INTEGER), p.worker_count) AS desired_workers, " +
+    "COALESCE(json_extract(p.checks_json, '$.scheduling.target_mode'), 'auto') AS worker_target_mode, " +
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id) AS work_item_count, " +
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'completed') AS completed_work_items, " +
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'failed') AS failed_work_items, " +
@@ -1975,9 +2057,11 @@ async function architectGetProject(request, env, projectId) {
         state: executionState,
         counts,
         execution_mode: executionMode,
-        desired_workers: executionMode === "python"
-          ? 1
-          : projectWorkerProfile(project.task_text, specializations.filter((item) => item.source === "architect_added").map((item) => item.id)).desired_workers,
+        desired_workers: schedulingFromChecks(project.checks_json).desired_workers ||
+          (executionMode === "python"
+            ? 1
+            : projectWorkerProfile(project.task_text, specializations.filter((item) => item.source === "architect_added").map((item) => item.id)).desired_workers),
+        worker_target_mode: schedulingFromChecks(project.checks_json).target_mode,
         ready_workers_at_creation: Number(project.worker_count || 0),
         ready_workers_now: readyWorkers.length,
         worker_readiness: workerReadiness,
