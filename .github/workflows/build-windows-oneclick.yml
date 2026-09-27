@@ -7,6 +7,7 @@ on:
       - "scripts/build_windows_oneclick.ps1"
       - "tests/lmstudio-local-protocol.py"
       - "tests/network-recovery-priority.py"
+      - "tests/windows-managed-lifecycle.py"
       - "src/quality/openrouter.js"
       - "tests/openrouter-quality-gate.mjs"
       - ".github/workflows/build-windows-oneclick.yml"
@@ -60,6 +61,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/lmstudio-local-protocol.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/windows-managed-lifecycle.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/network-recovery-priority.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/openrouter-quality-gate.mjs
@@ -109,7 +112,7 @@ jobs:
             "/LOG=$log"
           ) -Wait -PassThru
           if ($process.ExitCode -ne 0) {
-            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log }
+            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 100 }
             throw "Silent installer failed with exit code $($process.ExitCode)."
           }
 
@@ -147,6 +150,8 @@ jobs:
           if (-not $svc) { throw "SCM service record missing." }
           if ($svc.StartName -ne "NT AUTHORITY\LocalService") { throw "Unexpected service account." }
           if ($svc.StartMode -ne "Auto") { throw "Service is not automatic." }
+          $mode = (Get-Content -LiteralPath (Join-Path $stateRoot "install-mode.txt") -Raw).Trim()
+          if ($mode -ne "windows_service") { throw "Installer did not record Windows Service mode." }
 
           Write-Host "Windows one-click silent installation: PASS"
 
@@ -166,6 +171,167 @@ jobs:
           if (Get-Service -Name CitadelEWSNode -ErrorAction SilentlyContinue) {
             throw "CITADEL service remained registered after uninstall."
           }
+
+      - name: Forced fallback install smoke test
+        id: fallback_install
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -LiteralPath dist -Filter "CITADEL_EWS_Node_Setup_*_x64.exe" | Select-Object -First 1
+          if (-not $installer) { throw "Installer artifact not found." }
+          $log = Join-Path $env:RUNNER_TEMP "citadel-oneclick-fallback.log"
+          $p = Start-Process -FilePath $installer.FullName -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/SP-",
+            "/CONTROLLERURL=https://127.0.0.1:9",
+            "/FORCEFALLBACK=1",
+            "/LOG=$log"
+          ) -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 100 }
+            throw "Fallback installer failed with exit code $($p.ExitCode)."
+          }
+          if (Get-Service -Name CitadelEWSNode -ErrorAction SilentlyContinue) {
+            throw "Fallback mode unexpectedly left the SCM service registered."
+          }
+          schtasks.exe /Query /TN "CitadelEWSNodeFallback" | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 100 }
+            throw "Fallback startup task was not registered."
+          }
+          $modePath = Join-Path $env:ProgramData "CitadelEWS\state\install-mode.txt"
+          if ((Get-Content -LiteralPath $modePath -Raw).Trim() -ne "windows_boot_task") {
+            throw "Fallback install mode was not recorded."
+          }
+          Start-Sleep -Seconds 3
+          $taskHost = Get-CimInstance Win32_Process | Where-Object {
+            $_.Name -eq "CitadelNodeService.exe" -and $_.CommandLine -like "*--task-host*"
+          } | Select-Object -First 1
+          if (-not $taskHost) { throw "Fallback task host is not running." }
+          $agentRoot = Join-Path $env:ProgramData "CitadelEWS\agent"
+          function Get-AgentChild {
+            @(Get-CimInstance Win32_Process | Where-Object {
+              $_.ExecutablePath -eq (Join-Path $agentRoot "runtime\python.exe") -and
+              $_.CommandLine -like "*citadel_node_v2.py*"
+            })
+          }
+          $children = @(Get-AgentChild)
+          if ($children.Count -ne 1 -or $children[0].ParentProcessId -ne $taskHost.ProcessId) {
+            throw "Expected exactly one bundled Python agent owned by the fallback host."
+          }
+          [xml]$taskXml = Export-ScheduledTask -TaskName CitadelEWSNodeFallback
+          $settings = $taskXml.Task.Settings
+          if ($settings.ExecutionTimeLimit -ne "PT0S" -or
+              $settings.DisallowStartIfOnBatteries -ne "false" -or
+              $settings.StopIfGoingOnBatteries -ne "false" -or
+              $settings.StartWhenAvailable -ne "true" -or
+              $settings.RestartOnFailure.Interval -ne "PT1M" -or
+              [int]$settings.RestartOnFailure.Count -ne 255 -or
+              $settings.MultipleInstancesPolicy -ne "IgnoreNew") {
+            throw "Fallback task persistence/recovery settings differ from the required contract."
+          }
+          $principal = (Get-ScheduledTask -TaskName CitadelEWSNodeFallback).Principal
+          if ($principal.UserId -notin @('S-1-5-19', 'LOCAL SERVICE', 'NT AUTHORITY\LOCAL SERVICE')) {
+            throw "Fallback task must use LocalService, not SYSTEM."
+          }
+          if ($null -eq $taskXml.SelectSingleNode("//*[local-name()='Triggers']/*[local-name()='BootTrigger']")) {
+            throw "Boot trigger missing."
+          }
+          # Recover a failed child and verify the host never creates duplicates.
+          $oldPid = $children[0].ProcessId
+          Stop-Process -Id $oldPid -Force
+          $deadline = (Get-Date).AddSeconds(30)
+          do {
+            Start-Sleep -Seconds 1
+            $children = @(Get-AgentChild)
+          } until (($children.Count -eq 1 -and $children[0].ProcessId -ne $oldPid) -or (Get-Date) -gt $deadline)
+          if ($children.Count -ne 1 -or $children[0].ProcessId -eq $oldPid -or
+              $children[0].ParentProcessId -ne $taskHost.ProcessId) {
+            throw "Child crash recovery failed or created an unmanaged process."
+          }
+          # A persistent stop marker must prevent the supervisor from respawning.
+          $stopFile = Join-Path $env:ProgramData "CitadelEWS\state\STOP"
+          Set-Content -LiteralPath $stopFile -Value "CI lifecycle stop"
+          try {
+            $deadline = (Get-Date).AddSeconds(75)
+            do { Start-Sleep -Seconds 1 } until (@(Get-AgentChild).Count -eq 0 -or (Get-Date) -gt $deadline)
+            if (@(Get-AgentChild).Count -ne 0) { throw "Agent did not obey stop marker." }
+            Start-Sleep -Seconds 7
+            if (@(Get-AgentChild).Count -ne 0) { throw "Stopped agent was respawned." }
+          } finally {
+            Remove-Item -LiteralPath $stopFile -Force -ErrorAction SilentlyContinue
+          }
+          $deadline = (Get-Date).AddSeconds(30)
+          do { Start-Sleep -Seconds 1 } until (@(Get-AgentChild).Count -eq 1 -or (Get-Date) -gt $deadline)
+          $children = @(Get-AgentChild)
+          if ($children.Count -ne 1) { throw "Agent did not resume after clearing stop marker." }
+
+          # Killing the scheduled-task host must also kill its Python child. Otherwise
+          # Task Scheduler can restart the host while an orphaned agent is still alive.
+          $oldTaskHostPid = $taskHost.ProcessId
+          $oldChildPid = $children[0].ProcessId
+          Stop-Process -Id $oldTaskHostPid -Force
+          $deadline = (Get-Date).AddSeconds(15)
+          do {
+            Start-Sleep -Milliseconds 500
+            $oldChild = Get-Process -Id $oldChildPid -ErrorAction SilentlyContinue
+          } until (-not $oldChild -or (Get-Date) -gt $deadline)
+          if ($oldChild) {
+            throw "Fallback task-host termination left its Python child orphaned."
+          }
+
+          # Start a fresh task instance immediately instead of waiting for the
+          # one-minute scheduler recovery interval, then require one owned child.
+          Start-ScheduledTask -TaskName CitadelEWSNodeFallback
+          $deadline = (Get-Date).AddSeconds(30)
+          do {
+            Start-Sleep -Seconds 1
+            $newTaskHost = Get-CimInstance Win32_Process | Where-Object {
+              $_.Name -eq "CitadelNodeService.exe" -and
+              $_.CommandLine -like "*--task-host*" -and
+              $_.ProcessId -ne $oldTaskHostPid
+            } | Select-Object -First 1
+            $children = @(Get-AgentChild)
+          } until (
+            $newTaskHost -and
+            $children.Count -eq 1 -and
+            $children[0].ParentProcessId -eq $newTaskHost.ProcessId -or
+            (Get-Date) -gt $deadline
+          )
+          if (-not $newTaskHost -or
+              $children.Count -ne 1 -or
+              $children[0].ParentProcessId -ne $newTaskHost.ProcessId) {
+            throw "Fallback host restart did not recover exactly one owned Python agent."
+          }
+          $taskHost = $newTaskHost
+
+          Write-Host "Windows fallback settings, child recovery, host-orphan cleanup, stop/resume: PASS"
+          # Actual OS reboot and signed hub stop/restart remain a clean-VM acceptance gate.
+
+      - name: Fallback uninstall smoke test
+        if: ${{ always() && steps.fallback_install.outcome != 'skipped' }}
+        shell: pwsh
+        run: |
+          $uninstaller = Join-Path $env:ProgramData "CitadelEWS\uninstall\unins000.exe"
+          if (Test-Path -LiteralPath $uninstaller) {
+            $p = Start-Process -FilePath $uninstaller -ArgumentList @(
+              "/VERYSILENT",
+              "/SUPPRESSMSGBOXES",
+              "/NORESTART"
+            ) -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "Fallback uninstaller failed with exit code $($p.ExitCode)." }
+          }
+          schtasks.exe /Query /TN "CitadelEWSNodeFallback" *> $null
+          if ($LASTEXITCODE -eq 0) { throw "Fallback task remained registered after uninstall." }
+          Start-Sleep -Seconds 2
+          $orphan = Get-CimInstance Win32_Process | Where-Object {
+            ($_.Name -eq "CitadelNodeService.exe" -and $_.CommandLine -like "*--task-host*") -or
+            ($_.Name -eq "python.exe" -and $_.CommandLine -like "*citadel_node_v2.py*")
+          } | Select-Object -First 1
+          if ($orphan) { throw "Fallback uninstall left a CITADEL process running." }
+          Write-Host "Windows fallback uninstall: PASS"
+          exit 0
 
       - name: Upload installer
         uses: actions/upload-artifact@v4

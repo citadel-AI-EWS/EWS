@@ -9,6 +9,7 @@
 #endif
 
 #define ServiceName "CitadelEWSNode"
+#define FallbackTaskName "CitadelEWSNodeFallback"
 #define ProductName "CITADEL EWS Node"
 #define PublisherName "CITADEL AI EWS"
 
@@ -51,6 +52,9 @@ const
   DefaultControllerUrl = 'https://citadel-ai.init1.workers.dev';
   ControllerPublicX = 'erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0';
 
+var
+  StartupConfigured: Boolean;
+
 function JsonEscape(Value: string): string;
 begin
   StringChangeEx(Value, '\', '\\', True);
@@ -62,7 +66,7 @@ procedure RequireExec(FileName, Params, ErrorText: string);
 var
   ResultCode: Integer;
 begin
-  if not Exec(FileName, Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  if not ExecAndLogOutput(FileName, Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode, nil) then
     RaiseException(ErrorText + ' (unable to start)');
   if ResultCode <> 0 then
     RaiseException(ErrorText + ' (exit code ' + IntToStr(ResultCode) + ')');
@@ -84,10 +88,35 @@ begin
   Sleep(1500);
 end;
 
+procedure StopFallbackTask;
+var
+  SchTasks, TaskKill: string;
+begin
+  SchTasks := ExpandConstant('{sys}\schtasks.exe');
+  TaskKill := ExpandConstant('{sys}\taskkill.exe');
+  { Prevent failure recovery from racing upgrade/uninstall cleanup. }
+  TryExec(SchTasks, '/Change /TN "{#FallbackTaskName}" /DISABLE');
+  { Kill our host while it is still the parent so /T also terminates the agent child. }
+  TryExec(TaskKill, '/IM CitadelNodeService.exe /T /F');
+  Sleep(500);
+  TryExec(SchTasks, '/End /TN "{#FallbackTaskName}"');
+  Sleep(500);
+end;
+
+procedure DeleteFallbackTask;
+var
+  SchTasks: string;
+begin
+  SchTasks := ExpandConstant('{sys}\schtasks.exe');
+  TryExec(SchTasks, '/Delete /TN "{#FallbackTaskName}" /F');
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  { Stop an existing service before [Files] replaces the bundled runtime or host. }
+  { Stop either installation mode before [Files] replaces bundled binaries. }
   StopExistingService;
+  StopFallbackTask;
+  DeleteFallbackTask;
   Result := '';
 end;
 
@@ -143,47 +172,122 @@ begin
   );
 end;
 
-procedure InstallService;
+function ExecOk(FileName, Params: string): Boolean;
 var
-  Sc, ServiceExe, ServiceArgs: string;
   ResultCode: Integer;
 begin
+  Result := Exec(FileName, Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+end;
+
+function ForceFallbackRequested: Boolean;
+begin
+  Result := CompareText(ExpandConstant('{param:FORCEFALLBACK|0}'), '1') = 0;
+end;
+
+procedure WriteInstallMode(Mode: string);
+var
+  ModePath: string;
+begin
+  ModePath := ExpandConstant('{commonappdata}\CitadelEWS\state\install-mode.txt');
+  if not SaveStringToFile(ModePath, Mode + #13#10, False) then
+    RaiseException('Unable to record CITADEL installation mode.');
+end;
+
+function TryInstallService: Boolean;
+var
+  Sc, ServiceExe, ServiceArgs: string;
+begin
+  Result := False;
+  if ForceFallbackRequested then exit;
+
   Sc := ExpandConstant('{sys}\sc.exe');
   ServiceExe := ExpandConstant('{app}\CitadelNodeService.exe');
   ServiceArgs :=
     'binPath= "' + ServiceExe +
     '" start= delayed-auto obj= "NT AUTHORITY\LocalService" DisplayName= "{#ProductName}"';
 
-  { Repair/upgrade in place when the service already exists. }
-  if not Exec(Sc, 'config {#ServiceName} ' + ServiceArgs, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
-    RaiseException('Unable to inspect/update the CITADEL Windows service');
+  if not ExecOk(Sc, 'config {#ServiceName} ' + ServiceArgs) then
+    if not ExecOk(Sc, 'create {#ServiceName} ' + ServiceArgs) then exit;
 
-  if ResultCode <> 0 then
-  begin
-    RequireExec(
-      Sc,
-      'create {#ServiceName} ' + ServiceArgs,
-      'Unable to register the CITADEL Windows service'
-    );
+  if not ExecOk(Sc, 'description {#ServiceName} "CITADEL/EWS bounded node service with bundled Python runtime"') then exit;
+  if not ExecOk(Sc, 'failure {#ServiceName} reset= 86400 actions= restart/5000/restart/15000/restart/60000') then exit;
+  if not ExecOk(Sc, 'start {#ServiceName}') then exit;
+
+  DeleteFallbackTask;
+  WriteInstallMode('windows_service');
+  Result := True;
+end;
+
+function XmlEscape(Value: string): string;
+begin
+  StringChangeEx(Value, '&', '&amp;', True);
+  StringChangeEx(Value, '<', '&lt;', True);
+  StringChangeEx(Value, '>', '&gt;', True);
+  StringChangeEx(Value, '"', '&quot;', True);
+  Result := Value;
+end;
+
+procedure InstallFallbackTask;
+var
+  SchTasks, Sc, HostExe, TaskXml, TaskXmlPath: string;
+  FileSystem, XmlFile: Variant;
+begin
+  StopExistingService;
+  Sc := ExpandConstant('{sys}\sc.exe');
+  TryExec(Sc, 'delete {#ServiceName}');
+  Sleep(1000);
+
+  SchTasks := ExpandConstant('{sys}\schtasks.exe');
+  HostExe := ExpandConstant('{app}\CitadelNodeService.exe');
+  TaskXmlPath := ExpandConstant('{tmp}\citadel-fallback.xml');
+  { Explicit settings avoid the Scheduler defaults (72-hour limit and AC only).
+    LocalService matches the preferred service account and existing directory ACLs. }
+  TaskXml :=
+    '<?xml version="1.0" encoding="UTF-16"?>' +
+    '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">' +
+    '<Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>' +
+    '<Principals><Principal id="Agent"><UserId>S-1-5-19</UserId>' +
+    '<RunLevel>LeastPrivilege</RunLevel></Principal></Principals>' +
+    '<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>' +
+    '<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>' +
+    '<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>' +
+    '<StartWhenAvailable>true</StartWhenAvailable>' +
+    '<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>' +
+    '<RestartOnFailure><Interval>PT1M</Interval><Count>255</Count></RestartOnFailure>' +
+    '</Settings><Actions Context="Agent"><Exec><Command>' + XmlEscape(HostExe) +
+    '</Command><Arguments>--task-host</Arguments><WorkingDirectory>' +
+    XmlEscape(ExpandConstant('{app}')) +
+    '</WorkingDirectory></Exec></Actions></Task>';
+  { SchTasks consumes a Unicode XML file; FSO writes UTF-16LE with a BOM. }
+  FileSystem := CreateOleObject('Scripting.FileSystemObject');
+  XmlFile := FileSystem.CreateTextFile(TaskXmlPath, True, True);
+  try
+    XmlFile.Write(TaskXml);
+  finally
+    XmlFile.Close;
   end;
 
+  DeleteFallbackTask;
+  try
+    RequireExec(
+      SchTasks,
+      '/Create /TN "{#FallbackTaskName}" /XML "' + TaskXmlPath + '" /RU "NT AUTHORITY\LOCALSERVICE" /F',
+      'Unable to register CITADEL fallback startup task'
+    );
+  finally
+    DeleteFile(TaskXmlPath);
+  end;
   RequireExec(
-    Sc,
-    'description {#ServiceName} "CITADEL/EWS bounded node service with bundled Python runtime"',
-    'Unable to set the CITADEL service description'
+    SchTasks,
+    '/Query /TN "{#FallbackTaskName}"',
+    'CITADEL fallback startup task was not persisted'
   );
-
   RequireExec(
-    Sc,
-    'failure {#ServiceName} reset= 86400 actions= restart/5000/restart/15000/restart/60000',
-    'Unable to configure CITADEL service recovery'
+    SchTasks,
+    '/Run /TN "{#FallbackTaskName}"',
+    'Unable to start CITADEL fallback startup task'
   );
-
-  RequireExec(
-    Sc,
-    'start {#ServiceName}',
-    'Unable to start the CITADEL Windows service'
-  );
+  WriteInstallMode('windows_boot_task');
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -192,8 +296,19 @@ begin
   begin
     WriteDefaultConfig;
     HardenDirectories;
-    InstallService;
+    if not TryInstallService then
+    begin
+      Log('CITADEL Windows Service path unavailable; switching to bounded LocalService boot-task fallback.');
+      InstallFallbackTask;
+    end;
+    StartupConfigured := True;
   end;
+end;
+
+function GetCustomSetupExitCode: Integer;
+begin
+  { ssPostInstall exceptions alone can otherwise leave a false success code. }
+  if StartupConfigured then Result := 0 else Result := 1;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
@@ -206,5 +321,7 @@ begin
     TryExec(Sc, 'stop {#ServiceName}');
     Sleep(1000);
     TryExec(Sc, 'delete {#ServiceName}');
+    StopFallbackTask;
+    DeleteFallbackTask;
   end;
 end;

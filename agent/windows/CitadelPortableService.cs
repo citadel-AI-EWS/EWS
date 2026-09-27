@@ -1,6 +1,8 @@
 using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.ServiceProcess;
 using System.Threading;
 
@@ -53,16 +55,74 @@ namespace CitadelEws
         public const string ServiceId = "CitadelEWSNode";
         private const int RestartExitCode = 75;
         private const int StopExitCode = 76;
+        private const uint JobObjectLimitKillOnJobClose = 0x00002000;
+        private const int JobObjectExtendedLimitInformationClass = 9;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JobObjectBasicLimitInformation
+        {
+            public long PerProcessUserTimeLimit;
+            public long PerJobUserTimeLimit;
+            public uint LimitFlags;
+            public UIntPtr MinimumWorkingSetSize;
+            public UIntPtr MaximumWorkingSetSize;
+            public uint ActiveProcessLimit;
+            public UIntPtr Affinity;
+            public uint PriorityClass;
+            public uint SchedulingClass;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct IoCounters
+        {
+            public ulong ReadOperationCount;
+            public ulong WriteOperationCount;
+            public ulong OtherOperationCount;
+            public ulong ReadTransferCount;
+            public ulong WriteTransferCount;
+            public ulong OtherTransferCount;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JobObjectExtendedLimitInformation
+        {
+            public JobObjectBasicLimitInformation BasicLimitInformation;
+            public IoCounters IoInfo;
+            public UIntPtr ProcessMemoryLimit;
+            public UIntPtr JobMemoryLimit;
+            public UIntPtr PeakProcessMemoryUsed;
+            public UIntPtr PeakJobMemoryUsed;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateJobObject(IntPtr jobAttributes, string name);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetInformationJobObject(
+            IntPtr job,
+            int informationClass,
+            ref JobObjectExtendedLimitInformation information,
+            uint informationLength
+        );
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr handle);
 
         private readonly PortablePaths paths;
+        private readonly bool taskMode;
         private readonly object sync = new object();
         private Thread supervisor;
         private Process child;
+        private IntPtr taskJob = IntPtr.Zero;
         private volatile bool stopping;
 
-        internal CitadelPortableService(PortablePaths paths)
+        internal CitadelPortableService(PortablePaths paths, bool taskMode = false)
         {
             this.paths = paths;
+            this.taskMode = taskMode;
             ServiceName = ServiceId;
             CanStop = true;
             CanShutdown = true;
@@ -108,7 +168,11 @@ namespace CitadelEws
                 CreateNoWindow = true
             };
             start.EnvironmentVariables["PYTHONHOME"] = Path.Combine(paths.AppRoot, "runtime");
+            // Both supervisors use the agent's managed exit-code protocol (75/76).
             start.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] = "1";
+            start.EnvironmentVariables.Remove("CITADEL_TASK_MANAGED");
+            if (taskMode)
+                start.EnvironmentVariables["CITADEL_TASK_MANAGED"] = "1";
             start.EnvironmentVariables["CITADEL_SERVICE_STOP_FILE"] = paths.LifecycleStopFile;
             start.EnvironmentVariables["CITADEL_SERVICE_HOLD_FILE"] = paths.HoldFile;
             start.EnvironmentVariables["CITADEL_SERVICE_READY_FILE"] = paths.ReadyFile;
@@ -119,6 +183,47 @@ namespace CitadelEws
         {
             if (File.Exists(paths.LifecycleStopFile))
                 File.Delete(paths.LifecycleStopFile);
+        }
+
+        private static IntPtr CreateKillOnCloseJob()
+        {
+            var job = CreateJobObject(IntPtr.Zero, null);
+            if (job == IntPtr.Zero)
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Unable to create CITADEL task-host Job Object.");
+
+            var information = new JobObjectExtendedLimitInformation();
+            information.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose;
+            var size = (uint)Marshal.SizeOf(typeof(JobObjectExtendedLimitInformation));
+            if (!SetInformationJobObject(job, JobObjectExtendedLimitInformationClass, ref information, size))
+            {
+                var error = Marshal.GetLastWin32Error();
+                CloseHandle(job);
+                throw new Win32Exception(error, "Unable to configure CITADEL task-host Job Object.");
+            }
+            return job;
+        }
+
+        internal int RunTaskHost()
+        {
+            paths.Validate();
+            DeleteLifecycleStopFile();
+            stopping = false;
+            taskJob = CreateKillOnCloseJob();
+            if (!AssignProcessToJobObject(taskJob, Process.GetCurrentProcess().Handle))
+            {
+                var error = Marshal.GetLastWin32Error();
+                CloseHandle(taskJob);
+                taskJob = IntPtr.Zero;
+                throw new Win32Exception(error, "Unable to attach CITADEL task host to its Job Object.");
+            }
+
+            // Keep the final Job Object handle open for the entire task-host
+            // lifetime. The host is itself in the job, so every Process.Start
+            // child inherits membership before user code can run. Process
+            // teardown closes the handle and KILL_ON_JOB_CLOSE removes any
+            // surviving child without a post-creation assignment race.
+            Supervise();
+            return 0;
         }
 
         private void Supervise()
@@ -138,6 +243,8 @@ namespace CitadelEws
                     {
                         if (stopping) return;
                         current = Process.Start(BuildChildStartInfo());
+                        if (current == null)
+                            throw new InvalidOperationException("Unable to start CITADEL agent child.");
                         child = current;
                     }
 
@@ -161,6 +268,14 @@ namespace CitadelEws
                         return;
                     }
                     if (File.Exists(paths.StopFile)) continue;
+
+                    if (taskMode)
+                    {
+                        // The Task Scheduler fallback keeps one stable host alive and
+                        // restarts only the bounded agent child after an unexpected exit.
+                        Thread.Sleep(5000);
+                        continue;
+                    }
 
                     Environment.Exit(code == 0 ? 1 : code);
                     return;
@@ -243,10 +358,17 @@ namespace CitadelEws
                     start.FileName != paths.PythonPath ||
                     start.Arguments.IndexOf(" run --config ", StringComparison.Ordinal) < 0 ||
                     start.EnvironmentVariables["PYTHONHOME"] != runtime ||
-                    start.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] != "1")
+                    start.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] != "1" ||
+                    start.EnvironmentVariables["CITADEL_TASK_MANAGED"] != null)
                     throw new InvalidOperationException("Portable service child contract failed.");
 
-                Console.WriteLine("CITADEL portable Windows service SELF TEST: PASS");
+                var taskHost = new CitadelPortableService(paths, true);
+                var taskStart = taskHost.BuildChildStartInfo();
+                if (taskStart.EnvironmentVariables["CITADEL_TASK_MANAGED"] != "1" ||
+                    taskStart.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] != "1")
+                    throw new InvalidOperationException("Portable fallback task child contract failed.");
+
+                Console.WriteLine("CITADEL portable Windows service/task-host SELF TEST: PASS");
                 return 0;
             }
             finally
@@ -258,8 +380,11 @@ namespace CitadelEws
         public static int Main(string[] args)
         {
             if (args.Length == 1 && args[0] == "--self-test") return SelfTest();
-            if (args.Length != 0) throw new ArgumentException("The portable service does not accept runtime arguments.");
             var paths = PortablePaths.Discover();
+            if (args.Length == 1 && args[0] == "--task-host")
+                return new CitadelPortableService(paths, true).RunTaskHost();
+            if (args.Length != 0)
+                throw new ArgumentException("The portable host accepts only --self-test or --task-host.");
             ServiceBase.Run(new CitadelPortableService(paths));
             return 0;
         }
