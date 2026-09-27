@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import subprocess
+import tempfile
 import sys
 import time
 from pathlib import Path
@@ -38,11 +39,17 @@ def main() -> int:
     if "--holder" in sys.argv:
         return holder()
     node = load_agent_module()
+    old_program_data = os.environ.get("PROGRAMDATA")
+    temp_root = tempfile.TemporaryDirectory(prefix="citadel-mutex-test-")
+    os.environ["PROGRAMDATA"] = temp_root.name
+    (Path(temp_root.name) / "CitadelEWS" / "state").mkdir(parents=True, exist_ok=True)
+
     child = subprocess.Popen(
         [sys.executable, str(Path(__file__).resolve()), "--holder"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=os.environ.copy(),
     )
     try:
         line = child.stdout.readline().strip() if child.stdout else ""
@@ -79,6 +86,11 @@ def main() -> int:
         if child.poll() is None:
             child.kill()
             child.wait(timeout=5)
+        if old_program_data is None:
+            os.environ.pop("PROGRAMDATA", None)
+        else:
+            os.environ["PROGRAMDATA"] = old_program_data
+        temp_root.cleanup()
 
     print("Windows install/update machine mutex: PASS")
     return 0
