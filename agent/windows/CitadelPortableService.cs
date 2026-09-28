@@ -364,7 +364,7 @@ namespace CitadelEws
 
         private static string ReadOptionalJsonString(string json, string key)
         {
-            var token = """ + key + """;
+            var token = "\\"" + key + "\\"";
             var index = json.IndexOf(token, StringComparison.Ordinal);
             if (index < 0) return null;
             index = json.IndexOf(':', index + token.Length);
@@ -385,7 +385,7 @@ namespace CitadelEws
 
         private static bool ReadRequiredJsonBool(string json, string key)
         {
-            var token = """ + key + """;
+            var token = "\\"" + key + "\\"";
             var index = json.IndexOf(token, StringComparison.Ordinal);
             if (index < 0) throw new InvalidDataException("Missing release-state field: " + key);
             index = json.IndexOf(':', index + token.Length);
