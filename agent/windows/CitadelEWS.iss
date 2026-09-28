@@ -366,7 +366,7 @@ begin
 
   { Old releases do not know about the new lifecycle lock. Kill the supervised
     host tree explicitly, then prove the executable is no longer running before
-    [Files] is allowed to replace the live install tree. }
+    the installer file-copy phase is allowed to replace the live install tree. }
   TryExec(TaskKill, '/IM CitadelNodeService.exe /T /F');
   TerminateOrphanedCitadelPython;
   WaitForCitadelHostExit;
