@@ -121,6 +121,7 @@ async function closeChecked(page, entry, route, screenshotName) {
       if (await page.locator(selector).count() !== 1) addFinding("missing_control", "/", selector);
     }
 
+    entry.auth_probe_active = true;
     const invalidAuthStatus = await page.evaluate(async () => {
       const response = await fetch("/api/v1/architect/machines", {
         method: "GET",
@@ -139,6 +140,7 @@ async function closeChecked(page, entry, route, screenshotName) {
     await page.locator("#token").fill("synthetic-invalid-token");
     await page.locator("#login").evaluate(form => form.requestSubmit());
     await page.waitForTimeout(500);
+    entry.auth_probe_active = false;
     if (!(await page.locator("#auth").isVisible())) {
       addFinding("invalid_auth_unlocked", "/", "invalid token hid login panel");
     }
