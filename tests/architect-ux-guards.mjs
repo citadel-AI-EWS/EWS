@@ -585,6 +585,7 @@ assert.match(architect, /Controller покажет READY-ноды и точны�
   const projectEnv = {
     ARCHITECT_TOKEN_HASH: architectHash,
     GOOGLE_DRIVE_ACCESS_TOKEN: "test-drive-token",
+    GOOGLE_DRIVE_PAYLOAD_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     DB: {
       prepare(sql) {
         return new ProjectStatement(sql);
