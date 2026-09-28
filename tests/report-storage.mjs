@@ -19,12 +19,14 @@ const state = {
     node_id: "node_report_test",
     public_key: JSON.stringify({ kty: "OKP", crv: "Ed25519", x: nodePublicJwk.x }),
     status: "online",
+    hostname: "NODE-REPORT-TEST",
     agent_version: "0.3.10"
   },
   result: null,
   nonces: new Set(),
   payloads: new Map(),
-  drive: new Map()
+  drive: new Map(),
+  driveUploads: []
 };
 const originalFetch = globalThis.fetch;
 let driveNo = 0;
@@ -47,6 +49,7 @@ globalThis.fetch = async (input, init = {}) => {
     driveNo += 1;
     const fileId = "drive_report_" + driveNo;
     const raw = String(init.body || "");
+    state.driveUploads.push(raw);
     const chunks = raw.split("\r\n\r\n");
     const payloadText = (chunks[2] || "").split("\r\n--")[0];
     state.drive.set(fileId, payloadText);
@@ -89,6 +92,11 @@ class Statement {
     if (this.sql.includes("SELECT result_id, outcome, created_at FROM results")) {
       return state.result;
     }
+    if (this.sql.includes("SELECT a.mission_id, m.mission_type, n.hostname FROM assignments AS a")) {
+      return this.args[0] === "assignment_report_test" && this.args[1] === state.node.node_id
+        ? { mission_id: "mission_report_test", mission_type: "project_text", hostname: state.node.hostname }
+        : null;
+    }
     if (this.sql.includes("FROM payload_objects WHERE payload_id = ?")) {
       return state.payloads.get(this.args[0]) || null;
     }
@@ -130,6 +138,8 @@ class Statement {
         result_id,
         assignment_id,
         node_id,
+        hostname: state.node.hostname,
+        execution_architecture: "ai",
         outcome,
         summary,
         artifact_key,
@@ -252,6 +262,12 @@ assert.match(state.result.report_json, /^@drive:payload_/);
 assert.equal(state.result.report_size_bytes, Buffer.byteLength(JSON.stringify(payload.report)));
 assert.equal(oauthExchanges, 1);
 assert.equal(state.drive.size, 1);
+assert.equal(state.driveUploads.length, 1);
+assert.match(state.driveUploads[0], /"citadel_hostname":"NODE-REPORT-TEST"/);
+assert.match(state.driveUploads[0], /"citadel_node_id":"node_report_test"/);
+assert.match(state.driveUploads[0], /"citadel_execution_architecture":"ai"/);
+assert.match(state.driveUploads[0], /"citadel_assignment_id":"assignment_report_test"/);
+assert.match(state.driveUploads[0], /"citadel_mission_id":"mission_report_test"/);
 const encryptedDriveReport = [...state.drive.values()][0];
 assert.match(encryptedDriveReport, /"algorithm":"A256GCM"/);
 assert.equal(encryptedDriveReport.includes('"example":true'), false);
@@ -264,6 +280,8 @@ const listResponse = await worker.fetch(new Request(
 assert.equal(listResponse.status, 200);
 const list = await listResponse.json();
 assert.equal(list.reports.length, 1);
+assert.equal(list.reports[0].hostname, "NODE-REPORT-TEST");
+assert.equal(list.reports[0].execution_architecture, "ai");
 assert.equal("content" in list.reports[0], false);
 
 const detailResponse = await worker.fetch(new Request(
