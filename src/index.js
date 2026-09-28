@@ -515,7 +515,7 @@ async function deletePayloadBestEffort(env, payloadId) {
   }
 }
 
-async function persistDrivePayload(env, { owner_type, owner_id, kind, value }) {
+async function persistDrivePayload(env, { owner_type, owner_id, kind, value, metadata = {} }) {
   await ensurePayloadStorage(env);
   const config = googleDrivePayloadConfig(env);
   if (!config.configured) throw new ApiError(503, "drive_payload_storage_unavailable");
@@ -532,8 +532,13 @@ async function persistDrivePayload(env, { owner_type, owner_id, kind, value }) {
   const token = await googleDriveAccessToken(env);
   const safeOwner = String(owner_id || "unknown").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 80);
   const safeKind = String(kind || "payload").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 48);
-  const metadata = {
-    name: safeOwner + "__" + safeKind + "__" + payloadId + ".json.enc",
+  const driveContext = metadata && typeof metadata === "object" && !Array.isArray(metadata) ? metadata : {};
+  const safeHost = String(driveContext.hostname || "").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 64);
+  const safeExecution = String(driveContext.execution_architecture || "").toLowerCase();
+  const executionLabel = ["ai", "python", "system"].includes(safeExecution) ? safeExecution : "";
+  const fileNameParts = [safeHost, executionLabel, safeOwner, safeKind, payloadId].filter(Boolean);
+  const driveMetadata = {
+    name: fileNameParts.join("__") + ".json.enc",
     parents: [config.folder_id],
     mimeType: "application/vnd.citadel.payload+json",
     appProperties: {
@@ -543,14 +548,19 @@ async function persistDrivePayload(env, { owner_type, owner_id, kind, value }) {
       citadel_kind: String(kind || "").slice(0, 64),
       citadel_sha256: sha256,
       citadel_encryption: "A256GCM",
-      citadel_key_version: encrypted.key_version
+      citadel_key_version: encrypted.key_version,
+      citadel_hostname: String(driveContext.hostname || "").slice(0, 124),
+      citadel_node_id: String(driveContext.node_id || "").slice(0, 124),
+      citadel_execution_architecture: executionLabel,
+      citadel_assignment_id: String(driveContext.assignment_id || "").slice(0, 124),
+      citadel_mission_id: String(driveContext.mission_id || "").slice(0, 124)
     }
   };
   const boundary = "citadel_" + crypto.randomUUID().replace(/-/g, "");
   const multipart =
     "--" + boundary + "\r\n" +
     "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
-    JSON.stringify(metadata) + "\r\n" +
+    JSON.stringify(driveMetadata) + "\r\n" +
     "--" + boundary + "\r\n" +
     "Content-Type: application/vnd.citadel.payload+json\r\n\r\n" +
     encrypted.text + "\r\n" +
@@ -2911,7 +2921,8 @@ function normalizeAiState(value) {
     ["selected_model", 192], ["loaded_model", 192], ["last_action", 96],
     ["progress_phase", 96], ["progress_detail", 512], ["download_job_id", 160],
     ["query_id", 160], ["query_mode", 32], ["query_status", 32],
-    ["query_prompt", 8000], ["query_answer", 65536], ["live_checked_at", 64]
+    ["query_prompt", 8000], ["query_answer", 65536], ["live_checked_at", 64],
+    ["model_store_path", 1024], ["model_store_checked_at", 64]
   ];
   const out = {
     installed: value.installed === true || value.installed === 1 ? 1 : 0,
@@ -2923,12 +2934,34 @@ function normalizeAiState(value) {
     else if (typeof raw !== "string" || raw.length > max) throw new ApiError(400, "invalid_ai_state");
     else out[name] = raw;
   }
-  for (const name of ["progress_current","progress_total","progress_bytes","progress_total_bytes"]) {
+  for (const name of ["progress_current","progress_total","progress_bytes","progress_total_bytes","model_count"]) {
     const raw = value[name];
     if (raw === undefined || raw === null) out[name] = null;
     else if (!Number.isSafeInteger(raw) || raw < 0) throw new ApiError(400, "invalid_ai_state");
     else out[name] = raw;
   }
+  const installedModels = value.installed_models === undefined || value.installed_models === null
+    ? []
+    : value.installed_models;
+  if (!Array.isArray(installedModels) || installedModels.length > 64) throw new ApiError(400, "invalid_ai_state");
+  const normalizedModels = installedModels.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new ApiError(400, "invalid_ai_state");
+    const model = requireString(item.model, "ai_model_name", 512);
+    const architecture = item.architecture === undefined || item.architecture === null || item.architecture === ""
+      ? null : requireString(String(item.architecture), "ai_model_architecture", 96);
+    const parameters = item.parameters === undefined || item.parameters === null || item.parameters === ""
+      ? null : String(item.parameters).slice(0, 96);
+    const size = item.size_bytes;
+    if (size !== undefined && size !== null && (!Number.isSafeInteger(size) || size < 0)) {
+      throw new ApiError(400, "invalid_ai_state");
+    }
+    return { model, architecture, parameters, size_bytes: size ?? null };
+  });
+  if (new TextEncoder().encode(JSON.stringify(normalizedModels)).byteLength > 48 * 1024) {
+    throw new ApiError(400, "ai_model_inventory_too_large");
+  }
+  out.installed_models = normalizedModels;
+
   const loadConfig = value.load_config && typeof value.load_config === "object" && !Array.isArray(value.load_config)
     ? value.load_config : null;
   if (loadConfig) {
@@ -3487,13 +3520,33 @@ async function submitResult(request, env, nodeId, url) {
     return json({ ok: true, duplicate: true, result: existing });
   }
 
+  const reportContext = await env.DB.prepare(`
+    SELECT a.mission_id, m.mission_type, n.hostname
+    FROM assignments AS a
+    JOIN missions AS m ON m.mission_id = a.mission_id
+    LEFT JOIN nodes AS n ON n.node_id = a.node_id
+    WHERE a.assignment_id = ? AND a.node_id = ?
+  `).bind(assignmentId, nodeId).first();
+  const executionArchitecture = reportContext?.mission_type === "project_python"
+    ? "python"
+    : reportContext?.mission_type === "project_text"
+      ? "ai"
+      : "system";
+
   const resultId = `result_${crypto.randomUUID()}`;
   const reportId = `report_${crypto.randomUUID()}`;
   const reportPayload = await persistDrivePayload(env, {
     owner_type: "report",
     owner_id: reportId,
     kind: "agent_report",
-    value: reportValue
+    value: reportValue,
+    metadata: {
+      hostname: reportContext?.hostname || null,
+      node_id: nodeId,
+      execution_architecture: executionArchitecture,
+      assignment_id: assignmentId,
+      mission_id: reportContext?.mission_id || null
+    }
   });
   const reportPointer = drivePointer(reportPayload.payload_id);
   const effectiveArtifactKey = artifactKey || ("gdrive:" + reportPayload.drive_file_id);
@@ -3722,6 +3775,12 @@ async function architectListReports(request, env, url) {
       ar.assignment_id,
       ar.mission_id,
       ar.node_id,
+      n.hostname,
+      CASE
+        WHEN m.mission_type = 'project_python' THEN 'python'
+        WHEN m.mission_type = 'project_text' THEN 'ai'
+        ELSE 'system'
+      END AS execution_architecture,
       r.outcome,
       r.summary,
       r.artifact_key,
@@ -3732,6 +3791,8 @@ async function architectListReports(request, env, url) {
       ar.created_at
     FROM agent_reports AS ar
     JOIN results AS r ON r.result_id = ar.result_id
+    JOIN missions AS m ON m.mission_id = ar.mission_id
+    LEFT JOIN nodes AS n ON n.node_id = ar.node_id
     ${where}
     ORDER BY ar.created_at DESC, ar.report_id DESC
     LIMIT ? OFFSET ?
@@ -3756,6 +3817,12 @@ async function architectGetReport(request, env, reportId) {
       ar.assignment_id,
       ar.mission_id,
       ar.node_id,
+      n.hostname,
+      CASE
+        WHEN m.mission_type = 'project_python' THEN 'python'
+        WHEN m.mission_type = 'project_text' THEN 'ai'
+        ELSE 'system'
+      END AS execution_architecture,
       r.outcome,
       r.summary,
       r.artifact_key,
@@ -3768,6 +3835,8 @@ async function architectGetReport(request, env, reportId) {
       ar.created_at
     FROM agent_reports AS ar
     JOIN results AS r ON r.result_id = ar.result_id
+    JOIN missions AS m ON m.mission_id = ar.mission_id
+    LEFT JOIN nodes AS n ON n.node_id = ar.node_id
     WHERE ar.report_id = ? OR ar.result_id = ?
   `).bind(reportId, reportId).first();
 
