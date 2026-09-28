@@ -321,6 +321,7 @@ node tests/hub-five-questions.mjs
 node tests/d1-usage.mjs
 node tests/ten-prompt-routing.mjs
 python tests/lmstudio-local-protocol.py
+node tests/flow-a-e2e.mjs
 python tests/mini-agents.py
 node tests/openrouter-quality-gate.mjs
 
