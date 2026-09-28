@@ -5167,8 +5167,8 @@ async function architectSearchModels(request, env, url) {
   await authenticateArchitect(request, env);
   const raw = String(url.searchParams.get("q") || "").trim();
   const query = raw ? requireString(raw, "model_search", 80) : "GGUF instruct";
-  const rows = await fetchHuggingFaceModels(query, 40);
-  return json({ ok: true, query, source: "huggingface", models: mapHuggingFaceModels(rows, 24) });
+  const rows = await fetchHuggingFaceModels(query, 80);
+  return json({ ok: true, query, source: "huggingface", models: mapHuggingFaceModels(rows, 60) });
 }
 
 async function architectRecommendModels(request, env, nodeId) {
