@@ -125,8 +125,8 @@ need(index.includes('throw new ApiError(409, "command_already_pending")'), "comm
   const expireAt = block.indexOf("await expireStaleNodeCommands(env, nodeId);");
   const storageAt = block.indexOf("await ensureCommandStorage(env);");
   need(
-    expireAt >= 0 && storageAt > expireAt,
-    "Architect command path must expire the target node before enforcing command index"
+    storageAt >= 0 && expireAt > storageAt,
+    "Architect command path must bootstrap command storage before stale-command cleanup"
   );
 }
 need(index.includes("expireStaleNodeCommands"), "stale command expiry missing");
