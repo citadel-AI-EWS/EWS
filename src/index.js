@@ -822,7 +822,9 @@ const WORK_ROLE_REGISTRY = Object.freeze([
   { id: "recovery", label: "Recovery", kind: "worker", origin: "legacy_simulation" },
   { id: "programmer", label: "Programmer", kind: "worker", origin: "architect_extension_2026_09_18" },
   { id: "mathematician", label: "Mathematician", kind: "worker", origin: "architect_extension_2026_09_18" },
-  { id: "security_analyst", label: "Security Analyst", kind: "worker", origin: "architect_extension_2026_09_18" }
+  { id: "security_analyst", label: "Security Analyst", kind: "worker", origin: "architect_extension_2026_09_18" },
+  { id: "engineer", label: "Engineer", kind: "worker", origin: "ee_professions_2026_09" },
+  { id: "scientist", label: "Scientist", kind: "worker", origin: "ee_professions_2026_09" }
 ]);
 
 const WORKER_ROLE_IDS = new Set(
@@ -864,8 +866,18 @@ function schedulingFromChecks(checksJson) {
 
 function targetProjectWork(taskText, requestedRoles, executionMode, desiredWorkers) {
   const sourceText = String(taskText || "").trim();
+  const explicitRoles = Array.isArray(requestedRoles) && requestedRoles.length
+    ? requestedRoles
+    : [];
   let items = executionMode === "python"
-    ? [{ sequence_no: 1, role_name: "programmer", task_text: sourceText, role_source: "hub_recommended" }]
+    ? (explicitRoles.length
+        ? explicitRoles.map((roleName, index) => ({
+            sequence_no: index + 1,
+            role_name: roleName,
+            task_text: sourceText,
+            role_source: "architect_added"
+          }))
+        : [{ sequence_no: 1, role_name: "programmer", task_text: sourceText, role_source: "hub_recommended" }])
     : planProjectWork(sourceText, requestedRoles);
   if (!Number.isInteger(desiredWorkers)) return items;
   const target = Math.max(1, Math.min(50, desiredWorkers));
@@ -896,6 +908,8 @@ function classifyWorkRole(text) {
   const value = String(text || "").toLowerCase();
   const tests = [
     ["security_analyst", /(security|secure|vulnerab|threat|malware|audit|шифр|безопас|уязв|угроз|вредонос)/],
+    ["engineer", /(engineer|engineering|architecture|infrastructure|system design|hardware|network design|инженер|архитектур|инфраструктур|системн.*проект)/],
+    ["scientist", /(scientist|science|scientific|hypothesis|experiment|physics|chemistry|biology|уч[её]н|научн|гипотез|эксперимент|физик|хими|биолог)/],
     ["programmer", /(python|javascript|typescript|java|code|coding|program|function|api|sql|html|css|код|программ|функц|скрипт|база данных)/],
     ["mathematician", /(math|equation|formula|algebra|geometry|calculus|probab|combin|математ|формул|уравнен|алгебр|геометр|вероятност)/],
     ["metrics", /(metric|statistics|chart|graph|median|average|variance|метрик|статист|график|медиан|средн)/],
@@ -1685,12 +1699,19 @@ async function architectCheckProject(request, env) {
   const requestedRoles = normalizeRequestedProjectRoles(body.requested_roles);
   const workerTarget = normalizeProjectWorkerTarget(body.worker_target);
   const executionMode = projectExecutionMode(sourceType);
-  const effectiveRequestedRoles = executionMode === "python" ? [] : requestedRoles;
+  const effectiveRequestedRoles = requestedRoles;
   const result = await evaluateProjectChecks(env, sourceType, title, taskText);
   const recommendedWork = executionMode === "python"
-    ? [{ sequence_no: 1, role_name: "programmer", task_text: taskText, role_source: "hub_recommended" }]
+    ? (effectiveRequestedRoles.length
+        ? effectiveRequestedRoles.map((roleName, index) => ({
+            sequence_no: index + 1,
+            role_name: roleName,
+            task_text: taskText,
+            role_source: "architect_added"
+          }))
+        : [{ sequence_no: 1, role_name: "programmer", task_text: taskText, role_source: "hub_recommended" }])
     : planProjectWork(taskText);
-  const autoDesiredWorkers = executionMode === "python" ? 1 : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers;
+  const autoDesiredWorkers = executionMode === "python" ? Math.max(1, effectiveRequestedRoles.length || 1) : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers;
   const previewDesiredWorkers = workerTarget.mode === "fixed" ? workerTarget.count : autoDesiredWorkers;
   const plannedWork = targetProjectWork(taskText, effectiveRequestedRoles, executionMode, workerTarget.mode === "all" ? null : previewDesiredWorkers);
   const recommendedRolePlan = rolePlanSummary(recommendedWork);
@@ -1728,7 +1749,7 @@ async function architectCreateProject(request, env) {
   const requestedRoles = normalizeRequestedProjectRoles(body.requested_roles);
   const workerTarget = normalizeProjectWorkerTarget(body.worker_target);
   const executionMode = projectExecutionMode(sourceType);
-  const effectiveRequestedRoles = executionMode === "python" ? [] : requestedRoles;
+  const effectiveRequestedRoles = requestedRoles;
   const evaluated = await evaluateProjectChecks(env, sourceType, title, taskText);
   if (!projectChecksPassed(evaluated.checks)) {
     throw new ApiError(409, "project_checks_failed");
@@ -1752,10 +1773,17 @@ async function architectCreateProject(request, env) {
   const nodes = onlineNodes.filter((node) => projectNodeReady(node, sourceType));
 
   const recommendedWork = executionMode === "python"
-    ? [{ sequence_no: 1, role_name: "programmer", task_text: taskText, role_source: "hub_recommended" }]
+    ? (effectiveRequestedRoles.length
+        ? effectiveRequestedRoles.map((roleName, index) => ({
+            sequence_no: index + 1,
+            role_name: roleName,
+            task_text: taskText,
+            role_source: "architect_added"
+          }))
+        : [{ sequence_no: 1, role_name: "programmer", task_text: taskText, role_source: "hub_recommended" }])
     : planProjectWork(taskText);
   const recommendedRoles = new Set(recommendedWork.map((item) => item.role_name));
-  const autoDesiredWorkers = executionMode === "python" ? 1 : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers;
+  const autoDesiredWorkers = executionMode === "python" ? Math.max(1, effectiveRequestedRoles.length || 1) : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers;
   const desiredWorkers = workerTarget.mode === "fixed"
     ? workerTarget.count
     : workerTarget.mode === "all"
