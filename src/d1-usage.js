@@ -49,17 +49,13 @@ export async function d1UsageOverview(env, now = new Date()) {
   const promise = (async () => {
     let result;
     try {
-      const [analytics, detail] = await Promise.all([
-        cfJson('https://api.cloudflare.com/client/v4/graphql', token, {method: 'POST', body: JSON.stringify({query: QUERY, variables: {account, database, date}})}),
-        cfJson(`https://api.cloudflare.com/client/v4/accounts/${account}/d1/database/${database}`, token)
-      ]);
+      const analytics = await cfJson('https://api.cloudflare.com/client/v4/graphql', token, {method: 'POST', body: JSON.stringify({query: QUERY, variables: {account, database, date}})});
       const row = analytics.data?.viewer?.accounts?.[0];
       if (!row) throw Error('analytics_account_unavailable');
       const all = totals(row.account), db = totals(row.database);
-      const size = number(detail.result?.file_size);
-      result = {...base, status: size === null ? 'partial' : 'ready', updated_at: now.toISOString(),
+      result = {...base, status: 'ready', updated_at: now.toISOString(),
         account: {rows_read: metric(all.rowsRead, base.account.rows_read.limit), rows_written: metric(all.rowsWritten, base.account.rows_written.limit)},
-        database: {rows_read: db.rowsRead, rows_written: db.rowsWritten, storage: metric(size, base.database.storage.limit)}};
+        database: {rows_read: db.rowsRead, rows_written: db.rowsWritten, storage: base.database.storage}};
     } catch (error) {
       result = {...base, status: 'unavailable', error: /^cloudflare_http_\d+$/.test(error.message) ? error.message : 'analytics_unavailable'};
     }

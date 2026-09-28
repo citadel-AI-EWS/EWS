@@ -18,20 +18,20 @@ globalThis.fetch = async (url, options) => {
 try {
   assert.equal((await d1UsageOverview({})).status, 'unconfigured');
   const [a,b] = await Promise.all([d1UsageOverview(env,now),d1UsageOverview(env,now)]);
-  assert.equal(requests,2,'concurrent views must share upstream requests');
+  assert.equal(requests,1,'concurrent views must share the analytics request');
   assert.deepEqual(a,b);
   assert.equal(a.account.rows_read.percent,90);
   assert.equal(a.account.rows_written.remaining,50000);
   assert.equal(a.database.rows_read,5000,'database usage is separate from account quota');
-  assert.equal(a.database.storage.percent,20);
+  assert.equal(a.database.storage.percent,null,'storage is intentionally not fetched for percentage-only UI');
   assert.equal(a.reset_at,'2026-09-27T00:00:00.000Z');
   assert.ok(!JSON.stringify(a).includes('test-secret'));
-  await d1UsageOverview(env,new Date(+now+60000)); assert.equal(requests,2);
+  await d1UsageOverview(env,new Date(+now+60000)); assert.equal(requests,1);
   const paid=await d1UsageOverview({...env,D1_USAGE_PLAN:'paid'},now);
   assert.equal(paid.account.rows_read.percent,null,'daily usage cannot be compared with paid monthly allowance');
   globalThis.fetch=async()=>Response.json({errors:[{message:'secret-like detail'}]});
   const failed=await d1UsageOverview(env,new Date(+now+360000));
   assert.equal(failed.status,'unavailable'); assert.equal(failed.account.rows_read.used,null);
   assert.ok(!JSON.stringify(failed).includes('secret-like'));
-  console.log('D1 overview: account scope, exact arithmetic, missing configuration, caching, paid plan and errors PASS');
+  console.log('D1 overview: analytics-only account scope, exact arithmetic, caching, paid plan and errors PASS');
 } finally {globalThis.fetch=saved;}
