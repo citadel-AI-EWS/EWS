@@ -549,7 +549,7 @@ assert.match(architect, /Controller покажет READY-ноды и точны�
       throw new Error(`Unhandled project all(): ${this.sql}`);
     }
     async run() {
-      if (this.sql.startsWith("CREATE TABLE") || this.sql.startsWith("CREATE INDEX")) {
+      if (this.sql.startsWith("CREATE TABLE") || this.sql.startsWith("CREATE INDEX") || this.sql.startsWith("CREATE UNIQUE INDEX")) {
         return { meta: { changes: 0 } };
       }
       if (this.sql.startsWith("INSERT OR IGNORE INTO architect_auth_state")) {
