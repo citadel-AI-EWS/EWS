@@ -212,4 +212,18 @@ need(operations.includes("Длинные логи · Google Drive"), "Hub Drive 
 need(operations.includes("toggleDriveReport"), "Hub expandable Drive report loader missing");
 need(operations.includes("OpenRouter quality gate"), "Hub OpenRouter execution path missing");
 need(operations.includes("Папка моделей"), "Hub model-store path missing");
+need(index.includes('"ssh_probe"'), "SSH probe command missing from Controller allow-list");
+need(index.includes("node_ssh_state"), "SSH readiness D1 state missing");
+need(index.includes("nodeUpdateSshState"), "signed node SSH-state endpoint missing");
+need(index.includes("ssh_readiness_probe"), "SSH probe capability gate missing");
+need(agentV1.includes('"ssh_readiness_probe"'), "agent SSH readiness capability missing");
+need(agentV1.includes("def probe_ssh_readiness"), "read-only SSH readiness probe missing");
+need(agentV1.includes('("127.0.0.1", port)'), "SSH probe must check localhost rather than exposing a listener");
+need(agentV1.includes('"CITADEL_SSH_ACCESS_HOSTNAME"'), "SSH Access hostname configuration missing");
+need(!agentV1.includes('command_type == "shell"'), "arbitrary remote shell command must not be added to signed command channel");
+need(operations.includes("function probeSsh"), "Hub SSH probe action missing");
+need(operations.includes("function openBrowserSsh"), "Hub browser SSH handoff missing");
+need(operations.includes("sshReady"), "Hub SSH readiness gate missing");
+need(operations.includes("cloudflared") && operations.includes("localhost:22"), "Hub SSH readiness facts missing");
+
 
