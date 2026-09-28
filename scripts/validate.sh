@@ -7,6 +7,7 @@ python -m unittest -v controller_tests.py
 python -m py_compile controller_app.py controller_tests.py agent/citadel_node_v1.py agent/citadel_node_v2.py tests/network-recovery-priority.py
 python agent/citadel_node_v2.py self-test
 python tests/network-recovery-priority.py
+python tests/ssh-readiness.py
 
 python - <<'PY'
 from pathlib import Path
@@ -340,7 +341,7 @@ required = {
     "nodes", "missions", "assignments", "results", "commands", "audit_events",
     "agent_reports", "architect_sessions", "node_logs", "node_log_rate_limits",
     "agent_rollouts", "architect_projects", "project_work_items",
-    "project_specializations", "project_quality_gates", "node_network_state", "node_ai_state",
+    "project_specializations", "project_quality_gates", "node_network_state", "node_ai_state", "node_ssh_state",
     "architect_auth_state", "architect_recovery_attempts",
     "architect_access_tokens", "enterprise_sites", "enterprise_node_groups",
     "enterprise_node_scope", "enterprise_desired_state",
