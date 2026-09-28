@@ -36,6 +36,15 @@ class SshReadinessProbeTests(unittest.TestCase):
         self.assertEqual(state["access_hostname"], "node-1.example.com")
         self.assertEqual(state["access_mode"], "browser")
 
+    def test_local_and_ip_access_targets_are_rejected(self):
+        for hostname in ("localhost", "127.0.0.1", "10.0.0.5"):
+            with self.subTest(hostname=hostname), mock.patch.dict(
+                os.environ,
+                {"CITADEL_SSH_ACCESS_HOSTNAME": hostname, "CITADEL_SSH_ACCESS_MODE": "browser"},
+                clear=False,
+            ):
+                self.assertIsNone(self.agent._ssh_access_hostname())
+
     def test_hostname_is_bounded_and_probe_does_not_invent_tunnel(self):
         def which(name):
             return "/usr/sbin/sshd" if name == "sshd" else None
