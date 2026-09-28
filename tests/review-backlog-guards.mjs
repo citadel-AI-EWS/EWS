@@ -59,6 +59,7 @@ need(setup.includes('Enter-CitadelLifecycleLock'), "PowerShell installer lifecyc
 need(oneClickIss.includes('WbemScripting.SWbemLocator'), "one-click orphan-process WMI guard is missing");
 need(oneClickIss.includes('TerminateOrphanedCitadelPython'), "one-click orphaned agent termination is missing");
 need(oneClickIss.includes("Pos(AppPrefix, CommandLine) > 0"), "one-click command-line fallback for missing ExecutablePath is missing");
+need(oneClickIss.includes("MachineRootPrefix"), "one-click must quiesce future versioned release runtime children");
 need(oneClickIss.includes("'SELECT ProcessId,ExecutablePath,CommandLine FROM Win32_Process'"), "one-click must inspect all process names for CITADEL entrypoints");
 need(oneClickIss.includes('\\.venv\\scripts\\python'), "one-click must quiesce setup-package release venv agents");
 need(oneClickIss.includes('failure {#ServiceName} reset= 0 actions= ""'), "one-click must disable SCM recovery during live-tree replacement");
@@ -75,6 +76,11 @@ need(serviceHost.includes('CITADEL_SERVICE_STOP_FILE'), "transient service stop 
 need(serviceHost.includes('RequestAdditionalTime(60000)'), "SCM stop wait hint missing");
 need(serviceHost.includes('RestartExitCode = 75'), "service restart supervision missing");
 need(portableHost.includes('release-state.json'), "portable launcher versioned release-state support is missing");
+need(portableHost.includes('TryGetExistingAttributes'), "launcher must distinguish missing release-state from unreadable metadata");
+need(portableHost.includes('release-state.json must not be a reparse point'), "launcher release-state reparse guard is missing");
+need(portableHost.includes('Version-selection metadata ancestry contains a reparse point'), "launcher ProgramData/state ancestry reparse guard is missing");
+need(portableHost.includes('Invalid JSON integer token boundary'), "launcher schema parser token-boundary guard is missing");
+need(portableHost.includes('!Char.IsLetterOrDigit(value[0])'), "launcher strict release-id child validation is missing");
 need(portableHost.includes('RELEASE.OK'), "portable launcher verified release marker check is missing");
 need(portableHost.includes('TrySwitchToPreviousRelease'), "portable launcher one-shot previous release fallback is missing");
 need(portableHost.includes('RefreshCommittedRelease'), "portable launcher managed-restart pointer refresh is missing");
