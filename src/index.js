@@ -1091,7 +1091,7 @@ async function nodeSshStateResponse(env, nodeId) {
     FROM node_ssh_state
     WHERE node_id = ?
   `).bind(nodeId).first();
-  return row || {
+  const state = row || {
     node_id: nodeId,
     ssh_server_installed: 0,
     ssh_server_running: 0,
@@ -1104,6 +1104,16 @@ async function nodeSshStateResponse(env, nodeId) {
     checked_at: null,
     updated_at: null
   };
+  const checkedMs = Date.parse(state.checked_at || "");
+  const fresh = Number.isFinite(checkedMs) && Date.now() - checkedMs >= 0 && Date.now() - checkedMs <= 5 * 60 * 1000;
+  const ready = fresh &&
+    Number(state.ssh_server_running) === 1 &&
+    Number(state.local_port_open) === 1 &&
+    Number(state.cloudflared_running) === 1 &&
+    Number(state.tunnel_configured) === 1 &&
+    typeof state.access_hostname === "string" &&
+    ["browser", "infrastructure"].includes(state.access_mode);
+  return { ...state, fresh, ready };
 }
 
 function lmstudioInstallAssetForNode(node) {
@@ -3079,11 +3089,17 @@ function normalizeSshState(value) {
   let accessHostname = null;
   if (value.access_hostname !== undefined && value.access_hostname !== null && value.access_hostname !== "") {
     accessHostname = requireString(value.access_hostname, "ssh_access_hostname", 253).toLowerCase();
-    if (!/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(accessHostname) || accessHostname.includes("..")) {
+    if (
+      !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(accessHostname) ||
+      accessHostname.includes("..") ||
+      !accessHostname.includes(".") ||
+      accessHostname === "localhost" ||
+      /^\d{1,3}(?:\.\d{1,3}){3}$/.test(accessHostname)
+    ) {
       throw new ApiError(400, "invalid_ssh_access_hostname");
     }
   }
-  const checkedAt = requireString(value.checked_at || new Date().toISOString(), "ssh_checked_at", 64);
+  const checkedAt = requireString(value.checked_at, "ssh_checked_at", 64);
   if (!Number.isFinite(Date.parse(checkedAt))) throw new ApiError(400, "invalid_ssh_checked_at");
   const tunnelConfigured = flag("tunnel_configured");
   if (tunnelConfigured && (!accessHostname || accessMode === "none")) {
