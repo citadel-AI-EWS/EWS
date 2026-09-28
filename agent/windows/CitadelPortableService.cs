@@ -840,6 +840,70 @@ namespace CitadelEws
                     fallbackPaths.ReleaseId != previousId)
                     throw new InvalidOperationException("Versioned launcher did not fall back to committed previous release.");
 
+                // A malformed current RELEASE.OK is a structural start failure,
+                // not a reason to abandon the verified previous release.
+                File.WriteAllText(Path.Combine(releases, currentId, "runtime", "python.exe"), "");
+                File.WriteAllText(Path.Combine(releases, currentId, "RELEASE.OK"), "{");
+                var malformedMarkerFallback = PortablePaths.DiscoverForRoots(
+                    Path.Combine(root, "legacy"),
+                    citadelRoot
+                );
+                if (!malformedMarkerFallback.PreviousFallbackUsed ||
+                    malformedMarkerFallback.ReleaseId != previousId)
+                    throw new InvalidOperationException("Malformed current RELEASE.OK did not fall back to previous.");
+
+                // Fractional/suffixed schema values must not be accepted as schema 1.
+                File.WriteAllText(
+                    Path.Combine(versionedState, "release-state.json"),
+                    "{" +
+                    "\"schema\":1.5," +
+                    "\"current\":\"" + currentId + "\"," +
+                    "\"previous\":null," +
+                    "\"previous_rollbackable\":false," +
+                    "\"current_descriptor_sha256\":\"" + currentHash + "\"," +
+                    "\"previous_descriptor_sha256\":null," +
+                    "\"state_schema\":1," +
+                    "\"min_launcher_version\":\"1.0.0\"" +
+                    "}"
+                );
+                bool fractionalSchemaRejected = false;
+                try
+                {
+                    PortablePaths.DiscoverForRoots(Path.Combine(root, "legacy"), citadelRoot);
+                }
+                catch (InvalidDataException)
+                {
+                    fractionalSchemaRejected = true;
+                }
+                if (!fractionalSchemaRejected)
+                    throw new InvalidOperationException("Fractional release-state schema was accepted.");
+
+                // "." must not resolve to the releases container itself.
+                File.WriteAllText(
+                    Path.Combine(versionedState, "release-state.json"),
+                    "{" +
+                    "\"schema\":1," +
+                    "\"current\":\".\"," +
+                    "\"previous\":null," +
+                    "\"previous_rollbackable\":false," +
+                    "\"current_descriptor_sha256\":\"" + currentHash + "\"," +
+                    "\"previous_descriptor_sha256\":null," +
+                    "\"state_schema\":1," +
+                    "\"min_launcher_version\":\"1.0.0\"" +
+                    "}"
+                );
+                bool dotReleaseRejected = false;
+                try
+                {
+                    PortablePaths.DiscoverForRoots(Path.Combine(root, "legacy"), citadelRoot);
+                }
+                catch (InvalidDataException)
+                {
+                    dotReleaseRejected = true;
+                }
+                if (!dotReleaseRejected)
+                    throw new InvalidOperationException("Dot release identifier was accepted.");
+
                 File.WriteAllText(
                     Path.Combine(versionedState, "release-state.json"),
                     "{\"current\":\"..\\\\evil\",\"previous_rollbackable\":false," +
