@@ -2,6 +2,7 @@ import { getProjectExperienceRegistry } from "./experience/registry.js";
 import { d1UsageOverview } from "./d1-usage.js";
 import { openRouterQualityConfig, reviewWithOpenRouter } from "./quality/openrouter.js";
 import { ARCHITECT_ROLE_PERMISSIONS, DEFAULT_ENTERPRISE_POLICY, evaluateEnterpriseNode, normalizeEnterprisePolicy, requiredArchitectPermission, roleHasPermission } from "./enterprise/policy.js";
+import { decryptDrivePayload, encryptDrivePayload, verifyDrivePayloadEncryption } from "./google_drive_payload_crypto.js";
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -373,6 +374,16 @@ async function googleDriveAccessToken(env) {
   return data.access_token;
 }
 
+async function googleDrivePayloadReady(env) {
+  try {
+    await verifyDrivePayloadEncryption(env);
+  } catch (error) {
+    throw new ApiError(503, error?.code || "drive_payload_encryption_unavailable");
+  }
+  await googleDriveAccessToken(env);
+  return true;
+}
+
 async function ensurePayloadStorage(env) {
   if (!payloadSchemaPromise) {
     payloadSchemaPromise = env.DB.batch([
@@ -488,19 +499,27 @@ async function persistDrivePayload(env, { owner_type, owner_id, kind, value }) {
   const jsonText = JSON.stringify(value);
   const sizeBytes = new TextEncoder().encode(jsonText).byteLength;
   const sha256 = await sha256Hex(jsonText);
+  let encrypted;
+  try {
+    encrypted = await encryptDrivePayload(env, jsonText);
+  } catch (error) {
+    throw new ApiError(503, error?.code || "drive_payload_encryption_failed");
+  }
   const token = await googleDriveAccessToken(env);
   const safeOwner = String(owner_id || "unknown").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 80);
   const safeKind = String(kind || "payload").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 48);
   const metadata = {
-    name: safeOwner + "__" + safeKind + "__" + payloadId + ".json",
+    name: safeOwner + "__" + safeKind + "__" + payloadId + ".json.enc",
     parents: [config.folder_id],
-    mimeType: "application/json",
+    mimeType: "application/vnd.citadel.payload+json",
     appProperties: {
       citadel_payload_id: payloadId,
       citadel_owner_type: String(owner_type || "").slice(0, 64),
       citadel_owner_id: String(owner_id || "").slice(0, 120),
       citadel_kind: String(kind || "").slice(0, 64),
-      citadel_sha256: sha256
+      citadel_sha256: sha256,
+      citadel_encryption: "A256GCM",
+      citadel_key_version: encrypted.key_version
     }
   };
   const boundary = "citadel_" + crypto.randomUUID().replace(/-/g, "");
@@ -509,8 +528,8 @@ async function persistDrivePayload(env, { owner_type, owner_id, kind, value }) {
     "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
     JSON.stringify(metadata) + "\r\n" +
     "--" + boundary + "\r\n" +
-    "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
-    jsonText + "\r\n" +
+    "Content-Type: application/vnd.citadel.payload+json\r\n\r\n" +
+    encrypted.text + "\r\n" +
     "--" + boundary + "--";
   let response;
   try {
@@ -563,7 +582,14 @@ async function readDrivePayload(env, payloadId) {
     throw new ApiError(503, "drive_payload_read_failed");
   }
   if (!response.ok) throw new ApiError(503, "drive_payload_read_failed");
-  const text = await response.text();
+  const storedText = await response.text();
+  let decoded;
+  try {
+    decoded = await decryptDrivePayload(env, storedText);
+  } catch (error) {
+    throw new ApiError(502, error?.code || "drive_payload_decryption_failed");
+  }
+  const text = decoded.plaintext;
   if ((new TextEncoder().encode(text).byteLength) !== Number(row.size_bytes)) {
     throw new ApiError(502, "drive_payload_size_mismatch");
   }
@@ -6287,7 +6313,7 @@ async function handleApi(request, env, url) {
         ensureSessionStorage(env)
           .then(() => "ready")
           .catch(() => "unavailable"),
-        googleDriveAccessToken(env)
+        googleDrivePayloadReady(env)
           .then(() => "ready")
           .catch(() => "unavailable")
       ]);
