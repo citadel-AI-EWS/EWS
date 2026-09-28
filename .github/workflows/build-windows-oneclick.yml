@@ -491,10 +491,10 @@ jobs:
               throw "Repair did not restore LocalService ACL on $path."
             }
           }
-          $host = Get-CimInstance Win32_Process | Where-Object {
+          $supervisorHost = Get-CimInstance Win32_Process | Where-Object {
             $_.Name -eq "CitadelNodeService.exe" -and $_.ExecutablePath -eq (Join-Path $agentRoot "CitadelNodeService.exe")
           } | Select-Object -First 1
-          if (-not $host) { throw "Repair did not start supervised host." }
+          if (-not $supervisorHost) { throw "Repair did not start supervised host." }
           $child = @(Get-CimInstance Win32_Process | Where-Object {
             $_.ExecutablePath -eq (Join-Path $agentRoot "runtime\python.exe") -and
             $_.CommandLine -like "*citadel_node_v2.py*"
