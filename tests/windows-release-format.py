@@ -203,7 +203,7 @@ def main() -> int:
         expect_error(
             "extra executable",
             lambda: rf.verify_release_tree(releases, release_id, public_x=public_x),
-            "unmanifested_executable",
+            "unmanifested_payload",
         )
         extra.unlink()
 
@@ -261,7 +261,7 @@ def main() -> int:
             symlink.unlink()
 
         # Pure path and release-id helpers reject Windows-dangerous names.
-        for unsafe in ["../x", "C:/x", "x\\y", "file.txt:ads", "CON/file.txt", "x./y"]:
+        for unsafe in ["../x", "C:/x", "x\\y", "file.txt:ads", "CON/file.txt", "x./y", "a/./b", "a//b"]:
             expect_error(
                 f"unsafe path {unsafe}",
                 lambda unsafe=unsafe: rf.validate_manifest_path(unsafe),
@@ -273,6 +273,39 @@ def main() -> int:
                 lambda unsafe_id=unsafe_id: rf._validate_release_id(unsafe_id),
                 "invalid_release_id",
             )
+
+        # Strict JSON rejects duplicate keys and non-finite constants.
+        strict_probe = root / "strict-probe.json"
+        strict_probe.write_text('{"a":1,"a":2}', encoding="utf-8")
+        expect_error(
+            "duplicate json key",
+            lambda: rf._load_canonical_json(strict_probe),
+            "duplicate_json_key",
+        )
+        strict_probe.write_text('{"a":NaN}', encoding="utf-8")
+        expect_error(
+            "non-finite json",
+            lambda: rf._load_canonical_json(strict_probe),
+            "invalid_json_constant",
+        )
+        strict_probe.unlink()
+
+        # Descriptor schema must be an integer token, not 1.0 or true.
+        bad_schema = dict(descriptor)
+        bad_schema["schema"] = 1.0
+        raw_bad_schema = rf.canonical_json_bytes(bad_schema)
+        descriptor_path.write_bytes(raw_bad_schema)
+        (root / "RELEASE.json.sig").write_text(
+            b64url(key.sign(raw_bad_schema)) + "\n",
+            encoding="ascii",
+        )
+        expect_error(
+            "fractional schema",
+            lambda: rf.verify_release_tree(releases, release_id, public_x=public_x),
+            "invalid_integer:schema",
+        )
+        descriptor_path.write_bytes(canonical_descriptor)
+        (root / "RELEASE.json.sig").write_text(original_sig, encoding="ascii")
 
         # Deterministic ID and manifest hash are stable regardless of record order.
         reversed_records = list(reversed(descriptor["files"]))
