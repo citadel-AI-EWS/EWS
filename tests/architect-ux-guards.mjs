@@ -630,3 +630,7 @@ assert.ok(operations.includes("AI · READY"), "fleet AI badge missing");
 assert.ok(operations.includes("scheduleModelSearch"), "live model search missing");
 assert.ok(operations.includes("showModelDetails"), "model details UI missing");
 assert.ok(operations.includes("formatCount(m.downloads)"), "model download counts missing");
+
+assert.ok(operations.includes("syncFleetProgress"), "fleet command monitoring missing");
+assert.ok(operations.includes("сейчас выполняется"), "fleet active-command status missing");
+assert.ok(operations.includes("результат каждой ноды смотрите"), "fleet settled-status wording missing");
