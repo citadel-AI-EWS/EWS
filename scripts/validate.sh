@@ -308,6 +308,7 @@ node --check src/telemetry/architect.js
 node --check src/telemetry/router.js
 
 node tests/google-drive-payload-crypto.mjs
+node tests/google-drive-payload-readiness.mjs
 node tests/report-storage.mjs
 node tests/session-storage.mjs
 node tests/telemetry-storage.mjs
