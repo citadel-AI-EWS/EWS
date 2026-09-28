@@ -52,7 +52,7 @@ VERSION = "0.3.20"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}
+SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe"}
 CORE_UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
 UPDATE_FILE_NAMES = CORE_UPDATE_FILE_NAMES | {"windows_enterprise_probe.ps1"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -900,7 +900,7 @@ class Agent:
 
     @property
     def capabilities(self) -> list[str]:
-        capabilities = set(HANDLERS) | {"lmstudio_remote", "project_text", "project_python"}
+        capabilities = set(HANDLERS) | {"lmstudio_remote", "project_text", "project_python", "ssh_readiness_probe"}
         if self.config.prevent_automatic_sleep:
             capabilities.add("always_on_guard")
         if self.config.network_recovery_enabled:
@@ -1583,6 +1583,99 @@ class Agent:
             )
         except Exception as error:
             self.log.write("lmstudio_state_report_failed", error=str(error)[:300])
+
+    @staticmethod
+    def _process_running(names: set[str]) -> bool:
+        lowered = {name.lower() for name in names}
+        try:
+            for process in psutil.process_iter(["name"]):
+                name = str(process.info.get("name") or "").lower()
+                if name in lowered:
+                    return True
+        except (psutil.Error, OSError):
+            return False
+        return False
+
+    @staticmethod
+    def _local_port_open(port: int) -> bool:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.75):
+                return True
+        except OSError:
+            return False
+
+    @staticmethod
+    def _ssh_access_hostname() -> str | None:
+        value = os.environ.get("CITADEL_SSH_ACCESS_HOSTNAME", "").strip().lower()
+        if not value or len(value) > 253 or ".." in value:
+            return None
+        if not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", value):
+            return None
+        return value
+
+    @staticmethod
+    def _ssh_access_mode() -> str:
+        value = os.environ.get("CITADEL_SSH_ACCESS_MODE", "none").strip().lower()
+        return value if value in {"none", "browser", "infrastructure"} else "none"
+
+    def probe_ssh_readiness(self) -> dict[str, Any]:
+        """Read-only SSH/Cloudflare readiness probe; never opens ports or changes sshd."""
+        sshd = shutil.which("sshd")
+        if not sshd and os.name == "nt":
+            windows_root = Path(os.environ.get("WINDIR", r"C:\\Windows"))
+            candidate = windows_root / "System32" / "OpenSSH" / "sshd.exe"
+            if candidate.is_file():
+                sshd = str(candidate)
+
+        cloudflared = shutil.which("cloudflared")
+        if not cloudflared and os.name == "nt":
+            for candidate in (
+                Path(os.environ.get("ProgramFiles", r"C:\\Program Files")) / "cloudflared" / "cloudflared.exe",
+                Path(os.environ.get("ProgramFiles", r"C:\\Program Files")) / "Cloudflare" / "cloudflared.exe",
+            ):
+                if candidate.is_file():
+                    cloudflared = str(candidate)
+                    break
+
+        port_open = self._local_port_open(22)
+        ssh_running = port_open or self._process_running({"sshd", "sshd.exe"})
+        cloudflared_running = self._process_running({"cloudflared", "cloudflared.exe"})
+        access_hostname = self._ssh_access_hostname()
+        access_mode = self._ssh_access_mode()
+        tunnel_configured = bool(cloudflared_running and access_hostname and access_mode != "none")
+        return {
+            "ssh_server_installed": bool(sshd),
+            "ssh_server_running": bool(ssh_running),
+            "local_port_open": bool(port_open),
+            "cloudflared_installed": bool(cloudflared),
+            "cloudflared_running": bool(cloudflared_running),
+            "tunnel_configured": tunnel_configured,
+            "access_hostname": access_hostname,
+            "access_mode": access_mode,
+            "checked_at": now_iso(),
+        }
+
+    def report_ssh_state(self, state: dict[str, Any] | None = None) -> dict[str, Any]:
+        snapshot = state or self.probe_ssh_readiness()
+        if not self.identity.node_id:
+            return snapshot
+        try:
+            self.api.request(
+                "POST",
+                f"/api/v1/nodes/{self.require_node_id()}/ssh-state",
+                snapshot,
+            )
+            self.log.write(
+                "ssh_readiness_reported",
+                ssh_server_running=bool(snapshot.get("ssh_server_running")),
+                cloudflared_running=bool(snapshot.get("cloudflared_running")),
+                tunnel_configured=bool(snapshot.get("tunnel_configured")),
+                access_mode=str(snapshot.get("access_mode") or "none"),
+            )
+        except Exception as error:
+            self.log.write("ssh_state_report_failed", error=str(error)[:300])
+            raise
+        return snapshot
 
     def find_lms(self) -> str | None:
         candidates: list[str | None] = [shutil.which("lms")]
@@ -2689,6 +2782,8 @@ class Agent:
                 elif command_type == "lmstudio_probe":
                     snapshot = self.probe_lmstudio(force_inventory=True)
                     self.report_ai_state(**{key: value for key, value in snapshot.items() if key != "loaded_models"})
+                elif command_type == "ssh_probe":
+                    self.report_ssh_state()
                 elif command_type == "lmstudio_model_get":
                     self.download_lmstudio_model(command.get("payload") or {})
                 elif command_type == "lmstudio_model_load":
