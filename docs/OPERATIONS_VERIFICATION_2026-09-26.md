@@ -24,3 +24,8 @@
 ## Блокеры живой проверки
 
 `https://citadel-ai.init1.workers.dev/api/health` и `/api/v1/architect/machines` вернули HTTP 403 из этой среды; браузер также заблокировал переход. Токен Architect и доступ к устройствам отсутствуют. Последний workflow развёртывания TEST завершился до деплоя: секрет OpenRouter не прошёл проверку формата. Нужно исправить значение этого секрета в окружении GitHub `cloudflare-test`, дождаться зелёного CI/деплоя, затем повторить живой прогон. Отчёт Gemini не был приложен к доступному содержимому проекта; оценить его конкретные утверждения без текста нельзя.
+
+
+## D1 usage redeploy
+
+2026-09-28: redeploy requested after configuring the repository secret `D1_ANALYTICS_TOKEN`, so the live Operations Hub can sync the read-only Cloudflare analytics token and show the single daily D1 usage percentage.
