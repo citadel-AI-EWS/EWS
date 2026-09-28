@@ -1809,12 +1809,14 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
     const assignmentId = projectAssignmentId(work.work_item_id);
     const executionMode = projectExecutionMode(work.source_type);
     const missionType = executionMode === "python" ? "project_python" : "project_text";
-    const taskText = await resolveDriveText(env, work.task_text);
+    const taskPayloadId = drivePointerId(work.task_text);
+    const taskText = taskPayloadId ? null : await resolveDriveText(env, work.task_text);
     const payloadJson = JSON.stringify({
       project_id: work.project_id,
       work_item_id: work.work_item_id,
       role_name: work.role_name,
-      task_text: taskText,
+      task_payload_id: taskPayloadId,
+      task_text: taskPayloadId ? undefined : taskText,
       execution_mode: executionMode
     });
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
@@ -3259,10 +3261,16 @@ async function listAssignments(request, env, nodeId, url) {
     LIMIT 20
   `).bind(nodeId).all();
 
-  const assignments = (query.results || []).map((row) => ({
-    ...row,
-    payload: safeJson(row.payload_json, {}),
-    payload_json: undefined
+  const assignments = await Promise.all((query.results || []).map(async (row) => {
+    const payload = safeJson(row.payload_json, {});
+    if (payload && typeof payload === "object" && payload.task_payload_id && !payload.task_text) {
+      payload.task_text = await resolveDriveText(env, drivePointer(payload.task_payload_id));
+    }
+    return {
+      ...row,
+      payload,
+      payload_json: undefined
+    };
   }));
   return json({ ok: true, node_status: node.status, assignments });
 }
