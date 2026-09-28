@@ -583,3 +583,11 @@ assert.match(operations, /Задание сохранено\. Оно ждёт г
 assert.match(index, /function agentVersionAtLeast/);
 assert.match(index, /qualityGate\.content \|\| rawResultText/);
 assert.match(index, /local_result_ready_quality_gate_running/);
+
+assert.match(operations, /id="updateAll"/);
+assert.match(operations, /id="rollbackAll"/);
+assert.match(operations, /id="clock"/);
+assert.match(operations, /async function bulkCommand\(type\)/);
+assert.match(operations, /class="node-grid"/);
+assert.match(operations, /Автообновить все/);
+assert.match(operations, /Откатить все/);
