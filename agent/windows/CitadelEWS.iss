@@ -232,7 +232,8 @@ begin
     exit;
   end;
   try
-    CommandLine := Lowercase(ProcessObj.CommandLine);
+    CommandLine := ProcessObj.CommandLine;
+    CommandLine := Lowercase(CommandLine);
   except
     CommandLine := '';
   end;
