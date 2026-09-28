@@ -2269,6 +2269,7 @@ async function architectGetProject(request, env, projectId) {
     WHERE project_id = ?
   `).bind(projectId).first();
   if (!project) throw new ApiError(404, "project_not_found");
+  const projectTaskText = await resolveDriveText(env, project.task_text);
 
   const readinessQuery = await env.DB.prepare(`
     SELECT
@@ -2398,11 +2399,24 @@ async function architectGetProject(request, env, projectId) {
     created_at: event.created_at
   }));
 
-  const workItems = (workQuery.results || []).map((item) => ({
+  const textCache = new Map();
+  const jsonCache = new Map();
+  const resolveCachedText = (value) => {
+    const key = String(value || "");
+    if (!textCache.has(key)) textCache.set(key, resolveDriveText(env, value));
+    return textCache.get(key);
+  };
+  const resolveCachedJson = (value) => {
+    const key = String(value || "");
+    if (!jsonCache.has(key)) jsonCache.set(key, resolveDriveJson(env, value));
+    return jsonCache.get(key);
+  };
+  const workItems = await Promise.all((workQuery.results || []).map(async (item) => ({
     ...item,
-    result: safeJson(item.result_json, null),
+    task_text: await resolveCachedText(item.task_text),
+    result: item.result_json ? await resolveCachedJson(item.result_json) : null,
     result_json: undefined
-  }));
+  })));
   let specializationRows = specializationQuery.results || [];
   if (!specializationRows.length) {
     specializationRows = [...new Set(workItems.map((item) => item.role_name))].map((roleName) => ({
@@ -2465,7 +2479,7 @@ async function architectGetProject(request, env, projectId) {
         error_code: null
       }
     : workComplete && !qualityConfig.configured
-      ? await finalizeProjectAnswer(env, project.project_id, project.task_text, rawResultText)
+      ? await finalizeProjectAnswer(env, project.project_id, projectTaskText, rawResultText)
       : workComplete
         ? {
             ready: true,
@@ -2491,6 +2505,8 @@ async function architectGetProject(request, env, projectId) {
     ok: true,
     project: {
       ...project,
+      task_text: projectTaskText,
+      payload_storage: drivePointerId(project.task_text) ? "google_drive" : "legacy_d1",
       checks: safeJson(project.checks_json, {}),
       checks_json: undefined,
       role_plan: rolePlanSummary(workItems),
@@ -2503,7 +2519,7 @@ async function architectGetProject(request, env, projectId) {
         desired_workers: schedulingFromChecks(project.checks_json).desired_workers ||
           (executionMode === "python"
             ? 1
-            : projectWorkerProfile(project.task_text, specializations.filter((item) => item.source === "architect_added").map((item) => item.id)).desired_workers),
+            : projectWorkerProfile(projectTaskText, specializations.filter((item) => item.source === "architect_added").map((item) => item.id)).desired_workers),
         worker_target_mode: schedulingFromChecks(project.checks_json).target_mode,
         ready_workers_at_creation: Number(project.worker_count || 0),
         ready_workers_now: readyWorkers.length,
@@ -2526,7 +2542,7 @@ async function architectGetProject(request, env, projectId) {
                   ? "all_project_work_items_completed"
                   : executionState
       },
-      text_preflight: projectTextPreflight(project.task_text),
+      text_preflight: projectTextPreflight(projectTaskText),
       task_logs: taskLogs,
       final_report: {
         ready: finalReportReady,
@@ -3628,12 +3644,21 @@ async function architectGetReport(request, env, reportId) {
     throw new ApiError(404, "report_not_found");
   }
 
+  const content = await resolveDriveJson(env, report.report_json);
+  if (drivePointerId(report.report_json)) {
+    const serialized = JSON.stringify(content);
+    const sizeBytes = new TextEncoder().encode(serialized).byteLength;
+    if (sizeBytes !== Number(report.report_size_bytes) || (await sha256Hex(serialized)) !== report.report_sha256) {
+      throw new ApiError(502, "drive_report_integrity_mismatch");
+    }
+  }
   return json({
     ok: true,
     report: {
       ...report,
+      storage: drivePointerId(report.report_json) ? "google_drive" : "legacy_d1",
       metrics: safeJson(report.metrics_json, {}),
-      content: safeJson(report.report_json, null),
+      content,
       metrics_json: undefined,
       report_json: undefined
     }
