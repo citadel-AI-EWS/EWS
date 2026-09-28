@@ -33,7 +33,7 @@ const ALLOWED_REPORT_SENSITIVITIES = new Set([
 ]);
 const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
-const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
+const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe"]);
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
   version: "0.3.20",
@@ -83,6 +83,7 @@ let nodeHardwareSchemaPromise;
 let rolloutSchemaPromise;
 let projectSchemaPromise;
 let nodeAiSchemaPromise;
+let nodeSshSchemaPromise;
 let nodeRequestNonceSchemaPromise;
 let qualityGateSchemaPromise;
 let architectAuthSchemaPromise;
@@ -1013,6 +1014,95 @@ async function nodeAiStateResponse(env, nodeId) {
     last_action: row.last_action,
     updated_at: row.updated_at,
     runtime_updated_at: row.runtime_updated_at
+  };
+}
+
+async function ensureNodeSshStorage(env) {
+  if (!nodeSshSchemaPromise) {
+    nodeSshSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS node_ssh_state (
+          node_id TEXT PRIMARY KEY,
+          ssh_server_installed INTEGER NOT NULL DEFAULT 0 CHECK (ssh_server_installed IN (0,1)),
+          ssh_server_running INTEGER NOT NULL DEFAULT 0 CHECK (ssh_server_running IN (0,1)),
+          local_port_open INTEGER NOT NULL DEFAULT 0 CHECK (local_port_open IN (0,1)),
+          cloudflared_installed INTEGER NOT NULL DEFAULT 0 CHECK (cloudflared_installed IN (0,1)),
+          cloudflared_running INTEGER NOT NULL DEFAULT 0 CHECK (cloudflared_running IN (0,1)),
+          tunnel_configured INTEGER NOT NULL DEFAULT 0 CHECK (tunnel_configured IN (0,1)),
+          access_hostname TEXT,
+          access_mode TEXT NOT NULL DEFAULT 'none'
+            CHECK (access_mode IN ('none','browser','infrastructure')),
+          checked_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_node_ssh_state_updated
+        ON node_ssh_state(updated_at DESC)
+      `)
+    ]).catch((error) => {
+      nodeSshSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await nodeSshSchemaPromise;
+}
+
+async function upsertNodeSshState(env, nodeId, state) {
+  await ensureNodeSshStorage(env);
+  await env.DB.prepare(`
+    INSERT INTO node_ssh_state (
+      node_id, ssh_server_installed, ssh_server_running, local_port_open,
+      cloudflared_installed, cloudflared_running, tunnel_configured,
+      access_hostname, access_mode, checked_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(node_id) DO UPDATE SET
+      ssh_server_installed = excluded.ssh_server_installed,
+      ssh_server_running = excluded.ssh_server_running,
+      local_port_open = excluded.local_port_open,
+      cloudflared_installed = excluded.cloudflared_installed,
+      cloudflared_running = excluded.cloudflared_running,
+      tunnel_configured = excluded.tunnel_configured,
+      access_hostname = excluded.access_hostname,
+      access_mode = excluded.access_mode,
+      checked_at = excluded.checked_at,
+      updated_at = CURRENT_TIMESTAMP
+  `).bind(
+    nodeId,
+    state.ssh_server_installed,
+    state.ssh_server_running,
+    state.local_port_open,
+    state.cloudflared_installed,
+    state.cloudflared_running,
+    state.tunnel_configured,
+    state.access_hostname,
+    state.access_mode,
+    state.checked_at
+  ).run();
+}
+
+async function nodeSshStateResponse(env, nodeId) {
+  await ensureNodeSshStorage(env);
+  const row = await env.DB.prepare(`
+    SELECT node_id, ssh_server_installed, ssh_server_running, local_port_open,
+      cloudflared_installed, cloudflared_running, tunnel_configured,
+      access_hostname, access_mode, checked_at, updated_at
+    FROM node_ssh_state
+    WHERE node_id = ?
+  `).bind(nodeId).first();
+  return row || {
+    node_id: nodeId,
+    ssh_server_installed: 0,
+    ssh_server_running: 0,
+    local_port_open: 0,
+    cloudflared_installed: 0,
+    cloudflared_running: 0,
+    tunnel_configured: 0,
+    access_hostname: null,
+    access_mode: "none",
+    checked_at: null,
+    updated_at: null
   };
 }
 
@@ -2970,6 +3060,46 @@ function normalizeAiState(value) {
   }
   out.load_config = loadConfig;
   return out;
+}
+
+function normalizeSshState(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ApiError(400, "invalid_ssh_state");
+  const flag = (name) => {
+    const raw = value[name];
+    if (raw === true || raw === 1) return 1;
+    if (raw === false || raw === 0 || raw === undefined || raw === null) return 0;
+    throw new ApiError(400, "invalid_ssh_state");
+  };
+  const accessMode = value.access_mode === undefined || value.access_mode === null
+    ? "none"
+    : requireString(value.access_mode, "ssh_access_mode", 24).toLowerCase();
+  if (!["none", "browser", "infrastructure"].includes(accessMode)) {
+    throw new ApiError(400, "invalid_ssh_access_mode");
+  }
+  let accessHostname = null;
+  if (value.access_hostname !== undefined && value.access_hostname !== null && value.access_hostname !== "") {
+    accessHostname = requireString(value.access_hostname, "ssh_access_hostname", 253).toLowerCase();
+    if (!/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(accessHostname) || accessHostname.includes("..")) {
+      throw new ApiError(400, "invalid_ssh_access_hostname");
+    }
+  }
+  const checkedAt = requireString(value.checked_at || new Date().toISOString(), "ssh_checked_at", 64);
+  if (!Number.isFinite(Date.parse(checkedAt))) throw new ApiError(400, "invalid_ssh_checked_at");
+  const tunnelConfigured = flag("tunnel_configured");
+  if (tunnelConfigured && (!accessHostname || accessMode === "none")) {
+    throw new ApiError(400, "invalid_ssh_tunnel_state");
+  }
+  return {
+    ssh_server_installed: flag("ssh_server_installed"),
+    ssh_server_running: flag("ssh_server_running"),
+    local_port_open: flag("local_port_open"),
+    cloudflared_installed: flag("cloudflared_installed"),
+    cloudflared_running: flag("cloudflared_running"),
+    tunnel_configured: tunnelConfigured,
+    access_hostname: accessHostname,
+    access_mode: accessMode,
+    checked_at: new Date(checkedAt).toISOString()
+  };
 }
 
 function normalizeMetrics(value) {
@@ -5685,7 +5815,7 @@ async function architectCreateCommand(request, env, nodeId) {
   }
 
   const node = await env.DB.prepare(
-    "SELECT node_id, status, agent_version, os_name, architecture, last_seen_at, " +
+    "SELECT node_id, status, agent_version, os_name, architecture, capabilities_json, last_seen_at, " +
     "CASE WHEN last_seen_at IS NOT NULL " +
     "AND datetime(last_seen_at) >= datetime('now', '-5 minutes') THEN 1 ELSE 0 END AS recently_seen " +
     "FROM nodes WHERE node_id = ?"
@@ -5704,6 +5834,12 @@ async function architectCreateCommand(request, env, nodeId) {
   }
   if ((commandType.startsWith("lmstudio_") || commandType === "hybrid_query") && !agentVersionAtLeast(node.agent_version, "0.3.19")) {
     throw new ApiError(409, "agent_update_required");
+  }
+  if (commandType === "ssh_probe") {
+    const capabilities = safeJson(node.capabilities_json, []);
+    if (!Array.isArray(capabilities) || !capabilities.includes("ssh_readiness_probe")) {
+      throw new ApiError(409, "ssh_probe_not_supported");
+    }
   }
   if (commandType === "pause" && node.status === "paused") {
     throw new ApiError(409, "node_already_paused");
@@ -5728,7 +5864,7 @@ async function architectCreateCommand(request, env, nodeId) {
     payload = { asset: lmstudioInstallAssetForNode(node) };
   } else if (commandType === "lmstudio_uninstall") {
     payload = { purge_data: body.purge_data === true };
-  } else if (commandType === "lmstudio_probe") {
+  } else if (commandType === "lmstudio_probe" || commandType === "ssh_probe") {
     payload = {};
   } else if (commandType === "lmstudio_model_get" || commandType === "lmstudio_model_load") {
     await ensureNodeAiStorage(env);
@@ -5829,9 +5965,31 @@ async function architectNodeAiState(request, env, nodeId) {
   return json({ ok: true, node, ai: await nodeAiStateResponse(env, nodeId) });
 }
 
+async function nodeUpdateSshState(request, env, nodeId, url) {
+  const { bytes: bodyBytes, text: bodyText } = await readBody(request, 16 * 1024);
+  await authenticateNode(request, env, nodeId, url, bodyBytes);
+  const state = normalizeSshState(parseJsonObject(bodyText));
+  await upsertNodeSshState(env, nodeId, state);
+  return json({ ok: true, node_id: nodeId, ssh: await nodeSshStateResponse(env, nodeId) });
+}
+
+async function architectNodeSshState(request, env, nodeId) {
+  await authenticateArchitect(request, env);
+  const node = await env.DB.prepare(
+    "SELECT node_id, status, capabilities_json, last_seen_at FROM nodes WHERE node_id = ? AND status != 'revoked'"
+  ).bind(nodeId).first();
+  if (!node) throw new ApiError(404, "node_not_found");
+  return json({
+    ok: true,
+    node,
+    supported: safeJson(node.capabilities_json, []).includes("ssh_readiness_probe"),
+    ssh: await nodeSshStateResponse(env, nodeId)
+  });
+}
+
 async function architectNodeDetails(request, env, nodeId) {
   await authenticateArchitect(request, env);
-  await Promise.all([ensureNodeNetworkStorage(env), ensureNodeAiStorage(env), ensureNodeHardwareStorage(env)]);
+  await Promise.all([ensureNodeNetworkStorage(env), ensureNodeAiStorage(env), ensureNodeHardwareStorage(env), ensureNodeSshStorage(env)]);
   const row = await env.DB.prepare(`
     SELECT n.node_id, n.hostname, n.os_name, n.os_version, n.architecture,
       n.agent_version, n.status, n.cpu_percent, n.memory_percent, n.last_seen_at, n.capabilities_json,
@@ -5847,7 +6005,7 @@ async function architectNodeDetails(request, env, nodeId) {
   if (!row) throw new ApiError(404, "node_not_found");
 
   const macAddresses = safeJson(row.mac_addresses_json, []);
-  const ai = await nodeAiStateResponse(env, nodeId);
+  const [ai, ssh] = await Promise.all([nodeAiStateResponse(env, nodeId), nodeSshStateResponse(env, nodeId)]);
   return json({
     ok: true,
     node: {
@@ -5881,7 +6039,8 @@ async function architectNodeDetails(request, env, nodeId) {
       memory_total_bytes: Number(row.memory_total_bytes || 0) || null,
       gpus: safeJson(row.gpus_json, [])
     }),
-    ai
+    ai,
+    ssh
   });
 }
 
@@ -6793,6 +6952,15 @@ async function handleApi(request, env, url) {
       : methodNotAllowed(["GET"]);
   }
 
+  const architectSshStateMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/nodes\/([^/]+)\/ssh-state$/
+  );
+  if (architectSshStateMatch) {
+    return request.method === "GET"
+      ? architectNodeSshState(request, env, decodeURIComponent(architectSshStateMatch[1]))
+      : methodNotAllowed(["GET"]);
+  }
+
   const architectLmstudioPreflightMatch = url.pathname.match(
     /^\/api\/v1\/architect\/nodes\/([^/]+)\/lmstudio-preflight$/
   );
@@ -6847,6 +7015,13 @@ async function handleApi(request, env, url) {
   if (match) {
     return request.method === "POST"
       ? nodeUpdateAiState(request, env, decodeURIComponent(match[1]), url)
+      : methodNotAllowed(["POST"]);
+  }
+
+  match = url.pathname.match(/^\/api\/v1\/nodes\/([^/]+)\/ssh-state$/);
+  if (match) {
+    return request.method === "POST"
+      ? nodeUpdateSshState(request, env, decodeURIComponent(match[1]), url)
       : methodNotAllowed(["POST"]);
   }
 
