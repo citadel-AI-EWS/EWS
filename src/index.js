@@ -3386,6 +3386,7 @@ async function submitResult(request, env, nodeId, url) {
   }
 
   const summary = optionalString(body.summary, "summary", 4000);
+  const summaryIndex = summary ? summary.slice(0, 512) : null;
   const artifactKey = optionalString(body.artifact_key, "artifact_key", 512);
   const metricsJson = normalizeMetrics(body.metrics);
   const reportType = body.report_type === undefined
@@ -3465,7 +3466,7 @@ async function submitResult(request, env, nodeId, url) {
       assignmentId,
       nodeId,
       outcome,
-      summary,
+      summaryIndex,
       effectiveArtifactKey,
       metricsJson,
       assignmentId,
@@ -6246,7 +6247,7 @@ async function handleApi(request, env, url) {
 
     try {
       const row = await env.DB.prepare("SELECT 1 AS ok").first();
-      const [controllerSigning, reportStorage, sessionStorage] = await Promise.all([
+      const [controllerSigning, reportStorage, sessionStorage, payloadStorage] = await Promise.all([
         importControllerPrivateKey(env)
           .then(() => "ready")
           .catch(() => "unavailable"),
@@ -6254,6 +6255,9 @@ async function handleApi(request, env, url) {
           .then(() => "ready")
           .catch(() => "unavailable"),
         ensureSessionStorage(env)
+          .then(() => "ready")
+          .catch(() => "unavailable"),
+        googleDriveAccessToken(env)
           .then(() => "ready")
           .catch(() => "unavailable")
       ]);
@@ -6321,12 +6325,15 @@ async function handleApi(request, env, url) {
         ok: row?.ok === 1 &&
           controllerSigning === "ready" &&
           reportStorage === "ready" &&
-          sessionStorage === "ready",
+          sessionStorage === "ready" &&
+          payloadStorage === "ready",
         service: "citadel-ai",
         database: "citadel-control",
         controller_signing: controllerSigning,
         report_storage: reportStorage,
         session_storage: sessionStorage,
+        payload_storage: payloadStorage,
+        payload_storage_provider: "google_drive",
         openrouter_quality: openRouterQualityConfig(env).configured ? "configured" : "unconfigured",
         project_execution: projectExecution,
         project_readiness_error: projectReadinessError,
