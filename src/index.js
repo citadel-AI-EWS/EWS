@@ -6455,6 +6455,21 @@ async function handleApi(request, env, url) {
     return methodNotAllowed(["GET", "POST"]);
   }
 
+  const architectInteractiveMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/projects\/([^/]+)\/interactive\/([^/]+)$/
+  );
+  if (architectInteractiveMatch) {
+    const projectId = decodeURIComponent(architectInteractiveMatch[1]);
+    const workItemId = decodeURIComponent(architectInteractiveMatch[2]);
+    if (request.method === "GET") {
+      return architectGetInteractiveThread(request, env, projectId, workItemId);
+    }
+    if (request.method === "POST") {
+      return architectPostInteractiveMessage(request, env, projectId, workItemId);
+    }
+    return methodNotAllowed(["GET", "POST"]);
+  }
+
   const architectProjectMatch = url.pathname.match(
     /^\/api\/v1\/architect\/projects\/([^/]+)$/
   );
