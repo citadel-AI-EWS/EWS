@@ -299,30 +299,41 @@ def _local_file_lock(path: Path) -> threading.RLock:
         return lock
 
 
+class LifecycleLockState:
+    def __init__(self) -> None:
+        self.mutated = False
+        self.recovered = False
+
+    def mark_mutated(self) -> None:
+        self.mutated = True
+
+    def mark_recovered(self) -> None:
+        self.recovered = True
+
+
 def windows_install_update_paths() -> tuple[Path, Path]:
-    """Return the protected machine-wide lock and crash-marker paths."""
+    """Return the canonical machine-wide lifecycle lock and crash-marker paths.
+
+    The path is deliberately independent of the configurable node data_dir so
+    every installer, repair path, remote update and rollback serializes on the
+    same machine-wide primitive.
+    """
     program_data = os.environ.get("PROGRAMDATA") or os.environ.get("ALLUSERSPROFILE")
     if not program_data:
         raise RuntimeError("install_update_lock_root_unavailable")
-    state_root = Path(program_data) / "CitadelEWS" / "state"
+    lifecycle_root = Path(program_data) / "CitadelEWS" / "lifecycle"
     return (
-        state_root / "install-update.lock",
-        state_root / "install-update-active.json",
+        lifecycle_root / "install-update.lock",
+        lifecycle_root / "install-update-active.json",
     )
 
 
 @contextlib.contextmanager
 def install_update_mutex(timeout_seconds: float = 30.0):
-    """Serialize Windows installer/update/rollback operations machine-wide.
-
-    The lock is an exclusive Win32 file handle under the ACL-protected machine
-    state directory. A crash marker is written only after ownership is acquired.
-    If an updater dies after that point, the marker survives while the kernel
-    closes the file handle; subsequent remote updates fail closed until a full
-    installer performs repair.
-    """
+    """Serialize Windows lifecycle writers and retain evidence of torn writes."""
+    state = LifecycleLockState()
     if os.name != "nt":
-        yield
+        yield state
         return
 
     lock_path, marker_path = windows_install_update_paths()
@@ -350,7 +361,7 @@ def install_update_mutex(timeout_seconds: float = 30.0):
     open_always = 4
     file_attribute_hidden = 0x00000002
     invalid_handle_value = ctypes.c_void_p(-1).value
-    retryable_errors = {32, 33}  # sharing / lock violation
+    retryable_errors = {32, 33}
     deadline = time.monotonic() + max(0.0, float(timeout_seconds))
     handle = None
 
@@ -359,7 +370,7 @@ def install_update_mutex(timeout_seconds: float = 30.0):
         candidate = create_file(
             str(lock_path),
             generic_read | generic_write,
-            0,  # no sharing: exactly one lifecycle writer machine-wide
+            0,
             None,
             open_always,
             file_attribute_hidden,
@@ -368,7 +379,6 @@ def install_update_mutex(timeout_seconds: float = 30.0):
         if candidate not in (None, 0, invalid_handle_value):
             handle = candidate
             break
-
         error = ctypes.get_last_error()
         if error not in retryable_errors:
             raise RuntimeError("install_update_lock_unavailable")
@@ -377,11 +387,11 @@ def install_update_mutex(timeout_seconds: float = 30.0):
         time.sleep(0.1)
 
     marker_written = False
-    clean_exit = False
+    normal_return = False
+    caught_exception: BaseException | None = None
     try:
         if marker_path.exists():
             raise RuntimeError("install_update_lock_abandoned")
-
         marker = {
             "schema": "citadel.install-update-lock.v1",
             "pid": os.getpid(),
@@ -390,15 +400,25 @@ def install_update_mutex(timeout_seconds: float = 30.0):
         }
         atomic_write(marker_path, json.dumps(marker, sort_keys=True) + "\n")
         marker_written = True
-        yield
-        clean_exit = True
+        try:
+            yield state
+            normal_return = True
+        except BaseException as exc:
+            caught_exception = exc
+            raise
     finally:
-        # Only a normal return from the protected lifecycle mutation proves
-        # that the live tree is coherent. KeyboardInterrupt, SystemExit,
-        # process termination and unexpected BaseException paths deliberately
-        # leave the crash marker behind so remote update fails closed until a
-        # full installer/repair acquires the lock and repairs the machine.
-        if marker_written and clean_exit:
+        # Safe cases:
+        # - normal completion;
+        # - ordinary Exception before any live-tree mutation;
+        # - ordinary Exception after a fully verified rollback.
+        # Preserve the marker for BaseException/process-death semantics or an
+        # incomplete mutation so the next remote update fails closed.
+        safe_failure = (
+            caught_exception is not None
+            and isinstance(caught_exception, Exception)
+            and (not state.mutated or state.recovered)
+        )
+        if marker_written and (normal_return or safe_failure):
             with contextlib.suppress(FileNotFoundError):
                 marker_path.unlink()
         if handle not in (None, 0, invalid_handle_value):
@@ -2569,10 +2589,10 @@ class Agent:
             connection.close()
 
     def apply_update(self, payload: dict[str, Any]) -> None:
-        with install_update_mutex(timeout_seconds=30):
-            return self._apply_update_locked(payload)
+        with install_update_mutex(timeout_seconds=30) as lifecycle:
+            return self._apply_update_locked(payload, lifecycle)
 
-    def _apply_update_locked(self, payload: dict[str, Any]) -> None:
+    def _apply_update_locked(self, payload: dict[str, Any], lifecycle: LifecycleLockState) -> None:
         if not self.validate_update_payload(payload):
             raise RuntimeError("invalid update payload")
         install_root = Path(__file__).resolve().parent
@@ -2620,6 +2640,7 @@ class Agent:
                 existed_before[name] = current.exists()
                 if current.exists() and name not in CORE_UPDATE_FILE_NAMES:
                     shutil.copy2(current, backup / name)
+                lifecycle.mark_mutated()
                 os.replace(staging / name, current)
                 replaced.append(name)
             if "citadel_node_v2.py" in replaced:
@@ -2654,16 +2675,17 @@ class Agent:
                 elif not existed_before.get(name, False):
                     with contextlib.suppress(FileNotFoundError):
                         (install_root / name).unlink()
+            lifecycle.mark_recovered()
             self.log.write("agent_update_rolled_back", files=replaced)
             raise
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
     def rollback_last_update(self) -> None:
-        with install_update_mutex(timeout_seconds=30):
-            return self._rollback_last_update_locked()
+        with install_update_mutex(timeout_seconds=30) as lifecycle:
+            return self._rollback_last_update_locked(lifecycle)
 
-    def _rollback_last_update_locked(self) -> None:
+    def _rollback_last_update_locked(self, lifecycle: LifecycleLockState) -> None:
         install_root = Path(__file__).resolve().parent
         backup = self.config.data_dir / "update-backup"
         missing_core = [name for name in CORE_UPDATE_FILE_NAMES if not (backup / name).is_file()]
@@ -2689,6 +2711,7 @@ class Agent:
             if result.returncode != 0:
                 raise RuntimeError("rollback backup self-test failed")
             for name in sorted(rollback_names):
+                lifecycle.mark_mutated()
                 shutil.copy2(staging / name, install_root / name)
             self.log.write(
                 "agent_update_manual_rollback",
