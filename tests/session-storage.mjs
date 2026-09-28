@@ -98,7 +98,7 @@ class Statement {
     if (this.sql.startsWith("INSERT OR IGNORE INTO agent_reports")) {
       return { meta: { changes: 0 } };
     }
-    if (this.sql.startsWith("CREATE TABLE") || this.sql.startsWith("CREATE INDEX")) {
+    if (this.sql.startsWith("CREATE TABLE") || this.sql.startsWith("CREATE INDEX") || this.sql.startsWith("CREATE UNIQUE INDEX")) {
       return { meta: { changes: 0 } };
     }
     if (this.sql.startsWith("INSERT INTO payload_objects")) {
