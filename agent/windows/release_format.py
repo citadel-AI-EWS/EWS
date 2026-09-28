@@ -50,9 +50,6 @@ REQUIRED_PAYLOAD_PATHS = {
     "runtime/python.exe",
     "citadel_node_v2.py",
 }
-CRITICAL_EXECUTABLE_SUFFIXES = {
-    ".exe", ".dll", ".pyd", ".ps1", ".bat", ".cmd", ".com",
-}
 DESCRIPTOR_REQUIRED_FIELDS = {
     "schema",
     "product",
@@ -120,9 +117,26 @@ def _load_canonical_json(path: Path, *, allowed_fields: set[str] | None = None) 
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ReleaseFormatError(f"invalid_utf8:{path.name}") from exc
+    def reject_duplicate_pairs(pairs):
+        result = {}
+        for key, item in pairs:
+            if key in result:
+                raise ReleaseFormatError(f"duplicate_json_key:{path.name}:{key}")
+            result[key] = item
+        return result
+
+    def reject_constant(value):
+        raise ReleaseFormatError(f"invalid_json_constant:{path.name}:{value}")
+
     try:
-        value = json.loads(text)
-    except json.JSONDecodeError as exc:
+        value = json.loads(
+            text,
+            object_pairs_hook=reject_duplicate_pairs,
+            parse_constant=reject_constant,
+        )
+    except ReleaseFormatError:
+        raise
+    except (json.JSONDecodeError, ValueError) as exc:
         raise ReleaseFormatError(f"invalid_json:{path.name}") from exc
     if not isinstance(value, dict):
         raise ReleaseFormatError(f"json_object_required:{path.name}")
@@ -179,11 +193,15 @@ def validate_manifest_path(value: Any) -> str:
     if any(ord(ch) < 32 for ch in value):
         raise ReleaseFormatError(f"unsafe_manifest_path:{value!r}")
 
-    path = PurePosixPath(value)
-    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+    raw_parts = value.split("/")
+    if any(part in {"", ".", ".."} for part in raw_parts):
         raise ReleaseFormatError(f"unsafe_manifest_path:{value!r}")
 
-    for part in path.parts:
+    path = PurePosixPath(value)
+    if path.is_absolute():
+        raise ReleaseFormatError(f"unsafe_manifest_path:{value!r}")
+
+    for part in raw_parts:
         if part.endswith((" ", ".")):
             raise ReleaseFormatError(f"unsafe_manifest_path:{value!r}")
         basename = part.split(".", 1)[0].upper()
@@ -282,8 +300,7 @@ def _verify_no_extra_critical_executables(root: Path, manifest_paths: set[str]) 
             continue
         if relative in allowed_meta or relative.casefold() in {p.casefold() for p in manifest_paths}:
             continue
-        if path.suffix.lower() in CRITICAL_EXECUTABLE_SUFFIXES:
-            raise ReleaseFormatError(f"unmanifested_executable:{relative}")
+        raise ReleaseFormatError(f"unmanifested_payload:{relative}")
 
 
 def parse_and_verify_descriptor(
@@ -301,7 +318,7 @@ def parse_and_verify_descriptor(
     if missing:
         raise ReleaseFormatError(f"missing_descriptor_fields:{','.join(sorted(missing))}")
 
-    if descriptor["schema"] != SCHEMA:
+    if _validate_schema_int(descriptor["schema"], "schema") != SCHEMA:
         raise ReleaseFormatError("unsupported_release_schema")
     if descriptor["product"] != PRODUCT:
         raise ReleaseFormatError("wrong_product")
