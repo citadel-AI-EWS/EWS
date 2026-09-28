@@ -1801,11 +1801,12 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
     const assignmentId = projectAssignmentId(work.work_item_id);
     const executionMode = projectExecutionMode(work.source_type);
     const missionType = executionMode === "python" ? "project_python" : "project_text";
+    const taskText = await resolveDriveText(env, work.task_text);
     const payloadJson = JSON.stringify({
       project_id: work.project_id,
       work_item_id: work.work_item_id,
       role_name: work.role_name,
-      task_text: work.task_text,
+      task_text: taskText,
       execution_mode: executionMode
     });
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
@@ -1919,7 +1920,7 @@ function projectTextPreflight(taskText) {
 
 async function evaluateProjectChecks(env, sourceType, title, taskText) {
   await ensureProjectStorage(env);
-  const sourceAllowed = ["architect_manual", "architect_python"].includes(sourceType);
+  const sourceAllowed = ["architect_manual", "architect_ee", "architect_python"].includes(sourceType);
   const validationPass = title.length >= 1 && title.length <= 160 &&
     taskText.length >= 1 && taskText.length <= 20000;
   const taskSha256 = await sha256Hex(taskText);
