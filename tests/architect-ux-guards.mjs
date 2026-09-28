@@ -487,7 +487,24 @@ assert.match(architect, /Controller покажет READY-ноды и точны�
     "SHA-256",
     new TextEncoder().encode(architectToken)
   )).toString("hex");
-  const persisted = { project: null, workItems: 0 };
+  const persisted = { project: null, workItems: 0, workTaskPointers: [], payloadObjects: 0 };
+  const originalFetch = globalThis.fetch;
+  let driveUploadNo = 0;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.startsWith("https://www.googleapis.com/upload/drive/v3/files")) {
+      driveUploadNo += 1;
+      return new Response(JSON.stringify({
+        id: "drive_test_" + driveUploadNo,
+        name: "payload.json",
+        size: String((init.body || "").length)
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+    return originalFetch(input, init);
+  };
 
   function compactSql(sql) {
     return sql.replace(/\s+/g, " ").trim();
@@ -541,12 +558,18 @@ assert.match(architect, /Controller покажет READY-ноды и точны�
       if (this.sql.startsWith("INSERT INTO architect_projects")) {
         persisted.project = {
           project_id: this.args[0],
+          task_text: this.args[3],
           worker_count: this.args[this.args.length - 1]
         };
         return { meta: { changes: 1 } };
       }
       if (this.sql.startsWith("INSERT INTO project_work_items")) {
         persisted.workItems += 1;
+        persisted.workTaskPointers.push(this.args[5]);
+        return { meta: { changes: 1 } };
+      }
+      if (this.sql.startsWith("INSERT INTO payload_objects")) {
+        persisted.payloadObjects += 1;
         return { meta: { changes: 1 } };
       }
       if (
@@ -561,6 +584,7 @@ assert.match(architect, /Controller покажет READY-ноды и точны�
 
   const projectEnv = {
     ARCHITECT_TOKEN_HASH: architectHash,
+    GOOGLE_DRIVE_ACCESS_TOKEN: "test-drive-token",
     DB: {
       prepare(sql) {
         return new ProjectStatement(sql);
@@ -574,7 +598,8 @@ assert.match(architect, /Controller покажет READY-ноды и точны�
     ASSETS: { fetch() { return new Response("asset"); } }
   };
 
-  const response = await projectWorker.fetch(new Request(
+  try {
+    const response = await projectWorker.fetch(new Request(
     "https://example.test/api/v1/architect/projects",
     {
       method: "POST",
@@ -600,8 +625,14 @@ assert.match(architect, /Controller покажет READY-ноды и точны�
   assert.equal(body.execution.detail, "hub_plan_saved_waiting_for_ready_lmstudio_worker");
   assert.equal(body.project.work_item_count, 10);
   assert.equal(persisted.project?.worker_count, 0);
-  assert.equal(persisted.workItems, body.project.work_item_count);
-  assert.ok(body.project.work_items.every((item) => item.node_id === null));
+    assert.equal(persisted.workItems, body.project.work_item_count);
+    assert.ok(body.project.work_items.every((item) => item.node_id === null));
+    assert.match(persisted.project.task_text, /^@drive:payload_/);
+    assert.ok(persisted.workTaskPointers.every((value) => /^@drive:payload_/.test(value)));
+    assert.ok(persisted.payloadObjects >= 2, "project payloads must be indexed, not stored inline");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 }
 
 assert.match(operations, /<option value="1" selected>1<\/option>/);
@@ -649,3 +680,18 @@ assert.ok(operations.includes("LM Studio установлен — доступн
 assert.ok(index.includes("CREATE TABLE IF NOT EXISTS commands"), "runtime command table bootstrap missing");
 assert.ok(index.includes("CREATE TABLE IF NOT EXISTS audit_events"), "runtime audit table bootstrap missing");
 assert.ok(index.includes("lmstudio_command_storage_unavailable"), "LM Studio command storage error mapping missing");
+
+assert.ok(index.includes('id: "engineer"'), "Engineer profession missing");
+assert.ok(index.includes('id: "scientist"'), "Scientist profession missing");
+assert.ok(operations.includes('id="professionFab"'), "floating profession picker missing");
+assert.ok(operations.includes('requested_roles:[...selectedProfessionIds]'), "selected professions must be submitted");
+assert.ok(index.includes('DEFAULT_GOOGLE_DRIVE_PAYLOAD_FOLDER_ID'), "Google Drive payload store missing");
+assert.ok(index.includes('CREATE TABLE IF NOT EXISTS payload_objects'), "minimal payload index missing");
+assert.ok(index.includes('DRIVE_POINTER_PREFIX = "@drive:"'), "Drive pointer format missing");
+assert.ok(index.includes('task_payload_id'), "mission payload must reference Drive task payload");
+assert.ok(index.includes('async function architectGetInteractiveThread'), "interactive report GET missing");
+assert.ok(index.includes('async function architectPostInteractiveMessage'), "interactive report POST missing");
+assert.ok(index.includes('preferred_node_id') && index.includes('interactive_followup'), "interactive work must preserve worker affinity");
+assert.ok(operations.includes('id="reportReplyForm"'), "interactive report composer missing");
+assert.ok(operations.includes('Продолжение уйдёт тому же EE'), "same-worker interactive report hint missing");
+assert.ok(deployWorkflow.includes("GOOGLE_DRIVE_REFRESH_TOKEN"), "Drive credentials deploy wiring missing");
