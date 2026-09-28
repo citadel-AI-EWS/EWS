@@ -5110,7 +5110,7 @@ async function architectModelDetails(request, env, url) {
   let versions = [];
   try {
     const rows = await fetchHuggingFaceModels(modelFamilyQuery(modelId), 60);
-    versions = mapHuggingFaceModels(rows, 16).filter((item) => item.id !== modelId);
+    versions = mapHuggingFaceModels(rows, 40).filter((item) => item.id !== modelId);
   } catch {
     versions = [];
   }
