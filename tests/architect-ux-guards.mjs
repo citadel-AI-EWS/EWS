@@ -619,3 +619,14 @@ assert.ok(operations.includes("lmUpdate').hidden=!lmInstalled||lmBusy"), "LM Stu
 assert.ok(operations.includes("lmRemove').hidden=!lmInstalled||lmBusy"), "LM Studio remove control must require install");
 assert.ok(operations.includes("modelGet').hidden=!lmInstalled"), "model actions must hide until LM Studio is installed");
 assert.ok(operations.includes("LM Studio установлен — доступны обновление"), "dynamic LM Studio hint missing");
+
+assert.ok(index.includes("CREATE TABLE IF NOT EXISTS commands"), "command runtime bootstrap must create commands table");
+assert.ok(index.includes("CREATE TABLE IF NOT EXISTS audit_events"), "command runtime bootstrap must create audit_events table");
+assert.ok(index.includes("lmstudio_installed"), "fleet overview must expose LM Studio state");
+assert.ok(index.includes("/api/v1/architect/models/details"), "model details endpoint missing");
+assert.ok(operations.includes('id="installLmSelected"'), "fleet LM Studio install button missing");
+assert.ok(operations.includes('id="fleetProgress"'), "fleet progress UI missing");
+assert.ok(operations.includes("AI · READY"), "fleet AI badge missing");
+assert.ok(operations.includes("scheduleModelSearch"), "live model search missing");
+assert.ok(operations.includes("showModelDetails"), "model details UI missing");
+assert.ok(operations.includes("formatCount(m.downloads)"), "model download counts missing");
