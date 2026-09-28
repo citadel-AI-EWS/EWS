@@ -1327,13 +1327,16 @@ function qualityGateErrorCode(error) {
   return value.replace(/[^a-zA-Z0-9_.:-]/g, "_").slice(0, 120) || "quality_gate_failed";
 }
 
-function qualityGateResultFromRow(row, rawText) {
+async function qualityGateResultFromRow(env, row, rawText) {
   if (!row) return null;
   if (row.status === "completed" && typeof row.final_text === "string" && row.final_text.trim()) {
+    const content = drivePointerId(row.final_text)
+      ? await resolveDriveText(env, row.final_text)
+      : row.final_text;
     return {
       ready: true,
       status: "completed",
-      content: row.final_text,
+      content,
       reviewed: true,
       model: row.resolved_model || row.requested_model || null,
       error_code: null
@@ -1399,7 +1402,7 @@ async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
   `).bind(projectId).first();
 
   if (current?.source_sha256 === sourceSha256) {
-    const cached = qualityGateResultFromRow(current, draft);
+    const cached = await qualityGateResultFromRow(env, current, draft);
     if (cached?.ready || current.status === "processing") {
       if (current.status !== "processing") return cached;
       const newClaimId = crypto.randomUUID();
@@ -1430,6 +1433,9 @@ async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
   const claimId = current?.source_sha256 === sourceSha256 && current?.status === "processing"
     ? current.claim_id
     : crypto.randomUUID();
+  const supersededQualityPayloadId = current?.source_sha256 !== sourceSha256
+    ? drivePointerId(current?.final_text)
+    : null;
 
   if (!(current?.source_sha256 === sourceSha256 && current?.status === "processing")) {
     const claim = await env.DB.prepare(`
@@ -1457,13 +1463,16 @@ async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
       claimId
     ).run();
 
+    if ((claim?.meta?.changes || 0) === 1 && supersededQualityPayloadId) {
+      await deletePayloadBestEffort(env, supersededQualityPayloadId);
+    }
     if ((claim?.meta?.changes || 0) === 0) {
       const row = await env.DB.prepare(`
         SELECT project_id, source_sha256, status, requested_model, resolved_model,
           fusion_preset, final_text, error_code, claim_id, updated_at
         FROM project_quality_gates WHERE project_id = ?
       `).bind(projectId).first();
-      return qualityGateResultFromRow(row, draft) || {
+      return await qualityGateResultFromRow(env, row, draft) || {
         ready: false,
         status: "processing",
         content: null,
@@ -1480,6 +1489,13 @@ async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
       originalTask,
       draftAnswer: draft
     });
+    const qualityPayload = await persistDrivePayload(env, {
+      owner_type: "project",
+      owner_id: projectId,
+      kind: "quality_final",
+      value: { text: reviewed.content, model: reviewed.model }
+    });
+    const qualityPointer = drivePointer(qualityPayload.payload_id);
     const saved = await env.DB.prepare(`
       UPDATE project_quality_gates
       SET status = 'completed',
@@ -1491,7 +1507,7 @@ async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
         AND source_sha256 = ?
         AND claim_id = ?
         AND status = 'processing'
-    `).bind(reviewed.model, reviewed.content, projectId, sourceSha256, claimId).run();
+    `).bind(reviewed.model, qualityPointer, projectId, sourceSha256, claimId).run();
 
     if ((saved?.meta?.changes || 0) === 1) {
       return {
@@ -1504,12 +1520,13 @@ async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
       };
     }
 
+    await deletePayloadBestEffort(env, qualityPayload.payload_id);
     const row = await env.DB.prepare(`
       SELECT project_id, source_sha256, status, requested_model, resolved_model,
         fusion_preset, final_text, error_code, claim_id, updated_at
       FROM project_quality_gates WHERE project_id = ?
     `).bind(projectId).first();
-    return qualityGateResultFromRow(row, draft) || {
+    return await qualityGateResultFromRow(env, row, draft) || {
       ready: false,
       status: "processing",
       content: null,
