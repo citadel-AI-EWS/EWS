@@ -374,13 +374,37 @@ async function googleDriveAccessToken(env) {
   return data.access_token;
 }
 
-async function googleDrivePayloadReady(env) {
+export async function googleDrivePayloadReady(env) {
   try {
     await verifyDrivePayloadEncryption(env);
   } catch (error) {
     throw new ApiError(503, error?.code || "drive_payload_encryption_unavailable");
   }
-  await googleDriveAccessToken(env);
+
+  const token = await googleDriveAccessToken(env);
+  const config = googleDrivePayloadConfig(env);
+  let response;
+  try {
+    const fields = encodeURIComponent("id,mimeType,trashed,capabilities(canAddChildren)");
+    response = await fetch(
+      "https://www.googleapis.com/drive/v3/files/" +
+        encodeURIComponent(config.folder_id) +
+        "?fields=" + fields + "&supportsAllDrives=true",
+      { headers: { authorization: "Bearer " + token } }
+    );
+  } catch {
+    throw new ApiError(503, "drive_payload_folder_probe_failed");
+  }
+  if (!response.ok) throw new ApiError(503, "drive_payload_folder_probe_failed");
+
+  const folder = await response.json().catch(() => ({}));
+  if (
+    folder?.mimeType !== "application/vnd.google-apps.folder" ||
+    folder?.trashed === true ||
+    folder?.capabilities?.canAddChildren !== true
+  ) {
+    throw new ApiError(503, "drive_payload_folder_not_writable");
+  }
   return true;
 }
 
