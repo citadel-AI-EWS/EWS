@@ -2062,6 +2062,21 @@ async function architectCreateProject(request, env) {
   const plannedWork = targetProjectWork(taskText, effectiveRequestedRoles, executionMode, desiredWorkers);
   const workerCount = Math.min(nodes.length, desiredWorkers);
   const projectId = "project_" + crypto.randomUUID();
+  await ensurePayloadStorage(env);
+  const createdPayloadIds = [];
+  const projectTaskPayload = await persistDrivePayload(env, {
+    owner_type: "project",
+    owner_id: projectId,
+    kind: "project_task",
+    value: {
+      text: taskText,
+      source_type: sourceType,
+      requested_roles: effectiveRequestedRoles
+    }
+  });
+  createdPayloadIds.push(projectTaskPayload.payload_id);
+  const projectTaskPointer = drivePointer(projectTaskPayload.payload_id);
+  const workTaskPayloads = new Map();
   const checksJson = JSON.stringify({
     ...evaluated.checks,
     scheduling: {
@@ -2081,7 +2096,7 @@ async function architectCreateProject(request, env) {
       "INSERT INTO architect_projects (" +
       "project_id, title, source_type, task_text, task_sha256, checks_json, architect_approved, status, worker_count" +
       ") VALUES (?, ?, ?, ?, ?, ?, 1, 'planned', ?)"
-    ).bind(projectId, title, sourceType, taskText, evaluated.task_sha256, checksJson, workerCount),
+    ).bind(projectId, title, sourceType, projectTaskPointer, evaluated.task_sha256, checksJson, workerCount),
     env.DB.prepare(
       "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
       "VALUES ('architect', 'test-console', 'project.created', 'project', ?, ?)"
@@ -2108,6 +2123,18 @@ async function architectCreateProject(request, env) {
       : null;
     const planned = plannedWork[index];
     const workItemId = "work_" + crypto.randomUUID();
+    let taskPayload = workTaskPayloads.get(planned.task_text);
+    if (!taskPayload) {
+      taskPayload = await persistDrivePayload(env, {
+        owner_type: "project",
+        owner_id: projectId,
+        kind: "work_task",
+        value: { text: planned.task_text }
+      });
+      workTaskPayloads.set(planned.task_text, taskPayload);
+      createdPayloadIds.push(taskPayload.payload_id);
+    }
+    const taskPointer = drivePointer(taskPayload.payload_id);
     workItems.push({
       work_item_id: workItemId,
       sequence_no: planned.sequence_no,
@@ -2115,7 +2142,7 @@ async function architectCreateProject(request, env) {
       node_id: node?.node_id || null,
       hostname: node?.hostname || null,
       node_number: node?.node_number || null,
-      task_text: planned.task_text,
+      task_payload_id: taskPayload.payload_id,
       role_source: planned.role_source,
       status: "planned"
     });
@@ -2123,10 +2150,15 @@ async function architectCreateProject(request, env) {
       env.DB.prepare(
         "INSERT INTO project_work_items (work_item_id, project_id, sequence_no, node_id, role_name, task_text, status) " +
         "VALUES (?, ?, ?, ?, ?, ?, 'planned')"
-      ).bind(workItemId, projectId, planned.sequence_no, node?.node_id || null, planned.role_name, planned.task_text)
+      ).bind(workItemId, projectId, planned.sequence_no, node?.node_id || null, planned.role_name, taskPointer)
     );
   }
-  await env.DB.batch(statements);
+  try {
+    await env.DB.batch(statements);
+  } catch (error) {
+    await Promise.all(createdPayloadIds.map((payloadId) => deletePayloadBestEffort(env, payloadId)));
+    throw error;
+  }
   return json({
     ok: true,
     project: {
@@ -2140,6 +2172,8 @@ async function architectCreateProject(request, env) {
       worker_target: workerTarget,
       desired_workers: desiredWorkers,
       work_item_count: plannedWork.length,
+      payload_storage: "google_drive",
+      task_payload_id: projectTaskPayload.payload_id,
       role_plan: rolePlanSummary(plannedWork),
       recommended_roles: [...recommendedRoles],
       requested_roles: effectiveRequestedRoles,
