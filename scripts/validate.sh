@@ -320,6 +320,7 @@ node tests/d1-usage.mjs
 node tests/ten-prompt-routing.mjs
 python tests/lmstudio-local-protocol.py
 python tests/mini-agents.py
+python tests/windows-release-format.py
 node tests/openrouter-quality-gate.mjs
 
 python - <<'PY'
