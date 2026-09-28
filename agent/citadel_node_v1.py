@@ -1609,7 +1609,12 @@ class Agent:
         value = os.environ.get("CITADEL_SSH_ACCESS_HOSTNAME", "").strip().lower()
         if not value or len(value) > 253 or ".." in value:
             return None
-        if not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", value):
+        if (
+            not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", value)
+            or "." not in value
+            or value == "localhost"
+            or re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", value)
+        ):
             return None
         return value
 
