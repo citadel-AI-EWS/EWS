@@ -51,10 +51,16 @@ Type: filesandordirs; Name: "{app}"
 const
   DefaultControllerUrl = 'https://citadel-ai.init1.workers.dev';
   ControllerPublicX = 'erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0';
+  TrustedRegistryKey = 'Software\CITADEL\EWS';
+  MoveFileReplaceExisting = 1;
+  MoveFileWriteThrough = 8;
 
 var
   StartupConfigured: Boolean;
   ExistingNodeStateBeforeSetup: Boolean;
+
+function MoveFileEx(ExistingFileName, NewFileName: string; Flags: LongWord): Boolean;
+  external 'MoveFileExW@kernel32.dll stdcall';
 
 function JsonEscape(Value: string): string;
 begin
@@ -134,12 +140,68 @@ begin
   Result := '';
 end;
 
+function ExplicitControllerUrl: string;
+begin
+  Result := Trim(ExpandConstant('{param:CONTROLLERURL|}'));
+end;
+
+function TrustedControllerUrl(out Value: string): Boolean;
+begin
+  Value := ExplicitControllerUrl;
+  if Value <> '' then
+  begin
+    Result := True;
+    exit;
+  end;
+
+  if RegQueryStringValue(HKLM, TrustedRegistryKey, 'ControllerUrl', Value) and (Trim(Value) <> '') then
+  begin
+    Value := Trim(Value);
+    Result := True;
+    exit;
+  end;
+
+  if not ExistingNodeStateBeforeSetup then
+  begin
+    Value := DefaultControllerUrl;
+    Result := True;
+    exit;
+  end;
+
+  Value := '';
+  Result := False;
+end;
+
+procedure PersistTrustedControllerUrl(Value: string);
+begin
+  if Trim(Value) = '' then exit;
+  if not RegWriteStringValue(HKLM, TrustedRegistryKey, 'ControllerUrl', Trim(Value)) then
+    RaiseException('Unable to persist trusted CITADEL Controller URL.');
+end;
+
+procedure AtomicReplaceTextFile(PathValue, ContentValue, ErrorText: string);
+var
+  TempPath: string;
+begin
+  TempPath := PathValue + '.new';
+  DeleteFile(TempPath);
+  if not SaveStringToFile(TempPath, ContentValue, False) then
+    RaiseException(ErrorText + ' (temporary write failed)');
+  if not MoveFileEx(TempPath, PathValue, MoveFileReplaceExisting or MoveFileWriteThrough) then
+  begin
+    DeleteFile(TempPath);
+    RaiseException(ErrorText + ' (atomic replace failed)');
+  end;
+end;
+
 procedure WriteDefaultConfig;
 var
   StateRoot, ConfigPath, ConfigText, ControllerUrl: string;
 begin
   StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\state');
-  ControllerUrl := ExpandConstant('{param:CONTROLLERURL|' + DefaultControllerUrl + '}');
+  if not TrustedControllerUrl(ControllerUrl) then
+    ControllerUrl := DefaultControllerUrl;
+  PersistTrustedControllerUrl(ControllerUrl);
   ConfigPath := StateRoot + '\config.json';
   ForceDirectories(StateRoot);
 
@@ -167,23 +229,18 @@ end;
 
 procedure WriteTrustedSystemRecoveryConfig;
 var
-  StateRoot, ConfigPath, ConfigText, ControllerUrl, ExplicitControllerUrl: string;
+  StateRoot, ConfigPath, ConfigText, ControllerUrl: string;
 begin
   StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\state');
-  ExplicitControllerUrl := Trim(ExpandConstant('{param:CONTROLLERURL|}'));
-  if ExistingNodeStateBeforeSetup and (ExplicitControllerUrl = '') then
+  if not TrustedControllerUrl(ControllerUrl) then
     RaiseException(
-      'SYSTEM recovery for an existing node requires an explicit /CONTROLLERURL so the installer cannot redirect a custom-controller node.'
+      'SYSTEM recovery for this existing node has no trusted Controller URL metadata. ' +
+      'Re-run with /CONTROLLERURL to recover without redirecting the node.'
     );
-
-  if ExplicitControllerUrl <> '' then
-    ControllerUrl := ExplicitControllerUrl
-  else
-    ControllerUrl := DefaultControllerUrl;
+  PersistTrustedControllerUrl(ControllerUrl);
 
   ConfigPath := StateRoot + '\config.json';
   ForceDirectories(StateRoot);
-  DeleteFile(ConfigPath);
 
   ConfigText :=
     '{' + #13#10 +
@@ -200,29 +257,53 @@ begin
     '  "controller_public_x": "' + ControllerPublicX + '"' + #13#10 +
     '}' + #13#10;
 
-  if not SaveStringToFile(ConfigPath, ConfigText, False) then
-    RaiseException('Unable to rewrite trusted CITADEL configuration for SYSTEM recovery.');
+  AtomicReplaceTextFile(
+    ConfigPath,
+    ConfigText,
+    'Unable to rewrite trusted CITADEL configuration for SYSTEM recovery.'
+  );
+end;
+
+procedure RestoreLocalServiceTreeAccess(PathValue, Description, LocalServiceRights: string);
+var
+  Icacls: string;
+begin
+  Icacls := ExpandConstant('{sys}\icacls.exe');
+  RequireExec(
+    Icacls,
+    '"' + PathValue + '" /setowner "*S-1-5-32-544" /T /C',
+    'Unable to take ownership while restoring ' + Description
+  );
+  RequireExec(
+    Icacls,
+    '"' + PathValue + '" /reset /T /C',
+    'Unable to reset ACLs while restoring ' + Description
+  );
+  RequireExec(
+    Icacls,
+    '"' + PathValue + '" /inheritance:r /T /C',
+    'Unable to normalize ACL inheritance on ' + Description
+  );
+  RequireExec(
+    Icacls,
+    '"' + PathValue + '" /grant:r "*S-1-5-18:F" "*S-1-5-32-544:F" "*S-1-5-19:' + LocalServiceRights + '" /T /C',
+    'Unable to restore LocalService access on descendants of ' + Description
+  );
+  RequireExec(
+    Icacls,
+    '"' + PathValue + '" /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-19:(OI)(CI)' + LocalServiceRights + '"',
+    'Unable to install inheritable LocalService ACLs on ' + Description
+  );
 end;
 
 procedure HardenDirectories;
 var
-  Icacls, AppRoot, StateRoot: string;
+  AppRoot, StateRoot: string;
 begin
-  Icacls := ExpandConstant('{sys}\icacls.exe');
   AppRoot := ExpandConstant('{app}');
   StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\state');
-
-  RequireExec(
-    Icacls,
-    '"' + AppRoot + '" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-19:(OI)(CI)RX"',
-    'Unable to secure the CITADEL program directory'
-  );
-
-  RequireExec(
-    Icacls,
-    '"' + StateRoot + '" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-19:(OI)(CI)M"',
-    'Unable to secure the CITADEL state directory'
-  );
+  RestoreLocalServiceTreeAccess(AppRoot, 'the CITADEL program tree', 'RX');
+  RestoreLocalServiceTreeAccess(StateRoot, 'the CITADEL state tree', 'M');
 end;
 
 procedure HardenTreeForSystemRecovery(PathValue, Description: string);
