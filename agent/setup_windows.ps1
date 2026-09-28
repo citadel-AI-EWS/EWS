@@ -15,7 +15,7 @@ $ServiceName = "CitadelEWSNode"
 $ServiceDisplayName = "CITADEL EWS Node"
 $PythonWingetId = "Python.Python.3.14"
 $ReleaseVersion = "0.3.21"
-$ExpectedV1Sha256 = "65575e68cba11d18cd4775a58dff8f0ea1ecdf95b1db5737e69b7c6f6215a01c"
+$ExpectedV1Sha256 = "43f4b8db5e90d258d16f5d506ab5b90e61944c622f5a3669f457d76f47726cb3"
 $ExpectedV2Sha256 = "aed82fb91d4d1922ba3cb078ecfda0cb24eca91822524e0474a0128a5c5e5461"
 $ExpectedServiceHostSha256 = "892c5f388f9b54c0bcbb2956381dd601dfa8065b0e9258ba673e9505c2f81cad"
 $ExpectedServiceHelperSha256 = "e0e66f5a27018a283c65d42e6ead93e382706a163da682e6bd49f2b1fb9b0f99"
@@ -195,9 +195,21 @@ function Get-RunningLegacyCitadelAgents {
   }
 }
 
+function Disable-CitadelServiceRecovery {
+  $Existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+  if ($null -eq $Existing) { return }
+  $Sc = Join-Path $env:WINDIR "System32\sc.exe"
+  & $Sc failure $ServiceName reset= 0 actions= "" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Unable to disable CITADEL service recovery before lifecycle mutation." }
+  & $Sc failureflag $ServiceName 0 | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Unable to disable CITADEL service failure actions before lifecycle mutation." }
+}
+
 function Stop-CitadelServiceIfPresent {
   $Existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-  if ($null -eq $Existing -or $Existing.Status -eq "Stopped") { return }
+  if ($null -eq $Existing) { return }
+  Disable-CitadelServiceRecovery
+  if ($Existing.Status -eq "Stopped") { return }
   Stop-Service -Name $ServiceName -Force
   $Existing.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(75))
 }
@@ -693,6 +705,7 @@ try {
       Remove-CitadelServiceDefinition -Name $ServiceName
     } elseif ($null -ne $ExistingSnapshot) {
       Restore-CitadelServiceDefinition -Name $ServiceName -Snapshot $ExistingSnapshot
+      Set-CitadelServiceRecovery -Name $ServiceName
       if ($ExistingWasRunning) {
         Start-Service -Name $ServiceName
         (Get-Service -Name $ServiceName).WaitForStatus("Running", [TimeSpan]::FromSeconds(30))
