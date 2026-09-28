@@ -6355,7 +6355,8 @@ async function handleApi(request, env, url) {
         ok: row?.ok === 1 &&
           controllerSigning === "ready" &&
           reportStorage === "ready" &&
-          sessionStorage === "ready",
+          sessionStorage === "ready" &&
+          payloadStorage === "ready",
         service: "citadel-ai",
         database: "citadel-control",
         controller_signing: controllerSigning,
