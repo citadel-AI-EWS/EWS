@@ -5667,7 +5667,12 @@ async function handleApi(request, env, url) {
         FROM commands WHERE status IN ('pending','accepted')
         ORDER BY created_at DESC LIMIT 500`).all()
     ]);
-    return json({ok:true, nodes:nodes.results || [], commands:commands.results || []});
+    const machineNodes = (nodes.results || []).map((node) => ({
+      ...node,
+      latest_agent_version: LATEST_NODE_RELEASE.version,
+      update_required: node.agent_version !== LATEST_NODE_RELEASE.version
+    }));
+    return json({ok:true, nodes:machineNodes, commands:commands.results || []});
   }
 
   if (url.pathname === "/api/v1/architect/projects/check") {
