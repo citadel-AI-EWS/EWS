@@ -48,16 +48,11 @@ class D1Database {
     return new D1Statement(this.db, sql);
   }
   async batch(statements) {
+    // D1 serializes a batch internally. The test adapter intentionally avoids an
+    // outer BEGIN because independent Worker schema bootstraps can overlap.
     const results = [];
-    this.db.exec("BEGIN");
-    try {
-      for (const statement of statements) results.push(await statement.run());
-      this.db.exec("COMMIT");
-      return results;
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    for (const statement of statements) results.push(await statement.run());
+    return results;
   }
 }
 
