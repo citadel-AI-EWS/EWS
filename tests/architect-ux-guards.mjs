@@ -609,3 +609,7 @@ assert.ok(index.includes("async function expireStalePlannedProjects"), "stale pl
 assert.ok(index.includes("datetime(p.updated_at) <= datetime('now', '-24 hours')"), "stale planned project TTL missing");
 assert.ok(index.includes("w2.status IN ('assigned','running','completed','failed')"), "stale sweeper must preserve started work");
 assert.ok(operations.includes("автоматически закрываются через 24 часа"), "stale project retention copy missing");
+
+assert.ok(operations.includes("Promise.allSettled([api('/machines'"), "partial refresh must use allSettled");
+assert.ok(operations.includes("Часть данных не обновлена"), "partial refresh warning missing");
+assert.ok(operations.includes("refreshErrorText"), "refresh error mapper missing");
