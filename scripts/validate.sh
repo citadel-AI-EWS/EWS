@@ -315,6 +315,7 @@ node tests/review-backlog-guards.mjs
 node tests/legacy-experience.mjs
 node tests/experience-registry.mjs
 node tests/architect-ux-guards.mjs
+node tests/lmstudio-command-storage.mjs
 node tests/enterprise-policy.mjs
 node tests/hub-five-questions.mjs
 node tests/d1-usage.mjs
