@@ -1612,9 +1612,28 @@ class Agent:
         store.mkdir(parents=True, exist_ok=True)
         return store
 
-    def lmstudio_model_inventory(self) -> dict[str, Any]:
-        """Inventory the managed model directory without moving or redownloading models."""
+    def lmstudio_model_inventory(self, *, force: bool = False) -> dict[str, Any]:
+        """Inventory the managed model directory, caching expensive CLI scans for five minutes."""
         store = self.lmstudio_model_store()
+        state = self.lmstudio_state()
+        if not force:
+            checked = state.get("model_store_checked_at")
+            cached_models = state.get("installed_models")
+            cached_count = state.get("model_count")
+            if isinstance(checked, str) and isinstance(cached_models, list) and isinstance(cached_count, int):
+                try:
+                    stamp = dt.datetime.fromisoformat(checked.replace("Z", "+00:00"))
+                    age = (dt.datetime.now(dt.timezone.utc) - stamp.astimezone(dt.timezone.utc)).total_seconds()
+                    if 0 <= age < 300:
+                        return {
+                            "path": str(store),
+                            "count": cached_count,
+                            "models": cached_models[:64],
+                            "checked_at": checked,
+                        }
+                except (ValueError, TypeError):
+                    pass
+
         models: list[dict[str, Any]] = []
         if self.find_lms():
             try:
@@ -1724,7 +1743,7 @@ class Agent:
                 return value.strip()
         return None
 
-    def probe_lmstudio(self) -> dict[str, Any]:
+    def probe_lmstudio(self, *, force_inventory: bool = False) -> dict[str, Any]:
         state = self.lmstudio_state()
         installed = self.find_lms() is not None
         server_running = False
@@ -1747,7 +1766,7 @@ class Agent:
                             loaded_models.append(name)
                 except Exception:
                     loaded_models = []
-        inventory = self.lmstudio_model_inventory() if installed else {
+        inventory = self.lmstudio_model_inventory(force=force_inventory) if installed else {
             "path": str(self.lmstudio_model_store()),
             "count": 0,
             "models": [],
@@ -2132,7 +2151,7 @@ class Agent:
                     raise RuntimeError("lmstudio_model_download_failed")
                 time.sleep(2)
         model_key = self.resolve_lmstudio_model_key(model, quantization)
-        inventory = self.lmstudio_model_inventory()
+        inventory = self.lmstudio_model_inventory(force=True)
         self.report_ai_state(
             installed=True, server_running=True, selected_model=model_key,
             last_action="model_downloaded", progress_phase="download_complete",
@@ -2668,7 +2687,7 @@ class Agent:
                 elif command_type == "lmstudio_uninstall":
                     self.uninstall_lmstudio(command.get("payload") or {})
                 elif command_type == "lmstudio_probe":
-                    snapshot = self.probe_lmstudio()
+                    snapshot = self.probe_lmstudio(force_inventory=True)
                     self.report_ai_state(**{key: value for key, value in snapshot.items() if key != "loaded_models"})
                 elif command_type == "lmstudio_model_get":
                     self.download_lmstudio_model(command.get("payload") or {})
