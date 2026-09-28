@@ -3673,6 +3673,293 @@ async function architectGetReport(request, env, reportId) {
   });
 }
 
+
+function interactivePayloadText(payload) {
+  if (typeof payload === "string") return payload;
+  if (!payload || typeof payload !== "object") return "";
+  if (typeof payload.text === "string") return payload.text;
+  if (typeof payload.content === "string") return payload.content;
+  if (typeof payload.summary === "string") return payload.summary;
+  if (typeof payload.error_code === "string") return "ERROR: " + payload.error_code;
+  const serialized = JSON.stringify(payload);
+  return serialized.length <= 4000 ? serialized : serialized.slice(0, 4000) + "…";
+}
+
+async function interactiveThreadBase(env, projectId, workItemId) {
+  await Promise.all([ensureProjectStorage(env), ensureReportStorage(env), ensurePayloadStorage(env)]);
+  const base = await env.DB.prepare(`
+    SELECT
+      w.work_item_id, w.project_id, w.node_id, w.role_name, w.status AS work_status,
+      p.source_type, p.status AS project_status, p.title,
+      n.hostname,
+      (
+        SELECT ar.report_json
+        FROM agent_reports AS ar
+        WHERE ar.assignment_id = ('assignment_' || w.work_item_id)
+        ORDER BY datetime(ar.created_at) DESC
+        LIMIT 1
+      ) AS result_json
+    FROM project_work_items AS w
+    JOIN architect_projects AS p ON p.project_id = w.project_id
+    LEFT JOIN nodes AS n ON n.node_id = w.node_id
+    WHERE w.project_id = ? AND w.work_item_id = ?
+  `).bind(projectId, workItemId).first();
+  if (!base) throw new ApiError(404, "project_work_item_not_found");
+  if (!base.node_id) throw new ApiError(409, "interactive_worker_not_assigned");
+  return base;
+}
+
+async function ensureInteractiveThread(env, projectId, workItemId) {
+  const base = await interactiveThreadBase(env, projectId, workItemId);
+  let thread = await env.DB.prepare(`
+    SELECT thread_id, project_id, work_item_id, node_id, role_name, execution_mode,
+      status, message_count, created_at, updated_at
+    FROM interactive_threads
+    WHERE project_id = ? AND work_item_id = ?
+  `).bind(projectId, workItemId).first();
+
+  if (!thread) {
+    const threadId = "thread_" + crypto.randomUUID();
+    await env.DB.prepare(`
+      INSERT OR IGNORE INTO interactive_threads (
+        thread_id, project_id, work_item_id, node_id, role_name, execution_mode
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(
+      threadId,
+      projectId,
+      workItemId,
+      base.node_id,
+      base.role_name,
+      projectExecutionMode(base.source_type)
+    ).run();
+    thread = await env.DB.prepare(`
+      SELECT thread_id, project_id, work_item_id, node_id, role_name, execution_mode,
+        status, message_count, created_at, updated_at
+      FROM interactive_threads
+      WHERE project_id = ? AND work_item_id = ?
+    `).bind(projectId, workItemId).first();
+  }
+
+  if (!thread) throw new ApiError(500, "interactive_thread_create_failed");
+
+  if (Number(thread.message_count || 0) === 0 && base.result_json) {
+    let initialPayloadId = drivePointerId(base.result_json);
+    let createdPayloadId = null;
+    if (!initialPayloadId) {
+      const legacyResult = safeJson(base.result_json, null);
+      if (legacyResult) {
+        const migrated = await persistDrivePayload(env, {
+          owner_type: "thread",
+          owner_id: thread.thread_id,
+          kind: "legacy_initial_agent_report",
+          value: legacyResult
+        });
+        initialPayloadId = migrated.payload_id;
+        createdPayloadId = migrated.payload_id;
+      }
+    }
+    if (initialPayloadId) {
+      try {
+        const inserted = await env.DB.prepare(`
+          INSERT OR IGNORE INTO interactive_messages (
+            message_id, thread_id, sequence_no, actor, payload_id
+          ) VALUES (?, ?, 1, 'agent', ?)
+        `).bind("message_" + crypto.randomUUID(), thread.thread_id, initialPayloadId).run();
+        if ((inserted?.meta?.changes || 0) === 1) {
+          await env.DB.prepare(`
+            UPDATE interactive_threads
+            SET message_count = 1, updated_at = CURRENT_TIMESTAMP
+            WHERE thread_id = ?
+          `).bind(thread.thread_id).run();
+        } else if (createdPayloadId) {
+          await deletePayloadBestEffort(env, createdPayloadId);
+        }
+      } catch (error) {
+        if (createdPayloadId) await deletePayloadBestEffort(env, createdPayloadId);
+        throw error;
+      }
+    }
+  }
+
+  return {
+    ...thread,
+    hostname: base.hostname || null,
+    source_type: base.source_type,
+    project_status: base.project_status,
+    work_status: base.work_status
+  };
+}
+
+async function interactiveThreadMessages(env, threadId) {
+  const query = await env.DB.prepare(`
+    SELECT message_id, sequence_no, actor, payload_id, response_work_item_id, created_at
+    FROM interactive_messages
+    WHERE thread_id = ?
+    ORDER BY sequence_no ASC
+    LIMIT 200
+  `).bind(threadId).all();
+  return Promise.all((query.results || []).map(async (message) => {
+    const payload = await readDrivePayload(env, message.payload_id);
+    return {
+      ...message,
+      text: interactivePayloadText(payload)
+    };
+  }));
+}
+
+async function architectGetInteractiveThread(request, env, projectId, workItemId) {
+  await authenticateArchitect(request, env);
+  const thread = await ensureInteractiveThread(env, projectId, workItemId);
+  const messages = await interactiveThreadMessages(env, thread.thread_id);
+  return json({
+    ok: true,
+    thread: {
+      ...thread,
+      role: roleMetadata(thread.role_name),
+      messages
+    }
+  });
+}
+
+async function architectPostInteractiveMessage(request, env, projectId, workItemId) {
+  await authenticateArchitect(request, env);
+  const body = parseJsonObject(await readBodyText(request, 16 * 1024));
+  const messageText = requireString(body.message, "interactive_message", 8000);
+  const thread = await ensureInteractiveThread(env, projectId, workItemId);
+  if (thread.status !== "active") throw new ApiError(409, "interactive_thread_closed");
+  if (thread.project_status === "cancelled") throw new ApiError(409, "project_cancelled");
+
+  const historyRows = await env.DB.prepare(`
+    SELECT sequence_no, actor, payload_id
+    FROM interactive_messages
+    WHERE thread_id = ?
+    ORDER BY sequence_no DESC
+    LIMIT 12
+  `).bind(thread.thread_id).all();
+  const history = (await Promise.all(
+    (historyRows.results || []).reverse().map(async (row) => ({
+      actor: row.actor,
+      text: interactivePayloadText(await readDrivePayload(env, row.payload_id))
+    }))
+  )).filter((item) => item.text);
+
+  const userPayload = await persistDrivePayload(env, {
+    owner_type: "thread",
+    owner_id: thread.thread_id,
+    kind: "user_message",
+    value: { text: messageText }
+  });
+  const createdPayloadIds = [userPayload.payload_id];
+
+  let taskText = messageText;
+  let taskPayload = userPayload;
+  if (thread.execution_mode === "ai") {
+    const historyText = history
+      .slice(-10)
+      .map((item) => (item.actor === "user" ? "USER" : "AGENT") + ": " + item.text)
+      .join("\n\n")
+      .slice(-12000);
+    taskText = [
+      "Continue the same CITADEL interactive report with the same expert role and the same node.",
+      "Role: " + thread.role_name,
+      "Do not restart the analysis from zero. Answer the user's follow-up using the prior report/dialogue context.",
+      historyText ? "Conversation so far:\n" + historyText : "",
+      "USER FOLLOW-UP:\n" + messageText
+    ].filter(Boolean).join("\n\n");
+    taskPayload = await persistDrivePayload(env, {
+      owner_type: "thread",
+      owner_id: thread.thread_id,
+      kind: "followup_task",
+      value: { text: taskText }
+    });
+    createdPayloadIds.push(taskPayload.payload_id);
+  }
+
+  const sequenceRow = await env.DB.prepare(
+    "SELECT COALESCE(MAX(sequence_no), 0) AS max_sequence FROM project_work_items WHERE project_id = ?"
+  ).bind(projectId).first();
+  const messageSequenceRow = await env.DB.prepare(
+    "SELECT COALESCE(MAX(sequence_no), 0) AS max_sequence FROM interactive_messages WHERE thread_id = ?"
+  ).bind(thread.thread_id).first();
+  const workSequence = Number(sequenceRow?.max_sequence || 0) + 1;
+  const messageSequence = Number(messageSequenceRow?.max_sequence || 0) + 1;
+  const responseWorkItemId = "work_" + crypto.randomUUID();
+  const taskPointer = drivePointer(taskPayload.payload_id);
+
+  try {
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO project_work_items (
+          work_item_id, project_id, sequence_no, node_id, role_name, task_text, status
+        ) VALUES (?, ?, ?, ?, ?, ?, 'planned')
+      `).bind(
+        responseWorkItemId,
+        projectId,
+        workSequence,
+        thread.node_id,
+        thread.role_name,
+        taskPointer
+      ),
+      env.DB.prepare(`
+        INSERT INTO interactive_messages (
+          message_id, thread_id, sequence_no, actor, payload_id, response_work_item_id
+        ) VALUES (?, ?, ?, 'user', ?, ?)
+      `).bind(
+        "message_" + crypto.randomUUID(),
+        thread.thread_id,
+        messageSequence,
+        userPayload.payload_id,
+        responseWorkItemId
+      ),
+      env.DB.prepare(`
+        UPDATE interactive_threads
+        SET message_count = message_count + 1, updated_at = CURRENT_TIMESTAMP
+        WHERE thread_id = ?
+      `).bind(thread.thread_id),
+      env.DB.prepare(`
+        UPDATE architect_projects
+        SET status = 'running', updated_at = CURRENT_TIMESTAMP
+        WHERE project_id = ? AND status IN ('planned','running','completed','blocked')
+      `).bind(projectId),
+      env.DB.prepare(`
+        INSERT INTO audit_events (
+          actor_type, actor_id, action, target_type, target_id, details_json
+        ) VALUES ('architect', 'interactive-report', 'interactive.message.created',
+          'interactive_thread', ?, ?)
+      `).bind(thread.thread_id, JSON.stringify({
+        project_id: projectId,
+        work_item_id: responseWorkItemId,
+        node_id: thread.node_id,
+        role_name: thread.role_name,
+        execution_mode: thread.execution_mode
+      }))
+    ]);
+  } catch (error) {
+    await Promise.all(createdPayloadIds.map((payloadId) => deletePayloadBestEffort(env, payloadId)));
+    throw error;
+  }
+
+  let materialized = 0;
+  try {
+    materialized = await materializeProjectWorkForNode(env, thread.node_id, projectId);
+  } catch {
+    materialized = 0;
+  }
+  const queued = await env.DB.prepare(
+    "SELECT status FROM project_work_items WHERE work_item_id = ?"
+  ).bind(responseWorkItemId).first();
+
+  return json({
+    ok: true,
+    thread_id: thread.thread_id,
+    response_work_item_id: responseWorkItemId,
+    state: queued?.status || (materialized ? "assigned" : "planned"),
+    node_id: thread.node_id,
+    role_name: thread.role_name,
+    execution_mode: thread.execution_mode
+  }, 202);
+}
+
 function normalizeSessionUiState(value) {
   if (value === undefined || value === null) {
     return {};
