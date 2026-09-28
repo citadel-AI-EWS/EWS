@@ -4273,21 +4273,31 @@ async function architectDeleteSession(request, env, sessionId) {
 
 async function architectStorageUsage(request, env) {
   await authenticateArchitect(request, env);
-  await Promise.all([backfillLegacyReports(env), ensureSessionStorage(env)]);
+  await Promise.all([backfillLegacyReports(env), ensureSessionStorage(env), ensurePayloadStorage(env)]);
   const usage = await env.DB.prepare(
     "SELECT " +
     "(SELECT COUNT(*) FROM agent_reports) AS report_count, " +
-    "(SELECT COALESCE(SUM(report_size_bytes), 0) FROM agent_reports) AS report_bytes, " +
+    "(SELECT COALESCE(SUM(report_size_bytes), 0) FROM agent_reports) AS report_payload_bytes, " +
     "(SELECT COUNT(*) FROM architect_sessions) AS session_count, " +
-    "(SELECT COALESCE(SUM(snapshot_size_bytes), 0) FROM architect_sessions) AS session_bytes"
+    "(SELECT COALESCE(SUM(snapshot_size_bytes), 0) FROM architect_sessions) AS session_payload_bytes, " +
+    "(SELECT COUNT(*) FROM payload_objects) AS payload_object_count, " +
+    "(SELECT COALESCE(SUM(size_bytes), 0) FROM payload_objects) AS drive_payload_bytes, " +
+    "(SELECT COUNT(*) FROM interactive_threads) AS interactive_thread_count, " +
+    "(SELECT COUNT(*) FROM interactive_messages) AS interactive_message_count"
   ).first();
   return json({
     ok: true,
     usage: {
       report_count: usage?.report_count || 0,
-      report_bytes: usage?.report_bytes || 0,
+      report_payload_bytes: usage?.report_payload_bytes || 0,
       session_count: usage?.session_count || 0,
-      session_bytes: usage?.session_bytes || 0,
+      session_payload_bytes: usage?.session_payload_bytes || 0,
+      payload_object_count: usage?.payload_object_count || 0,
+      drive_payload_bytes: usage?.drive_payload_bytes || 0,
+      interactive_thread_count: usage?.interactive_thread_count || 0,
+      interactive_message_count: usage?.interactive_message_count || 0,
+      payload_provider: "google_drive",
+      payload_configured: googleDrivePayloadConfig(env).configured,
       safe_d1_target_bytes: 400 * 1024 * 1024,
       d1_database_limit_bytes: 500 * 1024 * 1024,
       max_report_bytes: MAX_REPORT_BYTES
