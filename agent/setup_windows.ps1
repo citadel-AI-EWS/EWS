@@ -195,9 +195,21 @@ function Get-RunningLegacyCitadelAgents {
   }
 }
 
+function Disable-CitadelServiceRecovery {
+  $Existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+  if ($null -eq $Existing) { return }
+  $Sc = Join-Path $env:WINDIR "System32\sc.exe"
+  & $Sc failure $ServiceName reset= 0 actions= "" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Unable to disable CITADEL service recovery before lifecycle mutation." }
+  & $Sc failureflag $ServiceName 0 | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Unable to disable CITADEL service failure actions before lifecycle mutation." }
+}
+
 function Stop-CitadelServiceIfPresent {
   $Existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-  if ($null -eq $Existing -or $Existing.Status -eq "Stopped") { return }
+  if ($null -eq $Existing) { return }
+  Disable-CitadelServiceRecovery
+  if ($Existing.Status -eq "Stopped") { return }
   Stop-Service -Name $ServiceName -Force
   $Existing.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(75))
 }
@@ -693,6 +705,7 @@ try {
       Remove-CitadelServiceDefinition -Name $ServiceName
     } elseif ($null -ne $ExistingSnapshot) {
       Restore-CitadelServiceDefinition -Name $ServiceName -Snapshot $ExistingSnapshot
+      Set-CitadelServiceRecovery -Name $ServiceName
       if ($ExistingWasRunning) {
         Start-Service -Name $ServiceName
         (Get-Service -Name $ServiceName).WaitForStatus("Running", [TimeSpan]::FromSeconds(30))
