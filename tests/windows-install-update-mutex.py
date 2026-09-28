@@ -42,7 +42,7 @@ def main() -> int:
     old_program_data = os.environ.get("PROGRAMDATA")
     temp_root = tempfile.TemporaryDirectory(prefix="citadel-mutex-test-")
     os.environ["PROGRAMDATA"] = temp_root.name
-    (Path(temp_root.name) / "CitadelEWS" / "state").mkdir(parents=True, exist_ok=True)
+    (Path(temp_root.name) / "CitadelEWS" / "lifecycle").mkdir(parents=True, exist_ok=True)
 
     child = subprocess.Popen(
         [sys.executable, str(Path(__file__).resolve()), "--holder"],
@@ -82,6 +82,37 @@ def main() -> int:
         marker_path.unlink()
         with node.install_update_mutex(timeout_seconds=2):
             pass
+
+        # Ordinary failures that occur before any mutation are safe to retry and
+        # must not strand a false abandoned marker.
+        try:
+            with node.install_update_mutex(timeout_seconds=2):
+                raise RuntimeError("pre-mutation failure")
+        except RuntimeError as error:
+            assert str(error) == "pre-mutation failure"
+        assert not marker_path.exists(), "safe pre-mutation failure left an abandoned marker"
+
+        # A recoverable mutation may clear the marker only after the caller has
+        # explicitly proved rollback completed.
+        try:
+            with node.install_update_mutex(timeout_seconds=2) as lifecycle:
+                lifecycle.mark_mutated()
+                lifecycle.mark_recovered()
+                raise RuntimeError("rolled back failure")
+        except RuntimeError as error:
+            assert str(error) == "rolled back failure"
+        assert not marker_path.exists(), "verified rollback left an abandoned marker"
+
+        # An ordinary exception after mutation without verified rollback must
+        # fail closed just like a hard crash.
+        try:
+            with node.install_update_mutex(timeout_seconds=2) as lifecycle:
+                lifecycle.mark_mutated()
+                raise RuntimeError("incomplete mutation")
+        except RuntimeError as error:
+            assert str(error) == "incomplete mutation"
+        assert marker_path.exists(), "incomplete mutation incorrectly cleared the crash marker"
+        marker_path.unlink()
 
         # A BaseException is not a clean lifecycle completion. The crash marker
         # must remain even though Python unwinds the context manager normally.
