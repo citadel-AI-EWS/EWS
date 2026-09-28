@@ -121,15 +121,24 @@ async function closeChecked(page, entry, route, screenshotName) {
       if (await page.locator(selector).count() !== 1) addFinding("missing_control", "/", selector);
     }
 
-    entry.auth_probe_active = true;
+    const invalidAuthStatus = await page.evaluate(async () => {
+      const response = await fetch("/api/v1/architect/machines", {
+        method: "GET",
+        cache: "no-store",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer synthetic-invalid-token"
+        }
+      });
+      return response.status;
+    });
+    if (invalidAuthStatus !== 401) {
+      addFinding("invalid_auth_not_rejected", "/", `invalid token returned HTTP ${invalidAuthStatus}, expected 401`);
+    }
+
     await page.locator("#token").fill("synthetic-invalid-token");
     await page.locator("#login").evaluate(form => form.requestSubmit());
-    await page.waitForTimeout(900);
-    entry.auth_probe_active = false;
-
-    if (entry.expected_auth_401 < 1) {
-      addFinding("invalid_auth_not_rejected", "/", "invalid token produced no HTTP 401");
-    }
+    await page.waitForTimeout(500);
     if (!(await page.locator("#auth").isVisible())) {
       addFinding("invalid_auth_unlocked", "/", "invalid token hid login panel");
     }
