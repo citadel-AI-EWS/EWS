@@ -35,17 +35,17 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.19",
+  version: "0.3.20",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "2dc5716dcad493fc825ccc62c5afddf1333f13b2a739d102d9506c35727d4190"
+      sha256: "9f2722f58b1a831d87b414172c057adf72942c3fcb1025c637f5fb7d0eb5e999"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "eb65600f30ddd8ab181f305c73343c35cf59b0ab9016d68281d94c134265210e"
+      sha256: "f34cbdf57c86651f428e2ff495e3a89e7364293b29562a3e726197f9d2ad4f38"
     }
   ]
 });
@@ -221,6 +221,20 @@ function agentRequiresRequestId(version) {
   if (!match) return false;
   const major = Number(match[1]), minor = Number(match[2]), patch = Number(match[3]);
   return major > 0 || minor > 3 || (minor === 3 && patch >= 10);
+}
+
+function agentVersionAtLeast(version, minimum) {
+  const parse = (value) => {
+    const match = String(value || "").match(/^(\d+)\.(\d+)\.(\d+)/);
+    return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+  };
+  const actual = parse(version);
+  const required = parse(minimum);
+  if (!actual || !required) return false;
+  for (let i = 0; i < 3; i += 1) {
+    if (actual[i] !== required[i]) return actual[i] > required[i];
+  }
+  return true;
 }
 
 function parseJsonObject(text) {
@@ -1883,7 +1897,7 @@ async function architectGetProject(request, env, projectId) {
       );
     } else {
       if (!hasProjectText) blockers.push(
-        node.agent_version !== LATEST_NODE_RELEASE.version ? "agent_outdated" : "project_text_missing"
+        !agentVersionAtLeast(node.agent_version, "0.3.19") ? "agent_outdated" : "project_text_missing"
       );
       if (!aiStateKnown) {
         blockers.push("lmstudio_state_unknown");
@@ -2018,11 +2032,17 @@ async function architectGetProject(request, env, projectId) {
       role_name: item.role_name,
       node_id: item.node_id,
       model: item.result.model || null,
-      content: typeof item.result.content === "string" ? item.result.content : null,
+      content: typeof item.result.content === "string" && item.result.content.trim()
+        ? item.result.content
+        : item.status === "failed"
+          ? `ERROR: ${String(item.result.error_code || item.result.error_type || "worker_failed")}`
+          : null,
+      error_code: typeof item.result.error_code === "string" ? item.result.error_code : null,
       status: item.status
     }));
   const workComplete = total > 0 && finished === total;
   const rawResultText = workComplete ? projectFinalText(finalSections) : null;
+  const qualityConfig = openRouterQualityConfig(env);
   const qualityGate = workComplete && executionMode === "python"
     ? {
         ready: true,
@@ -2032,18 +2052,29 @@ async function architectGetProject(request, env, projectId) {
         model: null,
         error_code: null
       }
-    : workComplete
+    : workComplete && !qualityConfig.configured
       ? await finalizeProjectAnswer(env, project.project_id, project.task_text, rawResultText)
-      : {
-          ready: false,
-          status: "waiting_for_workers",
-          content: null,
-          reviewed: false,
-          model: null,
-          error_code: null
-        };
-  const finalReportReady = workComplete && qualityGate.ready;
-  const finalResultText = finalReportReady ? qualityGate.content : null;
+      : workComplete
+        ? {
+            ready: true,
+            status: "deferred",
+            content: rawResultText,
+            reviewed: false,
+            model: qualityConfig.model || null,
+            error_code: null
+          }
+        : {
+            ready: false,
+            status: "waiting_for_workers",
+            content: null,
+            reviewed: false,
+            model: null,
+            error_code: null
+          };
+  // A completed local worker result is the baseline answer. OpenRouter may
+  // enrich it, but a slow/processing quality gate must never hide it.
+  const finalResultText = workComplete ? (qualityGate.content || rawResultText || null) : null;
+  const finalReportReady = workComplete && Boolean(finalResultText);
   return json({
     ok: true,
     project: {
@@ -2069,8 +2100,10 @@ async function architectGetProject(request, env, projectId) {
         total_work_items: total,
         final_report_ready: finalReportReady,
         progress_percent: total ? Math.round((finished / total) * 100) : 0,
-        detail: workComplete && !finalReportReady
-          ? "final_quality_gate_running"
+        detail: workComplete && qualityGate.status === "processing" && finalReportReady
+          ? "local_result_ready_quality_gate_running"
+          : workComplete && !finalReportReady
+            ? "final_quality_gate_running"
           : finalReportReady && qualityGate.reviewed
             ? "final_quality_gate_completed"
             : finalReportReady && qualityGate.status === "degraded"
@@ -4668,7 +4701,7 @@ async function architectCreateCommand(request, env, nodeId) {
   if (commandType === "stop" && node.agent_version !== LATEST_NODE_RELEASE.version) {
     throw new ApiError(409, "agent_update_required");
   }
-  if ((commandType.startsWith("lmstudio_") || commandType === "hybrid_query") && node.agent_version !== LATEST_NODE_RELEASE.version) {
+  if ((commandType.startsWith("lmstudio_") || commandType === "hybrid_query") && !agentVersionAtLeast(node.agent_version, "0.3.19")) {
     throw new ApiError(409, "agent_update_required");
   }
   if (commandType === "pause" && node.status === "paused") {

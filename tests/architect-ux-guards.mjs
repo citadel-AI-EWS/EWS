@@ -577,3 +577,9 @@ assert.match(architect, /Controller покажет READY-ноды и точны�
   assert.equal(persisted.workItems, body.project.work_item_count);
   assert.ok(body.project.work_items.every((item) => item.node_id === null));
 }
+
+assert.match(operations, /<option value="1" selected>1<\/option>/);
+assert.match(operations, /Задание сохранено\. Оно ждёт готовую ноду\/модель/);
+assert.match(index, /function agentVersionAtLeast/);
+assert.match(index, /qualityGate\.content \|\| rawResultText/);
+assert.match(index, /local_result_ready_quality_gate_running/);

@@ -48,7 +48,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.19"
+VERSION = "0.3.20"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -977,6 +977,13 @@ class Agent:
         if time.monotonic() - self.last_network_remember >= 300:
             self.remember_network_profile()
             self.last_network_remember = time.monotonic()
+    def sync_lmstudio_readiness(self) -> None:
+        """Refresh scheduler-visible LM Studio state without blocking service HOLD readiness."""
+        try:
+            self.report_ai_state(**self.probe_lmstudio())
+        except Exception as error:
+            self.log.write("lmstudio_heartbeat_probe_failed", error=str(error)[:300])
+
 
     def resources_ok(self) -> tuple[bool, dict[str, float]]:
         cpu = float(psutil.cpu_percent(interval=0.1))
@@ -1687,7 +1694,12 @@ class Agent:
                             loaded_models.append(name)
                 except Exception:
                     loaded_models = []
-        loaded_model = loaded_models[0] if loaded_models else None
+        selected_model = str(state.get("selected_model") or "").strip()
+        loaded_model = (
+            selected_model
+            if selected_model and selected_model in loaded_models
+            else loaded_models[0] if loaded_models else None
+        )
         snapshot = {
             "installed": installed,
             "selected_model": state.get("selected_model"),
@@ -2936,6 +2948,7 @@ class Agent:
         self.handle_commands()
         if time.monotonic() - self.last_heartbeat >= self.config.heartbeat_seconds:
             self.heartbeat()
+            self.sync_lmstudio_readiness()
         sent = self.results.flush(self.submit_result)
         if sent:
             self.log.write("queued_results_flushed", count=sent)

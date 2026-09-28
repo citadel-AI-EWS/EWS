@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 import citadel_node_v1 as v1
 
-VERSION = "0.3.19"
+VERSION = "0.3.20"
 v1.VERSION = VERSION
 v1.USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 
@@ -65,6 +65,7 @@ ALLOWED_EVENTS = {
     "windows_sleep_hibernate_inhibit",
     "hybrid_query_completed",
     "lmstudio_state_report_failed",
+    "lmstudio_heartbeat_probe_failed",
     "python_mode_calculation_fallback",
     "lmstudio_model_key_resolution_fallback",
     "command_failure_ack_failed",

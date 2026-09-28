@@ -67,5 +67,6 @@ assert.ok(index.includes("finalizeProjectAnswer"), "Controller quality-gate fina
 assert.ok(index.includes("project_quality_gates"), "Quality-gate cache table missing");
 assert.ok(index.includes("final_quality_gate_running"), "Quality-gate execution state missing");
 assert.ok(index.includes("quality_gate:"), "Final report quality-gate metadata missing");
+assert.ok(index.includes('status: "deferred"'), "Configured OpenRouter must not block local project results");
 
 console.log("OpenRouter final quality gate: PASS");
