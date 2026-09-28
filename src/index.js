@@ -1695,7 +1695,7 @@ async function architectCreateProject(request, env) {
     throw new ApiError(409, "project_checks_failed");
   }
 
-  await ensureNodeAiStorage(env);
+  await Promise.all([ensureNodeAiStorage(env), ensureAutoEnrollmentStorage(env)]);
   const nodesQuery = await env.DB.prepare(
     "SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.agent_version, n.capabilities_json, nn.node_number, " +
     "ai.installed AS lmstudio_installed, ai.loaded_model AS lmstudio_loaded_model, " +
@@ -1849,7 +1849,12 @@ async function architectListProjects(request, env) {
 
 async function architectGetProject(request, env, projectId) {
   await authenticateArchitect(request, env);
-  await Promise.all([ensureProjectStorage(env), ensureNodeAiStorage(env), ensureReportStorage(env)]);
+  await Promise.all([
+    ensureProjectStorage(env),
+    ensureNodeAiStorage(env),
+    ensureReportStorage(env),
+    ensureAutoEnrollmentStorage(env)
+  ]);
   const project = await env.DB.prepare(`
     SELECT project_id, title, source_type, task_text, checks_json,
       architect_approved, status, worker_count, created_at, updated_at
