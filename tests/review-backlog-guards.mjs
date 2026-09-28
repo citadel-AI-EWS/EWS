@@ -199,3 +199,17 @@ need(deployWorkflow.includes("GOOGLE_DRIVE_REPORT_ENCRYPTION_KEY"), "legacy Driv
 console.log("Review backlog guards: PASS");
 
 need(agentV1.includes("lmstudio_heartbeat_probe_failed"), "routine heartbeat does not refresh LM Studio readiness");
+need(agentV1.includes("def lmstudio_model_store"), "CITADEL model store helper missing");
+need(agentV1.includes('".lmstudio" / "models"'), "LM Studio model directory is not isolated under CITADEL HOME");
+need(agentV1.includes('["ls", "--json", "--detailed"]'), "LM Studio model inventory command missing");
+need(agentV1.includes('"model_store_path"'), "agent does not report model store path");
+need(agentV1.includes('"installed_models"'), "agent does not report installed model inventory");
+need(index.includes("citadel_execution_architecture"), "Drive payload metadata is missing execution architecture");
+need(index.includes("citadel_hostname"), "Drive payload metadata is missing hostname");
+need(index.includes("executionArchitecture"), "report execution architecture classification missing");
+need(operations.includes("Короткие логи · D1"), "Hub D1 log section missing");
+need(operations.includes("Длинные логи · Google Drive"), "Hub Drive log section missing");
+need(operations.includes("toggleDriveReport"), "Hub expandable Drive report loader missing");
+need(operations.includes("OpenRouter quality gate"), "Hub OpenRouter execution path missing");
+need(operations.includes("Папка моделей"), "Hub model-store path missing");
+
