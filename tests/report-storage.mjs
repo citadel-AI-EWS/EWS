@@ -156,7 +156,7 @@ class Statement {
       });
       return { meta: { changes: 1 } };
     }
-    if (this.sql.startsWith("CREATE TABLE") || this.sql.startsWith("CREATE INDEX")) {
+    if (this.sql.startsWith("CREATE TABLE") || this.sql.startsWith("CREATE INDEX") || this.sql.startsWith("CREATE UNIQUE INDEX")) {
       return { meta: { changes: 0 } };
     }
     if (
