@@ -28,6 +28,8 @@ namespace CitadelEws
         public bool PreviousRollbackable;
         public bool Versioned;
         public bool PreviousFallbackUsed;
+        public string LegacyRoot;
+        public string CitadelRoot;
 
         public static PortablePaths Discover()
         {
@@ -44,7 +46,7 @@ namespace CitadelEws
             var dataRoot = Path.Combine(citadelRoot, "state");
             var statePath = Path.Combine(dataRoot, "release-state.json");
             if (!File.Exists(statePath))
-                return CreateLegacy(legacyRoot, dataRoot);
+                return CreateLegacy(legacyRoot, citadelRoot, dataRoot);
 
             var json = File.ReadAllText(statePath);
             if (ReadRequiredJsonInt(json, "schema") != 1)
@@ -69,7 +71,11 @@ namespace CitadelEws
             if (TryCreateVersioned(
                 releasesRoot, dataRoot, current, currentDescriptor,
                 previous, previousDescriptor, previousRollbackable, false, out paths))
+            {
+                paths.LegacyRoot = legacyRoot;
+                paths.CitadelRoot = citadelRoot;
                 return paths;
+            }
 
             if (previousRollbackable &&
                 !String.IsNullOrWhiteSpace(previous) &&
@@ -77,18 +83,23 @@ namespace CitadelEws
                 TryCreateVersioned(
                     releasesRoot, dataRoot, previous, previousDescriptor,
                     null, null, false, true, out paths))
+            {
+                paths.LegacyRoot = legacyRoot;
+                paths.CitadelRoot = citadelRoot;
                 return paths;
+            }
 
             throw new InvalidDataException("Committed CITADEL release state has no startable verified release.");
         }
 
-        private static PortablePaths CreateLegacy(string appRoot, string dataRoot)
+        private static PortablePaths CreateLegacy(string appRoot, string citadelRoot, string dataRoot)
         {
-            return CreateForAppRoot(appRoot, dataRoot, null, null, null, false, false);
+            return CreateForAppRoot(appRoot, citadelRoot, dataRoot, null, null, null, false, false);
         }
 
         private static PortablePaths CreateForAppRoot(
             string appRoot,
+            string citadelRoot,
             string dataRoot,
             string releasesRoot,
             string releaseId,
@@ -111,7 +122,9 @@ namespace CitadelEws
                 PreviousReleaseId = previousReleaseId,
                 PreviousRollbackable = previousRollbackable,
                 Versioned = !String.IsNullOrWhiteSpace(releaseId),
-                PreviousFallbackUsed = previousFallbackUsed
+                PreviousFallbackUsed = previousFallbackUsed,
+                LegacyRoot = appRoot,
+                CitadelRoot = citadelRoot
             };
         }
 
@@ -160,8 +173,10 @@ namespace CitadelEws
             if (!String.Equals(ReadRequiredJsonString(okJson, "descriptor_sha256"), descriptorSha256, StringComparison.OrdinalIgnoreCase))
                 return false;
 
+            var citadelRoot = Directory.GetParent(releasesRoot).FullName;
             paths = CreateForAppRoot(
                 candidate,
+                citadelRoot,
                 dataRoot,
                 releasesRoot,
                 releaseId,
@@ -202,6 +217,29 @@ namespace CitadelEws
             PreviousRollbackable = false;
             PreviousFallbackUsed = true;
             return true;
+        }
+
+        internal void RefreshCommittedRelease()
+        {
+            if (String.IsNullOrWhiteSpace(LegacyRoot) || String.IsNullOrWhiteSpace(CitadelRoot))
+                return;
+            var fresh = DiscoverForRoots(LegacyRoot, CitadelRoot);
+            AppRoot = fresh.AppRoot;
+            DataRoot = fresh.DataRoot;
+            PythonPath = fresh.PythonPath;
+            AgentPath = fresh.AgentPath;
+            ConfigPath = fresh.ConfigPath;
+            StopFile = fresh.StopFile;
+            LifecycleStopFile = fresh.LifecycleStopFile;
+            HoldFile = fresh.HoldFile;
+            ReadyFile = fresh.ReadyFile;
+            ReleasesRoot = fresh.ReleasesRoot;
+            ReleaseId = fresh.ReleaseId;
+            PreviousReleaseId = fresh.PreviousReleaseId;
+            PreviousDescriptorSha256 = fresh.PreviousDescriptorSha256;
+            PreviousRollbackable = fresh.PreviousRollbackable;
+            Versioned = fresh.Versioned;
+            PreviousFallbackUsed = fresh.PreviousFallbackUsed;
         }
 
         private static bool HasReparsePoint(string path)
@@ -542,6 +580,10 @@ namespace CitadelEws
                     if (stopping) return;
                     if (code == RestartExitCode)
                     {
+                        // Exit 75 is the bounded handoff used by signed update.
+                        // Re-resolve committed state so a future atomic pointer
+                        // flip takes effect without restarting the stable host.
+                        paths.RefreshCommittedRelease();
                         Thread.Sleep(1000);
                         continue;
                     }
@@ -606,6 +648,15 @@ namespace CitadelEws
                     try { File.Delete(paths.LifecycleStopFile); } catch { }
                 }
             }
+        }
+
+        private static void CopyDirectory(string source, string destination)
+        {
+            Directory.CreateDirectory(destination);
+            foreach (var file in Directory.GetFiles(source))
+                File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), true);
+            foreach (var directory in Directory.GetDirectories(source))
+                CopyDirectory(directory, Path.Combine(destination, Path.GetFileName(directory)));
         }
 
         private static int SelfTest()
@@ -691,6 +742,18 @@ namespace CitadelEws
                     "}"
                 );
 
+                var legacyForRefreshRoot = Path.Combine(root, "legacy-refresh");
+                Directory.CreateDirectory(Path.Combine(legacyForRefreshRoot, "runtime"));
+                File.WriteAllText(Path.Combine(legacyForRefreshRoot, "runtime", "python.exe"), "");
+                File.WriteAllText(Path.Combine(legacyForRefreshRoot, "citadel_node_v2.py"), "");
+                var refreshCitadelRoot = Path.Combine(root, "refresh-programdata", "CitadelEWS");
+                var refreshState = Path.Combine(refreshCitadelRoot, "state");
+                Directory.CreateDirectory(refreshState);
+                File.WriteAllText(Path.Combine(refreshState, "config.json"), "{}");
+                var refreshPaths = PortablePaths.DiscoverForRoots(legacyForRefreshRoot, refreshCitadelRoot);
+                if (refreshPaths.Versioned)
+                    throw new InvalidOperationException("Legacy launcher unexpectedly started in versioned mode.");
+
                 var versionedPaths = PortablePaths.DiscoverForRoots(
                     Path.Combine(root, "legacy"),
                     citadelRoot
@@ -699,6 +762,19 @@ namespace CitadelEws
                     versionedPaths.ReleaseId != currentId ||
                     versionedPaths.AppRoot != Path.Combine(releases, currentId))
                     throw new InvalidOperationException("Versioned launcher did not select committed current release.");
+
+                // Simulate a long-lived legacy host receiving exit 75 after the
+                // versioned pointer appears. It must re-read the committed state.
+                Directory.CreateDirectory(Path.Combine(refreshCitadelRoot, "releases"));
+                CopyDirectory(Path.Combine(releases, currentId), Path.Combine(refreshCitadelRoot, "releases", currentId));
+                CopyDirectory(Path.Combine(releases, previousId), Path.Combine(refreshCitadelRoot, "releases", previousId));
+                File.WriteAllText(
+                    Path.Combine(refreshState, "release-state.json"),
+                    File.ReadAllText(Path.Combine(versionedState, "release-state.json"))
+                );
+                refreshPaths.RefreshCommittedRelease();
+                if (!refreshPaths.Versioned || refreshPaths.ReleaseId != currentId)
+                    throw new InvalidOperationException("Launcher did not refresh committed release after managed restart.");
 
                 File.Delete(Path.Combine(releases, currentId, "runtime", "python.exe"));
                 var fallbackPaths = PortablePaths.DiscoverForRoots(
