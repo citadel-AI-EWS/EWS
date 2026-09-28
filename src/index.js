@@ -1829,9 +1829,43 @@ async function architectCreateProject(request, env) {
   }, 201);
 }
 
+async function expireStalePlannedProjects(env) {
+  // Never-started planned projects must not occupy Operations forever.
+  await env.DB.batch([
+    env.DB.prepare(`
+      UPDATE project_work_items
+      SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+      WHERE status = 'planned'
+        AND project_id IN (
+          SELECT p.project_id
+          FROM architect_projects AS p
+          WHERE p.status = 'planned'
+            AND datetime(p.updated_at) <= datetime('now', '-24 hours')
+            AND NOT EXISTS (
+              SELECT 1 FROM project_work_items AS w2
+              WHERE w2.project_id = p.project_id
+                AND w2.status IN ('assigned','running','completed','failed')
+            )
+        )
+    `),
+    env.DB.prepare(`
+      UPDATE architect_projects
+      SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+      WHERE status = 'planned'
+        AND datetime(updated_at) <= datetime('now', '-24 hours')
+        AND NOT EXISTS (
+          SELECT 1 FROM project_work_items AS w
+          WHERE w.project_id = architect_projects.project_id
+            AND w.status IN ('assigned','running','completed','failed')
+        )
+    `)
+  ]);
+}
+
 async function architectListProjects(request, env) {
   await authenticateArchitect(request, env);
   await ensureProjectStorage(env);
+  await expireStalePlannedProjects(env);
   const rows = await env.DB.prepare(
     "SELECT p.project_id, p.title, p.source_type, p.status, p.worker_count, p.created_at, p.updated_at, " +
     "COALESCE(CAST(json_extract(p.checks_json, '$.scheduling.desired_workers') AS INTEGER), p.worker_count) AS desired_workers, " +
@@ -1842,7 +1876,9 @@ async function architectListProjects(request, env) {
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'assigned') AS assigned_work_items, " +
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'running') AS running_work_items, " +
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status IN ('completed','failed','cancelled')) AS finished_work_items " +
-    "FROM architect_projects AS p ORDER BY p.created_at DESC LIMIT 50"
+    "FROM architect_projects AS p " +
+    "WHERE NOT (p.status = 'cancelled' AND datetime(p.updated_at) < datetime('now', '-24 hours')) " +
+    "ORDER BY p.created_at DESC LIMIT 50"
   ).all();
   return json({ ok: true, projects: rows.results || [] });
 }
