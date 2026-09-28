@@ -5522,10 +5522,11 @@ async function architectCreateCommand(request, env, nodeId) {
   const bodyText = await readBodyText(request, 8 * 1024);
   const body = parseJsonObject(bodyText);
   const commandType = requireString(body.command_type, "command_type", 32);
-  // Clean this node first as a fast path, then enforce storage invariants.
+  // Bootstrap storage before any query touches the commands table. A partially
+  // initialized D1 must be able to create its first LM Studio command directly.
   try {
-    await expireStaleNodeCommands(env, nodeId);
     await ensureCommandStorage(env);
+    await expireStaleNodeCommands(env, nodeId);
   } catch (error) {
     if (error instanceof ApiError) throw error;
     console.error("Command storage preflight failed", { node_id: nodeId, command_type: commandType, error: String(error) });
