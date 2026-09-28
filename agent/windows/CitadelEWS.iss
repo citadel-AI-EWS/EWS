@@ -222,7 +222,7 @@ end;
 function IsCitadelAgentPython(ProcessObj: Variant): Boolean;
 var
   ExePath, ExeLower, CommandLine, RuntimePython, RuntimePythonW,
-  ReleasesPrefix, AppPrefix: string;
+  ReleasesPrefix, AppPrefix, MachineRootPrefix: string;
 begin
   Result := False;
   ExePath := '';
@@ -249,16 +249,21 @@ begin
   RuntimePythonW := Lowercase(ExpandConstant('{app}\runtime\pythonw.exe'));
   ReleasesPrefix := Lowercase(ExpandConstant('{app}\releases\'));
   AppPrefix := Lowercase(ExpandConstant('{app}\'));
+  MachineRootPrefix := Lowercase(ExpandConstant('{commonappdata}\CitadelEWS\'));
 
-  { CommandLine under the machine install root is authoritative when WMI does
-    not expose ExecutablePath. This also covers py.exe/python3.exe/renamed
-    interpreters that are executing the CITADEL entrypoint from this install. }
-  if Pos(AppPrefix, CommandLine) > 0 then
+  { CommandLine under either the legacy app root or the stable machine root is
+    authoritative when WMI does not expose ExecutablePath. The machine root
+    covers future versioned releases\<id>\runtime interpreters as well. }
+  if (Pos(AppPrefix, CommandLine) > 0) or
+     (Pos(MachineRootPrefix, CommandLine) > 0) then
   begin
     Result := True;
     exit;
   end;
 
+  { CommandLine under the machine install root is authoritative when WMI does
+    not expose ExecutablePath. This also covers py.exe/python3.exe/renamed
+    interpreters that are executing the CITADEL entrypoint from this install. }
   if (CompareText(ExeLower, RuntimePython) = 0) or
      (CompareText(ExeLower, RuntimePythonW) = 0) then
   begin
