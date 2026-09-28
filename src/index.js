@@ -5690,7 +5690,9 @@ async function handleApi(request, env, url) {
         LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
         WHERE n.status != 'revoked' ORDER BY n.node_id LIMIT 500`).all(),
       env.DB.prepare(`SELECT command_id, node_id, command_type, status, created_at
-        FROM commands WHERE status IN ('pending','accepted')
+        FROM commands
+        WHERE status IN ('pending','accepted')
+          OR datetime(created_at) >= datetime('now', '-30 minutes')
         ORDER BY created_at DESC LIMIT 500`).all()
     ]);
     const machineNodes = (nodes.results || []).map((node) => ({
