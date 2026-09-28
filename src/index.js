@@ -3814,8 +3814,14 @@ async function ensureInteractiveThread(env, projectId, workItemId) {
     }
   }
 
+  const refreshed = await env.DB.prepare(`
+    SELECT thread_id, project_id, work_item_id, node_id, role_name, execution_mode,
+      status, message_count, created_at, updated_at
+    FROM interactive_threads
+    WHERE thread_id = ?
+  `).bind(thread.thread_id).first();
   return {
-    ...thread,
+    ...(refreshed || thread),
     hostname: base.hostname || null,
     source_type: base.source_type,
     project_status: base.project_status,
@@ -3843,12 +3849,25 @@ async function interactiveThreadMessages(env, threadId) {
 async function architectGetInteractiveThread(request, env, projectId, workItemId) {
   await authenticateArchitect(request, env);
   const thread = await ensureInteractiveThread(env, projectId, workItemId);
-  const messages = await interactiveThreadMessages(env, thread.thread_id);
+  const [messages, pendingRow] = await Promise.all([
+    interactiveThreadMessages(env, thread.thread_id),
+    env.DB.prepare(`
+      SELECT COUNT(*) AS pending
+      FROM project_work_items AS w
+      WHERE w.work_item_id IN (
+        SELECT response_work_item_id
+        FROM interactive_messages
+        WHERE thread_id = ? AND actor = 'user' AND response_work_item_id IS NOT NULL
+      )
+        AND w.status IN ('planned','assigned','running')
+    `).bind(thread.thread_id).first()
+  ]);
   return json({
     ok: true,
     thread: {
       ...thread,
       role: roleMetadata(thread.role_name),
+      pending_responses: Number(pendingRow?.pending || 0),
       messages
     }
   });
