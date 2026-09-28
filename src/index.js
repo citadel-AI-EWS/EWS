@@ -2042,6 +2042,7 @@ async function architectGetProject(request, env, projectId) {
     }));
   const workComplete = total > 0 && finished === total;
   const rawResultText = workComplete ? projectFinalText(finalSections) : null;
+  const qualityConfig = openRouterQualityConfig(env);
   const qualityGate = workComplete && executionMode === "python"
     ? {
         ready: true,
@@ -2051,16 +2052,25 @@ async function architectGetProject(request, env, projectId) {
         model: null,
         error_code: null
       }
-    : workComplete
+    : workComplete && !qualityConfig.configured
       ? await finalizeProjectAnswer(env, project.project_id, project.task_text, rawResultText)
-      : {
-          ready: false,
-          status: "waiting_for_workers",
-          content: null,
-          reviewed: false,
-          model: null,
-          error_code: null
-        };
+      : workComplete
+        ? {
+            ready: true,
+            status: "deferred",
+            content: rawResultText,
+            reviewed: false,
+            model: qualityConfig.model || null,
+            error_code: null
+          }
+        : {
+            ready: false,
+            status: "waiting_for_workers",
+            content: null,
+            reviewed: false,
+            model: null,
+            error_code: null
+          };
   // A completed local worker result is the baseline answer. OpenRouter may
   // enrich it, but a slow/processing quality gate must never hide it.
   const finalResultText = workComplete ? (qualityGate.content || rawResultText || null) : null;
