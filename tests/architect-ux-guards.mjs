@@ -203,7 +203,7 @@ for (const required of [
   "lmstudio_model_load",
   "system_reboot",
   "system_shutdown",
-  "setTimeout(refresh,60000)"
+  "active?5000:60000"
 ]) {
   assert.ok(operations.includes(required), "Operations capability missing: " + required);
 }
