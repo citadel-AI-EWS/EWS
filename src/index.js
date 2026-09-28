@@ -69,6 +69,10 @@ const LMSTUDIO_INTEGRATION = Object.freeze({
   ])
 });
 const CONTROLLER_COMMAND_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0";
+const DEFAULT_GOOGLE_DRIVE_PAYLOAD_FOLDER_ID = "135_YkqQRJpkM1gmk_oh2uV8ldROqVmbn";
+const DRIVE_POINTER_PREFIX = "@drive:";
+let driveAccessTokenCache = { token: null, expires_at_ms: 0 };
+let payloadSchemaPromise;
 let reportSchemaPromise;
 let legacyReportBackfillPromise;
 let sessionSchemaPromise;
@@ -312,6 +316,271 @@ async function readBody(request, maxBytes) {
 
 async function readBodyText(request, maxBytes) {
   return (await readBody(request, maxBytes)).text;
+}
+
+
+function googleDrivePayloadConfig(env) {
+  const clientId = typeof env.GOOGLE_DRIVE_CLIENT_ID === "string" ? env.GOOGLE_DRIVE_CLIENT_ID.trim() : "";
+  const clientSecret = typeof env.GOOGLE_DRIVE_CLIENT_SECRET === "string" ? env.GOOGLE_DRIVE_CLIENT_SECRET.trim() : "";
+  const refreshToken = typeof env.GOOGLE_DRIVE_REFRESH_TOKEN === "string" ? env.GOOGLE_DRIVE_REFRESH_TOKEN.trim() : "";
+  const accessToken = typeof env.GOOGLE_DRIVE_ACCESS_TOKEN === "string" ? env.GOOGLE_DRIVE_ACCESS_TOKEN.trim() : "";
+  const folderId = typeof env.GOOGLE_DRIVE_REPORTS_FOLDER_ID === "string" && env.GOOGLE_DRIVE_REPORTS_FOLDER_ID.trim()
+    ? env.GOOGLE_DRIVE_REPORTS_FOLDER_ID.trim()
+    : DEFAULT_GOOGLE_DRIVE_PAYLOAD_FOLDER_ID;
+  return {
+    folder_id: folderId,
+    access_token: accessToken,
+    client_id: clientId,
+    client_secret: clientSecret,
+    refresh_token: refreshToken,
+    configured: Boolean(folderId && (accessToken || (clientId && clientSecret && refreshToken)))
+  };
+}
+
+async function googleDriveAccessToken(env) {
+  const config = googleDrivePayloadConfig(env);
+  if (!config.configured) throw new ApiError(503, "drive_payload_storage_unavailable");
+  if (config.access_token) return config.access_token;
+  if (driveAccessTokenCache.token && Date.now() < driveAccessTokenCache.expires_at_ms - 60000) {
+    return driveAccessTokenCache.token;
+  }
+  const body = new URLSearchParams({
+    client_id: config.client_id,
+    client_secret: config.client_secret,
+    refresh_token: config.refresh_token,
+    grant_type: "refresh_token"
+  });
+  let response;
+  try {
+    response = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body
+    });
+  } catch {
+    throw new ApiError(503, "drive_payload_storage_unavailable");
+  }
+  if (!response.ok) throw new ApiError(503, "drive_payload_auth_failed");
+  const data = await response.json().catch(() => ({}));
+  if (typeof data.access_token !== "string" || !data.access_token) {
+    throw new ApiError(503, "drive_payload_auth_failed");
+  }
+  const expiresIn = Number(data.expires_in || 3600);
+  driveAccessTokenCache = {
+    token: data.access_token,
+    expires_at_ms: Date.now() + Math.max(300, expiresIn) * 1000
+  };
+  return data.access_token;
+}
+
+async function ensurePayloadStorage(env) {
+  if (!payloadSchemaPromise) {
+    payloadSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS payload_objects (
+          payload_id TEXT PRIMARY KEY,
+          owner_type TEXT NOT NULL,
+          owner_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          drive_file_id TEXT NOT NULL UNIQUE,
+          sha256 TEXT NOT NULL,
+          size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_payload_objects_owner
+        ON payload_objects(owner_type, owner_id, kind, created_at)
+      `),
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS interactive_threads (
+          thread_id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          work_item_id TEXT,
+          node_id TEXT,
+          role_name TEXT NOT NULL,
+          execution_mode TEXT NOT NULL CHECK (execution_mode IN ('ai','python')),
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','closed')),
+          message_count INTEGER NOT NULL DEFAULT 0 CHECK (message_count >= 0),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (project_id) REFERENCES architect_projects(project_id) ON DELETE CASCADE,
+          FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE SET NULL
+        )
+      `),
+      env.DB.prepare(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_interactive_threads_project_work
+        ON interactive_threads(project_id, work_item_id)
+        WHERE work_item_id IS NOT NULL
+      `),
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS interactive_messages (
+          message_id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL,
+          sequence_no INTEGER NOT NULL CHECK (sequence_no >= 1),
+          actor TEXT NOT NULL CHECK (actor IN ('user','agent','system')),
+          payload_id TEXT NOT NULL,
+          response_work_item_id TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (thread_id) REFERENCES interactive_threads(thread_id) ON DELETE CASCADE,
+          FOREIGN KEY (payload_id) REFERENCES payload_objects(payload_id) ON DELETE RESTRICT,
+          UNIQUE (thread_id, sequence_no)
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_interactive_messages_thread
+        ON interactive_messages(thread_id, sequence_no)
+      `)
+    ]).catch((error) => {
+      payloadSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await payloadSchemaPromise;
+}
+
+function drivePointer(payloadId) {
+  return DRIVE_POINTER_PREFIX + payloadId;
+}
+
+function drivePointerId(value) {
+  if (typeof value !== "string" || !value.startsWith(DRIVE_POINTER_PREFIX)) return null;
+  const payloadId = value.slice(DRIVE_POINTER_PREFIX.length).trim();
+  return payloadId || null;
+}
+
+async function deleteDriveFileBestEffort(env, fileId) {
+  if (!fileId) return;
+  try {
+    const token = await googleDriveAccessToken(env);
+    await fetch("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(fileId), {
+      method: "DELETE",
+      headers: { authorization: "Bearer " + token }
+    });
+  } catch {}
+}
+
+async function deletePayloadBestEffort(env, payloadId) {
+  if (!payloadId) return;
+  try {
+    const row = await env.DB.prepare(
+      "SELECT drive_file_id FROM payload_objects WHERE payload_id = ?"
+    ).bind(payloadId).first();
+    if (row?.drive_file_id) await deleteDriveFileBestEffort(env, row.drive_file_id);
+    await env.DB.prepare("DELETE FROM payload_objects WHERE payload_id = ?").bind(payloadId).run();
+  } catch {}
+}
+
+async function persistDrivePayload(env, { owner_type, owner_id, kind, value }) {
+  await ensurePayloadStorage(env);
+  const config = googleDrivePayloadConfig(env);
+  if (!config.configured) throw new ApiError(503, "drive_payload_storage_unavailable");
+  const payloadId = "payload_" + crypto.randomUUID();
+  const jsonText = JSON.stringify(value);
+  const sizeBytes = new TextEncoder().encode(jsonText).byteLength;
+  const sha256 = await sha256Hex(jsonText);
+  const token = await googleDriveAccessToken(env);
+  const safeOwner = String(owner_id || "unknown").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 80);
+  const safeKind = String(kind || "payload").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 48);
+  const metadata = {
+    name: safeOwner + "__" + safeKind + "__" + payloadId + ".json",
+    parents: [config.folder_id],
+    mimeType: "application/json",
+    appProperties: {
+      citadel_payload_id: payloadId,
+      citadel_owner_type: String(owner_type || "").slice(0, 64),
+      citadel_owner_id: String(owner_id || "").slice(0, 120),
+      citadel_kind: String(kind || "").slice(0, 64),
+      citadel_sha256: sha256
+    }
+  };
+  const boundary = "citadel_" + crypto.randomUUID().replace(/-/g, "");
+  const multipart =
+    "--" + boundary + "\r\n" +
+    "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+    JSON.stringify(metadata) + "\r\n" +
+    "--" + boundary + "\r\n" +
+    "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+    jsonText + "\r\n" +
+    "--" + boundary + "--";
+  let response;
+  try {
+    response = await fetch(
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,size",
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "multipart/related; boundary=" + boundary
+        },
+        body: multipart
+      }
+    );
+  } catch {
+    throw new ApiError(503, "drive_payload_upload_failed");
+  }
+  if (!response.ok) throw new ApiError(503, "drive_payload_upload_failed");
+  const uploaded = await response.json().catch(() => ({}));
+  const fileId = typeof uploaded.id === "string" ? uploaded.id : "";
+  if (!fileId) throw new ApiError(503, "drive_payload_upload_failed");
+  try {
+    await env.DB.prepare(`
+      INSERT INTO payload_objects (
+        payload_id, owner_type, owner_id, kind, drive_file_id, sha256, size_bytes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(payloadId, owner_type, owner_id, kind, fileId, sha256, sizeBytes).run();
+  } catch (error) {
+    await deleteDriveFileBestEffort(env, fileId);
+    throw error;
+  }
+  return { payload_id: payloadId, drive_file_id: fileId, sha256, size_bytes: sizeBytes };
+}
+
+async function readDrivePayload(env, payloadId) {
+  await ensurePayloadStorage(env);
+  const row = await env.DB.prepare(`
+    SELECT payload_id, drive_file_id, sha256, size_bytes
+    FROM payload_objects WHERE payload_id = ?
+  `).bind(payloadId).first();
+  if (!row) throw new ApiError(404, "payload_not_found");
+  const token = await googleDriveAccessToken(env);
+  let response;
+  try {
+    response = await fetch(
+      "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(row.drive_file_id) + "?alt=media",
+      { headers: { authorization: "Bearer " + token } }
+    );
+  } catch {
+    throw new ApiError(503, "drive_payload_read_failed");
+  }
+  if (!response.ok) throw new ApiError(503, "drive_payload_read_failed");
+  const text = await response.text();
+  if ((new TextEncoder().encode(text).byteLength) !== Number(row.size_bytes)) {
+    throw new ApiError(502, "drive_payload_size_mismatch");
+  }
+  if ((await sha256Hex(text)) !== row.sha256) {
+    throw new ApiError(502, "drive_payload_hash_mismatch");
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new ApiError(502, "drive_payload_invalid_json");
+  }
+}
+
+async function resolveDriveText(env, value) {
+  const payloadId = drivePointerId(value);
+  if (!payloadId) return String(value || "");
+  const payload = await readDrivePayload(env, payloadId);
+  if (typeof payload === "string") return payload;
+  if (payload && typeof payload.text === "string") return payload.text;
+  throw new ApiError(502, "drive_payload_missing_text");
+}
+
+async function resolveDriveJson(env, value) {
+  const payloadId = drivePointerId(value);
+  if (!payloadId) return safeJson(value, null);
+  return readDrivePayload(env, payloadId);
 }
 
 async function ensureReportStorage(env) {
@@ -822,7 +1091,9 @@ const WORK_ROLE_REGISTRY = Object.freeze([
   { id: "recovery", label: "Recovery", kind: "worker", origin: "legacy_simulation" },
   { id: "programmer", label: "Programmer", kind: "worker", origin: "architect_extension_2026_09_18" },
   { id: "mathematician", label: "Mathematician", kind: "worker", origin: "architect_extension_2026_09_18" },
-  { id: "security_analyst", label: "Security Analyst", kind: "worker", origin: "architect_extension_2026_09_18" }
+  { id: "security_analyst", label: "Security Analyst", kind: "worker", origin: "architect_extension_2026_09_18" },
+  { id: "engineer", label: "Engineer", kind: "worker", origin: "ee_professions_2026_09" },
+  { id: "scientist", label: "Scientist", kind: "worker", origin: "ee_professions_2026_09" }
 ]);
 
 const WORKER_ROLE_IDS = new Set(
@@ -864,8 +1135,18 @@ function schedulingFromChecks(checksJson) {
 
 function targetProjectWork(taskText, requestedRoles, executionMode, desiredWorkers) {
   const sourceText = String(taskText || "").trim();
+  const explicitRoles = Array.isArray(requestedRoles) && requestedRoles.length
+    ? requestedRoles
+    : [];
   let items = executionMode === "python"
-    ? [{ sequence_no: 1, role_name: "programmer", task_text: sourceText, role_source: "hub_recommended" }]
+    ? (explicitRoles.length
+        ? explicitRoles.map((roleName, index) => ({
+            sequence_no: index + 1,
+            role_name: roleName,
+            task_text: sourceText,
+            role_source: "architect_added"
+          }))
+        : [{ sequence_no: 1, role_name: "programmer", task_text: sourceText, role_source: "hub_recommended" }])
     : planProjectWork(sourceText, requestedRoles);
   if (!Number.isInteger(desiredWorkers)) return items;
   const target = Math.max(1, Math.min(50, desiredWorkers));
@@ -896,6 +1177,8 @@ function classifyWorkRole(text) {
   const value = String(text || "").toLowerCase();
   const tests = [
     ["security_analyst", /(security|secure|vulnerab|threat|malware|audit|шифр|безопас|уязв|угроз|вредонос)/],
+    ["engineer", /(engineer|engineering|architecture|infrastructure|system design|hardware|network design|инженер|архитектур|инфраструктур|системн.*проект)/],
+    ["scientist", /(scientist|science|scientific|hypothesis|experiment|physics|chemistry|biology|уч[её]н|научн|гипотез|эксперимент|физик|хими|биолог)/],
     ["programmer", /(python|javascript|typescript|java|code|coding|program|function|api|sql|html|css|код|программ|функц|скрипт|база данных)/],
     ["mathematician", /(math|equation|formula|algebra|geometry|calculus|probab|combin|математ|формул|уравнен|алгебр|геометр|вероятност)/],
     ["metrics", /(metric|statistics|chart|graph|median|average|variance|метрик|статист|график|медиан|средн)/],
@@ -1044,13 +1327,16 @@ function qualityGateErrorCode(error) {
   return value.replace(/[^a-zA-Z0-9_.:-]/g, "_").slice(0, 120) || "quality_gate_failed";
 }
 
-function qualityGateResultFromRow(row, rawText) {
+async function qualityGateResultFromRow(env, row, rawText) {
   if (!row) return null;
   if (row.status === "completed" && typeof row.final_text === "string" && row.final_text.trim()) {
+    const content = drivePointerId(row.final_text)
+      ? await resolveDriveText(env, row.final_text)
+      : row.final_text;
     return {
       ready: true,
       status: "completed",
-      content: row.final_text,
+      content,
       reviewed: true,
       model: row.resolved_model || row.requested_model || null,
       error_code: null
@@ -1116,7 +1402,7 @@ async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
   `).bind(projectId).first();
 
   if (current?.source_sha256 === sourceSha256) {
-    const cached = qualityGateResultFromRow(current, draft);
+    const cached = await qualityGateResultFromRow(env, current, draft);
     if (cached?.ready || current.status === "processing") {
       if (current.status !== "processing") return cached;
       const newClaimId = crypto.randomUUID();
@@ -1147,6 +1433,9 @@ async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
   const claimId = current?.source_sha256 === sourceSha256 && current?.status === "processing"
     ? current.claim_id
     : crypto.randomUUID();
+  const supersededQualityPayloadId = current?.source_sha256 !== sourceSha256
+    ? drivePointerId(current?.final_text)
+    : null;
 
   if (!(current?.source_sha256 === sourceSha256 && current?.status === "processing")) {
     const claim = await env.DB.prepare(`
@@ -1174,13 +1463,16 @@ async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
       claimId
     ).run();
 
+    if ((claim?.meta?.changes || 0) === 1 && supersededQualityPayloadId) {
+      await deletePayloadBestEffort(env, supersededQualityPayloadId);
+    }
     if ((claim?.meta?.changes || 0) === 0) {
       const row = await env.DB.prepare(`
         SELECT project_id, source_sha256, status, requested_model, resolved_model,
           fusion_preset, final_text, error_code, claim_id, updated_at
         FROM project_quality_gates WHERE project_id = ?
       `).bind(projectId).first();
-      return qualityGateResultFromRow(row, draft) || {
+      return await qualityGateResultFromRow(env, row, draft) || {
         ready: false,
         status: "processing",
         content: null,
@@ -1197,6 +1489,13 @@ async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
       originalTask,
       draftAnswer: draft
     });
+    const qualityPayload = await persistDrivePayload(env, {
+      owner_type: "project",
+      owner_id: projectId,
+      kind: "quality_final",
+      value: { text: reviewed.content, model: reviewed.model }
+    });
+    const qualityPointer = drivePointer(qualityPayload.payload_id);
     const saved = await env.DB.prepare(`
       UPDATE project_quality_gates
       SET status = 'completed',
@@ -1208,7 +1507,7 @@ async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
         AND source_sha256 = ?
         AND claim_id = ?
         AND status = 'processing'
-    `).bind(reviewed.model, reviewed.content, projectId, sourceSha256, claimId).run();
+    `).bind(reviewed.model, qualityPointer, projectId, sourceSha256, claimId).run();
 
     if ((saved?.meta?.changes || 0) === 1) {
       return {
@@ -1221,12 +1520,13 @@ async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
       };
     }
 
+    await deletePayloadBestEffort(env, qualityPayload.payload_id);
     const row = await env.DB.prepare(`
       SELECT project_id, source_sha256, status, requested_model, resolved_model,
         fusion_preset, final_text, error_code, claim_id, updated_at
       FROM project_quality_gates WHERE project_id = ?
     `).bind(projectId).first();
-    return qualityGateResultFromRow(row, draft) || {
+    return await qualityGateResultFromRow(env, row, draft) || {
       ready: false,
       status: "processing",
       content: null,
@@ -1454,7 +1754,7 @@ function projectNodeReady(node, sourceType) {
  * Compatibility is applied before the scan limit so mixed AI/Python queues cannot starve later work.
  */
 async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
-  await Promise.all([ensureProjectStorage(env), ensureNodeAiStorage(env)]);
+  await Promise.all([ensureProjectStorage(env), ensureNodeAiStorage(env), ensurePayloadStorage(env)]);
   const node = await env.DB.prepare(`
     SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
       ai.installed, ai.loaded_model, ai.server_running
@@ -1472,6 +1772,10 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
     env.DB.prepare(`
       SELECT w.work_item_id, w.project_id, w.sequence_no, w.role_name, w.task_text,
         w.node_id AS preferred_node_id, p.title AS project_title, p.source_type, p.checks_json,
+        EXISTS (
+          SELECT 1 FROM interactive_messages AS im
+          WHERE im.response_work_item_id = w.work_item_id
+        ) AS interactive_followup,
         (SELECT COUNT(*) FROM project_work_items AS owned
           WHERE owned.project_id = w.project_id AND owned.node_id = ?) AS node_project_work_count
       FROM project_work_items AS w
@@ -1501,6 +1805,9 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
   let created = 0;
   const eligible = (planned.results || []).filter((work) => {
     if (!projectNodeReady(node, work.source_type)) return false;
+    if (Number(work.interactive_followup || 0) === 1) {
+      return Boolean(work.preferred_node_id) && work.preferred_node_id === nodeId;
+    }
     const scheduling = schedulingFromChecks(work.checks_json);
     if (scheduling.target_mode !== "auto" && scheduling.desired_workers) {
       const readyDistinct = [...readyNodes.values()].filter((candidate) => projectNodeReady(candidate, work.source_type)).length;
@@ -1510,19 +1817,23 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
     const preferred = work.preferred_node_id ? readyNodes.get(work.preferred_node_id) : null;
     return !work.preferred_node_id || work.preferred_node_id === nodeId || !projectNodeReady(preferred, work.source_type);
   });
-  const targeted = eligible.find((work) => schedulingFromChecks(work.checks_json).target_mode !== "auto");
-  const candidates = targeted ? [targeted] : eligible.slice(0, 2);
+  const interactive = eligible.find((work) => Number(work.interactive_followup || 0) === 1);
+  const targeted = eligible.find((work) => Number(work.interactive_followup || 0) !== 1 && schedulingFromChecks(work.checks_json).target_mode !== "auto");
+  const candidates = interactive ? [interactive] : targeted ? [targeted] : eligible.slice(0, 2);
 
   for (const work of candidates) {
     const missionId = projectMissionId(work.work_item_id);
     const assignmentId = projectAssignmentId(work.work_item_id);
     const executionMode = projectExecutionMode(work.source_type);
     const missionType = executionMode === "python" ? "project_python" : "project_text";
+    const taskPayloadId = drivePointerId(work.task_text);
+    const taskText = taskPayloadId ? null : await resolveDriveText(env, work.task_text);
     const payloadJson = JSON.stringify({
       project_id: work.project_id,
       work_item_id: work.work_item_id,
       role_name: work.role_name,
-      task_text: work.task_text,
+      task_payload_id: taskPayloadId,
+      task_text: taskPayloadId ? undefined : taskText,
       execution_mode: executionMode
     });
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
@@ -1636,7 +1947,7 @@ function projectTextPreflight(taskText) {
 
 async function evaluateProjectChecks(env, sourceType, title, taskText) {
   await ensureProjectStorage(env);
-  const sourceAllowed = ["architect_manual", "architect_python"].includes(sourceType);
+  const sourceAllowed = ["architect_manual", "architect_ee", "architect_python"].includes(sourceType);
   const validationPass = title.length >= 1 && title.length <= 160 &&
     taskText.length >= 1 && taskText.length <= 20000;
   const taskSha256 = await sha256Hex(taskText);
@@ -1685,12 +1996,19 @@ async function architectCheckProject(request, env) {
   const requestedRoles = normalizeRequestedProjectRoles(body.requested_roles);
   const workerTarget = normalizeProjectWorkerTarget(body.worker_target);
   const executionMode = projectExecutionMode(sourceType);
-  const effectiveRequestedRoles = executionMode === "python" ? [] : requestedRoles;
+  const effectiveRequestedRoles = requestedRoles;
   const result = await evaluateProjectChecks(env, sourceType, title, taskText);
   const recommendedWork = executionMode === "python"
-    ? [{ sequence_no: 1, role_name: "programmer", task_text: taskText, role_source: "hub_recommended" }]
+    ? (effectiveRequestedRoles.length
+        ? effectiveRequestedRoles.map((roleName, index) => ({
+            sequence_no: index + 1,
+            role_name: roleName,
+            task_text: taskText,
+            role_source: "architect_added"
+          }))
+        : [{ sequence_no: 1, role_name: "programmer", task_text: taskText, role_source: "hub_recommended" }])
     : planProjectWork(taskText);
-  const autoDesiredWorkers = executionMode === "python" ? 1 : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers;
+  const autoDesiredWorkers = executionMode === "python" ? Math.max(1, effectiveRequestedRoles.length || 1) : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers;
   const previewDesiredWorkers = workerTarget.mode === "fixed" ? workerTarget.count : autoDesiredWorkers;
   const plannedWork = targetProjectWork(taskText, effectiveRequestedRoles, executionMode, workerTarget.mode === "all" ? null : previewDesiredWorkers);
   const recommendedRolePlan = rolePlanSummary(recommendedWork);
@@ -1728,7 +2046,7 @@ async function architectCreateProject(request, env) {
   const requestedRoles = normalizeRequestedProjectRoles(body.requested_roles);
   const workerTarget = normalizeProjectWorkerTarget(body.worker_target);
   const executionMode = projectExecutionMode(sourceType);
-  const effectiveRequestedRoles = executionMode === "python" ? [] : requestedRoles;
+  const effectiveRequestedRoles = requestedRoles;
   const evaluated = await evaluateProjectChecks(env, sourceType, title, taskText);
   if (!projectChecksPassed(evaluated.checks)) {
     throw new ApiError(409, "project_checks_failed");
@@ -1752,10 +2070,17 @@ async function architectCreateProject(request, env) {
   const nodes = onlineNodes.filter((node) => projectNodeReady(node, sourceType));
 
   const recommendedWork = executionMode === "python"
-    ? [{ sequence_no: 1, role_name: "programmer", task_text: taskText, role_source: "hub_recommended" }]
+    ? (effectiveRequestedRoles.length
+        ? effectiveRequestedRoles.map((roleName, index) => ({
+            sequence_no: index + 1,
+            role_name: roleName,
+            task_text: taskText,
+            role_source: "architect_added"
+          }))
+        : [{ sequence_no: 1, role_name: "programmer", task_text: taskText, role_source: "hub_recommended" }])
     : planProjectWork(taskText);
   const recommendedRoles = new Set(recommendedWork.map((item) => item.role_name));
-  const autoDesiredWorkers = executionMode === "python" ? 1 : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers;
+  const autoDesiredWorkers = executionMode === "python" ? Math.max(1, effectiveRequestedRoles.length || 1) : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers;
   const desiredWorkers = workerTarget.mode === "fixed"
     ? workerTarget.count
     : workerTarget.mode === "all"
@@ -1764,6 +2089,21 @@ async function architectCreateProject(request, env) {
   const plannedWork = targetProjectWork(taskText, effectiveRequestedRoles, executionMode, desiredWorkers);
   const workerCount = Math.min(nodes.length, desiredWorkers);
   const projectId = "project_" + crypto.randomUUID();
+  await ensurePayloadStorage(env);
+  const createdPayloadIds = [];
+  const projectTaskPayload = await persistDrivePayload(env, {
+    owner_type: "project",
+    owner_id: projectId,
+    kind: "project_task",
+    value: {
+      text: taskText,
+      source_type: sourceType,
+      requested_roles: effectiveRequestedRoles
+    }
+  });
+  createdPayloadIds.push(projectTaskPayload.payload_id);
+  const projectTaskPointer = drivePointer(projectTaskPayload.payload_id);
+  const workTaskPayloads = new Map();
   const checksJson = JSON.stringify({
     ...evaluated.checks,
     scheduling: {
@@ -1783,7 +2123,7 @@ async function architectCreateProject(request, env) {
       "INSERT INTO architect_projects (" +
       "project_id, title, source_type, task_text, task_sha256, checks_json, architect_approved, status, worker_count" +
       ") VALUES (?, ?, ?, ?, ?, ?, 1, 'planned', ?)"
-    ).bind(projectId, title, sourceType, taskText, evaluated.task_sha256, checksJson, workerCount),
+    ).bind(projectId, title, sourceType, projectTaskPointer, evaluated.task_sha256, checksJson, workerCount),
     env.DB.prepare(
       "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
       "VALUES ('architect', 'test-console', 'project.created', 'project', ?, ?)"
@@ -1810,6 +2150,23 @@ async function architectCreateProject(request, env) {
       : null;
     const planned = plannedWork[index];
     const workItemId = "work_" + crypto.randomUUID();
+    let taskPayload = workTaskPayloads.get(planned.task_text);
+    if (!taskPayload) {
+      try {
+        taskPayload = await persistDrivePayload(env, {
+          owner_type: "project",
+          owner_id: projectId,
+          kind: "work_task",
+          value: { text: planned.task_text }
+        });
+      } catch (error) {
+        await Promise.all(createdPayloadIds.map((payloadId) => deletePayloadBestEffort(env, payloadId)));
+        throw error;
+      }
+      workTaskPayloads.set(planned.task_text, taskPayload);
+      createdPayloadIds.push(taskPayload.payload_id);
+    }
+    const taskPointer = drivePointer(taskPayload.payload_id);
     workItems.push({
       work_item_id: workItemId,
       sequence_no: planned.sequence_no,
@@ -1817,7 +2174,7 @@ async function architectCreateProject(request, env) {
       node_id: node?.node_id || null,
       hostname: node?.hostname || null,
       node_number: node?.node_number || null,
-      task_text: planned.task_text,
+      task_payload_id: taskPayload.payload_id,
       role_source: planned.role_source,
       status: "planned"
     });
@@ -1825,10 +2182,15 @@ async function architectCreateProject(request, env) {
       env.DB.prepare(
         "INSERT INTO project_work_items (work_item_id, project_id, sequence_no, node_id, role_name, task_text, status) " +
         "VALUES (?, ?, ?, ?, ?, ?, 'planned')"
-      ).bind(workItemId, projectId, planned.sequence_no, node?.node_id || null, planned.role_name, planned.task_text)
+      ).bind(workItemId, projectId, planned.sequence_no, node?.node_id || null, planned.role_name, taskPointer)
     );
   }
-  await env.DB.batch(statements);
+  try {
+    await env.DB.batch(statements);
+  } catch (error) {
+    await Promise.all(createdPayloadIds.map((payloadId) => deletePayloadBestEffort(env, payloadId)));
+    throw error;
+  }
   return json({
     ok: true,
     project: {
@@ -1842,6 +2204,8 @@ async function architectCreateProject(request, env) {
       worker_target: workerTarget,
       desired_workers: desiredWorkers,
       work_item_count: plannedWork.length,
+      payload_storage: "google_drive",
+      task_payload_id: projectTaskPayload.payload_id,
       role_plan: rolePlanSummary(plannedWork),
       recommended_roles: [...recommendedRoles],
       requested_roles: effectiveRequestedRoles,
@@ -1937,6 +2301,7 @@ async function architectGetProject(request, env, projectId) {
     WHERE project_id = ?
   `).bind(projectId).first();
   if (!project) throw new ApiError(404, "project_not_found");
+  const projectTaskText = await resolveDriveText(env, project.task_text);
 
   const readinessQuery = await env.DB.prepare(`
     SELECT
@@ -2066,11 +2431,24 @@ async function architectGetProject(request, env, projectId) {
     created_at: event.created_at
   }));
 
-  const workItems = (workQuery.results || []).map((item) => ({
+  const textCache = new Map();
+  const jsonCache = new Map();
+  const resolveCachedText = (value) => {
+    const key = String(value || "");
+    if (!textCache.has(key)) textCache.set(key, resolveDriveText(env, value));
+    return textCache.get(key);
+  };
+  const resolveCachedJson = (value) => {
+    const key = String(value || "");
+    if (!jsonCache.has(key)) jsonCache.set(key, resolveDriveJson(env, value));
+    return jsonCache.get(key);
+  };
+  const workItems = await Promise.all((workQuery.results || []).map(async (item) => ({
     ...item,
-    result: safeJson(item.result_json, null),
+    task_text: await resolveCachedText(item.task_text),
+    result: item.result_json ? await resolveCachedJson(item.result_json) : null,
     result_json: undefined
-  }));
+  })));
   let specializationRows = specializationQuery.results || [];
   if (!specializationRows.length) {
     specializationRows = [...new Set(workItems.map((item) => item.role_name))].map((roleName) => ({
@@ -2133,7 +2511,7 @@ async function architectGetProject(request, env, projectId) {
         error_code: null
       }
     : workComplete && !qualityConfig.configured
-      ? await finalizeProjectAnswer(env, project.project_id, project.task_text, rawResultText)
+      ? await finalizeProjectAnswer(env, project.project_id, projectTaskText, rawResultText)
       : workComplete
         ? {
             ready: true,
@@ -2159,6 +2537,8 @@ async function architectGetProject(request, env, projectId) {
     ok: true,
     project: {
       ...project,
+      task_text: projectTaskText,
+      payload_storage: drivePointerId(project.task_text) ? "google_drive" : "legacy_d1",
       checks: safeJson(project.checks_json, {}),
       checks_json: undefined,
       role_plan: rolePlanSummary(workItems),
@@ -2171,7 +2551,7 @@ async function architectGetProject(request, env, projectId) {
         desired_workers: schedulingFromChecks(project.checks_json).desired_workers ||
           (executionMode === "python"
             ? 1
-            : projectWorkerProfile(project.task_text, specializations.filter((item) => item.source === "architect_added").map((item) => item.id)).desired_workers),
+            : projectWorkerProfile(projectTaskText, specializations.filter((item) => item.source === "architect_added").map((item) => item.id)).desired_workers),
         worker_target_mode: schedulingFromChecks(project.checks_json).target_mode,
         ready_workers_at_creation: Number(project.worker_count || 0),
         ready_workers_now: readyWorkers.length,
@@ -2194,7 +2574,7 @@ async function architectGetProject(request, env, projectId) {
                   ? "all_project_work_items_completed"
                   : executionState
       },
-      text_preflight: projectTextPreflight(project.task_text),
+      text_preflight: projectTextPreflight(projectTaskText),
       task_logs: taskLogs,
       final_report: {
         ready: finalReportReady,
@@ -2903,10 +3283,16 @@ async function listAssignments(request, env, nodeId, url) {
     LIMIT 20
   `).bind(nodeId).all();
 
-  const assignments = (query.results || []).map((row) => ({
-    ...row,
-    payload: safeJson(row.payload_json, {}),
-    payload_json: undefined
+  const assignments = await Promise.all((query.results || []).map(async (row) => {
+    const payload = safeJson(row.payload_json, {});
+    if (payload && typeof payload === "object" && payload.task_payload_id && !payload.task_text) {
+      payload.task_text = await resolveDriveText(env, drivePointer(payload.task_payload_id));
+    }
+    return {
+      ...row,
+      payload,
+      payload_json: undefined
+    };
   }));
   return json({ ok: true, node_status: node.status, assignments });
 }
@@ -3005,6 +3391,7 @@ async function submitResult(request, env, nodeId, url) {
   }
 
   const summary = optionalString(body.summary, "summary", 4000);
+  const summaryIndex = summary ? summary.slice(0, 512) : null;
   const artifactKey = optionalString(body.artifact_key, "artifact_key", 512);
   const metricsJson = normalizeMetrics(body.metrics);
   const reportType = body.report_type === undefined
@@ -3043,11 +3430,30 @@ async function submitResult(request, env, nodeId, url) {
 
   const resultId = `result_${crypto.randomUUID()}`;
   const reportId = `report_${crypto.randomUUID()}`;
+  const reportPayload = await persistDrivePayload(env, {
+    owner_type: "report",
+    owner_id: reportId,
+    kind: "agent_report",
+    value: reportValue
+  });
+  const reportPointer = drivePointer(reportPayload.payload_id);
+  const effectiveArtifactKey = artifactKey || ("gdrive:" + reportPayload.drive_file_id);
   const assignmentStatus = outcome === "failed" ? "failed" : "completed";
   const detailsJson = JSON.stringify({ result_id: resultId, outcome });
 
   const isProjectAssignment = assignmentId.startsWith("assignment_work_");
   if (isProjectAssignment) await ensureProjectStorage(env);
+  const workItemId = isProjectAssignment ? assignmentId.slice("assignment_".length) : null;
+  const interactiveLink = workItemId
+    ? await env.DB.prepare(`
+        SELECT im.thread_id, t.message_count
+        FROM interactive_messages AS im
+        JOIN interactive_threads AS t ON t.thread_id = im.thread_id
+        WHERE im.response_work_item_id = ? AND im.actor = 'user'
+        ORDER BY im.sequence_no DESC
+        LIMIT 1
+      `).bind(workItemId).first()
+    : null;
 
   const resultStatements = [
     env.DB.prepare(`
@@ -3065,8 +3471,8 @@ async function submitResult(request, env, nodeId, url) {
       assignmentId,
       nodeId,
       outcome,
-      summary,
-      artifactKey,
+      summaryIndex,
+      effectiveArtifactKey,
       metricsJson,
       assignmentId,
       nodeId
@@ -3085,7 +3491,7 @@ async function submitResult(request, env, nodeId, url) {
     `).bind(
       reportId,
       reportType,
-      reportJson,
+      reportPointer,
       reportSha256,
       reportSizeBytes,
       sensitivity,
@@ -3141,6 +3547,28 @@ async function submitResult(request, env, nodeId, url) {
     );
   }
 
+  if (interactiveLink?.thread_id) {
+    const agentSequence = Number(interactiveLink.message_count || 0) + 1;
+    resultStatements.push(
+      env.DB.prepare(`
+        INSERT INTO interactive_messages (
+          message_id, thread_id, sequence_no, actor, payload_id
+        ) VALUES (?, ?, ?, 'agent', ?)
+      `).bind(
+        "message_" + crypto.randomUUID(),
+        interactiveLink.thread_id,
+        agentSequence,
+        reportPayload.payload_id
+      ),
+      env.DB.prepare(`
+        UPDATE interactive_threads
+        SET message_count = CASE WHEN message_count < ? THEN ? ELSE message_count END,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE thread_id = ?
+      `).bind(agentSequence, agentSequence, interactiveLink.thread_id)
+    );
+  }
+
   resultStatements.push(
     env.DB.prepare(`
       UPDATE missions
@@ -3170,6 +3598,7 @@ async function submitResult(request, env, nodeId, url) {
   try {
     statements = await env.DB.batch(resultStatements);
   } catch (error) {
+    await deletePayloadBestEffort(env, reportPayload.payload_id);
     if (String(error).includes("results.assignment_id")) {
       throw new ApiError(409, "result_already_exists");
     }
@@ -3177,6 +3606,7 @@ async function submitResult(request, env, nodeId, url) {
   }
 
   if ((statements[0]?.meta?.changes || 0) !== 1) {
+    await deletePayloadBestEffort(env, reportPayload.payload_id);
     throw new ApiError(409, "assignment_not_active");
   }
 
@@ -3185,6 +3615,7 @@ async function submitResult(request, env, nodeId, url) {
     result: {
       result_id: resultId,
       report_id: reportId,
+      report_payload_id: reportPayload.payload_id,
       assignment_id: assignmentId,
       outcome
     }
@@ -3285,16 +3716,336 @@ async function architectGetReport(request, env, reportId) {
     throw new ApiError(404, "report_not_found");
   }
 
+  const content = await resolveDriveJson(env, report.report_json);
+  if (drivePointerId(report.report_json)) {
+    const serialized = JSON.stringify(content);
+    const sizeBytes = new TextEncoder().encode(serialized).byteLength;
+    if (sizeBytes !== Number(report.report_size_bytes) || (await sha256Hex(serialized)) !== report.report_sha256) {
+      throw new ApiError(502, "drive_report_integrity_mismatch");
+    }
+  }
   return json({
     ok: true,
     report: {
       ...report,
+      storage: drivePointerId(report.report_json) ? "google_drive" : "legacy_d1",
       metrics: safeJson(report.metrics_json, {}),
-      content: safeJson(report.report_json, null),
+      content,
       metrics_json: undefined,
       report_json: undefined
     }
   });
+}
+
+
+function interactivePayloadText(payload) {
+  if (typeof payload === "string") return payload;
+  if (!payload || typeof payload !== "object") return "";
+  if (typeof payload.text === "string") return payload.text;
+  if (typeof payload.content === "string") return payload.content;
+  if (typeof payload.summary === "string") return payload.summary;
+  if (typeof payload.error_code === "string") return "ERROR: " + payload.error_code;
+  const serialized = JSON.stringify(payload);
+  return serialized.length <= 4000 ? serialized : serialized.slice(0, 4000) + "…";
+}
+
+async function interactiveThreadBase(env, projectId, workItemId) {
+  await Promise.all([ensureProjectStorage(env), ensureReportStorage(env), ensurePayloadStorage(env)]);
+  const base = await env.DB.prepare(`
+    SELECT
+      w.work_item_id, w.project_id, w.node_id, w.role_name, w.status AS work_status,
+      p.source_type, p.status AS project_status, p.title,
+      n.hostname,
+      (
+        SELECT ar.report_json
+        FROM agent_reports AS ar
+        WHERE ar.assignment_id = ('assignment_' || w.work_item_id)
+        ORDER BY datetime(ar.created_at) DESC
+        LIMIT 1
+      ) AS result_json
+    FROM project_work_items AS w
+    JOIN architect_projects AS p ON p.project_id = w.project_id
+    LEFT JOIN nodes AS n ON n.node_id = w.node_id
+    WHERE w.project_id = ? AND w.work_item_id = ?
+  `).bind(projectId, workItemId).first();
+  if (!base) throw new ApiError(404, "project_work_item_not_found");
+  if (!base.node_id) throw new ApiError(409, "interactive_worker_not_assigned");
+  return base;
+}
+
+async function ensureInteractiveThread(env, projectId, workItemId) {
+  const base = await interactiveThreadBase(env, projectId, workItemId);
+  let thread = await env.DB.prepare(`
+    SELECT thread_id, project_id, work_item_id, node_id, role_name, execution_mode,
+      status, message_count, created_at, updated_at
+    FROM interactive_threads
+    WHERE project_id = ? AND work_item_id = ?
+  `).bind(projectId, workItemId).first();
+
+  if (!thread) {
+    const threadId = "thread_" + crypto.randomUUID();
+    await env.DB.prepare(`
+      INSERT OR IGNORE INTO interactive_threads (
+        thread_id, project_id, work_item_id, node_id, role_name, execution_mode
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(
+      threadId,
+      projectId,
+      workItemId,
+      base.node_id,
+      base.role_name,
+      projectExecutionMode(base.source_type)
+    ).run();
+    thread = await env.DB.prepare(`
+      SELECT thread_id, project_id, work_item_id, node_id, role_name, execution_mode,
+        status, message_count, created_at, updated_at
+      FROM interactive_threads
+      WHERE project_id = ? AND work_item_id = ?
+    `).bind(projectId, workItemId).first();
+  }
+
+  if (!thread) throw new ApiError(500, "interactive_thread_create_failed");
+
+  if (Number(thread.message_count || 0) === 0 && base.result_json) {
+    let initialPayloadId = drivePointerId(base.result_json);
+    let createdPayloadId = null;
+    if (!initialPayloadId) {
+      const legacyResult = safeJson(base.result_json, null);
+      if (legacyResult) {
+        const migrated = await persistDrivePayload(env, {
+          owner_type: "thread",
+          owner_id: thread.thread_id,
+          kind: "legacy_initial_agent_report",
+          value: legacyResult
+        });
+        initialPayloadId = migrated.payload_id;
+        createdPayloadId = migrated.payload_id;
+      }
+    }
+    if (initialPayloadId) {
+      try {
+        const inserted = await env.DB.prepare(`
+          INSERT OR IGNORE INTO interactive_messages (
+            message_id, thread_id, sequence_no, actor, payload_id
+          ) VALUES (?, ?, 1, 'agent', ?)
+        `).bind("message_" + crypto.randomUUID(), thread.thread_id, initialPayloadId).run();
+        if ((inserted?.meta?.changes || 0) === 1) {
+          await env.DB.prepare(`
+            UPDATE interactive_threads
+            SET message_count = 1, updated_at = CURRENT_TIMESTAMP
+            WHERE thread_id = ?
+          `).bind(thread.thread_id).run();
+        } else if (createdPayloadId) {
+          await deletePayloadBestEffort(env, createdPayloadId);
+        }
+      } catch (error) {
+        if (createdPayloadId) await deletePayloadBestEffort(env, createdPayloadId);
+        throw error;
+      }
+    }
+  }
+
+  const refreshed = await env.DB.prepare(`
+    SELECT thread_id, project_id, work_item_id, node_id, role_name, execution_mode,
+      status, message_count, created_at, updated_at
+    FROM interactive_threads
+    WHERE thread_id = ?
+  `).bind(thread.thread_id).first();
+  return {
+    ...(refreshed || thread),
+    hostname: base.hostname || null,
+    source_type: base.source_type,
+    project_status: base.project_status,
+    work_status: base.work_status
+  };
+}
+
+async function interactiveThreadMessages(env, threadId) {
+  const query = await env.DB.prepare(`
+    SELECT message_id, sequence_no, actor, payload_id, response_work_item_id, created_at
+    FROM interactive_messages
+    WHERE thread_id = ?
+    ORDER BY sequence_no ASC
+    LIMIT 200
+  `).bind(threadId).all();
+  return Promise.all((query.results || []).map(async (message) => {
+    const payload = await readDrivePayload(env, message.payload_id);
+    return {
+      ...message,
+      text: interactivePayloadText(payload)
+    };
+  }));
+}
+
+async function architectGetInteractiveThread(request, env, projectId, workItemId) {
+  await authenticateArchitect(request, env);
+  const thread = await ensureInteractiveThread(env, projectId, workItemId);
+  const [messages, pendingRow] = await Promise.all([
+    interactiveThreadMessages(env, thread.thread_id),
+    env.DB.prepare(`
+      SELECT COUNT(*) AS pending
+      FROM project_work_items AS w
+      WHERE w.work_item_id IN (
+        SELECT response_work_item_id
+        FROM interactive_messages
+        WHERE thread_id = ? AND actor = 'user' AND response_work_item_id IS NOT NULL
+      )
+        AND w.status IN ('planned','assigned','running')
+    `).bind(thread.thread_id).first()
+  ]);
+  return json({
+    ok: true,
+    thread: {
+      ...thread,
+      role: roleMetadata(thread.role_name),
+      pending_responses: Number(pendingRow?.pending || 0),
+      messages
+    }
+  });
+}
+
+async function architectPostInteractiveMessage(request, env, projectId, workItemId) {
+  await authenticateArchitect(request, env);
+  const body = parseJsonObject(await readBodyText(request, 16 * 1024));
+  const messageText = requireString(body.message, "interactive_message", 8000);
+  const thread = await ensureInteractiveThread(env, projectId, workItemId);
+  if (thread.status !== "active") throw new ApiError(409, "interactive_thread_closed");
+  if (thread.project_status === "cancelled") throw new ApiError(409, "project_cancelled");
+
+  const historyRows = await env.DB.prepare(`
+    SELECT sequence_no, actor, payload_id
+    FROM interactive_messages
+    WHERE thread_id = ?
+    ORDER BY sequence_no DESC
+    LIMIT 12
+  `).bind(thread.thread_id).all();
+  const history = (await Promise.all(
+    (historyRows.results || []).reverse().map(async (row) => ({
+      actor: row.actor,
+      text: interactivePayloadText(await readDrivePayload(env, row.payload_id))
+    }))
+  )).filter((item) => item.text);
+
+  const userPayload = await persistDrivePayload(env, {
+    owner_type: "thread",
+    owner_id: thread.thread_id,
+    kind: "user_message",
+    value: { text: messageText }
+  });
+  const createdPayloadIds = [userPayload.payload_id];
+
+  let taskText = messageText;
+  let taskPayload = userPayload;
+  if (thread.execution_mode === "ai") {
+    const historyText = history
+      .slice(-10)
+      .map((item) => (item.actor === "user" ? "USER" : "AGENT") + ": " + item.text)
+      .join("\n\n")
+      .slice(-12000);
+    taskText = [
+      "Continue the same CITADEL interactive report with the same expert role and the same node.",
+      "Role: " + thread.role_name,
+      "Do not restart the analysis from zero. Answer the user's follow-up using the prior report/dialogue context.",
+      historyText ? "Conversation so far:\n" + historyText : "",
+      "USER FOLLOW-UP:\n" + messageText
+    ].filter(Boolean).join("\n\n");
+    try {
+      taskPayload = await persistDrivePayload(env, {
+        owner_type: "thread",
+        owner_id: thread.thread_id,
+        kind: "followup_task",
+        value: { text: taskText }
+      });
+    } catch (error) {
+      await deletePayloadBestEffort(env, userPayload.payload_id);
+      throw error;
+    }
+    createdPayloadIds.push(taskPayload.payload_id);
+  }
+
+  const sequenceRow = await env.DB.prepare(
+    "SELECT COALESCE(MAX(sequence_no), 0) AS max_sequence FROM project_work_items WHERE project_id = ?"
+  ).bind(projectId).first();
+  const messageSequenceRow = await env.DB.prepare(
+    "SELECT COALESCE(MAX(sequence_no), 0) AS max_sequence FROM interactive_messages WHERE thread_id = ?"
+  ).bind(thread.thread_id).first();
+  const workSequence = Number(sequenceRow?.max_sequence || 0) + 1;
+  const messageSequence = Number(messageSequenceRow?.max_sequence || 0) + 1;
+  const responseWorkItemId = "work_" + crypto.randomUUID();
+  const taskPointer = drivePointer(taskPayload.payload_id);
+
+  try {
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO project_work_items (
+          work_item_id, project_id, sequence_no, node_id, role_name, task_text, status
+        ) VALUES (?, ?, ?, ?, ?, ?, 'planned')
+      `).bind(
+        responseWorkItemId,
+        projectId,
+        workSequence,
+        thread.node_id,
+        thread.role_name,
+        taskPointer
+      ),
+      env.DB.prepare(`
+        INSERT INTO interactive_messages (
+          message_id, thread_id, sequence_no, actor, payload_id, response_work_item_id
+        ) VALUES (?, ?, ?, 'user', ?, ?)
+      `).bind(
+        "message_" + crypto.randomUUID(),
+        thread.thread_id,
+        messageSequence,
+        userPayload.payload_id,
+        responseWorkItemId
+      ),
+      env.DB.prepare(`
+        UPDATE interactive_threads
+        SET message_count = message_count + 1, updated_at = CURRENT_TIMESTAMP
+        WHERE thread_id = ?
+      `).bind(thread.thread_id),
+      env.DB.prepare(`
+        UPDATE architect_projects
+        SET status = 'running', updated_at = CURRENT_TIMESTAMP
+        WHERE project_id = ? AND status IN ('planned','running','completed','blocked')
+      `).bind(projectId),
+      env.DB.prepare(`
+        INSERT INTO audit_events (
+          actor_type, actor_id, action, target_type, target_id, details_json
+        ) VALUES ('architect', 'interactive-report', 'interactive.message.created',
+          'interactive_thread', ?, ?)
+      `).bind(thread.thread_id, JSON.stringify({
+        project_id: projectId,
+        work_item_id: responseWorkItemId,
+        node_id: thread.node_id,
+        role_name: thread.role_name,
+        execution_mode: thread.execution_mode
+      }))
+    ]);
+  } catch (error) {
+    await Promise.all(createdPayloadIds.map((payloadId) => deletePayloadBestEffort(env, payloadId)));
+    throw error;
+  }
+
+  let materialized = 0;
+  try {
+    materialized = await materializeProjectWorkForNode(env, thread.node_id, projectId);
+  } catch {
+    materialized = 0;
+  }
+  const queued = await env.DB.prepare(
+    "SELECT status FROM project_work_items WHERE work_item_id = ?"
+  ).bind(responseWorkItemId).first();
+
+  return json({
+    ok: true,
+    thread_id: thread.thread_id,
+    response_work_item_id: responseWorkItemId,
+    state: queued?.status || (materialized ? "assigned" : "planned"),
+    node_id: thread.node_id,
+    role_name: thread.role_name,
+    execution_mode: thread.execution_mode
+  }, 202);
 }
 
 function normalizeSessionUiState(value) {
@@ -3389,27 +4140,39 @@ async function architectCreateSession(request, env) {
 
   const sessionId = `session_${crypto.randomUUID()}`;
   const snapshotSha256 = await sha256Hex(snapshotJson);
-  await env.DB.batch([
-    env.DB.prepare(`
-      INSERT INTO architect_sessions (
-        session_id, name, schema_version, snapshot_json, snapshot_sha256,
-        snapshot_size_bytes, status, created_at, updated_at
-      ) VALUES (?, ?, 1, ?, ?, ?, 'active', ?, ?)
-    `).bind(
-      sessionId,
-      name,
-      snapshotJson,
-      snapshotSha256,
-      snapshotSizeBytes,
-      savedAt,
-      savedAt
-    ),
+  const snapshotPayload = await persistDrivePayload(env, {
+    owner_type: "session",
+    owner_id: sessionId,
+    kind: "session_snapshot",
+    value: snapshot
+  });
+  const snapshotPointer = drivePointer(snapshotPayload.payload_id);
+  try {
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO architect_sessions (
+          session_id, name, schema_version, snapshot_json, snapshot_sha256,
+          snapshot_size_bytes, status, created_at, updated_at
+        ) VALUES (?, ?, 1, ?, ?, ?, 'active', ?, ?)
+      `).bind(
+        sessionId,
+        name,
+        snapshotPointer,
+        snapshotSha256,
+        snapshotSizeBytes,
+        savedAt,
+        savedAt
+      ),
     env.DB.prepare(`
       INSERT INTO audit_events (
         actor_type, actor_id, action, target_type, target_id, details_json
       ) VALUES ('architect', 'test-console', 'session.created', 'session', ?, ?)
-    `).bind(sessionId, JSON.stringify({ name, schema_version: 1 }))
-  ]);
+      `).bind(sessionId, JSON.stringify({ name, schema_version: 1 }))
+    ]);
+  } catch (error) {
+    await deletePayloadBestEffort(env, snapshotPayload.payload_id);
+    throw error;
+  }
 
   return json({
     ok: true,
@@ -3438,11 +4201,20 @@ async function architectGetSession(request, env, sessionId) {
   if (!session) {
     throw new ApiError(404, "session_not_found");
   }
+  const snapshot = await resolveDriveJson(env, session.snapshot_json);
+  if (drivePointerId(session.snapshot_json)) {
+    const serialized = JSON.stringify(snapshot);
+    const sizeBytes = new TextEncoder().encode(serialized).byteLength;
+    if (sizeBytes !== Number(session.snapshot_size_bytes) || (await sha256Hex(serialized)) !== session.snapshot_sha256) {
+      throw new ApiError(502, "drive_session_integrity_mismatch");
+    }
+  }
   return json({
     ok: true,
     session: {
       ...session,
-      snapshot: safeJson(session.snapshot_json, null),
+      storage: drivePointerId(session.snapshot_json) ? "google_drive" : "legacy_d1",
+      snapshot,
       snapshot_json: undefined
     }
   });
@@ -3489,7 +4261,7 @@ async function architectDeleteSession(request, env, sessionId) {
   await authenticateArchitect(request, env);
   await ensureSessionStorage(env);
   const existing = await env.DB.prepare(
-    "SELECT session_id, name FROM architect_sessions WHERE session_id = ?"
+    "SELECT session_id, name, snapshot_json FROM architect_sessions WHERE session_id = ?"
   ).bind(sessionId).first();
   if (!existing) {
     throw new ApiError(404, "session_not_found");
@@ -3504,26 +4276,38 @@ async function architectDeleteSession(request, env, sessionId) {
       ) VALUES ('architect', 'test-console', 'session.deleted', 'session', ?, ?)
     `).bind(sessionId, JSON.stringify({ name: existing.name }))
   ]);
+  const snapshotPayloadId = drivePointerId(existing.snapshot_json);
+  if (snapshotPayloadId) await deletePayloadBestEffort(env, snapshotPayloadId);
   return json({ ok: true, deleted_session_id: sessionId });
 }
 
 async function architectStorageUsage(request, env) {
   await authenticateArchitect(request, env);
-  await Promise.all([backfillLegacyReports(env), ensureSessionStorage(env)]);
+  await Promise.all([backfillLegacyReports(env), ensureSessionStorage(env), ensurePayloadStorage(env)]);
   const usage = await env.DB.prepare(
     "SELECT " +
     "(SELECT COUNT(*) FROM agent_reports) AS report_count, " +
-    "(SELECT COALESCE(SUM(report_size_bytes), 0) FROM agent_reports) AS report_bytes, " +
+    "(SELECT COALESCE(SUM(report_size_bytes), 0) FROM agent_reports) AS report_payload_bytes, " +
     "(SELECT COUNT(*) FROM architect_sessions) AS session_count, " +
-    "(SELECT COALESCE(SUM(snapshot_size_bytes), 0) FROM architect_sessions) AS session_bytes"
+    "(SELECT COALESCE(SUM(snapshot_size_bytes), 0) FROM architect_sessions) AS session_payload_bytes, " +
+    "(SELECT COUNT(*) FROM payload_objects) AS payload_object_count, " +
+    "(SELECT COALESCE(SUM(size_bytes), 0) FROM payload_objects) AS drive_payload_bytes, " +
+    "(SELECT COUNT(*) FROM interactive_threads) AS interactive_thread_count, " +
+    "(SELECT COUNT(*) FROM interactive_messages) AS interactive_message_count"
   ).first();
   return json({
     ok: true,
     usage: {
       report_count: usage?.report_count || 0,
-      report_bytes: usage?.report_bytes || 0,
+      report_payload_bytes: usage?.report_payload_bytes || 0,
       session_count: usage?.session_count || 0,
-      session_bytes: usage?.session_bytes || 0,
+      session_payload_bytes: usage?.session_payload_bytes || 0,
+      payload_object_count: usage?.payload_object_count || 0,
+      drive_payload_bytes: usage?.drive_payload_bytes || 0,
+      interactive_thread_count: usage?.interactive_thread_count || 0,
+      interactive_message_count: usage?.interactive_message_count || 0,
+      payload_provider: "google_drive",
+      payload_configured: googleDrivePayloadConfig(env).configured,
       safe_d1_target_bytes: 400 * 1024 * 1024,
       d1_database_limit_bytes: 500 * 1024 * 1024,
       max_report_bytes: MAX_REPORT_BYTES
@@ -5484,7 +6268,7 @@ async function handleApi(request, env, url) {
 
     try {
       const row = await env.DB.prepare("SELECT 1 AS ok").first();
-      const [controllerSigning, reportStorage, sessionStorage] = await Promise.all([
+      const [controllerSigning, reportStorage, sessionStorage, payloadStorage] = await Promise.all([
         importControllerPrivateKey(env)
           .then(() => "ready")
           .catch(() => "unavailable"),
@@ -5492,6 +6276,9 @@ async function handleApi(request, env, url) {
           .then(() => "ready")
           .catch(() => "unavailable"),
         ensureSessionStorage(env)
+          .then(() => "ready")
+          .catch(() => "unavailable"),
+        googleDriveAccessToken(env)
           .then(() => "ready")
           .catch(() => "unavailable")
       ]);
@@ -5565,6 +6352,8 @@ async function handleApi(request, env, url) {
         controller_signing: controllerSigning,
         report_storage: reportStorage,
         session_storage: sessionStorage,
+        payload_storage: payloadStorage,
+        payload_storage_provider: "google_drive",
         openrouter_quality: openRouterQualityConfig(env).configured ? "configured" : "unconfigured",
         project_execution: projectExecution,
         project_readiness_error: projectReadinessError,
@@ -5757,6 +6546,21 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/v1/architect/projects") {
     if (request.method === "POST") return architectCreateProject(request, env);
     if (request.method === "GET") return architectListProjects(request, env);
+    return methodNotAllowed(["GET", "POST"]);
+  }
+
+  const architectInteractiveMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/projects\/([^/]+)\/interactive\/([^/]+)$/
+  );
+  if (architectInteractiveMatch) {
+    const projectId = decodeURIComponent(architectInteractiveMatch[1]);
+    const workItemId = decodeURIComponent(architectInteractiveMatch[2]);
+    if (request.method === "GET") {
+      return architectGetInteractiveThread(request, env, projectId, workItemId);
+    }
+    if (request.method === "POST") {
+      return architectPostInteractiveMessage(request, env, projectId, workItemId);
+    }
     return methodNotAllowed(["GET", "POST"]);
   }
 
