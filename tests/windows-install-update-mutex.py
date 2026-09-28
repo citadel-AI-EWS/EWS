@@ -42,7 +42,10 @@ def main() -> int:
     old_program_data = os.environ.get("PROGRAMDATA")
     temp_root = tempfile.TemporaryDirectory(prefix="citadel-mutex-test-")
     os.environ["PROGRAMDATA"] = temp_root.name
-    (Path(temp_root.name) / "CitadelEWS" / "lifecycle").mkdir(parents=True, exist_ok=True)
+    citadel_root = Path(temp_root.name) / "CitadelEWS"
+    citadel_root.mkdir(parents=True, exist_ok=True)
+    lifecycle_root = citadel_root / "lifecycle"
+    assert not lifecycle_root.exists()
 
     child = subprocess.Popen(
         [sys.executable, str(Path(__file__).resolve()), "--holder"],
@@ -56,6 +59,10 @@ def main() -> int:
         if line != "HELD":
             stderr = child.stderr.read() if child.stderr else ""
             raise AssertionError(f"holder did not acquire mutex: {line!r} {stderr!r}")
+
+        lock_path, _ = node.windows_install_update_paths()
+        assert lifecycle_root.is_dir(), "agent did not create canonical lifecycle directory"
+        assert lock_path.parent == lifecycle_root
 
         try:
             with node.install_update_mutex(timeout_seconds=0.2):
