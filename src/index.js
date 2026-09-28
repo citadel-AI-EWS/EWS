@@ -4696,12 +4696,20 @@ async function architectRelease(request, env) {
 
 async function architectCreateCommand(request, env, nodeId) {
   const actor = await authenticateArchitect(request, env);
-  // Clean this node first as a fast path, then enforce storage invariants.
-  await expireStaleNodeCommands(env, nodeId);
-  await ensureCommandStorage(env);
   const bodyText = await readBodyText(request, 8 * 1024);
   const body = parseJsonObject(bodyText);
   const commandType = requireString(body.command_type, "command_type", 32);
+  // Clean this node first as a fast path, then enforce storage invariants.
+  try {
+    await expireStaleNodeCommands(env, nodeId);
+    await ensureCommandStorage(env);
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    console.error("Command storage preflight failed", { node_id: nodeId, command_type: commandType, error: String(error) });
+    throw new ApiError(503, commandType.startsWith("lmstudio_")
+      ? "lmstudio_command_storage_unavailable"
+      : "command_storage_unavailable");
+  }
   if (!ALLOWED_ARCHITECT_COMMAND_TYPES.has(commandType)) {
     throw new ApiError(400, "command_type_not_allowed");
   }
@@ -5152,7 +5160,13 @@ async function architectModelDetails(request, env, url) {
 
 async function architectLmstudioPreflight(request, env, nodeId) {
   await authenticateArchitect(request, env);
-  await Promise.all([ensureCommandStorage(env), ensureNodeAiStorage(env)]);
+  try {
+    await Promise.all([ensureCommandStorage(env), ensureNodeAiStorage(env)]);
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    console.error("LM Studio preflight storage failed", { node_id: nodeId, error: String(error) });
+    throw new ApiError(503, "lmstudio_command_storage_unavailable");
+  }
   const node = await env.DB.prepare(
     "SELECT node_id, hostname, status, agent_version, os_name, architecture, last_seen_at, " +
     "CASE WHEN last_seen_at IS NOT NULL AND datetime(last_seen_at) >= datetime('now', '-5 minutes') THEN 1 ELSE 0 END AS recently_seen " +
