@@ -250,7 +250,7 @@ try {
       worker_target: 1
     })
   });
-  assert.equal(createResponse.status, 201, await createResponse.text());
+  assert.equal(createResponse.status, 201, "project creation HTTP " + createResponse.status);
   const created = await createResponse.json();
   const projectId = created.project.project_id;
   assert.ok(projectId);
@@ -263,7 +263,7 @@ try {
       controllerUrl + "/api/v1/architect/projects/" + encodeURIComponent(projectId),
       { headers: { authorization: "Bearer " + ARCHITECT_TOKEN } }
     );
-    assert.equal(projectResponse.status, 200, await projectResponse.text());
+    assert.equal(projectResponse.status, 200, "project read HTTP " + projectResponse.status);
     report = await projectResponse.json();
     if (report.project?.final_report?.ready) break;
     await sleep(50);
