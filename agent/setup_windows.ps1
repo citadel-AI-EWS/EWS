@@ -89,6 +89,7 @@ foreach ($MachinePath in @($InstallRoot, $StateRoot)) {
 }
 $InstallPrefix = $InstallRoot + '\'
 $StatePrefix = $StateRoot + '\'
+$LifecycleRoot = Join-Path $ProgramDataBase "CitadelEWS\lifecycle"
 if ([string]::Equals($InstallRoot, $StateRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
     $InstallPrefix.StartsWith($StatePrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
     $StatePrefix.StartsWith($InstallPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -201,6 +202,56 @@ function Stop-CitadelServiceIfPresent {
   $Existing.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(75))
 }
 
+function Get-RunningMachineCitadelAgents {
+  $InstallPrefixForMatch = $InstallRoot.TrimEnd('\') + '\'
+  try {
+    return @(
+      Get-CimInstance Win32_Process -ErrorAction Stop |
+        Where-Object {
+          $CommandLine = [string]$_.CommandLine
+          $ExecutablePath = [string]$_.ExecutablePath
+          if ([string]::IsNullOrWhiteSpace($CommandLine)) { return $false }
+          if ($CommandLine.IndexOf("citadel_node_v1.py", [System.StringComparison]::OrdinalIgnoreCase) -lt 0 -and
+              $CommandLine.IndexOf("citadel_node_v2.py", [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+            return $false
+          }
+          return (
+            $CommandLine.IndexOf($InstallPrefixForMatch, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+            (-not [string]::IsNullOrWhiteSpace($ExecutablePath) -and
+             $ExecutablePath.StartsWith($InstallPrefixForMatch, [System.StringComparison]::OrdinalIgnoreCase))
+          )
+        }
+    )
+  } catch {
+    throw "[CITADEL] Could not inspect machine CITADEL agent processes safely."
+  }
+}
+
+function Stop-RunningMachineCitadelAgents {
+  foreach ($Process in @(Get-RunningMachineCitadelAgents)) {
+    Stop-Process -Id $Process.ProcessId -Force -ErrorAction Stop
+    Wait-Process -Id $Process.ProcessId -Timeout 15 -ErrorAction SilentlyContinue
+  }
+  if (@(Get-RunningMachineCitadelAgents).Count -ne 0) {
+    throw "[CITADEL] A machine CITADEL agent process remained alive after quiescence."
+  }
+}
+
+function Test-PreLockInstalledAgent {
+  $StatePath = Join-Path $InstallRoot "install-state.json"
+  $ExistingService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+  if ($null -eq $ExistingService) { return $false }
+  if (-not (Test-Path -LiteralPath $StatePath)) { return $true }
+  try {
+    $ExistingState = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
+    $ExistingVersionText = [string]$ExistingState.agent_version
+    if ([string]::IsNullOrWhiteSpace($ExistingVersionText)) { return $true }
+    return ([version]$ExistingVersionText -lt [version]"0.3.21")
+  } catch {
+    return $true
+  }
+}
+
 function Quote-CitadelServiceArg {
   param([Parameter(Mandatory = $true)][string]$Value)
   if ([string]::IsNullOrWhiteSpace($Value) -or $Value.Contains('"')) { throw "Unsafe Windows service argument path." }
@@ -208,9 +259,9 @@ function Quote-CitadelServiceArg {
 }
 
 function Enter-CitadelLifecycleLock {
-  Set-CitadelDirectoryAcl -Path $StateRoot
-  $LockPath = Join-Path $StateRoot "install-update.lock"
-  $MarkerPath = Join-Path $StateRoot "install-update-active.json"
+  Set-CitadelDirectoryAcl -Path $LifecycleRoot
+  $LockPath = Join-Path $LifecycleRoot "install-update.lock"
+  $MarkerPath = Join-Path $LifecycleRoot "install-update-active.json"
   $Deadline = [DateTime]::UtcNow.AddSeconds(30)
   $Stream = $null
 
@@ -256,7 +307,7 @@ function Exit-CitadelLifecycleLock {
     [Parameter(Mandatory = $true)][System.IO.FileStream]$Stream,
     [Parameter(Mandatory = $true)][bool]$CleanExit
   )
-  $MarkerPath = Join-Path $StateRoot "install-update-active.json"
+  $MarkerPath = Join-Path $LifecycleRoot "install-update-active.json"
   try {
     if ($CleanExit -and (Test-Path -LiteralPath $MarkerPath)) {
       Remove-Item -LiteralPath $MarkerPath -Force
@@ -269,6 +320,12 @@ function Exit-CitadelLifecycleLock {
 $LifecycleLock = Enter-CitadelLifecycleLock
 $LifecycleCleanExit = $false
 try {
+
+if (Test-PreLockInstalledAgent) {
+  Write-Host "[CITADEL] Pre-0.3.21 lifecycle detected; quiescing the old service before staging."
+  Stop-CitadelServiceIfPresent
+  Stop-RunningMachineCitadelAgents
+}
 
 if ($Uninstall) {
   Stop-CitadelServiceIfPresent
