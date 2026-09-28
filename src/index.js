@@ -1754,7 +1754,7 @@ function projectNodeReady(node, sourceType) {
  * Compatibility is applied before the scan limit so mixed AI/Python queues cannot starve later work.
  */
 async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
-  await Promise.all([ensureProjectStorage(env), ensureNodeAiStorage(env)]);
+  await Promise.all([ensureProjectStorage(env), ensureNodeAiStorage(env), ensurePayloadStorage(env)]);
   const node = await env.DB.prepare(`
     SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
       ai.installed, ai.loaded_model, ai.server_running
