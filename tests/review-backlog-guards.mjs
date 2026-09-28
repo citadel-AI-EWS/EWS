@@ -70,6 +70,8 @@ need(serviceHost.includes('RestartExitCode = 75'), "service restart supervision 
 need(portableHost.includes('release-state.json'), "portable launcher versioned release-state support is missing");
 need(portableHost.includes('RELEASE.OK'), "portable launcher verified release marker check is missing");
 need(portableHost.includes('TrySwitchToPreviousRelease'), "portable launcher one-shot previous release fallback is missing");
+need(portableHost.includes('RefreshCommittedRelease'), "portable launcher managed-restart pointer refresh is missing");
+need(portableHost.includes('code == RestartExitCode'), "portable launcher managed restart handoff is missing");
 need(portableHost.includes('CITADEL_RELEASE_ID'), "portable launcher release identity marker is missing");
 need(portableHost.includes('ReparsePoint'), "portable launcher reparse-point rejection is missing");
 need(agentV1.includes('"windows_enterprise_readonly"'), "enterprise probe capability missing");
