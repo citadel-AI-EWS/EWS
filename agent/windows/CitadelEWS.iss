@@ -60,6 +60,8 @@ const
 var
   StartupConfigured: Boolean;
   LegacyCutoverActive: Boolean;
+  SetupLifecycleClean: Boolean;
+  UninstallLifecycleClean: Boolean;
   InstallUpdateLockHandle: THandle;
 
 function CreateFile(
@@ -74,12 +76,12 @@ function CloseHandle(hObject: THandle): Boolean;
 
 function InstallUpdateLockPath: string;
 begin
-  Result := ExpandConstant('{commonappdata}\CitadelEWS\state\install-update.lock');
+  Result := ExpandConstant('{commonappdata}\CitadelEWS\lifecycle\install-update.lock');
 end;
 
 function InstallUpdateMarkerPath: string;
 begin
-  Result := ExpandConstant('{commonappdata}\CitadelEWS\state\install-update-active.json');
+  Result := ExpandConstant('{commonappdata}\CitadelEWS\lifecycle\install-update-active.json');
 end;
 
 function SecureInstallUpdateStateRoot: Boolean;
@@ -88,7 +90,7 @@ var
   ResultCode: Integer;
 begin
   Result := False;
-  StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\state');
+  StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\lifecycle');
   Icacls := ExpandConstant('{sys}\icacls.exe');
   ForceDirectories(StateRoot);
   if not DirExists(StateRoot) then exit;
@@ -159,11 +161,12 @@ begin
   Result := True;
 end;
 
-procedure ReleaseInstallUpdateMutex;
+procedure ReleaseInstallUpdateMutex(CleanExit: Boolean);
 begin
   if InstallUpdateLockHandle <> 0 then
   begin
-    DeleteFile(InstallUpdateMarkerPath);
+    if CleanExit then
+      DeleteFile(InstallUpdateMarkerPath);
     CloseHandle(InstallUpdateLockHandle);
     InstallUpdateLockHandle := 0;
   end;
@@ -171,22 +174,24 @@ end;
 
 function InitializeSetup: Boolean;
 begin
+  SetupLifecycleClean := False;
   Result := AcquireInstallUpdateMutex;
 end;
 
 procedure DeinitializeSetup;
 begin
-  ReleaseInstallUpdateMutex;
+  ReleaseInstallUpdateMutex(SetupLifecycleClean);
 end;
 
 function InitializeUninstall: Boolean;
 begin
+  UninstallLifecycleClean := False;
   Result := AcquireInstallUpdateMutex;
 end;
 
 procedure DeinitializeUninstall;
 begin
-  ReleaseInstallUpdateMutex;
+  ReleaseInstallUpdateMutex(UninstallLifecycleClean);
 end;
 
 
@@ -214,9 +219,9 @@ begin
   Exec(FileName, Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
-function IsCitadelManagedProcess(ProcessObj: Variant): Boolean;
+function IsCitadelAgentPython(ProcessObj: Variant): Boolean;
 var
-  ExePath, CommandLine, HostExe, RuntimePython, RuntimePythonW: string;
+  ExePath, ExeLower, CommandLine, RuntimePython, RuntimePythonW, ReleasesPrefix: string;
 begin
   Result := False;
   ExePath := '';
@@ -232,21 +237,47 @@ begin
     CommandLine := '';
   end;
 
-  HostExe := ExpandConstant('{app}\CitadelNodeService.exe');
-  RuntimePython := ExpandConstant('{app}\runtime\python.exe');
-  RuntimePythonW := ExpandConstant('{app}\runtime\pythonw.exe');
+  ExeLower := Lowercase(ExePath);
+  RuntimePython := Lowercase(ExpandConstant('{app}\runtime\python.exe'));
+  RuntimePythonW := Lowercase(ExpandConstant('{app}\runtime\pythonw.exe'));
+  ReleasesPrefix := Lowercase(ExpandConstant('{app}\releases\'));
 
+  if not ((Pos('citadel_node_v1.py', CommandLine) > 0) or
+          (Pos('citadel_node_v2.py', CommandLine) > 0)) then
+    exit;
+
+  if (CompareText(ExeLower, RuntimePython) = 0) or
+     (CompareText(ExeLower, RuntimePythonW) = 0) then
+  begin
+    Result := True;
+    exit;
+  end;
+
+  { setup_windows.ps1 releases use releases\<id>\.venv\Scripts\python.exe. }
+  if (Pos(ReleasesPrefix, ExeLower) = 1) and
+     (Pos('\.venv\scripts\python', ExeLower) > 0) then
+    Result := True;
+end;
+
+function IsCitadelManagedProcess(ProcessObj: Variant): Boolean;
+var
+  ExePath, HostExe: string;
+begin
+  Result := False;
+  try
+    ExePath := VarToStr(ProcessObj.ExecutablePath);
+  except
+    exit;
+  end;
+
+  HostExe := ExpandConstant('{app}\CitadelNodeService.exe');
   if CompareText(ExePath, HostExe) = 0 then
   begin
     Result := True;
     exit;
   end;
 
-  if ((CompareText(ExePath, RuntimePython) = 0) or
-      (CompareText(ExePath, RuntimePythonW) = 0)) and
-     ((Pos('citadel_node_v1.py', CommandLine) > 0) or
-      (Pos('citadel_node_v2.py', CommandLine) > 0)) then
-    Result := True;
+  Result := IsCitadelAgentPython(ProcessObj);
 end;
 
 function CitadelManagedProcessRunning: Boolean;
@@ -280,10 +311,7 @@ procedure TerminateOrphanedCitadelPython;
 var
   Locator, Services, Processes, ProcessObj: Variant;
   I, ResultCode: Integer;
-  ExePath, CommandLine, RuntimePython, RuntimePythonW: string;
 begin
-  RuntimePython := ExpandConstant('{app}\runtime\python.exe');
-  RuntimePythonW := ExpandConstant('{app}\runtime\pythonw.exe');
   try
     Locator := CreateOleObject('WbemScripting.SWbemLocator');
     Services := Locator.ConnectServer('.', 'root\cimv2');
@@ -294,16 +322,11 @@ begin
     for I := 0 to Processes.Count - 1 do
     begin
       ProcessObj := Processes.ItemIndex(I);
-      ExePath := VarToStr(ProcessObj.ExecutablePath);
-      CommandLine := Lowercase(VarToStr(ProcessObj.CommandLine));
-      if ((CompareText(ExePath, RuntimePython) = 0) or
-          (CompareText(ExePath, RuntimePythonW) = 0)) and
-         ((Pos('citadel_node_v1.py', CommandLine) > 0) or
-          (Pos('citadel_node_v2.py', CommandLine) > 0)) then
+      if IsCitadelAgentPython(ProcessObj) then
       begin
         ResultCode := ProcessObj.Terminate(1);
         if ResultCode <> 0 then
-          Log('CITADEL could not terminate orphaned bundled-Python agent PID ' +
+          Log('CITADEL could not terminate orphaned agent Python PID ' +
               IntToStr(Integer(ProcessObj.ProcessId)) + '; WMI code ' +
               IntToStr(ResultCode) + '.');
       end;
@@ -333,8 +356,11 @@ begin
   SchTasks := ExpandConstant('{sys}\schtasks.exe');
   TaskKill := ExpandConstant('{sys}\taskkill.exe');
 
-  { Disable fallback before touching the Service so it cannot race the stop. }
+  { Disable both Scheduler and SCM failure recovery before touching the live
+    tree. TryInstallService restores the normal recovery actions after [Files]. }
   TryExec(SchTasks, '/Change /TN "{#FallbackTaskName}" /DISABLE');
+  TryExec(Sc, 'failure {#ServiceName} reset= 0 actions= ""');
+  TryExec(Sc, 'failureflag {#ServiceName} 0');
   TryExec(Sc, 'stop {#ServiceName}');
   Sleep(1000);
 
@@ -622,6 +648,7 @@ begin
       if LegacyCutoverActive then
         RequireLegacyCutover('commit', ' --expected-version "{#MyVersion}"');
       StartupConfigured := True;
+      SetupLifecycleClean := True;
     except
       if LegacyCutoverActive then
         AbortLegacyMigrationLifecycle;
@@ -649,4 +676,6 @@ begin
     DeleteFallbackTask;
     TryLegacyCutover('uninstall', '');
   end;
+  if CurUninstallStep = usPostUninstall then
+    UninstallLifecycleClean := True;
 end;
