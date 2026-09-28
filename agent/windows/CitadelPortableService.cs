@@ -10,6 +10,8 @@ namespace CitadelEws
 {
     internal sealed class PortablePaths
     {
+        public const string LauncherVersion = "1.0.0";
+
         public string AppRoot;
         public string DataRoot;
         public string PythonPath;
@@ -19,15 +21,79 @@ namespace CitadelEws
         public string LifecycleStopFile;
         public string HoldFile;
         public string ReadyFile;
+        public string ReleasesRoot;
+        public string ReleaseId;
+        public string PreviousReleaseId;
+        public string PreviousDescriptorSha256;
+        public bool PreviousRollbackable;
+        public bool Versioned;
+        public bool PreviousFallbackUsed;
 
         public static PortablePaths Discover()
         {
-            var appRoot = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
-            var dataRoot = Path.Combine(
+            var legacyRoot = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+            var citadelRoot = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                "CitadelEWS",
-                "state"
+                "CitadelEWS"
             );
+            return DiscoverForRoots(legacyRoot, citadelRoot);
+        }
+
+        internal static PortablePaths DiscoverForRoots(string legacyRoot, string citadelRoot)
+        {
+            var dataRoot = Path.Combine(citadelRoot, "state");
+            var statePath = Path.Combine(dataRoot, "release-state.json");
+            if (!File.Exists(statePath))
+                return CreateLegacy(legacyRoot, dataRoot);
+
+            var json = File.ReadAllText(statePath);
+            var minLauncher = ReadRequiredJsonString(json, "min_launcher_version");
+            Version requiredVersion;
+            Version actualVersion;
+            if (!Version.TryParse(minLauncher, out requiredVersion) ||
+                !Version.TryParse(LauncherVersion, out actualVersion))
+                throw new InvalidDataException("Invalid launcher version metadata.");
+            if (requiredVersion > actualVersion)
+                throw new InvalidOperationException("Installed launcher is too old for the committed release state.");
+
+            var releasesRoot = Path.Combine(citadelRoot, "releases");
+            var current = ReadRequiredJsonString(json, "current");
+            var currentDescriptor = ReadRequiredJsonString(json, "current_descriptor_sha256");
+            var previous = ReadOptionalJsonString(json, "previous");
+            var previousDescriptor = ReadOptionalJsonString(json, "previous_descriptor_sha256");
+            var previousRollbackable = ReadRequiredJsonBool(json, "previous_rollbackable");
+
+            PortablePaths paths;
+            if (TryCreateVersioned(
+                releasesRoot, dataRoot, current, currentDescriptor,
+                previous, previousDescriptor, previousRollbackable, false, out paths))
+                return paths;
+
+            if (previousRollbackable &&
+                !String.IsNullOrWhiteSpace(previous) &&
+                !String.IsNullOrWhiteSpace(previousDescriptor) &&
+                TryCreateVersioned(
+                    releasesRoot, dataRoot, previous, previousDescriptor,
+                    null, null, false, true, out paths))
+                return paths;
+
+            throw new InvalidDataException("Committed CITADEL release state has no startable verified release.");
+        }
+
+        private static PortablePaths CreateLegacy(string appRoot, string dataRoot)
+        {
+            return CreateForAppRoot(appRoot, dataRoot, null, null, null, false, false);
+        }
+
+        private static PortablePaths CreateForAppRoot(
+            string appRoot,
+            string dataRoot,
+            string releasesRoot,
+            string releaseId,
+            string previousReleaseId,
+            bool previousRollbackable,
+            bool previousFallbackUsed)
+        {
             return new PortablePaths {
                 AppRoot = appRoot,
                 DataRoot = dataRoot,
@@ -37,8 +103,163 @@ namespace CitadelEws
                 StopFile = Path.Combine(dataRoot, "STOP"),
                 LifecycleStopFile = Path.Combine(dataRoot, "SERVICE_STOP"),
                 HoldFile = Path.Combine(dataRoot, "SERVICE_HOLD"),
-                ReadyFile = Path.Combine(dataRoot, "SERVICE_READY")
+                ReadyFile = Path.Combine(dataRoot, "SERVICE_READY"),
+                ReleasesRoot = releasesRoot,
+                ReleaseId = releaseId,
+                PreviousReleaseId = previousReleaseId,
+                PreviousRollbackable = previousRollbackable,
+                Versioned = !String.IsNullOrWhiteSpace(releaseId),
+                PreviousFallbackUsed = previousFallbackUsed
             };
+        }
+
+        private static bool TryCreateVersioned(
+            string releasesRoot,
+            string dataRoot,
+            string releaseId,
+            string descriptorSha256,
+            string previousReleaseId,
+            string previousDescriptorSha256,
+            bool previousRollbackable,
+            bool previousFallbackUsed,
+            out PortablePaths paths)
+        {
+            paths = null;
+            if (!IsSafeReleaseId(releaseId) || !IsSha256(descriptorSha256))
+                return false;
+
+            var releasesFull = Path.GetFullPath(releasesRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var candidate = Path.GetFullPath(Path.Combine(releasesRoot, releaseId)).TrimEnd(Path.DirectorySeparatorChar);
+            if (!(candidate + Path.DirectorySeparatorChar).StartsWith(releasesFull, StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (!Directory.Exists(candidate))
+                return false;
+            if ((new DirectoryInfo(candidate).Attributes & FileAttributes.ReparsePoint) != 0)
+                return false;
+
+            var okPath = Path.Combine(candidate, "RELEASE.OK");
+            var pythonPath = Path.Combine(candidate, "runtime", "python.exe");
+            var agentPath = Path.Combine(candidate, "citadel_node_v2.py");
+            if (!File.Exists(okPath) || !File.Exists(pythonPath) || !File.Exists(agentPath))
+                return false;
+
+            var okJson = File.ReadAllText(okPath);
+            if (!String.Equals(ReadRequiredJsonString(okJson, "release_id"), releaseId, StringComparison.Ordinal))
+                return false;
+            if (!String.Equals(ReadRequiredJsonString(okJson, "descriptor_sha256"), descriptorSha256, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            paths = CreateForAppRoot(
+                candidate,
+                dataRoot,
+                releasesRoot,
+                releaseId,
+                previousReleaseId,
+                previousRollbackable,
+                previousFallbackUsed
+            );
+            paths.PreviousDescriptorSha256 = previousDescriptorSha256;
+            return true;
+        }
+
+        internal bool TrySwitchToPreviousRelease()
+        {
+            if (!Versioned || PreviousFallbackUsed || !PreviousRollbackable ||
+                String.IsNullOrWhiteSpace(PreviousReleaseId) ||
+                String.IsNullOrWhiteSpace(PreviousDescriptorSha256))
+                return false;
+
+            PortablePaths previous;
+            if (!TryCreateVersioned(
+                ReleasesRoot,
+                DataRoot,
+                PreviousReleaseId,
+                PreviousDescriptorSha256,
+                null,
+                null,
+                false,
+                true,
+                out previous))
+                return false;
+
+            AppRoot = previous.AppRoot;
+            PythonPath = previous.PythonPath;
+            AgentPath = previous.AgentPath;
+            ReleaseId = previous.ReleaseId;
+            PreviousReleaseId = null;
+            PreviousDescriptorSha256 = null;
+            PreviousRollbackable = false;
+            PreviousFallbackUsed = true;
+            return true;
+        }
+
+        private static bool IsSafeReleaseId(string value)
+        {
+            if (String.IsNullOrWhiteSpace(value) || value.Length > 160)
+                return false;
+            for (var i = 0; i < value.Length; i++)
+            {
+                var ch = value[i];
+                if (!(Char.IsLetterOrDigit(ch) || ch == '.' || ch == '_' || ch == '-'))
+                    return false;
+            }
+            return value.IndexOf("..", StringComparison.Ordinal) < 0;
+        }
+
+        private static bool IsSha256(string value)
+        {
+            if (String.IsNullOrWhiteSpace(value) || value.Length != 64)
+                return false;
+            for (var i = 0; i < value.Length; i++)
+            {
+                var ch = value[i];
+                if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')))
+                    return false;
+            }
+            return true;
+        }
+
+        private static string ReadRequiredJsonString(string json, string key)
+        {
+            var value = ReadOptionalJsonString(json, key);
+            if (String.IsNullOrWhiteSpace(value))
+                throw new InvalidDataException("Missing release-state field: " + key);
+            return value;
+        }
+
+        private static string ReadOptionalJsonString(string json, string key)
+        {
+            var token = """ + key + """;
+            var index = json.IndexOf(token, StringComparison.Ordinal);
+            if (index < 0) return null;
+            index = json.IndexOf(':', index + token.Length);
+            if (index < 0) throw new InvalidDataException("Invalid JSON field: " + key);
+            index++;
+            while (index < json.Length && Char.IsWhiteSpace(json[index])) index++;
+            if (index >= json.Length) throw new InvalidDataException("Invalid JSON field: " + key);
+            if (json.Substring(index).StartsWith("null", StringComparison.Ordinal)) return null;
+            if (json[index] != '"') throw new InvalidDataException("Invalid JSON string field: " + key);
+            index++;
+            var end = json.IndexOf('"', index);
+            if (end < 0) throw new InvalidDataException("Unterminated JSON string field: " + key);
+            var value = json.Substring(index, end - index);
+            if (value.IndexOf('\\') >= 0)
+                throw new InvalidDataException("Escaped release-state values are not accepted.");
+            return value;
+        }
+
+        private static bool ReadRequiredJsonBool(string json, string key)
+        {
+            var token = """ + key + """;
+            var index = json.IndexOf(token, StringComparison.Ordinal);
+            if (index < 0) throw new InvalidDataException("Missing release-state field: " + key);
+            index = json.IndexOf(':', index + token.Length);
+            if (index < 0) throw new InvalidDataException("Invalid JSON field: " + key);
+            index++;
+            while (index < json.Length && Char.IsWhiteSpace(json[index])) index++;
+            if (json.Substring(index).StartsWith("true", StringComparison.Ordinal)) return true;
+            if (json.Substring(index).StartsWith("false", StringComparison.Ordinal)) return false;
+            throw new InvalidDataException("Invalid JSON boolean field: " + key);
         }
 
         public void Validate()
@@ -176,6 +397,10 @@ namespace CitadelEws
             start.EnvironmentVariables["CITADEL_SERVICE_STOP_FILE"] = paths.LifecycleStopFile;
             start.EnvironmentVariables["CITADEL_SERVICE_HOLD_FILE"] = paths.HoldFile;
             start.EnvironmentVariables["CITADEL_SERVICE_READY_FILE"] = paths.ReadyFile;
+            if (paths.Versioned && !String.IsNullOrWhiteSpace(paths.ReleaseId))
+                start.EnvironmentVariables["CITADEL_RELEASE_ID"] = paths.ReleaseId;
+            else
+                start.EnvironmentVariables.Remove("CITADEL_RELEASE_ID");
             return start;
         }
 
@@ -239,13 +464,28 @@ namespace CitadelEws
                     }
 
                     Process current;
-                    lock (sync)
+                    try
                     {
-                        if (stopping) return;
-                        current = Process.Start(BuildChildStartInfo());
-                        if (current == null)
-                            throw new InvalidOperationException("Unable to start CITADEL agent child.");
-                        child = current;
+                        lock (sync)
+                        {
+                            if (stopping) return;
+                            current = Process.Start(BuildChildStartInfo());
+                            if (current == null)
+                                throw new InvalidOperationException("Unable to start CITADEL agent child.");
+                            child = current;
+                        }
+                    }
+                    catch
+                    {
+                        // Versioned mode gets exactly one start-time fallback to
+                        // the committed previous release. A child that actually
+                        // starts is never rolled back because of later exit codes.
+                        if (paths.TrySwitchToPreviousRelease())
+                        {
+                            Thread.Sleep(250);
+                            continue;
+                        }
+                        throw;
                     }
 
                     current.WaitForExit();
@@ -367,6 +607,83 @@ namespace CitadelEws
                 if (taskStart.EnvironmentVariables["CITADEL_TASK_MANAGED"] != "1" ||
                     taskStart.EnvironmentVariables["CITADEL_SERVICE_MANAGED"] != "1")
                     throw new InvalidOperationException("Portable fallback task child contract failed.");
+
+                var citadelRoot = Path.Combine(root, "programdata", "CitadelEWS");
+                var versionedState = Path.Combine(citadelRoot, "state");
+                var releases = Path.Combine(citadelRoot, "releases");
+                var currentId = "0.3.22-abcdef012345";
+                var previousId = "0.3.21-deadbeef0000";
+                var currentHash = new string('a', 64);
+                var previousHash = new string('b', 64);
+                Directory.CreateDirectory(versionedState);
+                File.WriteAllText(Path.Combine(versionedState, "config.json"), "{}");
+
+                Action<string, string> makeRelease = (releaseId, descriptorHash) => {
+                    var releaseRoot = Path.Combine(releases, releaseId);
+                    Directory.CreateDirectory(Path.Combine(releaseRoot, "runtime"));
+                    File.WriteAllText(Path.Combine(releaseRoot, "runtime", "python.exe"), "");
+                    File.WriteAllText(Path.Combine(releaseRoot, "citadel_node_v2.py"), "");
+                    File.WriteAllText(
+                        Path.Combine(releaseRoot, "RELEASE.OK"),
+                        "{\"release_id\":\"" + releaseId +
+                        "\",\"descriptor_sha256\":\"" + descriptorHash + "\"}"
+                    );
+                };
+                makeRelease(currentId, currentHash);
+                makeRelease(previousId, previousHash);
+                File.WriteAllText(
+                    Path.Combine(versionedState, "release-state.json"),
+                    "{" +
+                    "\"schema\":1," +
+                    "\"generation\":1," +
+                    "\"current\":\"" + currentId + "\"," +
+                    "\"previous\":\"" + previousId + "\"," +
+                    "\"previous_rollbackable\":true," +
+                    "\"current_descriptor_sha256\":\"" + currentHash + "\"," +
+                    "\"previous_descriptor_sha256\":\"" + previousHash + "\"," +
+                    "\"state_schema\":1," +
+                    "\"min_launcher_version\":\"1.0.0\"," +
+                    "\"transaction_id\":\"txn-selftest\"," +
+                    "\"committed_at\":\"2026-09-28T00:00:00Z\"" +
+                    "}"
+                );
+
+                var versionedPaths = PortablePaths.DiscoverForRoots(
+                    Path.Combine(root, "legacy"),
+                    citadelRoot
+                );
+                if (!versionedPaths.Versioned ||
+                    versionedPaths.ReleaseId != currentId ||
+                    versionedPaths.AppRoot != Path.Combine(releases, currentId))
+                    throw new InvalidOperationException("Versioned launcher did not select committed current release.");
+
+                File.Delete(Path.Combine(releases, currentId, "runtime", "python.exe"));
+                var fallbackPaths = PortablePaths.DiscoverForRoots(
+                    Path.Combine(root, "legacy"),
+                    citadelRoot
+                );
+                if (!fallbackPaths.Versioned ||
+                    !fallbackPaths.PreviousFallbackUsed ||
+                    fallbackPaths.ReleaseId != previousId)
+                    throw new InvalidOperationException("Versioned launcher did not fall back to committed previous release.");
+
+                File.WriteAllText(
+                    Path.Combine(versionedState, "release-state.json"),
+                    "{\"current\":\"..\\\\evil\",\"previous_rollbackable\":false," +
+                    "\"current_descriptor_sha256\":\"" + currentHash +
+                    "\",\"min_launcher_version\":\"1.0.0\"}"
+                );
+                bool unsafeStateRejected = false;
+                try
+                {
+                    PortablePaths.DiscoverForRoots(Path.Combine(root, "legacy"), citadelRoot);
+                }
+                catch (InvalidDataException)
+                {
+                    unsafeStateRejected = true;
+                }
+                if (!unsafeStateRejected)
+                    throw new InvalidOperationException("Unsafe versioned release state was not rejected.");
 
                 Console.WriteLine("CITADEL portable Windows service/task-host SELF TEST: PASS");
                 return 0;
