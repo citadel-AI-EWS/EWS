@@ -208,6 +208,32 @@ for (const required of [
   assert.ok(operations.includes(required), "Operations capability missing: " + required);
 }
 assert.ok(!operations.includes("setInterval(refresh,10000)"), "Operations console must not poll every 10 seconds");
+for (const required of [
+  'id="selectLmAll"',
+  'id="installLmSelected"',
+  'id="fleetActivity"',
+  'id="modelResults"',
+  'id="modelDetailsDialog"',
+  "ai-badge",
+  "lmstudio-preflight",
+  "/models/details",
+  "&limit=80",
+  "showModelDetails",
+  "selectedNodeIds",
+  "updateFleetActivityFromData"
+]) {
+  assert.ok(operations.includes(required), "LM Studio fleet/model UX missing: " + required);
+}
+for (const required of [
+  "architectModelDetails",
+  "architectLmstudioPreflight",
+  "ai_installed",
+  "lmstudio_command_storage_unavailable",
+  "modelNodeCompatibility",
+  "/models/details"
+]) {
+  assert.ok(index.includes(required), "LM Studio fleet/model API missing: " + required);
+}
 
 
 assert.match(architect, /Ноды, проекты, миссии, отчёты, модели и данные не удаляются/);

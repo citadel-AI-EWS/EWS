@@ -118,7 +118,17 @@ need(wrangler.includes('"crons": ["17 * * * *"]'), "telemetry retention cron mis
 need(index.includes("await expireStaleNodeCommands(env, nodeId);\n  await ensureRolloutCommandForNode(env, nodeId);"), "stale command expiry must run before rollout scheduling");
 need(index.includes("do {") && index.includes("expiredBatchSize = await expireStaleCommands(env);") && index.includes("while (expiredBatchSize === 250);"), "command storage must drain every full stale-command batch before creating the active-command unique index");
 need(index.includes('throw new ApiError(409, "command_already_pending")'), "command storage UNIQUE conflicts must not surface as internal_error");
-need(index.includes("await expireStaleNodeCommands(env, nodeId);\n  await ensureCommandStorage(env);"), "Architect command path must expire the target node before enforcing command index");
+{
+  const start = index.indexOf("async function architectCreateCommand");
+  const end = index.indexOf("async function nodeUpdateAiState", start);
+  const block = start >= 0 && end > start ? index.slice(start, end) : "";
+  const expireAt = block.indexOf("await expireStaleNodeCommands(env, nodeId);");
+  const storageAt = block.indexOf("await ensureCommandStorage(env);");
+  need(
+    expireAt >= 0 && storageAt > expireAt,
+    "Architect command path must expire the target node before enforcing command index"
+  );
+}
 need(index.includes("expireStaleNodeCommands"), "stale command expiry missing");
 need(agentV1.includes("x-node-request-id"), "agent request nonce header missing");
 need(agentV1.includes("recover_network"), "bounded network recovery missing");
