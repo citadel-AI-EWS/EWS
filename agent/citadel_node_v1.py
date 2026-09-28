@@ -1571,7 +1571,8 @@ class Agent:
             "progress_phase", "progress_current", "progress_total", "progress_bytes",
             "progress_total_bytes", "progress_detail", "download_job_id",
             "query_id", "query_mode", "query_status", "query_prompt", "query_answer",
-            "load_config",
+            "load_config", "model_store_path", "model_count", "installed_models",
+            "model_store_checked_at",
         }
         body = {key: state.get(key) for key in allowed if key in state}
         try:
