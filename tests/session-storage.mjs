@@ -13,6 +13,7 @@ const payloads = new Map();
 const drive = new Map();
 const originalFetch = globalThis.fetch;
 let driveNo = 0;
+let failDriveDeletes = false;
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input);
   if (url.startsWith("https://www.googleapis.com/upload/drive/v3/files")) {
@@ -33,6 +34,7 @@ globalThis.fetch = async (input, init = {}) => {
     return value === undefined ? new Response("missing", { status: 404 }) : new Response(value, { status: 200 });
   }
   if (url.includes("/drive/v3/files/") && init.method === "DELETE") {
+    if (failDriveDeletes) return new Response("temporary delete failure", { status: 503 });
     drive.delete(decodeURIComponent(url.split("/").pop()));
     return new Response(null, { status: 204 });
   }
@@ -232,6 +234,28 @@ assert.equal(deleteResponse.status, 200);
 assert.equal(sessions.size, 0);
 assert.equal(audit.length, 3);
 assert.equal(payloads.size, 0);
+assert.equal(drive.size, 0);
+
+// A failed remote Drive delete must not erase the D1 payload index. Keeping the
+// pointer makes the orphan discoverable/retryable instead of silently losing it.
+const failedCleanupCreate = await request("/api/v1/architect/sessions", {
+  method: "POST",
+  body: JSON.stringify({ name: "Checkpoint delete retry", ui_state: {} })
+});
+assert.equal(failedCleanupCreate.status, 201);
+const failedCleanupSession = (await failedCleanupCreate.json()).session;
+assert.equal(payloads.size, 1);
+assert.equal(drive.size, 1);
+failDriveDeletes = true;
+const failedCleanupDelete = await request(`/api/v1/architect/sessions/${failedCleanupSession.session_id}`, {
+  method: "DELETE"
+});
+assert.equal(failedCleanupDelete.status, 200);
+assert.equal(sessions.size, 0);
+assert.equal(payloads.size, 1);
+assert.equal(drive.size, 1);
+failDriveDeletes = false;
+
 globalThis.fetch = originalFetch;
 
 console.log("Authenticated Drive-backed session checkpoints and storage usage: OK");
