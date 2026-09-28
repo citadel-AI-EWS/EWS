@@ -1738,6 +1738,86 @@ function projectAssignmentId(workItemId) {
   return "assignment_" + workItemId;
 }
 
+
+async function recoverStaleProjectAssignments(env) {
+  await ensureProjectStorage(env);
+  const stale = await env.DB.prepare(`
+    SELECT
+      a.assignment_id,
+      a.node_id,
+      a.status AS assignment_status,
+      a.assigned_at,
+      a.started_at,
+      w.work_item_id,
+      w.project_id
+    FROM assignments AS a
+    JOIN project_work_items AS w
+      ON a.assignment_id = ('assignment_' || w.work_item_id)
+    LEFT JOIN nodes AS n ON n.node_id = a.node_id
+    WHERE NOT EXISTS (
+      SELECT 1 FROM results AS r WHERE r.assignment_id = a.assignment_id
+    )
+      AND (
+        (
+          a.status = 'assigned'
+          AND datetime(a.assigned_at) <= datetime('now', '-10 minutes')
+        )
+        OR (
+          a.status = 'running'
+          AND datetime(COALESCE(a.started_at, a.assigned_at)) <= datetime('now', '-45 minutes')
+          AND (
+            n.node_id IS NULL
+            OR n.status != 'online'
+            OR n.last_seen_at IS NULL
+            OR datetime(n.last_seen_at) < datetime('now', '-5 minutes')
+          )
+        )
+      )
+    ORDER BY datetime(COALESCE(a.started_at, a.assigned_at)) ASC
+    LIMIT 100
+  `).all();
+
+  let recovered = 0;
+  for (const row of stale.results || []) {
+    const reason = row.assignment_status === "running"
+      ? "running_node_heartbeat_lost"
+      : "assigned_accept_lease_expired";
+    const claim = await env.DB.prepare(`
+      UPDATE assignments
+      SET status = 'failed', completed_at = CURRENT_TIMESTAMP
+      WHERE assignment_id = ?
+        AND status = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM results WHERE results.assignment_id = assignments.assignment_id
+        )
+    `).bind(row.assignment_id, row.assignment_status).run();
+    if ((claim?.meta?.changes || 0) !== 1) continue;
+
+    await env.DB.batch([
+      env.DB.prepare(`
+        UPDATE project_work_items
+        SET node_id = NULL, status = 'planned', updated_at = CURRENT_TIMESTAMP
+        WHERE work_item_id = ?
+          AND project_id = ?
+          AND status = ?
+      `).bind(row.work_item_id, row.project_id, row.assignment_status),
+      env.DB.prepare(`
+        INSERT INTO audit_events (
+          actor_type, actor_id, action, target_type, target_id, details_json
+        ) VALUES ('controller', 'assignment-reaper', 'project.work.requeued_stale',
+          'project_work_item', ?, ?)
+      `).bind(row.work_item_id, JSON.stringify({
+        project_id: row.project_id,
+        previous_node_id: row.node_id,
+        previous_assignment_status: row.assignment_status,
+        reason
+      }))
+    ]);
+    recovered += 1;
+  }
+  return recovered;
+}
+
 function projectExecutionMode(sourceType) {
   return sourceType === "architect_python" ? "python" : "ai";
 }
@@ -1882,6 +1962,24 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
           WHERE work_item_id = ? AND node_id = ? AND status = 'assigned'
         )
       `).bind(assignmentId, missionId, nodeId, work.work_item_id, nodeId),
+      env.DB.prepare(`
+        UPDATE assignments
+        SET mission_id = ?,
+            node_id = ?,
+            status = 'assigned',
+            assigned_at = CURRENT_TIMESTAMP,
+            started_at = NULL,
+            completed_at = NULL
+        WHERE assignment_id = ?
+          AND status = 'failed'
+          AND NOT EXISTS (
+            SELECT 1 FROM results WHERE results.assignment_id = assignments.assignment_id
+          )
+          AND EXISTS (
+            SELECT 1 FROM project_work_items
+            WHERE work_item_id = ? AND node_id = ? AND status = 'assigned'
+          )
+      `).bind(missionId, nodeId, assignmentId, work.work_item_id, nodeId),
       env.DB.prepare(`
         UPDATE architect_projects
         SET status = 'running', updated_at = CURRENT_TIMESTAMP
@@ -3266,6 +3364,7 @@ async function listAssignments(request, env, nodeId, url) {
     return json({ ok: true, node_status: "paused", assignments: [] });
   }
 
+  await recoverStaleProjectAssignments(env);
   await materializeProjectWorkForNode(env, nodeId);
 
   const query = await env.DB.prepare(`
