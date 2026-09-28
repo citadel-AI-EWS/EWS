@@ -4834,7 +4834,10 @@ async function architectCreateCommand(request, env, nodeId) {
     if (String(error).includes("idx_commands_one_active_per_node") || String(error).includes("UNIQUE")) {
       throw new ApiError(409, "command_already_pending");
     }
-    throw error;
+    console.error("Command persistence failed", { node_id: nodeId, command_type: commandType, error: String(error) });
+    throw new ApiError(503, commandType.startsWith("lmstudio_")
+      ? "lmstudio_command_storage_unavailable"
+      : "command_storage_unavailable");
   }
 
   return json({
@@ -5013,12 +5016,170 @@ async function fetchHuggingFaceModels(query, limit = 30) {
   return rows;
 }
 
+function inferModelParametersB(modelId, tags = []) {
+  const haystack = [modelId, ...(Array.isArray(tags) ? tags : [])].join(" ");
+  const matches = [...haystack.matchAll(/(?:^|[^0-9])(\d+(?:\.\d+)?)\s*[bB](?:[^A-Za-z0-9]|$)/g)]
+    .map((match) => Number(match[1]))
+    .filter((value) => Number.isFinite(value) && value > 0 && value <= 1000);
+  return matches.length ? Math.min(...matches) : null;
+}
+
+function huggingFaceFamilyQuery(modelId) {
+  const name = String(modelId || "").split("/").pop() || "";
+  const stripped = name
+    .replace(/[-_.](?:gguf|instruct|chat|base|it)$/i, "")
+    .replace(/[-_.]\d+(?:\.\d+)?[bB](?:[-_.].*)?$/i, "")
+    .replace(/[-_.](?:q\d(?:_[A-Za-z0-9]+)?|fp16|bf16|f16)(?:[-_.].*)?$/i, "");
+  return (stripped || name).slice(0, 80);
+}
+
+async function fetchHuggingFaceModelDetail(modelId) {
+  const encoded = String(modelId).split("/").map(encodeURIComponent).join("/");
+  let response;
+  try {
+    response = await fetch("https://huggingface.co/api/models/" + encoded, {
+      headers: { "accept": "application/json", "user-agent": "CITADEL-EWS/1.0" }
+    });
+  } catch {
+    throw new ApiError(502, "huggingface_unavailable");
+  }
+  if (response.status === 404) throw new ApiError(404, "huggingface_model_not_found");
+  if (!response.ok) throw new ApiError(response.status === 429 ? 429 : 502, "huggingface_search_failed");
+  try {
+    return await response.json();
+  } catch {
+    throw new ApiError(502, "huggingface_invalid_response");
+  }
+}
+
+function modelNodeCompatibility(modelId, detail, hardware) {
+  const tags = Array.isArray(detail?.tags) ? detail.tags.map(String) : [];
+  const siblings = Array.isArray(detail?.siblings) ? detail.siblings : [];
+  const ggufFiles = siblings
+    .map((item) => typeof item?.rfilename === "string" ? item.rfilename : "")
+    .filter((name) => /\.gguf$/i.test(name));
+  const gguf = tags.some((tag) => tag.toLowerCase() === "gguf") || ggufFiles.length > 0;
+  const parametersB = inferModelParametersB(modelId, tags);
+  const ramGiB = Number(hardware?.memory_total_bytes || 0) / (1024 ** 3);
+  const gpus = Array.isArray(hardware?.gpus) ? hardware.gpus : [];
+  const maxVramGiB = gpus.reduce((best, gpu) =>
+    Math.max(best, Number(gpu?.vram_total_bytes || 0) / (1024 ** 3)), 0);
+  const estimatedQ4GiB = parametersB ? Math.max(1.2, parametersB * 0.68 + 0.8) : null;
+
+  let status = "unknown";
+  if (!gguf) status = "format_unknown";
+  else if (estimatedQ4GiB && (maxVramGiB >= estimatedQ4GiB * 0.9 || ramGiB >= estimatedQ4GiB * 1.35)) status = "recommended";
+  else if (estimatedQ4GiB && ramGiB >= estimatedQ4GiB * 1.05) status = "possible";
+  else if (estimatedQ4GiB && ramGiB > 0) status = "not_recommended";
+  else if (gguf) status = "unknown";
+
+  return {
+    status,
+    gguf,
+    parameters_b: parametersB,
+    estimated_q4_memory_gib: estimatedQ4GiB ? Number(estimatedQ4GiB.toFixed(1)) : null,
+    ram_gib: ramGiB ? Number(ramGiB.toFixed(1)) : null,
+    max_vram_gib: maxVramGiB ? Number(maxVramGiB.toFixed(1)) : null,
+    gguf_files: ggufFiles.slice(0, 24)
+  };
+}
+
 async function architectSearchModels(request, env, url) {
   await authenticateArchitect(request, env);
   const raw = String(url.searchParams.get("q") || "").trim();
   const query = raw ? requireString(raw, "model_search", 80) : "GGUF instruct";
-  const rows = await fetchHuggingFaceModels(query, 40);
-  return json({ ok: true, query, source: "huggingface", models: mapHuggingFaceModels(rows, 24) });
+  const requested = Number(url.searchParams.get("limit") || 60);
+  const limit = Number.isInteger(requested) ? Math.max(1, Math.min(80, requested)) : 60;
+  const rows = await fetchHuggingFaceModels(query, limit);
+  return json({ ok: true, query, source: "huggingface", models: mapHuggingFaceModels(rows, limit) });
+}
+
+async function architectModelDetails(request, env, url) {
+  await authenticateArchitect(request, env);
+  const modelId = normalizeLmModelId(url.searchParams.get("id"));
+  const nodeId = String(url.searchParams.get("node_id") || "").trim();
+  const detail = await fetchHuggingFaceModelDetail(modelId);
+  let hardware = null;
+  let recommendation = null;
+  if (nodeId) {
+    await ensureNodeHardwareStorage(env);
+    const row = await env.DB.prepare(
+      "SELECT memory_total_bytes, cpu_logical_count, gpus_json, updated_at FROM node_hardware_state WHERE node_id = ?"
+    ).bind(nodeId).first();
+    if (row) {
+      hardware = {
+        memory_total_bytes: Number(row.memory_total_bytes || 0) || null,
+        cpu_logical_count: Number(row.cpu_logical_count || 0) || null,
+        gpus: safeJson(row.gpus_json, []),
+        updated_at: row.updated_at || null
+      };
+      recommendation = modelRecommendationProfile(hardware);
+    }
+  }
+
+  const familyQuery = huggingFaceFamilyQuery(modelId);
+  let alternatives = [];
+  if (familyQuery) {
+    try {
+      alternatives = mapHuggingFaceModels(await fetchHuggingFaceModels(familyQuery, 30), 16)
+        .filter((item) => item.id !== modelId);
+    } catch {
+      alternatives = [];
+    }
+  }
+
+  const siblings = Array.isArray(detail?.siblings) ? detail.siblings : [];
+  return json({
+    ok: true,
+    model: {
+      id: modelId,
+      downloads: Number(detail?.downloads || 0),
+      likes: Number(detail?.likes || 0),
+      pipeline_tag: typeof detail?.pipeline_tag === "string" ? detail.pipeline_tag : null,
+      last_modified: detail?.lastModified || detail?.last_modified || null,
+      tags: Array.isArray(detail?.tags) ? detail.tags.map(String).slice(0, 40) : [],
+      files: siblings
+        .map((item) => typeof item?.rfilename === "string" ? item.rfilename : "")
+        .filter(Boolean)
+        .slice(0, 60)
+    },
+    hardware,
+    recommendation,
+    compatibility: modelNodeCompatibility(modelId, detail, hardware),
+    alternatives
+  });
+}
+
+async function architectLmstudioPreflight(request, env, nodeId) {
+  await authenticateArchitect(request, env);
+  await Promise.all([ensureCommandStorage(env), ensureNodeAiStorage(env)]);
+  const node = await env.DB.prepare(
+    "SELECT node_id, hostname, status, agent_version, os_name, architecture, last_seen_at, " +
+    "CASE WHEN last_seen_at IS NOT NULL AND datetime(last_seen_at) >= datetime('now', '-5 minutes') THEN 1 ELSE 0 END AS recently_seen " +
+    "FROM nodes WHERE node_id = ? AND status != 'revoked'"
+  ).bind(nodeId).first();
+  if (!node) throw new ApiError(404, "node_not_found");
+  if (Number(node.recently_seen || 0) !== 1) throw new ApiError(409, "node_offline");
+  if (!agentVersionAtLeast(node.agent_version, "0.3.19")) throw new ApiError(409, "agent_update_required");
+  const pending = await env.DB.prepare(
+    "SELECT command_id, command_type, status FROM commands WHERE node_id = ? AND status IN ('pending','accepted') LIMIT 1"
+  ).bind(nodeId).first();
+  if (pending) throw new ApiError(409, "command_already_pending");
+  // Validate the signing configuration before the user starts an installation.
+  controllerPrivateJwk(env);
+  const asset = lmstudioInstallAssetForNode(node);
+  return json({
+    ok: true,
+    node: {
+      node_id: node.node_id,
+      hostname: node.hostname,
+      agent_version: node.agent_version,
+      os_name: node.os_name,
+      architecture: node.architecture
+    },
+    ai: await nodeAiStateResponse(env, nodeId),
+    asset
+  });
 }
 
 async function architectRecommendModels(request, env, nodeId) {
@@ -5485,6 +5646,12 @@ async function handleApi(request, env, url) {
       : methodNotAllowed(["GET"]);
   }
 
+  if (url.pathname === "/api/v1/architect/models/details") {
+    return request.method === "GET"
+      ? architectModelDetails(request, env, url)
+      : methodNotAllowed(["GET"]);
+  }
+
   if (url.pathname === "/api/v1/architect/work-roles") {
     return request.method === "GET"
       ? architectWorkRoles(request, env)
@@ -5494,15 +5661,23 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/v1/architect/machines") {
     if (request.method !== "GET") return methodNotAllowed(["GET"]);
     await authenticateArchitect(request, env);
+    await ensureNodeAiStorage(env);
     const [nodes, commands] = await Promise.all([
-      env.DB.prepare(`SELECT node_id, hostname, agent_version, cpu_percent, memory_percent,
-        last_seen_at, CASE WHEN status = 'online' AND
-        (last_seen_at IS NULL OR datetime(last_seen_at) < datetime('now', '-2 minutes'))
-        THEN 'offline' ELSE status END AS status
-        FROM nodes WHERE status != 'revoked' ORDER BY node_id LIMIT 500`).all(),
+      env.DB.prepare(`SELECT n.node_id, n.hostname, n.agent_version, n.cpu_percent, n.memory_percent,
+        n.last_seen_at, CASE WHEN n.status = 'online' AND
+        (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-2 minutes'))
+        THEN 'offline' ELSE n.status END AS status,
+        COALESCE(ai.installed, 0) AS ai_installed,
+        COALESCE(ai.server_running, 0) AS ai_server_running,
+        ai.selected_model AS ai_selected_model,
+        ai.loaded_model AS ai_loaded_model,
+        ai.updated_at AS ai_updated_at
+        FROM nodes AS n
+        LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
+        WHERE n.status != 'revoked' ORDER BY n.node_id LIMIT 500`).all(),
       env.DB.prepare(`SELECT command_id, node_id, command_type, status, created_at
         FROM commands WHERE status IN ('pending','accepted')
-        ORDER BY created_at DESC LIMIT 100`).all()
+        ORDER BY created_at DESC LIMIT 500`).all()
     ]);
     return json({ok:true, nodes:nodes.results || [], commands:commands.results || []});
   }
@@ -5616,6 +5791,15 @@ async function handleApi(request, env, url) {
   if (architectAiStateMatch) {
     return request.method === "GET"
       ? architectNodeAiState(request, env, decodeURIComponent(architectAiStateMatch[1]))
+      : methodNotAllowed(["GET"]);
+  }
+
+  const architectLmstudioPreflightMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/nodes\/([^/]+)\/lmstudio-preflight$/
+  );
+  if (architectLmstudioPreflightMatch) {
+    return request.method === "GET"
+      ? architectLmstudioPreflight(request, env, decodeURIComponent(architectLmstudioPreflightMatch[1]))
       : methodNotAllowed(["GET"]);
   }
 
