@@ -321,7 +321,25 @@ def windows_install_update_paths() -> tuple[Path, Path]:
     program_data = os.environ.get("PROGRAMDATA") or os.environ.get("ALLUSERSPROFILE")
     if not program_data:
         raise RuntimeError("install_update_lock_root_unavailable")
-    lifecycle_root = Path(program_data) / "CitadelEWS" / "lifecycle"
+    citadel_root = Path(program_data) / "CitadelEWS"
+    if not citadel_root.is_dir():
+        raise RuntimeError("install_update_lock_root_unavailable")
+    try:
+        root_attrs = getattr(citadel_root.stat(), "st_file_attributes", 0)
+    except OSError as exc:
+        raise RuntimeError("install_update_lock_root_unavailable") from exc
+    if root_attrs & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT
+        raise RuntimeError("install_update_lock_root_unsafe")
+
+    lifecycle_root = citadel_root / "lifecycle"
+    lifecycle_root.mkdir(exist_ok=True)
+    try:
+        lifecycle_attrs = getattr(lifecycle_root.stat(), "st_file_attributes", 0)
+    except OSError as exc:
+        raise RuntimeError("install_update_lock_root_unavailable") from exc
+    if not lifecycle_root.is_dir() or lifecycle_attrs & 0x400:
+        raise RuntimeError("install_update_lock_root_unsafe")
+
     return (
         lifecycle_root / "install-update.lock",
         lifecycle_root / "install-update-active.json",
