@@ -189,6 +189,8 @@ need(index.includes('from "./google_drive_payload_crypto.js"'), "Drive payload c
 need(index.includes("await encryptDrivePayload(env, jsonText)"), "Drive payload encryption before upload missing");
 need(index.includes("await decryptDrivePayload(env, storedText)"), "Drive payload decryption before integrity check missing");
 need(index.includes("googleDrivePayloadReady(env)"), "encrypted Drive readiness probe missing");
+need(index.includes("capabilities(canAddChildren)"), "Drive folder write-capability probe missing");
+need(index.includes("drive_payload_folder_not_writable"), "Drive non-writable folder failure missing");
 need(driveCrypto.includes('"AES-GCM"'), "AES-GCM Drive payload encryption missing");
 need(driveCrypto.includes("GOOGLE_DRIVE_PAYLOAD_ENCRYPTION_KEY"), "Drive payload encryption secret missing");
 need(driveCrypto.includes("GOOGLE_DRIVE_REPORT_ENCRYPTION_KEY"), "legacy Drive encryption secret compatibility missing");
