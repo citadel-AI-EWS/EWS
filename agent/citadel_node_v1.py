@@ -30,6 +30,7 @@ import socket
 import subprocess  # nosec B404
 import sys
 import tempfile
+import threading
 import time
 import urllib.parse
 import uuid
@@ -1342,6 +1343,18 @@ class Agent:
             "completed_at": now_iso(),
         }
 
+    def _keep_assignment_live(self, stop_event: threading.Event) -> None:
+        """Keep node liveness fresh while a long local assignment is executing."""
+        interval = max(5.0, min(float(self.config.heartbeat_seconds), 30.0))
+        while not stop_event.wait(interval):
+            try:
+                self.heartbeat()
+            except Exception as error:
+                self.log.write(
+                    "assignment_heartbeat_failed",
+                    error=str(error)[:300],
+                )
+
     def execute_assignment(self, assignment: dict[str, Any]) -> None:
         node_id = self.require_node_id()
         assignment_id = str(assignment.get("assignment_id") or "")
@@ -1366,6 +1379,14 @@ class Agent:
             f"/api/v1/nodes/{node_id}/assignments/{quoted}/accept",
             {},
         )
+        heartbeat_stop = threading.Event()
+        heartbeat_thread = threading.Thread(
+            target=self._keep_assignment_live,
+            args=(heartbeat_stop,),
+            name="citadel-assignment-heartbeat",
+            daemon=True,
+        )
+        heartbeat_thread.start()
         started = time.monotonic()
         try:
             if is_project_python:
@@ -1399,6 +1420,9 @@ class Agent:
                 "sensitivity": "internal",
                 "report": {"error_type": type(error).__name__, "error_code": local_error_code(error)},
             }
+        finally:
+            heartbeat_stop.set()
+            heartbeat_thread.join(timeout=2.0)
         try:
             self.submit_result(result)
             self.log.write(
