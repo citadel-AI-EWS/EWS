@@ -5061,7 +5061,7 @@ function modelCompatibilityForHardware(modelId, hardware) {
 }
 
 async function fetchHuggingFaceModelDetails(modelId) {
-  const url = "https://huggingface.co/api/models/" + encodeURIComponent(modelId);
+  const url = "https://huggingface.co/api/models/" + modelId.split("/").map(encodeURIComponent).join("/");
   let response;
   try {
     response = await fetch(url, { headers: { "accept": "application/json", "user-agent": "CITADEL-EWS/1.0" } });
