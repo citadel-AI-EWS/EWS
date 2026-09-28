@@ -39,9 +39,95 @@ function gpuText(gpus){return Array.isArray(gpus)&&gpus.length?gpus.map(g=>g.nam
 function renderModelOptions(models){const list=$('modelOptions');list.replaceChildren();for(const m of models||[]){const o=document.createElement('option');o.value=m.id;o.label=(m.gguf?'GGUF · ':'')+(m.downloads||0)+' downloads';list.appendChild(o)}}
 function requireNode(){if(!currentNode)throw Error('Нода не выбрана.');return currentNode}
 function commandBody(type,extra={}){const body={command_type:type,...extra};if(type==='system_reboot')body.confirmation='REBOOT';if(type==='system_shutdown')body.confirmation='SHUTDOWN';if(type==='lmstudio_uninstall')body.confirmation='REMOVE_LMSTUDIO';return body}
-async function sendCommand(node,type,extra={}){return api('/nodes/'+encodeURIComponent(node.node_id)+'/commands',{method:'POST',body:JSON.stringify(commandBody(type,extra))})}async function command(node,type,extra={}){const name=commandNames[type]||type;const destructive=['uninstall','system_reboot','system_shutdown','lmstudio_uninstall','stop','rollback'].includes(type);if(!confirm((destructive?'ВНИМАНИЕ. ':'')+name+': '+(node.hostname||node.node_id)+'?'))return;try{await sendCommand(node,type,extra);tell('Команда «'+name+'» принята. Ожидается подтверждение агента.');await refresh();if($('nodeDialog').open&&currentNode?.node_id===node.node_id)setTimeout(()=>loadNodeDetails(node),500)}catch(e){tell(e.message,true);$('nodeDetailState').textContent=e.message;$('nodeDetailState').className='status error'}}async function bulkCommand(type){const isUpdate=type==='update',nodes=(lastMachineData.nodes||[]).filter(n=>['online','paused'].includes(n.status)&&(isUpdate?n.update_required===true:true));if(!nodes.length)return tell(isUpdate?'Все доступные ноды уже актуальны или сейчас не на связи.':'Нет доступных нод для отката.',false);const title=isUpdate?'автообновление':'ОТКАТ',question=(isUpdate?'Запустить автообновление ':'ВНИМАНИЕ. Откатить ')+nodes.length+' нод одновременно?';if(!confirm(question))return;const buttonId=isUpdate?'updateAll':'rollbackAll';await withButton(buttonId,async()=>{let ok=0;const failures=[];for(const n of nodes){try{await sendCommand(n,type);ok++}catch(e){failures.push((n.hostname||n.node_id)+': '+e.message)}}tell((isUpdate?'Автообновление':'Откат')+' отправлено: '+ok+' из '+nodes.length+(failures.length?' · Ошибки: '+failures.join(' | '):''),failures.length>0);setTimeout(refresh,700)})}
+async function sendCommand(node,type,extra={}){return api('/nodes/'+encodeURIComponent(node.node_id)+'/commands',{method:'POST',body:JSON.stringify(commandBody(type,extra))})}async function command(node,type,extra={}){const name=commandNames[type]||type;const destructive=['uninstall','system_reboot','system_shutdown','lmstudio_uninstall','stop','rollback'].includes(type);if(!confirm((destructive?'ВНИМАНИЕ. ':'')+name+': '+(node.hostname||node.node_id)+'?'))return;try{await sendCommand(node,type,extra);tell('Команда «'+name+'» принята. Ожидается подтверждение агента.');await refresh();if($('nodeDialog').open&&currentNode?.node_id===node.node_id)setTimeout(()=>loadNodeDetails(node),500)}catch(e){tell(e.message,true);$('nodeDetailState').textContent=e.message;$('nodeDetailState').className='status error'}}function renderFleetProgress(){
+  const box=$('fleetProgress');
+  if(!fleetAction){box.hidden=true;box.replaceChildren();return}
+  box.hidden=false;box.replaceChildren();
+  const head=el('strong');
+  if(fleetAction.phase!=='done')head.append(el('span',undefined,'spin'));
+  head.append(el('span',(fleetAction.phase==='done'?'✓ ':'')+fleetAction.label+(fleetAction.phase==='done'?'':'…')));
+  box.append(head);
+  const bar=el('progress');bar.max=Math.max(1,fleetAction.total);bar.value=Math.min(fleetAction.total,fleetAction.completed);box.append(bar);
+  const status='Обработано '+fleetAction.completed+' из '+fleetAction.total+' · принято '+fleetAction.accepted+(fleetAction.failed?' · ошибок '+fleetAction.failed:'');
+  box.append(el('small',status));
+}
+async function runFleetCommands(label,type,nodes,buttonId){
+  if(!nodes.length){tell('Нет подходящих нод для этой операции.',true);return}
+  fleetAction={label,total:nodes.length,completed:0,accepted:0,failed:0,phase:'dispatching'};
+  renderFleetProgress();pageBusy(true);
+  const failures=[];
+  try{
+    for(const n of nodes){
+      try{await sendCommand(n,type);fleetAction.accepted++}
+      catch(e){fleetAction.failed++;failures.push((n.hostname||n.node_id)+': '+e.message)}
+      finally{fleetAction.completed++;renderFleetProgress()}
+    }
+    fleetAction.phase='done';renderFleetProgress();
+    tell(label+': команды отправлены '+fleetAction.accepted+' из '+fleetAction.total+(failures.length?' · '+failures.join(' | '):''),failures.length>0);
+    setTimeout(refresh,500);
+  }finally{pageBusy(false)}
+}
+async function bulkCommand(type){
+  const isUpdate=type==='update';
+  const nodes=(lastMachineData.nodes||[]).filter(n=>['online','paused'].includes(n.status)&&(isUpdate?n.update_required===true:true));
+  if(!nodes.length)return tell(isUpdate?'Все доступные ноды уже актуальны или сейчас не на связи.':'Нет доступных нод для отката.',false);
+  const label=isUpdate?'Автообновление всех нод':'Откат всех нод';
+  if(!confirm((isUpdate?'Запустить автообновление ':'ВНИМАНИЕ. Откатить ')+nodes.length+' нод?'))return;
+  await withButton(isUpdate?'updateAll':'rollbackAll',()=>runFleetCommands(label,type,nodes,isUpdate?'updateAll':'rollbackAll'));
+}
+function selectedLmInstallNodes(){
+  return (lastMachineData.nodes||[]).filter(n=>selectedNodeIds.has(n.node_id)&&['online','paused'].includes(n.status)&&Number(n.lmstudio_installed||0)!==1);
+}
+async function installLmSelected(){
+  const nodes=selectedLmInstallNodes();
+  if(!nodes.length)return tell('Выберите хотя бы одну ноду на связи без LM Studio.',true);
+  if(!confirm('Установить LM Studio на выбранные ноды: '+nodes.length+'?'))return;
+  await withButton('installLmSelected',()=>runFleetCommands('Установка LM Studio на выбранные ноды','lmstudio_install',nodes,'installLmSelected'));
+}
+function selectEligibleLmNodes(){
+  const eligible=(lastMachineData.nodes||[]).filter(n=>['online','paused'].includes(n.status)&&Number(n.lmstudio_installed||0)!==1);
+  const allSelected=eligible.length>0&&eligible.every(n=>selectedNodeIds.has(n.node_id));
+  for(const n of eligible){if(allSelected)selectedNodeIds.delete(n.node_id);else selectedNodeIds.add(n.node_id)}
+  renderNodes(lastMachineData);
+}
 async function wake(node){if(!confirm('Разбудить '+(node.hostname||node.node_id)+' через доступную ноду в той же LAN?'))return;try{await api('/nodes/'+encodeURIComponent(node.node_id)+'/wake',{method:'POST',body:'{}'});tell('Wake-команда поставлена в очередь.');setTimeout(refresh,500)}catch(e){tell(e.message,true);$('nodeDetailState').textContent=e.message;$('nodeDetailState').className='status error'}}
-function renderNodes(data){const nodes=data.nodes||[],root=$('nodes');root.replaceChildren();root.style.setProperty('--node-cols',String(nodes.length<=1?1:nodes.length===2?2:nodes.length===3?3:nodes.length===4?4:5));root.classList.toggle('dense',nodes.length>=5);const online=nodes.filter(n=>n.status==='online').length,paused=nodes.filter(n=>n.status==='paused').length,outdated=nodes.filter(n=>n.update_required).length;$('nodeSummary').textContent='Всего '+nodes.length+' · на связи '+online+(paused?' · пауза '+paused:'')+(outdated?' · обновить '+outdated:' · все версии актуальны');for(const n of nodes){const c=el('article',undefined,'card node-card');c.dataset.status=n.status||'unknown';const head=el('div',undefined,'node-head'),avatar=el('div','🖥️','node-avatar'),title=el('h2',n.hostname||n.node_id);avatar.setAttribute('aria-hidden','true');head.append(avatar,title);c.append(head,state(n.status),el('p','Агент '+(n.agent_version||'—')));const pill=el('span',n.update_required?'↑ Доступна '+(n.latest_agent_version||'новая версия'):'✓ Агент актуален','update-pill '+(n.update_required?'outdated':'current'));c.append(pill);const m=el('div',undefined,'machine-meta');m.append(metric('CPU',Number.isFinite(Number(n.cpu_percent))?Number(n.cpu_percent).toFixed(0)+'%':'—'),metric('RAM',Number.isFinite(Number(n.memory_percent))?Number(n.memory_percent).toFixed(0)+'%':'—'));c.append(m,el('small','Последний ответ: '+(n.last_seen_at||'не получен')));const commands=(data.commands||[]).filter(x=>x.node_id===n.node_id);const current=commands[0];if(current){const active=['pending','accepted'].includes(current.status);if(active){const live=el('div',undefined,'command-live'),labelEl=el('strong');labelEl.append(el('span',undefined,'spin'),el('span','Идёт: '+(commandNames[current.command_type]||current.command_type),'dots'));live.append(labelEl);c.append(live)}else c.append(el('p','Команда: '+(commandNames[current.command_type]||current.command_type)),state(current.status))}const row=el('div',undefined,'row');row.append(button('Подробнее',()=>openNode(n),'primary'));row.append(button('Пауза',()=>command(n,'pause'),'btn-pause'));row.append(button('Продолжить',()=>command(n,'resume'),'btn-resume'));row.append(button('Обновить',()=>command(n,'update'),'btn-update'));if(n.status==='offline')row.append(button('Разбудить',()=>wake(n),'btn-info'));c.append(row);root.append(c)}if(!nodes.length)root.append(el('p','Зарегистрированных машин нет.'))}
+function renderNodes(data){
+  const nodes=data.nodes||[],root=$('nodes');root.replaceChildren();
+  root.style.setProperty('--node-cols',String(nodes.length<=1?1:nodes.length===2?2:nodes.length===3?3:nodes.length===4?4:5));
+  root.classList.toggle('dense',nodes.length>=5);
+  const online=nodes.filter(n=>n.status==='online').length,paused=nodes.filter(n=>n.status==='paused').length,outdated=nodes.filter(n=>n.update_required).length,aiCount=nodes.filter(n=>Number(n.lmstudio_installed||0)===1).length;
+  $('nodeSummary').textContent='Всего '+nodes.length+' · на связи '+online+(paused?' · пауза '+paused:'')+' · AI '+aiCount+(outdated?' · обновить '+outdated:' · все версии актуальны');
+  for(const n of nodes){
+    const card=el('article',undefined,'card node-card');card.dataset.status=n.status||'unknown';
+    const head=el('div',undefined,'node-head');
+    const eligibleLm=['online','paused'].includes(n.status)&&Number(n.lmstudio_installed||0)!==1;
+    const selectWrap=el('label',undefined,'node-select'),check=document.createElement('input');check.type='checkbox';check.checked=selectedNodeIds.has(n.node_id);check.disabled=!eligibleLm;check.title=eligibleLm?'Выбрать для установки LM Studio':'LM Studio уже установлен или нода не на связи';check.onchange=()=>{if(check.checked)selectedNodeIds.add(n.node_id);else selectedNodeIds.delete(n.node_id)};selectWrap.append(check);
+    const avatar=el('div','🖥️','node-avatar');avatar.setAttribute('aria-hidden','true');
+    const title=el('h2',n.hostname||n.node_id);
+    head.append(selectWrap,avatar,title);
+    if(Number(n.lmstudio_installed||0)===1){
+      const ready=Number(n.lmstudio_server_running||0)===1&&Boolean(n.lmstudio_loaded_model);
+      const badge=el('span',undefined,'ai-badge '+(ready?'ready':''));
+      badge.append(el('span','✦','spark'),el('span',ready?'AI · READY':'AI · LM Studio'));
+      head.append(badge);
+    }
+    card.append(head,state(n.status),el('p','Агент '+(n.agent_version||'—')));
+    const pill=el('span',n.update_required?'↑ Доступна '+(n.latest_agent_version||'новая версия'):'✓ Агент актуален','update-pill '+(n.update_required?'outdated':'current'));card.append(pill);
+    const metrics=el('div',undefined,'machine-meta');metrics.append(metric('CPU',Number.isFinite(Number(n.cpu_percent))?Number(n.cpu_percent).toFixed(0)+'%':'—'),metric('RAM',Number.isFinite(Number(n.memory_percent))?Number(n.memory_percent).toFixed(0)+'%':'—'));card.append(metrics,el('small','Последний ответ: '+(n.last_seen_at||'не получен')));
+    const commands=(data.commands||[]).filter(x=>x.node_id===n.node_id),current=commands[0];
+    if(current){
+      const active=['pending','accepted'].includes(current.status);
+      if(active){const live=el('div',undefined,'command-live'),labelEl=el('strong');labelEl.append(el('span',undefined,'spin'),el('span','Идёт: '+(commandNames[current.command_type]||current.command_type),'dots'));live.append(labelEl);card.append(live)}
+      else card.append(el('p','Команда: '+(commandNames[current.command_type]||current.command_type)),state(current.status));
+    }
+    const row=el('div',undefined,'row');row.append(button('Подробнее',()=>openNode(n),'primary'),button('Пауза',()=>command(n,'pause'),'btn-pause'),button('Продолжить',()=>command(n,'resume'),'btn-resume'));
+    if(n.update_required)row.append(button('Обновить',()=>command(n,'update'),'btn-update'));
+    if(n.status==='offline')row.append(button('Разбудить',()=>wake(n),'btn-info'));
+    card.append(row);root.append(card);
+  }
+  if(!nodes.length)root.append(el('p','Зарегистрированных машин нет.'));
+  renderFleetProgress();
+}
 function renderDetailGrid(target,items){target.replaceChildren();for(const [k,v] of items)target.append(metric(k,v??'—'))}
 function renderNodeDetails(d){const n=d.node||{},net=d.network||{},ai=d.ai||{},hw=d.hardware||{},rec=d.model_recommendation||{};currentNode={...currentNode,...n};$('nodeTitle').textContent=n.hostname||n.node_id||'Нода';renderDetailGrid($('nodeDetailSummary'),[['Статус',label(n.status)],['Система',[n.os_name,n.os_version].filter(Boolean).join(' ')||'—'],['Архитектура',n.architecture||'—'],['Агент',n.agent_version||'—'],['Доступная версия',n.latest_agent_version||'—'],['Обновление',n.update_required?'Требуется':'Версия совпадает'],['Мини-агенты Python',(n.capabilities||[]).includes('project_python')?'Модуль доступен':'Не сообщён'],['Мини-агенты AI',(n.capabilities||[]).includes('project_text')?'Модуль доступен':'Не сообщён'],['CPU',n.cpu_percent==null?'—':n.cpu_percent+'%'],['RAM занято',n.memory_percent==null?'—':n.memory_percent+'%'],['Последний ответ',n.last_seen_at||'—']]);renderDetailGrid($('nodeNetwork'),[['LAN IP',net.lan_ipv4||'—'],['MAC',(net.mac_addresses||[]).join(', ')||'—'],['Сеть обновлена',net.updated_at||'—']]);renderDetailGrid($('nodeHardware'),[['RAM всего',gib(hw.memory_total_bytes)],['CPU потоков',hw.cpu_logical_count||'—'],['GPU / VRAM',gpuText(hw.gpus)],['Профиль обновлён',hw.updated_at||'—']]);$('modelRecommendation').textContent=rec.tier?'Рекомендация Архитектора: '+rec.target_parameters_b+' · '+rec.quantization+' · контекст '+rec.context_length+' · '+rec.reason:'Архитектор ждёт профиль железа от агента.';$('lmControlHint').textContent=lmOperationStartedAt?'LM Studio: выполняется операция…':Number(ai.installed)===1?'LM Studio установлен — доступны обновление, проверка и удаление.':'LM Studio не установлен — доступна установка и проверка.';renderDetailGrid($('nodeAi'),[['LM Studio',Number(ai.installed)===1?'✓ Установлен':'× Не установлен'],['Сервер модели',Number(ai.server_running)===1?'✓ Работает':'◷ Не запущен'],['Выбрана модель',ai.selected_model?'✓ '+ai.selected_model:'— Не выбрана'],['Загружена модель',ai.loaded_model?'✓ '+ai.loaded_model:'— Не загружена'],['Последнее действие',ai.last_action||'—'],['AI обновлено',ai.updated_at||ai.runtime_updated_at||'—']]);if(rec.quantization&&!$('modelQuant').value)$('modelQuant').value=rec.quantization;if(ai.selected_model&&!$('modelId').value)$('modelId').value=ai.selected_model;const lmInstalled=Number(ai.installed)===1,lmPhase=String(ai.progress_phase||''),lmBusy=Boolean(lmOperationStartedAt)||(!['','complete','failed'].includes(lmPhase)&&/download|install|running|loading|helper|runtime|daemon|upstream/.test(lmPhase));$('lmInstall').hidden=lmInstalled||lmBusy;$('lmUpdate').hidden=!lmInstalled||lmBusy;$('lmRemove').hidden=!lmInstalled||lmBusy;$('lmProbe').hidden=lmBusy;$('lmInstall').disabled=lmBusy;$('lmUpdate').disabled=lmBusy;$('lmRemove').disabled=lmBusy;$('lmProbe').disabled=lmBusy;$('modelGet').hidden=!lmInstalled;$('modelLoad').hidden=!lmInstalled;$('detailWake').disabled=n.status!=='offline';$('detailPause').disabled=n.status==='paused'||n.status==='offline';$('detailResume').disabled=n.status!=='paused';renderAiProgress(ai);$('nodeDetailState').textContent='Сведения загружены только для этой ноды. Фоновое чтение подробностей не выполняется.';$('nodeDetailState').className='status'}async function loadNodeDetails(node,quiet=false){currentNode=node;const seq=++detailSequence,epoch=generation;if(!quiet){$('nodeDetailState').replaceChildren(el('span',undefined,'spin'),el('span','Загружаю состояние ноды…'));$('nodeDetailState').className='status'}try{const d=await api('/nodes/'+encodeURIComponent(node.node_id)+'/details');if(seq===detailSequence&&epoch===generation&&currentNode?.node_id===node.node_id)renderNodeDetails(d)}catch(e){if(seq===detailSequence&&epoch===generation&&!quiet){$('nodeDetailState').textContent='Подробности не получены: '+e.message;$('nodeDetailState').className='status error'}}}
 function clearDetailProgressWatch(){if(detailPollTimer){clearInterval(detailPollTimer);detailPollTimer=null}}
