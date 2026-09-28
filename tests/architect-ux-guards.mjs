@@ -613,3 +613,9 @@ assert.ok(operations.includes("автоматически закрываются
 assert.ok(operations.includes("Promise.allSettled([api('/machines'"), "partial refresh must use allSettled");
 assert.ok(operations.includes("Часть данных не обновлена"), "partial refresh warning missing");
 assert.ok(operations.includes("refreshErrorText"), "refresh error mapper missing");
+
+assert.ok(operations.includes("lmInstall').hidden=lmInstalled||lmBusy"), "LM Studio install control must hide after install");
+assert.ok(operations.includes("lmUpdate').hidden=!lmInstalled||lmBusy"), "LM Studio update control must require install");
+assert.ok(operations.includes("lmRemove').hidden=!lmInstalled||lmBusy"), "LM Studio remove control must require install");
+assert.ok(operations.includes("modelGet').hidden=!lmInstalled"), "model actions must hide until LM Studio is installed");
+assert.ok(operations.includes("LM Studio установлен — доступны обновление"), "dynamic LM Studio hint missing");
