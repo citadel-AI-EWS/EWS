@@ -4112,27 +4112,39 @@ async function architectCreateSession(request, env) {
 
   const sessionId = `session_${crypto.randomUUID()}`;
   const snapshotSha256 = await sha256Hex(snapshotJson);
-  await env.DB.batch([
-    env.DB.prepare(`
-      INSERT INTO architect_sessions (
-        session_id, name, schema_version, snapshot_json, snapshot_sha256,
-        snapshot_size_bytes, status, created_at, updated_at
-      ) VALUES (?, ?, 1, ?, ?, ?, 'active', ?, ?)
-    `).bind(
-      sessionId,
-      name,
-      snapshotJson,
-      snapshotSha256,
-      snapshotSizeBytes,
-      savedAt,
-      savedAt
-    ),
+  const snapshotPayload = await persistDrivePayload(env, {
+    owner_type: "session",
+    owner_id: sessionId,
+    kind: "session_snapshot",
+    value: snapshot
+  });
+  const snapshotPointer = drivePointer(snapshotPayload.payload_id);
+  try {
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO architect_sessions (
+          session_id, name, schema_version, snapshot_json, snapshot_sha256,
+          snapshot_size_bytes, status, created_at, updated_at
+        ) VALUES (?, ?, 1, ?, ?, ?, 'active', ?, ?)
+      `).bind(
+        sessionId,
+        name,
+        snapshotPointer,
+        snapshotSha256,
+        snapshotSizeBytes,
+        savedAt,
+        savedAt
+      ),
     env.DB.prepare(`
       INSERT INTO audit_events (
         actor_type, actor_id, action, target_type, target_id, details_json
       ) VALUES ('architect', 'test-console', 'session.created', 'session', ?, ?)
-    `).bind(sessionId, JSON.stringify({ name, schema_version: 1 }))
-  ]);
+      `).bind(sessionId, JSON.stringify({ name, schema_version: 1 }))
+    ]);
+  } catch (error) {
+    await deletePayloadBestEffort(env, snapshotPayload.payload_id);
+    throw error;
+  }
 
   return json({
     ok: true,
@@ -4161,11 +4173,20 @@ async function architectGetSession(request, env, sessionId) {
   if (!session) {
     throw new ApiError(404, "session_not_found");
   }
+  const snapshot = await resolveDriveJson(env, session.snapshot_json);
+  if (drivePointerId(session.snapshot_json)) {
+    const serialized = JSON.stringify(snapshot);
+    const sizeBytes = new TextEncoder().encode(serialized).byteLength;
+    if (sizeBytes !== Number(session.snapshot_size_bytes) || (await sha256Hex(serialized)) !== session.snapshot_sha256) {
+      throw new ApiError(502, "drive_session_integrity_mismatch");
+    }
+  }
   return json({
     ok: true,
     session: {
       ...session,
-      snapshot: safeJson(session.snapshot_json, null),
+      storage: drivePointerId(session.snapshot_json) ? "google_drive" : "legacy_d1",
+      snapshot,
       snapshot_json: undefined
     }
   });
@@ -4212,7 +4233,7 @@ async function architectDeleteSession(request, env, sessionId) {
   await authenticateArchitect(request, env);
   await ensureSessionStorage(env);
   const existing = await env.DB.prepare(
-    "SELECT session_id, name FROM architect_sessions WHERE session_id = ?"
+    "SELECT session_id, name, snapshot_json FROM architect_sessions WHERE session_id = ?"
   ).bind(sessionId).first();
   if (!existing) {
     throw new ApiError(404, "session_not_found");
@@ -4227,6 +4248,8 @@ async function architectDeleteSession(request, env, sessionId) {
       ) VALUES ('architect', 'test-console', 'session.deleted', 'session', ?, ?)
     `).bind(sessionId, JSON.stringify({ name: existing.name }))
   ]);
+  const snapshotPayloadId = drivePointerId(existing.snapshot_json);
+  if (snapshotPayloadId) await deletePayloadBestEffort(env, snapshotPayloadId);
   return json({ ok: true, deleted_session_id: sessionId });
 }
 
