@@ -1755,6 +1755,10 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
     env.DB.prepare(`
       SELECT w.work_item_id, w.project_id, w.sequence_no, w.role_name, w.task_text,
         w.node_id AS preferred_node_id, p.title AS project_title, p.source_type, p.checks_json,
+        EXISTS (
+          SELECT 1 FROM interactive_messages AS im
+          WHERE im.response_work_item_id = w.work_item_id
+        ) AS interactive_followup,
         (SELECT COUNT(*) FROM project_work_items AS owned
           WHERE owned.project_id = w.project_id AND owned.node_id = ?) AS node_project_work_count
       FROM project_work_items AS w
@@ -1784,6 +1788,9 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
   let created = 0;
   const eligible = (planned.results || []).filter((work) => {
     if (!projectNodeReady(node, work.source_type)) return false;
+    if (Number(work.interactive_followup || 0) === 1) {
+      return Boolean(work.preferred_node_id) && work.preferred_node_id === nodeId;
+    }
     const scheduling = schedulingFromChecks(work.checks_json);
     if (scheduling.target_mode !== "auto" && scheduling.desired_workers) {
       const readyDistinct = [...readyNodes.values()].filter((candidate) => projectNodeReady(candidate, work.source_type)).length;
@@ -1793,8 +1800,9 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
     const preferred = work.preferred_node_id ? readyNodes.get(work.preferred_node_id) : null;
     return !work.preferred_node_id || work.preferred_node_id === nodeId || !projectNodeReady(preferred, work.source_type);
   });
-  const targeted = eligible.find((work) => schedulingFromChecks(work.checks_json).target_mode !== "auto");
-  const candidates = targeted ? [targeted] : eligible.slice(0, 2);
+  const interactive = eligible.find((work) => Number(work.interactive_followup || 0) === 1);
+  const targeted = eligible.find((work) => Number(work.interactive_followup || 0) !== 1 && schedulingFromChecks(work.checks_json).target_mode !== "auto");
+  const candidates = interactive ? [interactive] : targeted ? [targeted] : eligible.slice(0, 2);
 
   for (const work of candidates) {
     const missionId = projectMissionId(work.work_item_id);
