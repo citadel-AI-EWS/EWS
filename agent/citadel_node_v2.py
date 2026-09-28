@@ -65,6 +65,7 @@ ALLOWED_EVENTS = {
     "windows_sleep_hibernate_inhibit",
     "hybrid_query_completed",
     "lmstudio_state_report_failed",
+    "lmstudio_heartbeat_probe_failed",
     "python_mode_calculation_fallback",
     "lmstudio_model_key_resolution_fallback",
     "command_failure_ack_failed",
