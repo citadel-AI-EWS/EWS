@@ -157,6 +157,7 @@ class Statement {
 const env = {
   ARCHITECT_TOKEN_HASH: architectHash,
   GOOGLE_DRIVE_ACCESS_TOKEN: "test-drive-token",
+  GOOGLE_DRIVE_PAYLOAD_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   DB: {
     prepare(sql) {
       return new Statement(sql);
@@ -197,6 +198,10 @@ assert.match(created.snapshot_sha256, /^[a-f0-9]{64}$/);
 
 const stored = sessions.get(created.session_id);
 assert.match(stored.snapshot_json, /^@drive:payload_/);
+assert.equal(drive.size, 1);
+const encryptedDriveSession = [...drive.values()][0];
+assert.match(encryptedDriveSession, /"algorithm":"A256GCM"/);
+assert.equal(encryptedDriveSession.includes("selected_report_id"), false);
 
 const listResponse = await request("/api/v1/architect/sessions?limit=10");
 assert.equal(listResponse.status, 200);
