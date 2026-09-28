@@ -45,8 +45,22 @@ namespace CitadelEws
         {
             var dataRoot = Path.Combine(citadelRoot, "state");
             var statePath = Path.Combine(dataRoot, "release-state.json");
-            if (!File.Exists(statePath))
+
+            FileAttributes stateAttributes;
+            if (!TryGetExistingAttributes(statePath, out stateAttributes))
                 return CreateLegacy(legacyRoot, citadelRoot, dataRoot);
+
+            if ((stateAttributes & FileAttributes.Directory) != 0)
+                throw new InvalidDataException("release-state.json is not a regular file.");
+            if ((stateAttributes & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException("release-state.json must not be a reparse point.");
+
+            var programDataRoot = Directory.GetParent(citadelRoot);
+            if (programDataRoot == null ||
+                HasReparsePoint(programDataRoot.FullName) ||
+                HasReparsePoint(citadelRoot) ||
+                HasReparsePoint(dataRoot))
+                throw new InvalidDataException("Version-selection metadata ancestry contains a reparse point.");
 
             var json = File.ReadAllText(statePath);
             if (ReadRequiredJsonInt(json, "schema") != 1)
@@ -167,11 +181,26 @@ namespace CitadelEws
                 HasReparsePoint(agentPath))
                 return false;
 
-            var okJson = File.ReadAllText(okPath);
-            if (!String.Equals(ReadRequiredJsonString(okJson, "release_id"), releaseId, StringComparison.Ordinal))
+            try
+            {
+                var okJson = File.ReadAllText(okPath);
+                if (!String.Equals(ReadRequiredJsonString(okJson, "release_id"), releaseId, StringComparison.Ordinal))
+                    return false;
+                if (!String.Equals(ReadRequiredJsonString(okJson, "descriptor_sha256"), descriptorSha256, StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+            catch (IOException)
+            {
                 return false;
-            if (!String.Equals(ReadRequiredJsonString(okJson, "descriptor_sha256"), descriptorSha256, StringComparison.OrdinalIgnoreCase))
+            }
+            catch (UnauthorizedAccessException)
+            {
                 return false;
+            }
+            catch (InvalidDataException)
+            {
+                return false;
+            }
 
             var citadelRoot = Directory.GetParent(releasesRoot).FullName;
             paths = CreateForAppRoot(
@@ -242,6 +271,25 @@ namespace CitadelEws
             PreviousFallbackUsed = fresh.PreviousFallbackUsed;
         }
 
+        private static bool TryGetExistingAttributes(string path, out FileAttributes attributes)
+        {
+            try
+            {
+                attributes = File.GetAttributes(path);
+                return true;
+            }
+            catch (FileNotFoundException)
+            {
+                attributes = 0;
+                return false;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                attributes = 0;
+                return false;
+            }
+        }
+
         private static bool HasReparsePoint(string path)
         {
             try
@@ -268,8 +316,12 @@ namespace CitadelEws
             while (index < json.Length && Char.IsDigit(json[index])) index++;
             if (index == start || (index == start + 1 && json[start] == '-'))
                 throw new InvalidDataException("Invalid JSON integer field: " + key);
+            var numberEnd = index;
+            while (index < json.Length && Char.IsWhiteSpace(json[index])) index++;
+            if (index >= json.Length || (json[index] != ',' && json[index] != '}'))
+                throw new InvalidDataException("Invalid JSON integer token boundary: " + key);
             int value;
-            if (!Int32.TryParse(json.Substring(start, index - start), out value))
+            if (!Int32.TryParse(json.Substring(start, numberEnd - start), out value))
                 throw new InvalidDataException("Invalid JSON integer field: " + key);
             return value;
         }
@@ -277,6 +329,8 @@ namespace CitadelEws
         private static bool IsSafeReleaseId(string value)
         {
             if (String.IsNullOrWhiteSpace(value) || value.Length > 160)
+                return false;
+            if (!Char.IsLetterOrDigit(value[0]) || !Char.IsLetterOrDigit(value[value.Length - 1]))
                 return false;
             for (var i = 0; i < value.Length; i++)
             {
