@@ -604,3 +604,8 @@ assert.match(operations, /startDetailProgressWatch/);
 assert.match(operations, /waiting_agent/);
 assert.match(operations, /active\?5000:60000/);
 assert.match(operations, /Официальный установщик LM Studio сейчас работает/);
+
+assert.ok(index.includes("async function expireStalePlannedProjects"), "stale planned project sweeper missing");
+assert.ok(index.includes("datetime(p.updated_at) <= datetime('now', '-24 hours')"), "stale planned project TTL missing");
+assert.ok(index.includes("w2.status IN ('assigned','running','completed','failed')"), "stale sweeper must preserve started work");
+assert.ok(operations.includes("автоматически закрываются через 24 часа"), "stale project retention copy missing");
