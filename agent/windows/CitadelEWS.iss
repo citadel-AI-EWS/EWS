@@ -221,15 +221,17 @@ end;
 
 function IsCitadelAgentPython(ProcessObj: Variant): Boolean;
 var
-  ExePath, ExeLower, CommandLine, RuntimePython, RuntimePythonW, ReleasesPrefix: string;
+  ExePath, ExeLower, CommandLine, RuntimePython, RuntimePythonW,
+  ReleasesPrefix, AppPrefix: string;
 begin
   Result := False;
   ExePath := '';
   CommandLine := '';
+
   try
     ExePath := ProcessObj.ExecutablePath;
   except
-    exit;
+    ExePath := '';
   end;
   try
     CommandLine := ProcessObj.CommandLine;
@@ -238,14 +240,24 @@ begin
     CommandLine := '';
   end;
 
+  if not ((Pos('citadel_node_v1.py', CommandLine) > 0) or
+          (Pos('citadel_node_v2.py', CommandLine) > 0)) then
+    exit;
+
   ExeLower := Lowercase(ExePath);
   RuntimePython := Lowercase(ExpandConstant('{app}\runtime\python.exe'));
   RuntimePythonW := Lowercase(ExpandConstant('{app}\runtime\pythonw.exe'));
   ReleasesPrefix := Lowercase(ExpandConstant('{app}\releases\'));
+  AppPrefix := Lowercase(ExpandConstant('{app}\'));
 
-  if not ((Pos('citadel_node_v1.py', CommandLine) > 0) or
-          (Pos('citadel_node_v2.py', CommandLine) > 0)) then
+  { CommandLine under the machine install root is authoritative when WMI does
+    not expose ExecutablePath. This also covers py.exe/python3.exe/renamed
+    interpreters that are executing the CITADEL entrypoint from this install. }
+  if Pos(AppPrefix, CommandLine) > 0 then
+  begin
+    Result := True;
     exit;
+  end;
 
   if (CompareText(ExeLower, RuntimePython) = 0) or
      (CompareText(ExeLower, RuntimePythonW) = 0) then
@@ -254,7 +266,6 @@ begin
     exit;
   end;
 
-  { setup_windows.ps1 releases use releases\<id>\.venv\Scripts\python.exe. }
   if (Pos(ReleasesPrefix, ExeLower) = 1) and
      (Pos('\.venv\scripts\python', ExeLower) > 0) then
     Result := True;
@@ -291,8 +302,7 @@ begin
     Locator := CreateOleObject('WbemScripting.SWbemLocator');
     Services := Locator.ConnectServer('.', 'root\cimv2');
     Processes := Services.ExecQuery(
-      'SELECT ExecutablePath,CommandLine FROM Win32_Process ' +
-      'WHERE Name="CitadelNodeService.exe" OR Name="python.exe" OR Name="pythonw.exe"'
+      'SELECT ExecutablePath,CommandLine FROM Win32_Process'
     );
     for I := 0 to Processes.Count - 1 do
     begin
@@ -317,8 +327,7 @@ begin
     Locator := CreateOleObject('WbemScripting.SWbemLocator');
     Services := Locator.ConnectServer('.', 'root\cimv2');
     Processes := Services.ExecQuery(
-      'SELECT ProcessId,ExecutablePath,CommandLine FROM Win32_Process ' +
-      'WHERE Name="python.exe" OR Name="pythonw.exe"'
+      'SELECT ProcessId,ExecutablePath,CommandLine FROM Win32_Process'
     );
     for I := 0 to Processes.Count - 1 do
     begin
