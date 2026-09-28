@@ -3412,6 +3412,17 @@ async function submitResult(request, env, nodeId, url) {
 
   const isProjectAssignment = assignmentId.startsWith("assignment_work_");
   if (isProjectAssignment) await ensureProjectStorage(env);
+  const workItemId = isProjectAssignment ? assignmentId.slice("assignment_".length) : null;
+  const interactiveLink = workItemId
+    ? await env.DB.prepare(`
+        SELECT im.thread_id, t.message_count
+        FROM interactive_messages AS im
+        JOIN interactive_threads AS t ON t.thread_id = im.thread_id
+        WHERE im.response_work_item_id = ? AND im.actor = 'user'
+        ORDER BY im.sequence_no DESC
+        LIMIT 1
+      `).bind(workItemId).first()
+    : null;
 
   const resultStatements = [
     env.DB.prepare(`
@@ -3502,6 +3513,28 @@ async function submitResult(request, env, nodeId, url) {
         )
           AND EXISTS (SELECT 1 FROM results WHERE result_id = ?)
       `).bind(assignmentId, resultId)
+    );
+  }
+
+  if (interactiveLink?.thread_id) {
+    const agentSequence = Number(interactiveLink.message_count || 0) + 1;
+    resultStatements.push(
+      env.DB.prepare(`
+        INSERT INTO interactive_messages (
+          message_id, thread_id, sequence_no, actor, payload_id
+        ) VALUES (?, ?, ?, 'agent', ?)
+      `).bind(
+        "message_" + crypto.randomUUID(),
+        interactiveLink.thread_id,
+        agentSequence,
+        reportPayload.payload_id
+      ),
+      env.DB.prepare(`
+        UPDATE interactive_threads
+        SET message_count = CASE WHEN message_count < ? THEN ? ELSE message_count END,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE thread_id = ?
+      `).bind(agentSequence, agentSequence, interactiveLink.thread_id)
     );
   }
 
