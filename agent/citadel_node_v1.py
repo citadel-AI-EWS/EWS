@@ -1605,10 +1605,62 @@ class Agent:
         home.mkdir(parents=True, exist_ok=True)
         return home
 
+    def lmstudio_model_store(self) -> Path:
+        """Return the stable CITADEL-owned LM Studio model directory."""
+        store = (self.lmstudio_runtime_home() / ".lmstudio" / "models").resolve()
+        store.mkdir(parents=True, exist_ok=True)
+        return store
+
+    def lmstudio_model_inventory(self) -> dict[str, Any]:
+        """Inventory the managed model directory without moving or redownloading models."""
+        store = self.lmstudio_model_store()
+        models: list[dict[str, Any]] = []
+        if self.find_lms():
+            try:
+                listed = self.run_lms(["ls", "--json", "--detailed"], timeout=60)
+                decoded = json.loads(listed.stdout or "[]")
+                rows = decoded if isinstance(decoded, list) else (
+                    decoded.get("models", []) if isinstance(decoded, dict) else []
+                )
+                for item in rows:
+                    if not isinstance(item, dict):
+                        continue
+                    key = self._loaded_model_name(item)
+                    if not key:
+                        continue
+                    size = item.get("sizeBytes", item.get("size_bytes", item.get("size")))
+                    models.append({
+                        "model": key,
+                        "architecture": item.get("architecture"),
+                        "parameters": item.get("parameters"),
+                        "size_bytes": int(size) if isinstance(size, (int, float)) and size >= 0 else None,
+                    })
+            except Exception:
+                models = []
+        if not models:
+            for candidate in sorted(store.rglob("*.gguf"))[:64]:
+                try:
+                    stat = candidate.stat()
+                    models.append({
+                        "model": candidate.relative_to(store).as_posix(),
+                        "architecture": None,
+                        "parameters": None,
+                        "size_bytes": int(stat.st_size),
+                    })
+                except OSError:
+                    continue
+        return {
+            "path": str(store),
+            "count": len(models),
+            "models": models[:64],
+            "checked_at": now_iso(),
+        }
+
     def lmstudio_process_env(self) -> dict[str, str]:
         env = os.environ.copy()
         runtime_home = str(self.lmstudio_runtime_home())
         env["CITADEL_LMSTUDIO_HOME"] = runtime_home
+        env["CITADEL_MODEL_STORE"] = str(self.lmstudio_model_store())
         env["HOME"] = runtime_home
         env["LMS_NO_MODIFY_PATH"] = "1"
         return env
@@ -1694,6 +1746,12 @@ class Agent:
                             loaded_models.append(name)
                 except Exception:
                     loaded_models = []
+        inventory = self.lmstudio_model_inventory() if installed else {
+            "path": str(self.lmstudio_model_store()),
+            "count": 0,
+            "models": [],
+            "checked_at": now_iso(),
+        }
         selected_model = str(state.get("selected_model") or "").strip()
         loaded_model = (
             selected_model
@@ -1718,6 +1776,10 @@ class Agent:
             "query_status": state.get("query_status"),
             "load_config": state.get("load_config"),
             "loaded_models": loaded_models[:8],
+            "model_store_path": inventory["path"],
+            "model_count": inventory["count"],
+            "installed_models": inventory["models"],
+            "model_store_checked_at": inventory["checked_at"],
             "live_checked_at": now_iso(),
         }
         self.save_lmstudio_state(
@@ -2069,13 +2131,21 @@ class Agent:
                     raise RuntimeError("lmstudio_model_download_failed")
                 time.sleep(2)
         model_key = self.resolve_lmstudio_model_key(model, quantization)
+        inventory = self.lmstudio_model_inventory()
         self.report_ai_state(
             installed=True, server_running=True, selected_model=model_key,
             last_action="model_downloaded", progress_phase="download_complete",
             progress_bytes=None, progress_total_bytes=None, download_job_id=job_id,
             progress_detail=f"Downloaded: {model_key}",
+            model_store_path=inventory["path"], model_count=inventory["count"],
+            installed_models=inventory["models"], model_store_checked_at=inventory["checked_at"],
         )
-        self.log.write("lmstudio_model_downloaded", model=model_key)
+        self.log.write(
+            "lmstudio_model_downloaded",
+            model=model_key,
+            model_store_path=inventory["path"],
+            model_count=inventory["count"],
+        )
 
     def load_lmstudio_model(self, payload: dict[str, Any]) -> None:
         if not self.validate_lmstudio_model_payload(payload):
