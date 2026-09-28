@@ -19,6 +19,7 @@ const buildSite = fs.readFileSync("scripts/build_site.sh", "utf8");
 const hub = fs.readFileSync("hub.html", "utf8");
 const operations = fs.readFileSync("operations.html", "utf8");
 const deployWorkflow = fs.readFileSync(".github/workflows/deploy-cloudflare.yml", "utf8");
+const smokeTest = fs.readFileSync("scripts/smoke_test.mjs", "utf8");
 need(index.includes("auto_enrollment_windows"), "global auto-enrollment window missing");
 need(index.includes("AUTO_ENROLL_MAX_NEW_PER_HOUR"), "enrollment hourly setting missing");
 need(index.includes("AUTO_ENROLL_MAX_NODES"), "enrollment node cap setting missing");
@@ -153,6 +154,8 @@ need(operations.includes("/models/search?q="), "operations Hugging Face search m
 need(operations.includes("modelSource"), "operations model source selector missing");
 need(deployWorkflow.includes("/tmp/openrouter-key"), "OpenRouter key normalization missing");
 need(deployWorkflow.includes("OpenRouter key probe: authenticated"), "OpenRouter authentication probe missing");
+need(index.includes('payloadStorage === "ready"'), "health readiness must require Google Drive payload storage");
+need(smokeTest.includes('"payload_storage"'), "live smoke must require Google Drive payload storage readiness");
 need(index.includes('"lmstudio_probe"'), "LM Studio probe command missing from Controller allow-list");
 need(index.includes('"hybrid_query"'), "Hybrid command missing from Controller allow-list");
 need(agentV1.includes("validate_hybrid_payload"), "Hybrid payload validation missing");
