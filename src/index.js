@@ -450,25 +450,34 @@ function drivePointerId(value) {
 }
 
 async function deleteDriveFileBestEffort(env, fileId) {
-  if (!fileId) return;
+  if (!fileId) return true;
   try {
     const token = await googleDriveAccessToken(env);
-    await fetch("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(fileId), {
+    const response = await fetch("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(fileId), {
       method: "DELETE",
       headers: { authorization: "Bearer " + token }
     });
-  } catch {}
+    return response.ok || response.status === 404;
+  } catch {
+    return false;
+  }
 }
 
 async function deletePayloadBestEffort(env, payloadId) {
-  if (!payloadId) return;
+  if (!payloadId) return true;
   try {
     const row = await env.DB.prepare(
       "SELECT drive_file_id FROM payload_objects WHERE payload_id = ?"
     ).bind(payloadId).first();
-    if (row?.drive_file_id) await deleteDriveFileBestEffort(env, row.drive_file_id);
+    if (!row) return true;
+    if (row.drive_file_id && !(await deleteDriveFileBestEffort(env, row.drive_file_id))) {
+      return false;
+    }
     await env.DB.prepare("DELETE FROM payload_objects WHERE payload_id = ?").bind(payloadId).run();
-  } catch {}
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function persistDrivePayload(env, { owner_type, owner_id, kind, value }) {
