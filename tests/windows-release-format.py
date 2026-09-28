@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import tempfile
+import sys
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
@@ -18,6 +19,7 @@ MODULE_PATH = ROOT / "agent" / "windows" / "release_format.py"
 SPEC = importlib.util.spec_from_file_location("citadel_release_format", MODULE_PATH)
 assert SPEC and SPEC.loader
 rf = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = rf
 SPEC.loader.exec_module(rf)
 
 
