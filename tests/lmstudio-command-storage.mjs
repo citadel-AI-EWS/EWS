@@ -72,7 +72,7 @@ class Statement {
       state.tables.add("audit_events");
       return { meta: { changes: 0 } };
     }
-    if (this.sql.startsWith("CREATE TABLE") || this.sql.startsWith("CREATE INDEX")) {
+    if (this.sql.startsWith("CREATE TABLE") || this.sql.startsWith("CREATE INDEX") || this.sql.startsWith("CREATE UNIQUE INDEX")) {
       const match = this.sql.match(/CREATE (?:UNIQUE )?INDEX IF NOT EXISTS ([^ ]+)/);
       if (match) state.indexes.add(match[1]);
       return { meta: { changes: 0 } };
