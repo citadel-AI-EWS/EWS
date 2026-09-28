@@ -460,6 +460,17 @@ async function deleteDriveFileBestEffort(env, fileId) {
   } catch {}
 }
 
+async function deletePayloadBestEffort(env, payloadId) {
+  if (!payloadId) return;
+  try {
+    const row = await env.DB.prepare(
+      "SELECT drive_file_id FROM payload_objects WHERE payload_id = ?"
+    ).bind(payloadId).first();
+    if (row?.drive_file_id) await deleteDriveFileBestEffort(env, row.drive_file_id);
+    await env.DB.prepare("DELETE FROM payload_objects WHERE payload_id = ?").bind(payloadId).run();
+  } catch {}
+}
+
 async function persistDrivePayload(env, { owner_type, owner_id, kind, value }) {
   await ensurePayloadStorage(env);
   const config = googleDrivePayloadConfig(env);
