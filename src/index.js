@@ -2152,12 +2152,17 @@ async function architectCreateProject(request, env) {
     const workItemId = "work_" + crypto.randomUUID();
     let taskPayload = workTaskPayloads.get(planned.task_text);
     if (!taskPayload) {
-      taskPayload = await persistDrivePayload(env, {
-        owner_type: "project",
-        owner_id: projectId,
-        kind: "work_task",
-        value: { text: planned.task_text }
-      });
+      try {
+        taskPayload = await persistDrivePayload(env, {
+          owner_type: "project",
+          owner_id: projectId,
+          kind: "work_task",
+          value: { text: planned.task_text }
+        });
+      } catch (error) {
+        await Promise.all(createdPayloadIds.map((payloadId) => deletePayloadBestEffort(env, payloadId)));
+        throw error;
+      }
       workTaskPayloads.set(planned.task_text, taskPayload);
       createdPayloadIds.push(taskPayload.payload_id);
     }
@@ -3944,12 +3949,17 @@ async function architectPostInteractiveMessage(request, env, projectId, workItem
       historyText ? "Conversation so far:\n" + historyText : "",
       "USER FOLLOW-UP:\n" + messageText
     ].filter(Boolean).join("\n\n");
-    taskPayload = await persistDrivePayload(env, {
-      owner_type: "thread",
-      owner_id: thread.thread_id,
-      kind: "followup_task",
-      value: { text: taskText }
-    });
+    try {
+      taskPayload = await persistDrivePayload(env, {
+        owner_type: "thread",
+        owner_id: thread.thread_id,
+        kind: "followup_task",
+        value: { text: taskText }
+      });
+    } catch (error) {
+      await deletePayloadBestEffort(env, userPayload.payload_id);
+      throw error;
+    }
     createdPayloadIds.push(taskPayload.payload_id);
   }
 
