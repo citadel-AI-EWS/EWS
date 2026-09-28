@@ -292,6 +292,7 @@ node --check /tmp/ews-node-test.js
 node --check /tmp/ews-hub.js
 node --check /tmp/ews-operations.js
 node --check src/index.js
+node --check src/google_drive_payload_crypto.js
 node --check src/quality/openrouter.js
 node --check src/worker.js
 node --check src/experience/policy.js
@@ -306,6 +307,7 @@ node --check src/telemetry/cursor.js
 node --check src/telemetry/architect.js
 node --check src/telemetry/router.js
 
+node tests/google-drive-payload-crypto.mjs
 node tests/report-storage.mjs
 node tests/session-storage.mjs
 node tests/telemetry-storage.mjs
