@@ -435,6 +435,45 @@ async function ensureSessionStorage(env) {
 async function ensureCommandStorage(env) {
   if (!commandIndexPromise) {
     commandIndexPromise = (async () => {
+      // Runtime-bootstrap the core command/audit tables as well as the index.
+      // A partially initialized TEST D1 must return a concrete API error, never
+      // an opaque internal_error just because migrations were not applied first.
+      await env.DB.batch([
+        env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS commands (
+            command_id TEXT PRIMARY KEY,
+            node_id TEXT NOT NULL,
+            command_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            signature TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at TEXT,
+            FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+          )
+        `),
+        env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS audit_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor_type TEXT NOT NULL,
+            actor_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target_type TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+          )
+        `),
+        env.DB.prepare(`
+          CREATE INDEX IF NOT EXISTS idx_commands_node_status_created
+          ON commands(node_id, status, created_at)
+        `),
+        env.DB.prepare(`
+          CREATE INDEX IF NOT EXISTS idx_audit_events_created
+          ON audit_events(event_id DESC)
+        `)
+      ]);
+
       // Existing TEST databases may contain an old pending/accepted command.
       // Drain stale rows before creating the partial UNIQUE index; otherwise
       // SQLite can reject index creation and surface an opaque internal_error.
@@ -4985,6 +5024,117 @@ function mapHuggingFaceModels(rows, limit = 16) {
     .slice(0, limit);
 }
 
+function modelParameterBillions(text) {
+  const value = String(text || "");
+  const matches = [...value.matchAll(/(?:^|[-_/])([0-9]+(?:\.[0-9]+)?)b(?:[-_/]|$)/ig)];
+  if (!matches.length) return null;
+  const parsed = Number(matches[0][1]);
+  return Number.isFinite(parsed) && parsed > 0 && parsed < 10000 ? parsed : null;
+}
+
+function modelFamilyQuery(modelId) {
+  const tail = String(modelId || "").split("/").pop() || "";
+  return tail
+    .replace(/[-_.](gguf|instruct|chat|base)$/ig, "")
+    .replace(/[-_.]q\d(?:_[a-z0-9]+)*/ig, "")
+    .replace(/[-_.][0-9]+(?:\.[0-9]+)?b(?:[-_.]|$).*/ig, "")
+    .trim() || tail;
+}
+
+function modelCompatibilityForHardware(modelId, hardware) {
+  const paramsB = modelParameterBillions(modelId);
+  const ramGiB = Number(hardware?.memory_total_bytes || 0) / (1024 ** 3);
+  const gpus = Array.isArray(hardware?.gpus) ? hardware.gpus : [];
+  const vramGiB = gpus.reduce((max, gpu) => Math.max(max, Number(gpu?.vram_total_bytes || 0) / (1024 ** 3)), 0);
+  if (!paramsB || !ramGiB) {
+    return { level: "unknown", can_install: true, reason: "Недостаточно данных для точной оценки; установка возможна, запуск нужно проверить на ноде." };
+  }
+  const estimatedQ4GiB = Math.max(1, paramsB * 0.7 + 1.2);
+  const capacityGiB = ramGiB + Math.min(vramGiB, estimatedQ4GiB);
+  if (estimatedQ4GiB <= capacityGiB * 0.72) {
+    return { level: "recommended", can_install: true, estimated_q4_gib: Number(estimatedQ4GiB.toFixed(1)), reason: "Модель должна комфортно помещаться в доступную память при Q4-квантизации." };
+  }
+  if (estimatedQ4GiB <= capacityGiB * 0.95) {
+    return { level: "possible", can_install: true, estimated_q4_gib: Number(estimatedQ4GiB.toFixed(1)), reason: "Установить можно, но скорость/контекст могут потребовать более лёгкой квантизации." };
+  }
+  return { level: "too_large", can_install: true, estimated_q4_gib: Number(estimatedQ4GiB.toFixed(1)), reason: "Скачать можно, но для этой ноды модель, вероятно, слишком тяжёлая для практического локального запуска." };
+}
+
+async function fetchHuggingFaceModelDetails(modelId) {
+  const url = "https://huggingface.co/api/models/" + encodeURIComponent(modelId);
+  let response;
+  try {
+    response = await fetch(url, { headers: { "accept": "application/json", "user-agent": "CITADEL-EWS/1.0" } });
+  } catch {
+    throw new ApiError(502, "huggingface_unavailable");
+  }
+  if (!response.ok) throw new ApiError(response.status === 404 ? 404 : 502, response.status === 404 ? "model_not_found" : "huggingface_search_failed");
+  try {
+    return await response.json();
+  } catch {
+    throw new ApiError(502, "huggingface_invalid_response");
+  }
+}
+
+async function architectModelDetails(request, env, url) {
+  await authenticateArchitect(request, env);
+  const modelId = requireString(url.searchParams.get("id"), "model_id", 192);
+  const nodeId = optionalString(url.searchParams.get("node_id"), "node_id", 128);
+  const detail = await fetchHuggingFaceModelDetails(modelId);
+  const siblings = Array.isArray(detail?.siblings) ? detail.siblings : [];
+  const files = siblings.map((item) => String(item?.rfilename || "")).filter(Boolean).slice(0, 120);
+  const quantizations = [...new Set(files.flatMap((name) => {
+    const match = name.match(/(?:^|[-_.])(Q[0-9](?:_[A-Z0-9]+)+)(?:[-_.]|$)/i);
+    return match ? [match[1].toUpperCase()] : [];
+  }))].sort();
+
+  let hardware = null;
+  let compatibility = { level: "unknown", can_install: true, reason: "Нода не выбрана." };
+  if (nodeId) {
+    await ensureNodeHardwareStorage(env);
+    const node = await env.DB.prepare(`
+      SELECT n.node_id, n.hostname, h.memory_total_bytes, h.cpu_logical_count, h.gpus_json
+      FROM nodes AS n
+      LEFT JOIN node_hardware_state AS h ON h.node_id = n.node_id
+      WHERE n.node_id = ? AND n.status != 'revoked'
+    `).bind(nodeId).first();
+    if (!node) throw new ApiError(404, "node_not_found");
+    hardware = {
+      memory_total_bytes: Number(node.memory_total_bytes || 0) || null,
+      cpu_logical_count: Number(node.cpu_logical_count || 0) || null,
+      gpus: safeJson(node.gpus_json, [])
+    };
+    compatibility = modelCompatibilityForHardware(modelId, hardware);
+  }
+
+  let versions = [];
+  try {
+    const rows = await fetchHuggingFaceModels(modelFamilyQuery(modelId), 60);
+    versions = mapHuggingFaceModels(rows, 16).filter((item) => item.id !== modelId);
+  } catch {
+    versions = [];
+  }
+
+  return json({
+    ok: true,
+    model: {
+      id: detail?.id || modelId,
+      downloads: Number(detail?.downloads || 0),
+      likes: Number(detail?.likes || 0),
+      pipeline_tag: typeof detail?.pipeline_tag === "string" ? detail.pipeline_tag : null,
+      library_name: typeof detail?.library_name === "string" ? detail.library_name : null,
+      last_modified: detail?.lastModified || detail?.last_modified || null,
+      tags: Array.isArray(detail?.tags) ? detail.tags.slice(0, 40) : [],
+      files,
+      quantizations
+    },
+    node_id: nodeId || null,
+    hardware,
+    compatibility,
+    versions
+  });
+}
+
 async function fetchHuggingFaceModels(query, limit = 30) {
   const hfUrl = new URL("https://huggingface.co/api/models");
   if (query) hfUrl.searchParams.set("search", query);
@@ -5485,6 +5635,12 @@ async function handleApi(request, env, url) {
       : methodNotAllowed(["GET"]);
   }
 
+  if (url.pathname === "/api/v1/architect/models/details") {
+    return request.method === "GET"
+      ? architectModelDetails(request, env, url)
+      : methodNotAllowed(["GET"]);
+  }
+
   if (url.pathname === "/api/v1/architect/work-roles") {
     return request.method === "GET"
       ? architectWorkRoles(request, env)
@@ -5494,15 +5650,22 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/v1/architect/machines") {
     if (request.method !== "GET") return methodNotAllowed(["GET"]);
     await authenticateArchitect(request, env);
+    await Promise.all([ensureNodeAiStorage(env), ensureCommandStorage(env)]);
     const [nodes, commands] = await Promise.all([
-      env.DB.prepare(`SELECT node_id, hostname, agent_version, cpu_percent, memory_percent,
-        last_seen_at, CASE WHEN status = 'online' AND
-        (last_seen_at IS NULL OR datetime(last_seen_at) < datetime('now', '-2 minutes'))
-        THEN 'offline' ELSE status END AS status
-        FROM nodes WHERE status != 'revoked' ORDER BY node_id LIMIT 500`).all(),
+      env.DB.prepare(`SELECT n.node_id, n.hostname, n.agent_version, n.cpu_percent, n.memory_percent,
+        n.last_seen_at, CASE WHEN n.status = 'online' AND
+        (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-2 minutes'))
+        THEN 'offline' ELSE n.status END AS status,
+        COALESCE(ai.installed, 0) AS lmstudio_installed,
+        COALESCE(ai.server_running, 0) AS lmstudio_server_running,
+        ai.loaded_model AS lmstudio_loaded_model,
+        ai.updated_at AS lmstudio_updated_at
+        FROM nodes AS n
+        LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
+        WHERE n.status != 'revoked' ORDER BY n.node_id LIMIT 500`).all(),
       env.DB.prepare(`SELECT command_id, node_id, command_type, status, created_at
         FROM commands WHERE status IN ('pending','accepted')
-        ORDER BY created_at DESC LIMIT 100`).all()
+        ORDER BY created_at DESC LIMIT 500`).all()
     ]);
     return json({ok:true, nodes:nodes.results || [], commands:commands.results || []});
   }
