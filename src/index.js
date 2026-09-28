@@ -69,6 +69,10 @@ const LMSTUDIO_INTEGRATION = Object.freeze({
   ])
 });
 const CONTROLLER_COMMAND_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0";
+const DEFAULT_GOOGLE_DRIVE_PAYLOAD_FOLDER_ID = "135_YkqQRJpkM1gmk_oh2uV8ldROqVmbn";
+const DRIVE_POINTER_PREFIX = "@drive:";
+let driveAccessTokenCache = { token: null, expires_at_ms: 0 };
+let payloadSchemaPromise;
 let reportSchemaPromise;
 let legacyReportBackfillPromise;
 let sessionSchemaPromise;
@@ -312,6 +316,260 @@ async function readBody(request, maxBytes) {
 
 async function readBodyText(request, maxBytes) {
   return (await readBody(request, maxBytes)).text;
+}
+
+
+function googleDrivePayloadConfig(env) {
+  const clientId = typeof env.GOOGLE_DRIVE_CLIENT_ID === "string" ? env.GOOGLE_DRIVE_CLIENT_ID.trim() : "";
+  const clientSecret = typeof env.GOOGLE_DRIVE_CLIENT_SECRET === "string" ? env.GOOGLE_DRIVE_CLIENT_SECRET.trim() : "";
+  const refreshToken = typeof env.GOOGLE_DRIVE_REFRESH_TOKEN === "string" ? env.GOOGLE_DRIVE_REFRESH_TOKEN.trim() : "";
+  const accessToken = typeof env.GOOGLE_DRIVE_ACCESS_TOKEN === "string" ? env.GOOGLE_DRIVE_ACCESS_TOKEN.trim() : "";
+  const folderId = typeof env.GOOGLE_DRIVE_REPORTS_FOLDER_ID === "string" && env.GOOGLE_DRIVE_REPORTS_FOLDER_ID.trim()
+    ? env.GOOGLE_DRIVE_REPORTS_FOLDER_ID.trim()
+    : DEFAULT_GOOGLE_DRIVE_PAYLOAD_FOLDER_ID;
+  return {
+    folder_id: folderId,
+    access_token: accessToken,
+    client_id: clientId,
+    client_secret: clientSecret,
+    refresh_token: refreshToken,
+    configured: Boolean(folderId && (accessToken || (clientId && clientSecret && refreshToken)))
+  };
+}
+
+async function googleDriveAccessToken(env) {
+  const config = googleDrivePayloadConfig(env);
+  if (!config.configured) throw new ApiError(503, "drive_payload_storage_unavailable");
+  if (config.access_token) return config.access_token;
+  if (driveAccessTokenCache.token && Date.now() < driveAccessTokenCache.expires_at_ms - 60000) {
+    return driveAccessTokenCache.token;
+  }
+  const body = new URLSearchParams({
+    client_id: config.client_id,
+    client_secret: config.client_secret,
+    refresh_token: config.refresh_token,
+    grant_type: "refresh_token"
+  });
+  let response;
+  try {
+    response = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body
+    });
+  } catch {
+    throw new ApiError(503, "drive_payload_storage_unavailable");
+  }
+  if (!response.ok) throw new ApiError(503, "drive_payload_auth_failed");
+  const data = await response.json().catch(() => ({}));
+  if (typeof data.access_token !== "string" || !data.access_token) {
+    throw new ApiError(503, "drive_payload_auth_failed");
+  }
+  const expiresIn = Number(data.expires_in || 3600);
+  driveAccessTokenCache = {
+    token: data.access_token,
+    expires_at_ms: Date.now() + Math.max(300, expiresIn) * 1000
+  };
+  return data.access_token;
+}
+
+async function ensurePayloadStorage(env) {
+  if (!payloadSchemaPromise) {
+    payloadSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS payload_objects (
+          payload_id TEXT PRIMARY KEY,
+          owner_type TEXT NOT NULL,
+          owner_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          drive_file_id TEXT NOT NULL UNIQUE,
+          sha256 TEXT NOT NULL,
+          size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_payload_objects_owner
+        ON payload_objects(owner_type, owner_id, kind, created_at)
+      `),
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS interactive_threads (
+          thread_id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          work_item_id TEXT,
+          node_id TEXT,
+          role_name TEXT NOT NULL,
+          execution_mode TEXT NOT NULL CHECK (execution_mode IN ('ai','python')),
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','closed')),
+          message_count INTEGER NOT NULL DEFAULT 0 CHECK (message_count >= 0),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (project_id) REFERENCES architect_projects(project_id) ON DELETE CASCADE,
+          FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE SET NULL
+        )
+      `),
+      env.DB.prepare(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_interactive_threads_project_work
+        ON interactive_threads(project_id, work_item_id)
+        WHERE work_item_id IS NOT NULL
+      `),
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS interactive_messages (
+          message_id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL,
+          sequence_no INTEGER NOT NULL CHECK (sequence_no >= 1),
+          actor TEXT NOT NULL CHECK (actor IN ('user','agent','system')),
+          payload_id TEXT NOT NULL,
+          response_work_item_id TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (thread_id) REFERENCES interactive_threads(thread_id) ON DELETE CASCADE,
+          FOREIGN KEY (payload_id) REFERENCES payload_objects(payload_id) ON DELETE RESTRICT,
+          UNIQUE (thread_id, sequence_no)
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_interactive_messages_thread
+        ON interactive_messages(thread_id, sequence_no)
+      `)
+    ]).catch((error) => {
+      payloadSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await payloadSchemaPromise;
+}
+
+function drivePointer(payloadId) {
+  return DRIVE_POINTER_PREFIX + payloadId;
+}
+
+function drivePointerId(value) {
+  if (typeof value !== "string" || !value.startsWith(DRIVE_POINTER_PREFIX)) return null;
+  const payloadId = value.slice(DRIVE_POINTER_PREFIX.length).trim();
+  return payloadId || null;
+}
+
+async function deleteDriveFileBestEffort(env, fileId) {
+  if (!fileId) return;
+  try {
+    const token = await googleDriveAccessToken(env);
+    await fetch("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(fileId), {
+      method: "DELETE",
+      headers: { authorization: "Bearer " + token }
+    });
+  } catch {}
+}
+
+async function persistDrivePayload(env, { owner_type, owner_id, kind, value }) {
+  await ensurePayloadStorage(env);
+  const config = googleDrivePayloadConfig(env);
+  if (!config.configured) throw new ApiError(503, "drive_payload_storage_unavailable");
+  const payloadId = "payload_" + crypto.randomUUID();
+  const jsonText = JSON.stringify(value);
+  const sizeBytes = new TextEncoder().encode(jsonText).byteLength;
+  const sha256 = await sha256Hex(jsonText);
+  const token = await googleDriveAccessToken(env);
+  const safeOwner = String(owner_id || "unknown").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 80);
+  const safeKind = String(kind || "payload").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 48);
+  const metadata = {
+    name: safeOwner + "__" + safeKind + "__" + payloadId + ".json",
+    parents: [config.folder_id],
+    mimeType: "application/json",
+    appProperties: {
+      citadel_payload_id: payloadId,
+      citadel_owner_type: String(owner_type || "").slice(0, 64),
+      citadel_owner_id: String(owner_id || "").slice(0, 120),
+      citadel_kind: String(kind || "").slice(0, 64),
+      citadel_sha256: sha256
+    }
+  };
+  const boundary = "citadel_" + crypto.randomUUID().replace(/-/g, "");
+  const multipart =
+    "--" + boundary + "\r\n" +
+    "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+    JSON.stringify(metadata) + "\r\n" +
+    "--" + boundary + "\r\n" +
+    "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+    jsonText + "\r\n" +
+    "--" + boundary + "--";
+  let response;
+  try {
+    response = await fetch(
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,size",
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "multipart/related; boundary=" + boundary
+        },
+        body: multipart
+      }
+    );
+  } catch {
+    throw new ApiError(503, "drive_payload_upload_failed");
+  }
+  if (!response.ok) throw new ApiError(503, "drive_payload_upload_failed");
+  const uploaded = await response.json().catch(() => ({}));
+  const fileId = typeof uploaded.id === "string" ? uploaded.id : "";
+  if (!fileId) throw new ApiError(503, "drive_payload_upload_failed");
+  try {
+    await env.DB.prepare(`
+      INSERT INTO payload_objects (
+        payload_id, owner_type, owner_id, kind, drive_file_id, sha256, size_bytes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(payloadId, owner_type, owner_id, kind, fileId, sha256, sizeBytes).run();
+  } catch (error) {
+    await deleteDriveFileBestEffort(env, fileId);
+    throw error;
+  }
+  return { payload_id: payloadId, drive_file_id: fileId, sha256, size_bytes: sizeBytes };
+}
+
+async function readDrivePayload(env, payloadId) {
+  await ensurePayloadStorage(env);
+  const row = await env.DB.prepare(`
+    SELECT payload_id, drive_file_id, sha256, size_bytes
+    FROM payload_objects WHERE payload_id = ?
+  `).bind(payloadId).first();
+  if (!row) throw new ApiError(404, "payload_not_found");
+  const token = await googleDriveAccessToken(env);
+  let response;
+  try {
+    response = await fetch(
+      "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(row.drive_file_id) + "?alt=media",
+      { headers: { authorization: "Bearer " + token } }
+    );
+  } catch {
+    throw new ApiError(503, "drive_payload_read_failed");
+  }
+  if (!response.ok) throw new ApiError(503, "drive_payload_read_failed");
+  const text = await response.text();
+  if ((new TextEncoder().encode(text).byteLength) !== Number(row.size_bytes)) {
+    throw new ApiError(502, "drive_payload_size_mismatch");
+  }
+  if ((await sha256Hex(text)) !== row.sha256) {
+    throw new ApiError(502, "drive_payload_hash_mismatch");
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new ApiError(502, "drive_payload_invalid_json");
+  }
+}
+
+async function resolveDriveText(env, value) {
+  const payloadId = drivePointerId(value);
+  if (!payloadId) return String(value || "");
+  const payload = await readDrivePayload(env, payloadId);
+  if (typeof payload === "string") return payload;
+  if (payload && typeof payload.text === "string") return payload.text;
+  throw new ApiError(502, "drive_payload_missing_text");
+}
+
+async function resolveDriveJson(env, value) {
+  const payloadId = drivePointerId(value);
+  if (!payloadId) return safeJson(value, null);
+  return readDrivePayload(env, payloadId);
 }
 
 async function ensureReportStorage(env) {
