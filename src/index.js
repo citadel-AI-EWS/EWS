@@ -5066,6 +5066,7 @@ function modelNodeCompatibility(modelId, detail, hardware) {
   const ggufFiles = siblings
     .map((item) => typeof item?.rfilename === "string" ? item.rfilename : "")
     .filter((name) => /\.gguf$/i.test(name));
+  const q4Files = ggufFiles.filter((name) => /(?:^|[-_.])Q4(?:[_A-Za-z0-9.-]*)(?:\.gguf)$/i.test(name));
   const gguf = tags.some((tag) => tag.toLowerCase() === "gguf") || ggufFiles.length > 0;
   const parametersB = inferModelParametersB(modelId, tags);
   const ramGiB = Number(hardware?.memory_total_bytes || 0) / (1024 ** 3);
@@ -5076,16 +5077,19 @@ function modelNodeCompatibility(modelId, detail, hardware) {
 
   let status = "unknown";
   if (!gguf) status = "format_unknown";
+  else if (q4Files.length === 0) status = "unknown";
   else if (estimatedQ4GiB && (maxVramGiB >= estimatedQ4GiB * 0.9 || ramGiB >= estimatedQ4GiB * 1.35)) status = "recommended";
   else if (estimatedQ4GiB && ramGiB >= estimatedQ4GiB * 1.05) status = "possible";
   else if (estimatedQ4GiB && ramGiB > 0) status = "not_recommended";
-  else if (gguf) status = "unknown";
+  else status = "unknown";
 
   return {
     status,
     gguf,
+    q4_artifact: q4Files.length > 0,
+    q4_files: q4Files.slice(0, 24),
     parameters_b: parametersB,
-    estimated_q4_memory_gib: estimatedQ4GiB ? Number(estimatedQ4GiB.toFixed(1)) : null,
+    estimated_q4_memory_gib: q4Files.length && estimatedQ4GiB ? Number(estimatedQ4GiB.toFixed(1)) : null,
     ram_gib: ramGiB ? Number(ramGiB.toFixed(1)) : null,
     max_vram_gib: maxVramGiB ? Number(maxVramGiB.toFixed(1)) : null,
     gguf_files: ggufFiles.slice(0, 24)
@@ -5175,6 +5179,7 @@ async function architectLmstudioPreflight(request, env, nodeId) {
   if (!node) throw new ApiError(404, "node_not_found");
   if (Number(node.recently_seen || 0) !== 1) throw new ApiError(409, "node_offline");
   if (!agentVersionAtLeast(node.agent_version, "0.3.19")) throw new ApiError(409, "agent_update_required");
+  await expireStaleNodeCommands(env, nodeId);
   const pending = await env.DB.prepare(
     "SELECT command_id, command_type, status FROM commands WHERE node_id = ? AND status IN ('pending','accepted') LIMIT 1"
   ).bind(nodeId).first();
