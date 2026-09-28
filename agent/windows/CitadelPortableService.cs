@@ -47,6 +47,8 @@ namespace CitadelEws
                 return CreateLegacy(legacyRoot, dataRoot);
 
             var json = File.ReadAllText(statePath);
+            if (ReadRequiredJsonInt(json, "schema") != 1)
+                throw new InvalidDataException("Unsupported CITADEL release-state schema.");
             var minLauncher = ReadRequiredJsonString(json, "min_launcher_version");
             Version requiredVersion;
             Version actualVersion;
@@ -132,15 +134,24 @@ namespace CitadelEws
             var candidate = Path.GetFullPath(Path.Combine(releasesRoot, releaseId)).TrimEnd(Path.DirectorySeparatorChar);
             if (!(candidate + Path.DirectorySeparatorChar).StartsWith(releasesFull, StringComparison.OrdinalIgnoreCase))
                 return false;
-            if (!Directory.Exists(candidate))
+            if (!Directory.Exists(releasesRoot) || HasReparsePoint(releasesRoot))
                 return false;
-            if ((new DirectoryInfo(candidate).Attributes & FileAttributes.ReparsePoint) != 0)
+            if (!Directory.Exists(candidate) || HasReparsePoint(candidate))
                 return false;
 
+            var runtimeRoot = Path.Combine(candidate, "runtime");
             var okPath = Path.Combine(candidate, "RELEASE.OK");
-            var pythonPath = Path.Combine(candidate, "runtime", "python.exe");
+            var pythonPath = Path.Combine(runtimeRoot, "python.exe");
             var agentPath = Path.Combine(candidate, "citadel_node_v2.py");
-            if (!File.Exists(okPath) || !File.Exists(pythonPath) || !File.Exists(agentPath))
+            if (!Directory.Exists(runtimeRoot) ||
+                !File.Exists(okPath) ||
+                !File.Exists(pythonPath) ||
+                !File.Exists(agentPath))
+                return false;
+            if (HasReparsePoint(runtimeRoot) ||
+                HasReparsePoint(okPath) ||
+                HasReparsePoint(pythonPath) ||
+                HasReparsePoint(agentPath))
                 return false;
 
             var okJson = File.ReadAllText(okPath);
@@ -191,6 +202,38 @@ namespace CitadelEws
             PreviousRollbackable = false;
             PreviousFallbackUsed = true;
             return true;
+        }
+
+        private static bool HasReparsePoint(string path)
+        {
+            try
+            {
+                return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        private static int ReadRequiredJsonInt(string json, string key)
+        {
+            var token = "\"" + key + "\"";
+            var index = json.IndexOf(token, StringComparison.Ordinal);
+            if (index < 0) throw new InvalidDataException("Missing release-state field: " + key);
+            index = json.IndexOf(':', index + token.Length);
+            if (index < 0) throw new InvalidDataException("Invalid JSON field: " + key);
+            index++;
+            while (index < json.Length && Char.IsWhiteSpace(json[index])) index++;
+            var start = index;
+            if (index < json.Length && json[index] == '-') index++;
+            while (index < json.Length && Char.IsDigit(json[index])) index++;
+            if (index == start || (index == start + 1 && json[start] == '-'))
+                throw new InvalidDataException("Invalid JSON integer field: " + key);
+            int value;
+            if (!Int32.TryParse(json.Substring(start, index - start), out value))
+                throw new InvalidDataException("Invalid JSON integer field: " + key);
+            return value;
         }
 
         private static bool IsSafeReleaseId(string value)
