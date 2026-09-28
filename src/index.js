@@ -1374,6 +1374,56 @@ async function qualityGateResultFromRow(env, row, rawText) {
   return null;
 }
 
+
+async function projectQualityGateSnapshot(env, projectId, originalTask, rawText) {
+  const draft = String(rawText || "").trim();
+  if (!draft) {
+    return {
+      ready: false,
+      status: "empty",
+      content: null,
+      reviewed: false,
+      model: null,
+      error_code: "empty_project_result"
+    };
+  }
+  const config = openRouterQualityConfig(env);
+  if (!config.configured) {
+    return {
+      ready: true,
+      status: "unconfigured",
+      content: draft,
+      reviewed: false,
+      model: null,
+      error_code: null
+    };
+  }
+
+  await ensureQualityGateStorage(env);
+  const sourceSha256 = await sha256Hex(
+    `${config.model}\n${config.fusionPreset}\n${String(originalTask || "")}\n\u0000${draft}`
+  );
+  const row = await env.DB.prepare(`
+    SELECT project_id, source_sha256, status, requested_model, resolved_model,
+      fusion_preset, final_text, error_code, claim_id, updated_at
+    FROM project_quality_gates
+    WHERE project_id = ?
+  `).bind(projectId).first();
+
+  if (row?.source_sha256 === sourceSha256) {
+    const cached = await qualityGateResultFromRow(env, row, draft);
+    if (cached) return cached;
+  }
+  return {
+    ready: true,
+    status: "deferred",
+    content: draft,
+    reviewed: false,
+    model: config.model,
+    error_code: null
+  };
+}
+
 async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
   const draft = String(rawText || "").trim();
   if (!draft) {
@@ -2295,7 +2345,7 @@ async function architectListProjects(request, env) {
   return json({ ok: true, projects: rows.results || [] });
 }
 
-async function architectGetProject(request, env, projectId) {
+async function architectGetProject(request, env, projectId, executionCtx = null) {
   await authenticateArchitect(request, env);
   await Promise.all([
     ensureProjectStorage(env),
@@ -2510,7 +2560,7 @@ async function architectGetProject(request, env, projectId) {
   const workComplete = total > 0 && finished === total;
   const rawResultText = workComplete ? projectFinalText(finalSections) : null;
   const qualityConfig = openRouterQualityConfig(env);
-  const qualityGate = workComplete && executionMode === "python"
+  let qualityGate = workComplete && executionMode === "python"
     ? {
         ready: true,
         status: "not_applicable_python",
@@ -2519,25 +2569,42 @@ async function architectGetProject(request, env, projectId) {
         model: null,
         error_code: null
       }
-    : workComplete && !qualityConfig.configured
-      ? await finalizeProjectAnswer(env, project.project_id, projectTaskText, rawResultText)
-      : workComplete
-        ? {
-            ready: true,
-            status: "deferred",
-            content: rawResultText,
-            reviewed: false,
-            model: qualityConfig.model || null,
-            error_code: null
-          }
-        : {
-            ready: false,
-            status: "waiting_for_workers",
-            content: null,
-            reviewed: false,
-            model: null,
-            error_code: null
-          };
+    : workComplete
+      ? await projectQualityGateSnapshot(env, project.project_id, projectTaskText, rawResultText)
+      : {
+          ready: false,
+          status: "waiting_for_workers",
+          content: null,
+          reviewed: false,
+          model: null,
+          error_code: null
+        };
+
+  if (
+    workComplete &&
+    executionMode !== "python" &&
+    qualityConfig.configured &&
+    !qualityGate.reviewed &&
+    qualityGate.status !== "degraded" &&
+    executionCtx &&
+    typeof executionCtx.waitUntil === "function"
+  ) {
+    const backgroundReview = finalizeProjectAnswer(
+      env,
+      project.project_id,
+      projectTaskText,
+      rawResultText
+    ).catch((error) => {
+      console.error("Background OpenRouter quality gate failed", error);
+    });
+    executionCtx.waitUntil(backgroundReview);
+    if (qualityGate.status === "deferred") {
+      qualityGate = {
+        ...qualityGate,
+        status: "processing"
+      };
+    }
+  }
   // A completed local worker result is the baseline answer. OpenRouter may
   // enrich it, but a slow/processing quality gate must never hide it.
   const finalResultText = workComplete ? (qualityGate.content || rawResultText || null) : null;
@@ -6269,7 +6336,7 @@ function apiDescription() {
   });
 }
 
-async function handleApi(request, env, url) {
+async function handleApi(request, env, url, executionCtx = null) {
   if (url.pathname === "/api/health") {
     if (request.method !== "GET") {
       return methodNotAllowed(["GET"]);
@@ -6578,7 +6645,7 @@ async function handleApi(request, env, url) {
   );
   if (architectProjectMatch) {
     return request.method === "GET"
-      ? architectGetProject(request, env, decodeURIComponent(architectProjectMatch[1]))
+      ? architectGetProject(request, env, decodeURIComponent(architectProjectMatch[1]), executionCtx)
       : methodNotAllowed(["GET"]);
   }
 
@@ -6788,14 +6855,14 @@ export {
 };
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, executionCtx) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith("/api/")) {
       return env.ASSETS.fetch(request);
     }
 
     try {
-      return await handleApi(request, env, url);
+      return await handleApi(request, env, url, executionCtx);
     } catch (error) {
       if (error instanceof ApiError) {
         return json({ ok: false, error: error.code }, error.status);
