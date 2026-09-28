@@ -122,14 +122,23 @@ jobs:
           GOOGLE_DRIVE_CLIENT_ID: ${{ secrets.GOOGLE_DRIVE_CLIENT_ID }}
           GOOGLE_DRIVE_CLIENT_SECRET: ${{ secrets.GOOGLE_DRIVE_CLIENT_SECRET }}
           GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
+          GOOGLE_DRIVE_PAYLOAD_ENCRYPTION_KEY: ${{ secrets.GOOGLE_DRIVE_PAYLOAD_ENCRYPTION_KEY }}
+          GOOGLE_DRIVE_REPORT_ENCRYPTION_KEY: ${{ secrets.GOOGLE_DRIVE_REPORT_ENCRYPTION_KEY }}
         run: |
+          drive_encryption_key="${GOOGLE_DRIVE_PAYLOAD_ENCRYPTION_KEY:-$GOOGLE_DRIVE_REPORT_ENCRYPTION_KEY}"
           if [ -z "$GOOGLE_DRIVE_CLIENT_ID" ] || [ -z "$GOOGLE_DRIVE_CLIENT_SECRET" ] || [ -z "$GOOGLE_DRIVE_REFRESH_TOKEN" ]; then
-            echo "Google Drive payload credentials are not configured; payload writes will fail closed with drive_payload_storage_unavailable."
+            echo "Google Drive OAuth credentials are not configured; payload storage will remain unavailable."
           else
             printf '%s' "$GOOGLE_DRIVE_CLIENT_ID" | npx wrangler secret put GOOGLE_DRIVE_CLIENT_ID
             printf '%s' "$GOOGLE_DRIVE_CLIENT_SECRET" | npx wrangler secret put GOOGLE_DRIVE_CLIENT_SECRET
             printf '%s' "$GOOGLE_DRIVE_REFRESH_TOKEN" | npx wrangler secret put GOOGLE_DRIVE_REFRESH_TOKEN
-            echo "Google Drive payload credentials synced."
+            echo "Google Drive OAuth credentials synced."
+          fi
+          if [ -z "$drive_encryption_key" ]; then
+            echo "Google Drive payload encryption key is not configured; payload storage will remain unavailable."
+          else
+            printf '%s' "$drive_encryption_key" | npx wrangler secret put GOOGLE_DRIVE_PAYLOAD_ENCRYPTION_KEY
+            echo "Google Drive payload encryption key synced."
           fi
 
       - name: Deploy TEST site and Worker
