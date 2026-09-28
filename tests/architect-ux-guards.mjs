@@ -203,7 +203,7 @@ for (const required of [
   "lmstudio_model_load",
   "system_reboot",
   "system_shutdown",
-  "setTimeout(refresh,60000)"
+  "active?5000:60000"
 ]) {
   assert.ok(operations.includes(required), "Operations capability missing: " + required);
 }
@@ -595,3 +595,12 @@ assert.match(operations, /Откатить все/);
 assert.match(index, /ensureAutoEnrollmentStorage\(env\).*nodesQuery/s);
 assert.match(index, /ensureReportStorage\(env\),\s*ensureAutoEnrollmentStorage\(env\)/);
 assert.match(operations, /Сервер не смог собрать сведения проекта/);
+
+assert.match(operations, /id="lmUpdate"/);
+assert.match(operations, /Обновить LM Studio/);
+assert.match(operations, /🖥️/);
+assert.match(operations, /id="lmLiveStatus"/);
+assert.match(operations, /startDetailProgressWatch/);
+assert.match(operations, /waiting_agent/);
+assert.match(operations, /active\?5000:60000/);
+assert.match(operations, /Официальный установщик LM Studio сейчас работает/);
