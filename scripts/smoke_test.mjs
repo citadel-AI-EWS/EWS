@@ -32,6 +32,7 @@ function assertReady(health, hub, api, root) {
     "controller_signing",
     "report_storage",
     "session_storage",
+    "payload_storage",
     "telemetry_storage",
     "presence_storage"
   ];
