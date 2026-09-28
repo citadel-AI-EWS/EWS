@@ -214,7 +214,7 @@ for (const required of [
   'id="fleetActivity"',
   'id="modelResults"',
   'id="modelDetailsDialog"',
-  'class="ai-badge ',
+  "ai-badge",
   "lmstudio-preflight",
   "/models/details",
   "&limit=80",
