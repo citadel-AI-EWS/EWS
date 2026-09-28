@@ -151,6 +151,10 @@ jobs:
           if ($svc.StartName -ne "NT AUTHORITY\LocalService") { throw "Unexpected service account." }
           if ($svc.StartMode -ne "Auto") { throw "Service is not automatic." }
           $mode = (Get-Content -LiteralPath (Join-Path $stateRoot "install-mode.txt") -Raw).Trim()
+          $trustedConfig = Get-Content -LiteralPath (Join-Path $stateRoot "config.json") -Raw | ConvertFrom-Json
+          if ($trustedConfig.controller_url -ne "https://127.0.0.1:9" -or $null -ne $trustedConfig.tampered) {
+            throw "SYSTEM recovery did not replace the pre-existing config with trusted installer values."
+          }
           if ($mode -ne "windows_service") { throw "Installer did not record Windows Service mode." }
 
           Write-Host "Windows one-click silent installation: PASS"
@@ -259,6 +263,27 @@ jobs:
             if (@(Get-AgentChild).Count -ne 0) { throw "Agent did not obey stop marker." }
             Start-Sleep -Seconds 7
             if (@(Get-AgentChild).Count -ne 0) { throw "Stopped agent was respawned." }
+
+            # Repair/install while intentionally stopped must preserve a valid
+            # startup registration instead of treating the missing Python child as failure.
+            $repairLog = Join-Path $env:RUNNER_TEMP "citadel-oneclick-fallback-stopped-repair.log"
+            $repair = Start-Process -FilePath $installer.FullName -ArgumentList @(
+              "/VERYSILENT",
+              "/SUPPRESSMSGBOXES",
+              "/NORESTART",
+              "/SP-",
+              "/CONTROLLERURL=https://127.0.0.1:9",
+              "/FORCEFALLBACK=1",
+              "/LOG=$repairLog"
+            ) -Wait -PassThru
+            if ($repair.ExitCode -ne 0) {
+              if (Test-Path -LiteralPath $repairLog) { Get-Content -LiteralPath $repairLog -Tail 100 }
+              throw "Repair of intentionally stopped fallback node failed."
+            }
+            schtasks.exe /Query /TN "CitadelEWSNodeFallback" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Stopped-node repair lost the fallback startup task." }
+            Start-Sleep -Seconds 2
+            if (@(Get-AgentChild).Count -ne 0) { throw "Stopped-node repair incorrectly started the Python child." }
           } finally {
             Remove-Item -LiteralPath $stopFile -Force -ErrorAction SilentlyContinue
           }
@@ -266,6 +291,15 @@ jobs:
           do { Start-Sleep -Seconds 1 } until (@(Get-AgentChild).Count -eq 1 -or (Get-Date) -gt $deadline)
           $children = @(Get-AgentChild)
           if ($children.Count -ne 1) { throw "Agent did not resume after clearing stop marker." }
+          # Repair can legitimately replace the task-host process. Rebind the
+          # ownership assertion to the currently registered/running host.
+          $taskHost = Get-CimInstance Win32_Process | Where-Object {
+            $_.Name -eq "CitadelNodeService.exe" -and
+            $_.CommandLine -like "*--task-host*"
+          } | Select-Object -First 1
+          if (-not $taskHost -or $children[0].ParentProcessId -ne $taskHost.ProcessId) {
+            throw "Stopped-node repair did not resume under the current fallback host."
+          }
 
           # Killing the scheduled-task host must also kill its Python child. Otherwise
           # Task Scheduler can restart the host while an orphaned agent is still alive.
@@ -333,6 +367,158 @@ jobs:
           Write-Host "Windows fallback uninstall: PASS"
           exit 0
 
+      - name: Forced SYSTEM recovery install smoke test
+        id: system_recovery_install
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -LiteralPath dist -Filter "CITADEL_EWS_Node_Setup_*_x64.exe" | Select-Object -First 1
+          if (-not $installer) { throw "Installer artifact not found." }
+          $log = Join-Path $env:RUNNER_TEMP "citadel-oneclick-system-recovery.log"
+          $stateRoot = Join-Path $env:ProgramData "CitadelEWS\state"
+          New-Item -ItemType Directory -Force -Path $stateRoot | Out-Null
+          Set-Content -LiteralPath (Join-Path $stateRoot "config.json") -Value '{"controller_url":"https://attacker.invalid","tampered":true}' -Encoding UTF8
+          $p = Start-Process -FilePath $installer.FullName -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/SP-",
+            "/CONTROLLERURL=https://127.0.0.1:9",
+            "/FORCESYSTEMFALLBACK=1",
+            "/LOG=$log"
+          ) -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 120 }
+            throw "SYSTEM recovery installer failed with exit code $($p.ExitCode)."
+          }
+          if (Get-Service -Name CitadelEWSNode -ErrorAction SilentlyContinue) {
+            throw "SYSTEM recovery mode unexpectedly left the SCM service registered."
+          }
+          schtasks.exe /Query /TN "CitadelEWSNodeFallback" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "SYSTEM recovery startup task was not registered." }
+          $stateRoot = Join-Path $env:ProgramData "CitadelEWS\state"
+          $mode = (Get-Content -LiteralPath (Join-Path $stateRoot "install-mode.txt") -Raw).Trim()
+          if ($mode -ne "windows_boot_task_system") { throw "SYSTEM recovery mode was not recorded." }
+          $principal = (Get-ScheduledTask -TaskName CitadelEWSNodeFallback).Principal
+          if ($principal.UserId -notin @('S-1-5-18', 'SYSTEM', 'NT AUTHORITY\SYSTEM')) {
+            throw "SYSTEM recovery task does not run as SYSTEM."
+          }
+          $stateAcl = Get-Acl -LiteralPath $stateRoot
+          $localServiceAce = @($stateAcl.Access | Where-Object {
+            try {
+              $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq 'S-1-5-19'
+            } catch { $false }
+          })
+          if ($localServiceAce.Count -ne 0) {
+            throw "SYSTEM recovery left LocalService access on the CITADEL state directory."
+          }
+          $agentRoot = Join-Path $env:ProgramData "CitadelEWS\agent"
+          foreach ($securedPath in @($stateRoot, $agentRoot, (Join-Path $stateRoot "config.json"), (Join-Path $agentRoot "runtime\python.exe"))) {
+            $acl = Get-Acl -LiteralPath $securedPath
+            $ownerSid = ([System.Security.Principal.NTAccount]$acl.Owner).Translate([System.Security.Principal.SecurityIdentifier]).Value
+            if ($ownerSid -notin @('S-1-5-32-544','S-1-5-18')) {
+              throw "SYSTEM recovery left an untrusted owner on $securedPath : $ownerSid"
+            }
+            $lsAce = @($acl.Access | Where-Object {
+              try {
+                $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq 'S-1-5-19'
+              } catch { $false }
+            })
+            if ($lsAce.Count -ne 0) {
+              throw "SYSTEM recovery left LocalService ACL entries on $securedPath."
+            }
+          }
+          $trustedConfig = Get-Content -LiteralPath (Join-Path $stateRoot "config.json") -Raw | ConvertFrom-Json
+          if ($trustedConfig.controller_url -ne "https://127.0.0.1:9" -or $null -ne $trustedConfig.tampered) {
+            throw "SYSTEM recovery did not replace the pre-existing config with trusted installer values."
+          }
+          $recoveryLog = Join-Path $stateRoot "install-recovery.log"
+          if (-not (Test-Path -LiteralPath $recoveryLog)) { throw "Recovery log was not written." }
+          $recoveryText = Get-Content -LiteralPath $recoveryLog -Raw
+          if ($recoveryText -notmatch "windows_boot_task_system \| success") {
+            throw "Recovery log does not record successful SYSTEM fallback."
+          }
+          Start-Sleep -Seconds 3
+          $taskHost = Get-CimInstance Win32_Process | Where-Object {
+            $_.Name -eq "CitadelNodeService.exe" -and
+            $_.ExecutablePath -eq (Join-Path $agentRoot "CitadelNodeService.exe") -and
+            $_.CommandLine -like "*--task-host*"
+          } | Select-Object -First 1
+          if (-not $taskHost) { throw "SYSTEM recovery task host is not running from the installed program tree." }
+          $children = @(Get-CimInstance Win32_Process | Where-Object {
+            $_.ExecutablePath -eq (Join-Path $agentRoot "runtime\python.exe") -and
+            $_.CommandLine -like "*citadel_node_v2.py*"
+          })
+          if ($children.Count -ne 1 -or $children[0].ParentProcessId -ne $taskHost.ProcessId) {
+            throw "SYSTEM recovery did not start exactly one owned agent child."
+          }
+          Write-Host "Windows SYSTEM recovery fallback: PASS"
+
+      - name: Repair from SYSTEM recovery back to LocalService
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -LiteralPath dist -Filter "CITADEL_EWS_Node_Setup_*_x64.exe" | Select-Object -First 1
+          if (-not $installer) { throw "Installer artifact not found." }
+          $log = Join-Path $env:RUNNER_TEMP "citadel-oneclick-repair-from-system.log"
+          $p = Start-Process -FilePath $installer.FullName -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/SP-",
+            "/LOG=$log"
+          ) -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 120 }
+            throw "Repair from SYSTEM recovery failed with exit code $($p.ExitCode)."
+          }
+          $stateRoot = Join-Path $env:ProgramData "CitadelEWS\state"
+          $agentRoot = Join-Path $env:ProgramData "CitadelEWS\agent"
+          $config = Get-Content -LiteralPath (Join-Path $stateRoot "config.json") -Raw | ConvertFrom-Json
+          if ($config.controller_url -ne "https://127.0.0.1:9") {
+            throw "Repair did not preserve trusted Controller URL from HKLM metadata."
+          }
+          $mode = (Get-Content -LiteralPath (Join-Path $stateRoot "install-mode.txt") -Raw).Trim()
+          if ($mode -notin @('windows_service','windows_boot_task')) {
+            throw "Repair did not return from SYSTEM recovery to a LocalService mode."
+          }
+          foreach ($path in @($stateRoot, $agentRoot, (Join-Path $stateRoot "config.json"), (Join-Path $agentRoot "runtime\python.exe"))) {
+            $acl = Get-Acl -LiteralPath $path
+            $localServiceAce = @($acl.Access | Where-Object {
+              try {
+                $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq 'S-1-5-19'
+              } catch { $false }
+            })
+            if ($localServiceAce.Count -eq 0) {
+              throw "Repair did not restore LocalService ACL on $path."
+            }
+          }
+          $supervisorHost = Get-CimInstance Win32_Process | Where-Object {
+            $_.Name -eq "CitadelNodeService.exe" -and $_.ExecutablePath -eq (Join-Path $agentRoot "CitadelNodeService.exe")
+          } | Select-Object -First 1
+          if (-not $supervisorHost) { throw "Repair did not start supervised host." }
+          $child = @(Get-CimInstance Win32_Process | Where-Object {
+            $_.ExecutablePath -eq (Join-Path $agentRoot "runtime\python.exe") -and
+            $_.CommandLine -like "*citadel_node_v2.py*"
+          })
+          if ($child.Count -ne 1) { throw "Repair did not start exactly one Python agent child." }
+          Write-Host "Windows SYSTEM recovery repair-back: PASS"
+
+      - name: SYSTEM recovery uninstall smoke test
+        if: ${{ always() && steps.system_recovery_install.outcome != 'skipped' }}
+        shell: pwsh
+        run: |
+          $uninstaller = Join-Path $env:ProgramData "CitadelEWS\uninstall\unins000.exe"
+          if (Test-Path -LiteralPath $uninstaller) {
+            $p = Start-Process -FilePath $uninstaller -ArgumentList @(
+              "/VERYSILENT",
+              "/SUPPRESSMSGBOXES",
+              "/NORESTART"
+            ) -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "SYSTEM recovery uninstaller failed with exit code $($p.ExitCode)." }
+          }
+          schtasks.exe /Query /TN "CitadelEWSNodeFallback" *> $null
+          if ($LASTEXITCODE -eq 0) { throw "SYSTEM recovery task remained registered after uninstall." }
+          Write-Host "Windows SYSTEM recovery uninstall: PASS"
+          exit 0
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
