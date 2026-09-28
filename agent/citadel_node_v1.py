@@ -977,13 +977,13 @@ class Agent:
         if time.monotonic() - self.last_network_remember >= 300:
             self.remember_network_profile()
             self.last_network_remember = time.monotonic()
-        # Keep Controller scheduling state aligned with the real local LM Studio state.
-        # This is intentionally tied to the normal heartbeat cadence so a rebooted
-        # node becomes READY without requiring a manual Probe command.
+    def sync_lmstudio_readiness(self) -> None:
+        """Refresh scheduler-visible LM Studio state without blocking service HOLD readiness."""
         try:
             self.report_ai_state(**self.probe_lmstudio())
         except Exception as error:
             self.log.write("lmstudio_heartbeat_probe_failed", error=str(error)[:300])
+
 
     def resources_ok(self) -> tuple[bool, dict[str, float]]:
         cpu = float(psutil.cpu_percent(interval=0.1))
@@ -2948,6 +2948,7 @@ class Agent:
         self.handle_commands()
         if time.monotonic() - self.last_heartbeat >= self.config.heartbeat_seconds:
             self.heartbeat()
+            self.sync_lmstudio_readiness()
         sent = self.results.flush(self.submit_result)
         if sent:
             self.log.write("queued_results_flushed", count=sent)
