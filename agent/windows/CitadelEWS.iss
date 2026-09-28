@@ -227,12 +227,12 @@ begin
   ExePath := '';
   CommandLine := '';
   try
-    ExePath := VarToStr(ProcessObj.ExecutablePath);
+    ExePath := ProcessObj.ExecutablePath;
   except
     exit;
   end;
   try
-    CommandLine := Lowercase(VarToStr(ProcessObj.CommandLine));
+    CommandLine := Lowercase(ProcessObj.CommandLine);
   except
     CommandLine := '';
   end;
@@ -265,7 +265,7 @@ var
 begin
   Result := False;
   try
-    ExePath := VarToStr(ProcessObj.ExecutablePath);
+    ExePath := ProcessObj.ExecutablePath;
   except
     exit;
   end;
