@@ -645,3 +645,7 @@ assert.ok(operations.includes("lmUpdate').hidden=!lmInstalled||lmBusy"), "LM Stu
 assert.ok(operations.includes("lmRemove').hidden=!lmInstalled||lmBusy"), "LM Studio remove control must require install");
 assert.ok(operations.includes("modelGet').hidden=!lmInstalled"), "model actions must hide until LM Studio is installed");
 assert.ok(operations.includes("LM Studio установлен — доступны обновление"), "dynamic LM Studio hint missing");
+
+assert.ok(index.includes("CREATE TABLE IF NOT EXISTS commands"), "runtime command table bootstrap missing");
+assert.ok(index.includes("CREATE TABLE IF NOT EXISTS audit_events"), "runtime audit table bootstrap missing");
+assert.ok(index.includes("lmstudio_command_storage_unavailable"), "LM Studio command storage error mapping missing");

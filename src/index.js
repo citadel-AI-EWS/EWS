@@ -435,6 +435,45 @@ async function ensureSessionStorage(env) {
 async function ensureCommandStorage(env) {
   if (!commandIndexPromise) {
     commandIndexPromise = (async () => {
+      // Runtime-bootstrap the core command/audit tables as well as the index.
+      // A partially initialized D1 must never turn LM Studio install into an
+      // opaque 500 just because the migration history is incomplete.
+      await env.DB.batch([
+        env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS commands (
+            command_id TEXT PRIMARY KEY,
+            node_id TEXT NOT NULL,
+            command_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            signature TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at TEXT,
+            FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+          )
+        `),
+        env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS audit_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor_type TEXT NOT NULL,
+            actor_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target_type TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+          )
+        `),
+        env.DB.prepare(`
+          CREATE INDEX IF NOT EXISTS idx_commands_node_status_created
+          ON commands(node_id, status, created_at)
+        `),
+        env.DB.prepare(`
+          CREATE INDEX IF NOT EXISTS idx_audit_events_created
+          ON audit_events(event_id DESC)
+        `)
+      ]);
+
       // Existing TEST databases may contain an old pending/accepted command.
       // Drain stale rows before creating the partial UNIQUE index; otherwise
       // SQLite can reject index creation and surface an opaque internal_error.
