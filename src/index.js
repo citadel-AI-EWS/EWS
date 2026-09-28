@@ -3375,6 +3375,14 @@ async function submitResult(request, env, nodeId, url) {
 
   const resultId = `result_${crypto.randomUUID()}`;
   const reportId = `report_${crypto.randomUUID()}`;
+  const reportPayload = await persistDrivePayload(env, {
+    owner_type: "report",
+    owner_id: reportId,
+    kind: "agent_report",
+    value: reportValue
+  });
+  const reportPointer = drivePointer(reportPayload.payload_id);
+  const effectiveArtifactKey = artifactKey || ("gdrive:" + reportPayload.drive_file_id);
   const assignmentStatus = outcome === "failed" ? "failed" : "completed";
   const detailsJson = JSON.stringify({ result_id: resultId, outcome });
 
@@ -3398,7 +3406,7 @@ async function submitResult(request, env, nodeId, url) {
       nodeId,
       outcome,
       summary,
-      artifactKey,
+      effectiveArtifactKey,
       metricsJson,
       assignmentId,
       nodeId
@@ -3417,7 +3425,7 @@ async function submitResult(request, env, nodeId, url) {
     `).bind(
       reportId,
       reportType,
-      reportJson,
+      reportPointer,
       reportSha256,
       reportSizeBytes,
       sensitivity,
@@ -3502,6 +3510,7 @@ async function submitResult(request, env, nodeId, url) {
   try {
     statements = await env.DB.batch(resultStatements);
   } catch (error) {
+    await deletePayloadBestEffort(env, reportPayload.payload_id);
     if (String(error).includes("results.assignment_id")) {
       throw new ApiError(409, "result_already_exists");
     }
@@ -3509,6 +3518,7 @@ async function submitResult(request, env, nodeId, url) {
   }
 
   if ((statements[0]?.meta?.changes || 0) !== 1) {
+    await deletePayloadBestEffort(env, reportPayload.payload_id);
     throw new ApiError(409, "assignment_not_active");
   }
 
@@ -3517,6 +3527,7 @@ async function submitResult(request, env, nodeId, url) {
     result: {
       result_id: resultId,
       report_id: reportId,
+      report_payload_id: reportPayload.payload_id,
       assignment_id: assignmentId,
       outcome
     }
