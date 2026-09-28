@@ -225,7 +225,7 @@ function agentRequiresRequestId(version) {
 
 function agentVersionAtLeast(version, minimum) {
   const parse = (value) => {
-    const match = String(value || "").match(/^(\\d+)\\.(\\d+)\\.(\\d+)/);
+    const match = String(value || "").match(/^(\d+)\.(\d+)\.(\d+)/);
     return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
   };
   const actual = parse(version);
