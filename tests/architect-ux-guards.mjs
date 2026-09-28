@@ -591,3 +591,7 @@ assert.match(operations, /async function bulkCommand\(type\)/);
 assert.match(operations, /class="node-grid"/);
 assert.match(operations, /Автообновить все/);
 assert.match(operations, /Откатить все/);
+
+assert.match(index, /ensureAutoEnrollmentStorage\(env\).*nodesQuery/s);
+assert.match(index, /ensureReportStorage\(env\),\s*ensureAutoEnrollmentStorage\(env\)/);
+assert.match(operations, /Сервер не смог собрать сведения проекта/);
