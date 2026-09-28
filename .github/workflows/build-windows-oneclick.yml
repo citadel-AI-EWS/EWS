@@ -453,6 +453,55 @@ jobs:
           }
           Write-Host "Windows SYSTEM recovery fallback: PASS"
 
+      - name: Repair from SYSTEM recovery back to LocalService
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -LiteralPath dist -Filter "CITADEL_EWS_Node_Setup_*_x64.exe" | Select-Object -First 1
+          if (-not $installer) { throw "Installer artifact not found." }
+          $log = Join-Path $env:RUNNER_TEMP "citadel-oneclick-repair-from-system.log"
+          $p = Start-Process -FilePath $installer.FullName -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/SP-",
+            "/LOG=$log"
+          ) -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 120 }
+            throw "Repair from SYSTEM recovery failed with exit code $($p.ExitCode)."
+          }
+          $stateRoot = Join-Path $env:ProgramData "CitadelEWS\state"
+          $agentRoot = Join-Path $env:ProgramData "CitadelEWS\agent"
+          $config = Get-Content -LiteralPath (Join-Path $stateRoot "config.json") -Raw | ConvertFrom-Json
+          if ($config.controller_url -ne "https://127.0.0.1:9") {
+            throw "Repair did not preserve trusted Controller URL from HKLM metadata."
+          }
+          $mode = (Get-Content -LiteralPath (Join-Path $stateRoot "install-mode.txt") -Raw).Trim()
+          if ($mode -notin @('windows_service','windows_boot_task')) {
+            throw "Repair did not return from SYSTEM recovery to a LocalService mode."
+          }
+          foreach ($path in @($stateRoot, $agentRoot, (Join-Path $stateRoot "config.json"), (Join-Path $agentRoot "runtime\python.exe"))) {
+            $acl = Get-Acl -LiteralPath $path
+            $localServiceAce = @($acl.Access | Where-Object {
+              try {
+                $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq 'S-1-5-19'
+              } catch { $false }
+            })
+            if ($localServiceAce.Count -eq 0) {
+              throw "Repair did not restore LocalService ACL on $path."
+            }
+          }
+          $host = Get-CimInstance Win32_Process | Where-Object {
+            $_.Name -eq "CitadelNodeService.exe" -and $_.ExecutablePath -eq (Join-Path $agentRoot "CitadelNodeService.exe")
+          } | Select-Object -First 1
+          if (-not $host) { throw "Repair did not start supervised host." }
+          $child = @(Get-CimInstance Win32_Process | Where-Object {
+            $_.ExecutablePath -eq (Join-Path $agentRoot "runtime\python.exe") -and
+            $_.CommandLine -like "*citadel_node_v2.py*"
+          })
+          if ($child.Count -ne 1) { throw "Repair did not start exactly one Python agent child." }
+          Write-Host "Windows SYSTEM recovery repair-back: PASS"
+
       - name: SYSTEM recovery uninstall smoke test
         if: ${{ always() && steps.system_recovery_install.outcome != 'skipped' }}
         shell: pwsh
