@@ -28,8 +28,21 @@ const state = {
 };
 const originalFetch = globalThis.fetch;
 let driveNo = 0;
+let oauthExchanges = 0;
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input);
+  if (url === "https://oauth2.googleapis.com/token") {
+    const form = new URLSearchParams(String(init.body || ""));
+    assert.equal(form.get("client_id"), "test-client-id");
+    assert.equal(form.get("client_secret"), "test-client-secret");
+    assert.equal(form.get("refresh_token"), "test-refresh-token");
+    assert.equal(form.get("grant_type"), "refresh_token");
+    oauthExchanges += 1;
+    return new Response(JSON.stringify({ access_token: "oauth-drive-token", expires_in: 3600 }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  }
   if (url.startsWith("https://www.googleapis.com/upload/drive/v3/files")) {
     driveNo += 1;
     const fileId = "drive_report_" + driveNo;
@@ -172,7 +185,10 @@ class Statement {
 
 const env = {
   ARCHITECT_TOKEN_HASH: architectHash,
-  GOOGLE_DRIVE_ACCESS_TOKEN: "test-drive-token",
+  GOOGLE_DRIVE_CLIENT_ID: "test-client-id",
+  GOOGLE_DRIVE_CLIENT_SECRET: "test-client-secret",
+  GOOGLE_DRIVE_REFRESH_TOKEN: "test-refresh-token",
+  GOOGLE_DRIVE_PAYLOAD_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   DB: {
     prepare(sql) {
       return new Statement(sql);
@@ -234,6 +250,11 @@ assert.equal(state.result.sensitivity, "internal");
 assert.match(state.result.report_sha256, /^[a-f0-9]{64}$/);
 assert.match(state.result.report_json, /^@drive:payload_/);
 assert.equal(state.result.report_size_bytes, Buffer.byteLength(JSON.stringify(payload.report)));
+assert.equal(oauthExchanges, 1);
+assert.equal(state.drive.size, 1);
+const encryptedDriveReport = [...state.drive.values()][0];
+assert.match(encryptedDriveReport, /"algorithm":"A256GCM"/);
+assert.equal(encryptedDriveReport.includes('"example":true'), false);
 
 const architectHeaders = { authorization: `Bearer ${architectToken}` };
 const listResponse = await worker.fetch(new Request(
@@ -253,6 +274,7 @@ assert.equal(detailResponse.status, 200);
 const detail = await detailResponse.json();
 assert.deepEqual(detail.report.content, payload.report);
 assert.deepEqual(detail.report.metrics, payload.metrics);
+assert.equal(oauthExchanges, 1);
 
 assert.equal(detail.report.storage, "google_drive");
 globalThis.fetch = originalFetch;
