@@ -22,7 +22,37 @@ const state = {
     agent_version: "0.3.10"
   },
   result: null,
-  nonces: new Set()
+  nonces: new Set(),
+  payloads: new Map(),
+  drive: new Map()
+};
+const originalFetch = globalThis.fetch;
+let driveNo = 0;
+globalThis.fetch = async (input, init = {}) => {
+  const url = String(input);
+  if (url.startsWith("https://www.googleapis.com/upload/drive/v3/files")) {
+    driveNo += 1;
+    const fileId = "drive_report_" + driveNo;
+    const raw = String(init.body || "");
+    const chunks = raw.split("\r\n\r\n");
+    const payloadText = (chunks[2] || "").split("\r\n--")[0];
+    state.drive.set(fileId, payloadText);
+    return new Response(JSON.stringify({ id: fileId }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  }
+  const media = url.match(/\/drive\/v3\/files\/([^?]+)\?alt=media/);
+  if (media) {
+    const value = state.drive.get(decodeURIComponent(media[1]));
+    return value === undefined ? new Response("missing", { status: 404 }) : new Response(value, { status: 200 });
+  }
+  if (url.includes("/drive/v3/files/") && init.method === "DELETE") {
+    const fileId = decodeURIComponent(url.split("/").pop());
+    state.drive.delete(fileId);
+    return new Response(null, { status: 204 });
+  }
+  return originalFetch(input, init);
 };
 
 function compact(sql) {
@@ -45,6 +75,9 @@ class Statement {
     }
     if (this.sql.includes("SELECT result_id, outcome, created_at FROM results")) {
       return state.result;
+    }
+    if (this.sql.includes("FROM payload_objects WHERE payload_id = ?")) {
+      return state.payloads.get(this.args[0]) || null;
     }
     if (this.sql.includes("FROM agent_reports AS ar") && this.sql.includes("WHERE ar.report_id = ?")) {
       return state.result && [state.result.report_id, state.result.result_id].includes(this.args[0])
@@ -70,6 +103,14 @@ class Statement {
     if (this.sql.startsWith("DELETE FROM node_request_nonces")) return { meta: { changes: 0 } };
     if (this.sql.startsWith("INSERT OR IGNORE INTO agent_reports")) {
       return { meta: { changes: 0 } };
+    }
+    if (this.sql.startsWith("INSERT INTO payload_objects")) {
+      const [payload_id, owner_type, owner_id, kind, drive_file_id, sha256, size_bytes] = this.args;
+      state.payloads.set(payload_id, { payload_id, owner_type, owner_id, kind, drive_file_id, sha256, size_bytes });
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("DELETE FROM payload_objects")) {
+      return { meta: { changes: state.payloads.delete(this.args[0]) ? 1 : 0 } };
     }
     if (this.sql.startsWith("INSERT INTO results")) {
       const [
@@ -131,6 +172,7 @@ class Statement {
 
 const env = {
   ARCHITECT_TOKEN_HASH: architectHash,
+  GOOGLE_DRIVE_ACCESS_TOKEN: "test-drive-token",
   DB: {
     prepare(sql) {
       return new Statement(sql);
@@ -190,7 +232,8 @@ assert.equal((await submitResponse.json()).ok, true);
 assert.equal(state.result.report_type, "system_inventory");
 assert.equal(state.result.sensitivity, "internal");
 assert.match(state.result.report_sha256, /^[a-f0-9]{64}$/);
-assert.equal(state.result.report_size_bytes, Buffer.byteLength(state.result.report_json));
+assert.match(state.result.report_json, /^@drive:payload_/);
+assert.equal(state.result.report_size_bytes, Buffer.byteLength(JSON.stringify(payload.report)));
 
 const architectHeaders = { authorization: `Bearer ${architectToken}` };
 const listResponse = await worker.fetch(new Request(
@@ -211,4 +254,6 @@ const detail = await detailResponse.json();
 assert.deepEqual(detail.report.content, payload.report);
 assert.deepEqual(detail.report.metrics, payload.metrics);
 
-console.log("Authenticated D1 report storage and retrieval: OK");
+assert.equal(detail.report.storage, "google_drive");
+globalThis.fetch = originalFetch;
+console.log("Authenticated Drive-backed report storage and retrieval: OK");
