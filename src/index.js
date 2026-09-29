@@ -6654,32 +6654,71 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/v1/architect/machines") {
     if (request.method !== "GET") return methodNotAllowed(["GET"]);
     await authenticateArchitect(request, env);
-    await ensureNodeAiStorage(env);
+    await Promise.all([ensureNodeAiStorage(env), ensureNodeNetworkStorage(env), ensureAutoEnrollmentStorage(env)]);
     const [nodes, commands] = await Promise.all([
-      env.DB.prepare(`SELECT n.node_id, n.hostname, n.agent_version, n.cpu_percent, n.memory_percent,
-        n.last_seen_at, CASE WHEN n.status = 'online' AND
+      env.DB.prepare(`SELECT n.node_id, nn.node_number, n.hostname, n.os_name, n.os_version, n.architecture,
+        n.agent_version, n.cpu_percent, n.memory_percent, n.last_seen_at,
+        CASE WHEN n.status = 'online' AND
         (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-2 minutes'))
         THEN 'offline' ELSE n.status END AS status,
+        net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json,
         COALESCE(ai.installed, 0) AS ai_installed,
         COALESCE(ai.server_running, 0) AS ai_server_running,
         ai.selected_model AS ai_selected_model,
         ai.loaded_model AS ai_loaded_model,
-        ai.updated_at AS ai_updated_at
+        ai.updated_at AS ai_updated_at,
+        air.state_json AS ai_runtime_json
         FROM nodes AS n
+        LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id
+        LEFT JOIN node_network_state AS net ON net.node_id = n.node_id
         LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
+        LEFT JOIN node_ai_runtime_state AS air ON air.node_id = n.node_id
         WHERE n.status != 'revoked' ORDER BY n.node_id LIMIT 500`).all(),
-      env.DB.prepare(`SELECT command_id, node_id, command_type, status, created_at
+      env.DB.prepare(`SELECT command_id, node_id, command_type, status, created_at, completed_at
         FROM commands
         WHERE status IN ('pending','accepted')
-          OR datetime(created_at) >= datetime('now', '-30 minutes')
+          OR created_at >= datetime('now', '-30 minutes')
         ORDER BY created_at DESC LIMIT 500`).all()
     ]);
-    const machineNodes = (nodes.results || []).map((node) => ({
-      ...node,
-      latest_agent_version: LATEST_NODE_RELEASE.version,
-      update_required: node.agent_version !== LATEST_NODE_RELEASE.version
-    }));
-    return json({ok:true, nodes:machineNodes, commands:commands.results || []});
+    const commandRows = commands.results || [];
+    const latestCommands = new Map();
+    for (const command of commandRows) {
+      if (!latestCommands.has(command.node_id)) latestCommands.set(command.node_id, command);
+    }
+    const rawNodes = nodes.results || [];
+    const liveRelays = rawNodes.filter((node) =>
+      node.status === "online" &&
+      node.lan_ipv4 &&
+      Date.parse(String(node.last_seen_at).replace(" ", "T") + (String(node.last_seen_at).includes("T") ? "" : "Z")) >= Date.now() - 5 * 60 * 1000
+    );
+    const machineNodes = rawNodes.map((node) => {
+      const macAddresses = safeJson(node.mac_addresses_json, []);
+      const prefix = subnet24(node.lan_ipv4);
+      const relay = prefix && Array.isArray(macAddresses) && macAddresses.length
+        ? liveRelays.find((candidate) => candidate.node_id !== node.node_id && subnet24(candidate.lan_ipv4) === prefix)
+        : null;
+      const latestCommand = latestCommands.get(node.node_id);
+      return {
+        ...node,
+        mac_addresses: Array.isArray(macAddresses) ? macAddresses : [],
+        mac_addresses_json: undefined,
+        lmstudio_installed: node.ai_installed,
+        lmstudio_server_running: node.ai_server_running,
+        lmstudio_selected_model: node.ai_selected_model,
+        lmstudio_loaded_model: node.ai_loaded_model,
+        lmstudio_updated_at: node.ai_updated_at,
+        lmstudio_runtime: safeJson(node.ai_runtime_json, {}),
+        ai_runtime_json: undefined,
+        last_command_type: latestCommand?.command_type || null,
+        last_command_status: latestCommand?.status || null,
+        last_command_at: latestCommand?.completed_at || latestCommand?.created_at || null,
+        wake_available: node.status === "offline" && Boolean(relay),
+        wake_relay_node_id: relay?.node_id || null,
+        latest_agent_version: LATEST_NODE_RELEASE.version,
+        update_required: node.agent_version !== LATEST_NODE_RELEASE.version
+      };
+    });
+    return json({ok:true, nodes:machineNodes, commands:commandRows});
   }
 
   if (url.pathname === "/api/v1/architect/projects/check") {
