@@ -399,7 +399,11 @@ assert.match(index, /hub_d1_overloaded/);
 }
 assert.match(hub, /setInterval\(refresh,60000\)/);
 assert.doesNotMatch(home, /setInterval\(refresh,10000\)/);
-assert.match(home, /function scheduleRefresh\(delay=60000\)/);
+assert.match(home, /const PUBLIC_HUB_REFRESH_MS=300000;/);
+assert.match(home, /function scheduleRefresh\(delay=PUBLIC_HUB_REFRESH_MS\)/);
+assert.match(home, /async function refresh\(\)\{\s*if\(document\.hidden\)/);
+assert.match(home, /visibilitychange/);
+assert.match(home, /if\(!document\.hidden\)scheduleRefresh\(delay\)/);
 assert.match(home, /healthFetchedAt>=300000/);
 assert.match(home, /hub_d1_daily_read_limit_exceeded/);
 assert.match(home, /nextUtcReset/);
