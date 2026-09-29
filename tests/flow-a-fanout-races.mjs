@@ -16,6 +16,16 @@ assert.doesNotMatch(
   /readyDistinct\s*<\s*scheduling\.desired_workers/,
   "explicit fanout must not wait for every requested host before the first claim"
 );
+assert.doesNotMatch(
+  materialize,
+  /node_project_work_count/,
+  "hot materialize path must not pre-reserve explicit work with a correlated node count"
+);
+assert.match(
+  materialize,
+  /scheduling\.target_mode !== "auto"[\s\S]*?return true;/,
+  "explicit fanout must let another physical host claim work pinned to a duplicate preferred enrollment"
+);
 
 const claimMatch = materialize.match(
   /env\.DB\.prepare\(\`\n\s*(UPDATE project_work_items[\s\S]*?JOIN nodes AS same_node[\s\S]*?)\n\s*\`\)\.bind\(\n\s*nodeId,\n\s*work\.work_item_id,\n\s*enforceDistinctHost/
