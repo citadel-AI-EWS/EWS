@@ -548,6 +548,8 @@ async function persistDrivePayload(env, { owner_type, owner_id, kind, value, met
       citadel_owner_id: String(owner_id || "").slice(0, 120),
       citadel_kind: String(kind || "").slice(0, 64),
       citadel_sha256: sha256,
+      citadel_size_bytes: String(sizeBytes),
+      citadel_created_at: new Date().toISOString(),
       citadel_encryption: "A256GCM",
       citadel_key_version: encrypted.key_version,
       citadel_hostname: String(driveContext.hostname || "").slice(0, 124),
@@ -3686,7 +3688,7 @@ async function submitResult(request, env, nodeId, url) {
     kind: "agent_report",
     value: reportValue,
     metadata: {
-      hostname: reportContext?.hostname || null,
+      hostname: reportContext?.hostname || nodeId,
       node_id: nodeId,
       execution_architecture: executionArchitecture,
       assignment_id: assignmentId,
