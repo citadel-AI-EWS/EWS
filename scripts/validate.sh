@@ -37,7 +37,7 @@ for source, target in (
 hub = Path("hub.html").read_text(encoding="utf-8")
 for required in (
     "/api/v1/hub/nodes",
-    "/api/v1/architect/overview",
+    "/api/v1/architect/machines",
     "/api/v1/architect/presence",
     "/api/v1/architect/release",
     "/api/v1/architect/missions",
@@ -86,6 +86,14 @@ for forbidden in (
 
 if "SSH target configured locally; tunnel reachability is not yet verified" not in hub:
     raise SystemExit("Hub must not claim SSH reachability before Tunnel verification")
+
+secure_refresh_start = hub.find("async function refreshSecure")
+secure_refresh_end = hub.find("async function refresh(){", secure_refresh_start)
+secure_refresh = hub[secure_refresh_start:secure_refresh_end] if secure_refresh_start >= 0 and secure_refresh_end > secure_refresh_start else ""
+if "/api/v1/architect/overview" in secure_refresh:
+    raise SystemExit("Hub secure polling must not use heavyweight Architect overview")
+if "document.hidden" not in hub or "visibilitychange" not in hub:
+    raise SystemExit("Hub hidden-tab D1 polling guard missing")
 
 architect = Path("architect.html").read_text(encoding="utf-8")
 worker = Path("src/index.js").read_text(encoding="utf-8")

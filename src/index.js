@@ -78,6 +78,7 @@ let reportSchemaPromise;
 let legacyReportBackfillPromise;
 let sessionSchemaPromise;
 let commandIndexPromise;
+let commandReadIndexPromise;
 let nodeNetworkSchemaPromise;
 let nodeHardwareSchemaPromise;
 let rolloutSchemaPromise;
@@ -711,6 +712,29 @@ async function ensureSessionStorage(env) {
   await sessionSchemaPromise;
 }
 
+async function ensureCommandReadIndexes(env) {
+  if (!commandReadIndexPromise) {
+    commandReadIndexPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_commands_status_created
+        ON commands(status, created_at DESC, command_id DESC)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_commands_created_time
+        ON commands(datetime(created_at) DESC, command_id DESC)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_audit_events_target_action
+        ON audit_events(target_type, target_id, action, event_id DESC)
+      `)
+    ]).catch((error) => {
+      commandReadIndexPromise = undefined;
+      throw error;
+    });
+  }
+  await commandReadIndexPromise;
+}
+
 async function ensureCommandStorage(env) {
   if (!commandIndexPromise) {
     commandIndexPromise = (async () => {
@@ -748,8 +772,20 @@ async function ensureCommandStorage(env) {
           ON commands(node_id, status, created_at)
         `),
         env.DB.prepare(`
+          CREATE INDEX IF NOT EXISTS idx_commands_status_created
+          ON commands(status, created_at DESC, command_id DESC)
+        `),
+        env.DB.prepare(`
+          CREATE INDEX IF NOT EXISTS idx_commands_created_time
+          ON commands(datetime(created_at) DESC, command_id DESC)
+        `),
+        env.DB.prepare(`
           CREATE INDEX IF NOT EXISTS idx_audit_events_created
           ON audit_events(event_id DESC)
+        `),
+        env.DB.prepare(`
+          CREATE INDEX IF NOT EXISTS idx_audit_events_target_action
+          ON audit_events(target_type, target_id, action, event_id DESC)
         `)
       ]);
 
@@ -1037,10 +1073,18 @@ async function startUpdateAllRollout(request, env) {
 
 async function ensureRolloutCommandForNode(env, nodeId) {
   await Promise.all([ensureRolloutStorage(env), ensureCommandStorage(env)]);
-  const [rollout, node, pending, recentCompletedUpdate] = await Promise.all([
-    env.DB.prepare(
-      "SELECT rollout_id, target_version, release_json FROM agent_rollouts WHERE status = 'active' ORDER BY created_at DESC LIMIT 1"
-    ).first(),
+  // Rollouts are exceptional. On the steady-state polling path, do one indexed
+  // lookup and return before touching node/command history.
+  const rollout = await env.DB.prepare(
+    "SELECT rollout_id, target_version, release_json FROM agent_rollouts WHERE status = 'active' ORDER BY created_at DESC LIMIT 1"
+  ).first();
+  if (!rollout) return;
+
+  // Stale active commands only need cleanup when a rollout actually needs the
+  // single-active-command slot. Normal agent polling must not scan for stale
+  // commands every 30 seconds.
+  await expireStaleNodeCommands(env, nodeId);
+  const [node, pending, recentCompletedUpdate] = await Promise.all([
     env.DB.prepare(
       "SELECT node_id, hostname, status, agent_version, last_seen_at FROM nodes WHERE node_id = ?"
     ).bind(nodeId).first(),
@@ -1055,7 +1099,6 @@ async function ensureRolloutCommandForNode(env, nodeId) {
     ).bind(nodeId).first()
   ]);
   if (
-    !rollout ||
     !node ||
     pending ||
     node.status === "revoked" ||
@@ -1765,6 +1808,18 @@ function projectNodeReady(node, sourceType) {
  */
 async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
   await Promise.all([ensureProjectStorage(env), ensureNodeAiStorage(env), ensurePayloadStorage(env)]);
+  // Most assignment polls happen with no queued project work. Use the
+  // status-first index to prove that cheaply before loading node AI state and
+  // the fleet-wide readiness set.
+  const plannedWork = projectId
+    ? await env.DB.prepare(
+        "SELECT work_item_id FROM project_work_items WHERE status = 'planned' AND project_id = ? LIMIT 1"
+      ).bind(projectId).first()
+    : await env.DB.prepare(
+        "SELECT work_item_id FROM project_work_items WHERE status = 'planned' LIMIT 1"
+      ).first();
+  if (!plannedWork) return 0;
+
   const node = await env.DB.prepare(`
     SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
       ai.installed, ai.loaded_model, ai.server_running
@@ -3204,7 +3259,7 @@ async function enrollNode(request, env) {
 
 async function heartbeat(request, env, nodeId, url) {
   const { bytes: bodyBytes, text: bodyText } = await readBody(request, MAX_NODE_BODY_BYTES);
-  await authenticateNode(request, env, nodeId, url, bodyBytes);
+  const node = await authenticateNode(request, env, nodeId, url, bodyBytes);
   const body = parseJsonObject(bodyText);
 
   const cpuPercent = optionalPercent(body.cpu_percent, "cpu_percent");
@@ -3217,6 +3272,7 @@ async function heartbeat(request, env, nodeId, url) {
   const hardware = normalizeNodeHardware(body.hardware);
   if (network) await ensureNodeNetworkStorage(env);
   if (hardware) await ensureNodeHardwareStorage(env);
+  const heartbeatAt = new Date().toISOString();
   const heartbeatStatements = [
     env.DB.prepare(`
       UPDATE nodes
@@ -3225,9 +3281,9 @@ async function heartbeat(request, env, nodeId, url) {
           agent_version = COALESCE(?, agent_version),
           capabilities_json = COALESCE(?, capabilities_json),
           status = CASE WHEN status = 'paused' THEN 'paused' ELSE 'online' END,
-          last_seen_at = CURRENT_TIMESTAMP
+          last_seen_at = ?
       WHERE node_id = ? AND status != 'revoked'
-    `).bind(cpuPercent, memoryPercent, agentVersion, capabilitiesJson, nodeId)
+    `).bind(cpuPercent, memoryPercent, agentVersion, capabilitiesJson, heartbeatAt, nodeId)
   ];
   if (network) {
     heartbeatStatements.push(env.DB.prepare(`
@@ -3272,10 +3328,11 @@ async function heartbeat(request, env, nodeId, url) {
     throw new ApiError(404, "node_not_found");
   }
 
-  const node = await env.DB.prepare(
-    "SELECT status, last_seen_at FROM nodes WHERE node_id = ?"
-  ).bind(nodeId).first();
-  return json({ ok: true, node_id: nodeId, ...node });
+  // authenticateNode already loaded the current status. The UPDATE above can
+  // only preserve paused or move a non-revoked node to online, so a second
+  // point SELECT just to echo the heartbeat would double-read this hot path.
+  const status = node.status === "paused" ? "paused" : "online";
+  return json({ ok: true, node_id: nodeId, status, last_seen_at: heartbeatAt });
 }
 
 async function listAssignments(request, env, nodeId, url) {
@@ -4490,16 +4547,22 @@ async function expireStaleNodeCommands(env, nodeId) {
 
 async function listCommands(request, env, nodeId, url) {
   const node = await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
-  await expireStaleNodeCommands(env, nodeId);
-  await ensureRolloutCommandForNode(env, nodeId);
+  // Current-version nodes cannot benefit from rollout discovery. Skipping the
+  // lookup removes one D1 read from every steady-state command poll.
+  if (node.agent_version !== LATEST_NODE_RELEASE.version) {
+    await ensureRolloutCommandForNode(env, nodeId);
+  }
 
+  const cutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
   const query = await env.DB.prepare(`
     SELECT command_id, command_type, payload_json, signature, status, created_at
     FROM commands
-    WHERE node_id = ? AND status IN ('pending', 'accepted')
+    WHERE node_id = ?
+      AND status IN ('pending', 'accepted')
+      AND datetime(created_at) >= datetime(?)
     ORDER BY created_at ASC
     LIMIT 20
-  `).bind(nodeId).all();
+  `).bind(nodeId, cutoff).all();
 
   const commands = (query.results || []).map((row) => ({
     ...row,
@@ -5407,9 +5470,13 @@ async function architectOverview(request, env) {
     ensureAutoEnrollmentStorage(env),
     ensureProjectStorage(env),
     ensureNodeNetworkStorage(env),
-    ensureNodeAiStorage(env)
+    ensureNodeAiStorage(env),
+    ensureCommandReadIndexes(env)
   ]);
-  await expireStaleCommands(env);
+  // Overview is a read path. Do not run command-retention housekeeping on every
+  // browser refresh; write/control paths expire stale commands before they need
+  // the active-command slot. Filter stale active rows in the read query instead.
+  const activeCommandCutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
 
   const [counts, nodesQuery, missionsQuery, commandsQuery] = await Promise.all([
     env.DB.prepare(
@@ -5480,12 +5547,13 @@ async function architectOverview(request, env) {
       "CASE WHEN EXISTS (SELECT 1 FROM audit_events AS ae " +
       "WHERE ae.target_type = 'command' AND ae.target_id = c.command_id " +
       "AND ae.action = 'command.expired') THEN 1 ELSE 0 END AS ttl_expired " +
-      "FROM commands AS c WHERE c.status IN ('pending', 'accepted') " +
+      "FROM commands AS c WHERE (c.status IN ('pending', 'accepted') " +
+      "AND datetime(c.created_at) >= datetime(?)) " +
       "OR c.command_id IN (" +
       "SELECT command_id FROM commands WHERE status NOT IN ('pending', 'accepted') " +
       "ORDER BY created_at DESC LIMIT 50" +
       ") ORDER BY c.created_at DESC"
-    ).all()
+    ).bind(activeCommandCutoff).all()
   ]);
 
   const missions = (missionsQuery.results || []).map((row) => {
@@ -6202,12 +6270,15 @@ async function architectWakeNode(request, env, targetNodeId) {
     WHERE n.node_id != ?
       AND n.status = 'online'
       AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes')
-    ORDER BY n.last_seen_at DESC
+    ORDER BY datetime(n.last_seen_at) DESC
     LIMIT 100
   `).bind(targetNodeId).all();
   const relay = (relaysQuery.results || []).find((candidate) => subnet24(candidate.lan_ipv4) === prefix);
   if (!relay) throw new ApiError(409, "wake_relay_unavailable");
 
+  // Wake is an explicit control action, so reclaim an expired command slot here
+  // instead of making every steady-state agent poll perform cleanup.
+  await expireStaleNodeCommands(env, relay.node_id);
   const pending = await env.DB.prepare(
     "SELECT command_id FROM commands WHERE node_id = ? AND status IN ('pending','accepted') LIMIT 1"
   ).bind(relay.node_id).first();
@@ -6623,32 +6694,76 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/v1/architect/machines") {
     if (request.method !== "GET") return methodNotAllowed(["GET"]);
     await authenticateArchitect(request, env);
-    await ensureNodeAiStorage(env);
+    await Promise.all([
+      ensureNodeAiStorage(env),
+      ensureNodeNetworkStorage(env),
+      ensureAutoEnrollmentStorage(env),
+      ensureCommandReadIndexes(env)
+    ]);
     const [nodes, commands] = await Promise.all([
-      env.DB.prepare(`SELECT n.node_id, n.hostname, n.agent_version, n.cpu_percent, n.memory_percent,
-        n.last_seen_at, CASE WHEN n.status = 'online' AND
+      env.DB.prepare(`SELECT n.node_id, nn.node_number, n.hostname, n.os_name, n.os_version, n.architecture,
+        n.agent_version, n.cpu_percent, n.memory_percent, n.last_seen_at,
+        CASE WHEN n.status = 'online' AND
         (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-2 minutes'))
         THEN 'offline' ELSE n.status END AS status,
+        net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json,
         COALESCE(ai.installed, 0) AS ai_installed,
         COALESCE(ai.server_running, 0) AS ai_server_running,
         ai.selected_model AS ai_selected_model,
         ai.loaded_model AS ai_loaded_model,
-        ai.updated_at AS ai_updated_at
+        ai.updated_at AS ai_updated_at,
+        air.state_json AS ai_runtime_json
         FROM nodes AS n
+        LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id
+        LEFT JOIN node_network_state AS net ON net.node_id = n.node_id
         LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
+        LEFT JOIN node_ai_runtime_state AS air ON air.node_id = n.node_id
         WHERE n.status != 'revoked' ORDER BY n.node_id LIMIT 500`).all(),
-      env.DB.prepare(`SELECT command_id, node_id, command_type, status, created_at
+      env.DB.prepare(`SELECT command_id, node_id, command_type, status, created_at, completed_at
         FROM commands
         WHERE status IN ('pending','accepted')
           OR datetime(created_at) >= datetime('now', '-30 minutes')
         ORDER BY created_at DESC LIMIT 500`).all()
     ]);
-    const machineNodes = (nodes.results || []).map((node) => ({
-      ...node,
-      latest_agent_version: LATEST_NODE_RELEASE.version,
-      update_required: node.agent_version !== LATEST_NODE_RELEASE.version
-    }));
-    return json({ok:true, nodes:machineNodes, commands:commands.results || []});
+    const commandRows = commands.results || [];
+    const latestCommands = new Map();
+    for (const command of commandRows) {
+      if (!latestCommands.has(command.node_id)) latestCommands.set(command.node_id, command);
+    }
+    const rawNodes = nodes.results || [];
+    const liveRelays = rawNodes.filter((node) =>
+      node.status === "online" &&
+      node.lan_ipv4 &&
+      Date.parse(String(node.last_seen_at).replace(" ", "T") + (String(node.last_seen_at).includes("T") ? "" : "Z")) >= Date.now() - 5 * 60 * 1000
+    );
+    const machineNodes = rawNodes.map((node) => {
+      const macAddresses = safeJson(node.mac_addresses_json, []);
+      const prefix = subnet24(node.lan_ipv4);
+      const relay = prefix && Array.isArray(macAddresses) && macAddresses.length
+        ? liveRelays.find((candidate) => candidate.node_id !== node.node_id && subnet24(candidate.lan_ipv4) === prefix)
+        : null;
+      const latestCommand = latestCommands.get(node.node_id);
+      return {
+        ...node,
+        mac_addresses: Array.isArray(macAddresses) ? macAddresses : [],
+        mac_addresses_json: undefined,
+        lmstudio_installed: node.ai_installed,
+        lmstudio_server_running: node.ai_server_running,
+        lmstudio_selected_model: node.ai_selected_model,
+        lmstudio_loaded_model: node.ai_loaded_model,
+        lmstudio_updated_at: node.ai_updated_at,
+        lmstudio_runtime: safeJson(node.ai_runtime_json, {}),
+        ai_runtime_json: undefined,
+        last_command_type: latestCommand?.command_type || null,
+        last_command_status: latestCommand?.status || null,
+        last_command_at: latestCommand?.completed_at || latestCommand?.created_at || null,
+        wake_available: node.status === "offline" && Boolean(relay),
+        wake_relay_node_id: relay?.node_id || null,
+        latest_agent_version: LATEST_NODE_RELEASE.version,
+        update_required: node.agent_version !== LATEST_NODE_RELEASE.version
+      };
+    });
+    return json({ok:true, nodes:machineNodes, commands:commandRows});
   }
 
   if (url.pathname === "/api/v1/architect/projects/check") {

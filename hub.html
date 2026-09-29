@@ -194,7 +194,7 @@
     const $ = (id) => document.getElementById(id);
     const nodesEl = $("nodes"), tokenInput = $("architectToken"), loginButton = $("loginButton"), logoutButton = $("logoutButton");
     const searchInput = $("nodeSearch"), nodePicker = $("nodePicker"), updateAllButton = $("updateAllButton"), pauseAllButton = $("pauseAllButton"), exportButton = $("exportButton");
-    let architectToken = sessionStorage.getItem("citadel-architect-token") || "", releaseVersion = "", lmstudioConfig = null, lmstudioNodeId = "", hybridNodeId = "", hybridMode = "both", lmstudioPollTimer = null, hybridPollTimer = null, requestedLmNodeId = new URLSearchParams(location.search).get("lmnode") || sessionStorage.getItem("citadel-lmnode-request") || "", lastOverview = null, lastPresence = [], lastPublic = [], refreshBusy = false, lang = localStorage.getItem("citadelHubLang") || "ru";
+    let architectToken = sessionStorage.getItem("citadel-architect-token") || "", releaseVersion = "", releaseFetchedAt = 0, lmstudioConfig = null, lmstudioNodeId = "", hybridNodeId = "", hybridMode = "both", lmstudioPollTimer = null, hybridPollTimer = null, requestedLmNodeId = new URLSearchParams(location.search).get("lmnode") || sessionStorage.getItem("citadel-lmnode-request") || "", lastOverview = null, lastPresence = [], lastPublic = [], refreshBusy = false, lang = localStorage.getItem("citadelHubLang") || "ru";
     if(requestedLmNodeId)sessionStorage.removeItem("citadel-lmnode-request");
     if(location.pathname!=="/"||location.search||location.hash)history.replaceState({citadelView:"hub"},"","/");
 
@@ -347,7 +347,7 @@
       node.lmstudio_runtime=ai;
     }
     async function pollAiState(nodeId){
-      if(!architectToken||!nodeId)return null;
+      if(document.hidden||!architectToken||!nodeId)return null;
       const data=await api("/api/v1/architect/nodes/"+encodeURIComponent(nodeId)+"/ai-state");
       const node=(lastOverview?.nodes||[]).find(n=>n.node_id===nodeId);
       applyAiSnapshot(node,data);
@@ -575,12 +575,16 @@
       setState(`Live public data · ${new Date().toLocaleTimeString()}`)
     }
     async function refreshSecure(){
-      const [overview,presenceData,release]=await Promise.all([
-        api("/api/v1/architect/overview"),
+      const needRelease=!releaseVersion||Date.now()-releaseFetchedAt>=600000;
+      const [fleet,presenceData,release]=await Promise.all([
+        api("/api/v1/architect/machines"),
         api("/api/v1/architect/presence"),
-        api("/api/v1/architect/release")
+        needRelease?api("/api/v1/architect/release"):Promise.resolve(null)
       ]);
-      lastOverview=overview;lastPresence=presenceData.presence||[];releaseVersion=release.release?.version||"";lmstudioConfig=release.lmstudio||null;
+      const fleetNodes=fleet.nodes||[];
+      const overview={...fleet,counts:{nodes:fleetNodes.length,online_nodes:fleetNodes.filter(n=>freshness(n)==="online").length}};
+      lastOverview=overview;lastPresence=presenceData.presence||[];
+      if(release){releaseVersion=release.release?.version||"";lmstudioConfig=release.lmstudio||null;releaseFetchedAt=Date.now()}
       const modelOptions=$("lmstudioModelOptions");modelOptions.replaceChildren();
       for(const item of (lmstudioConfig?.model_presets||[])){const option=document.createElement("option");option.value=item.id;option.label=item.label||item.id;modelOptions.appendChild(option)}
       renderCurrent();
@@ -604,7 +608,7 @@
       syncLmstudioPanel();
       setState(`Secure controller data · ${new Date().toLocaleTimeString()}`)
     }
-    async function refresh(){if(refreshBusy)return;refreshBusy=true;$("networkChip").innerHTML='NETWORK <strong>SYNC</strong>';try{if(architectToken)await refreshSecure();else await refreshPublic();$("networkChip").innerHTML='NETWORK <strong>ONLINE</strong>'}catch(error){$("networkChip").innerHTML='NETWORK <strong>ERROR</strong>';$("controllerStatus").textContent=`CONTROLLER — ${error.message}`;$("controllerStatus").className="statusPill bad";if(architectToken&&["architect_authentication_required","invalid_architect_token"].includes(error.message)){architectToken="";sessionStorage.removeItem("citadel-architect-token");tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;toast("Authentication failed",error.message,"bad");await refreshPublic()}else setState(`Controller error: ${error.message}`)}finally{refreshBusy=false}}
+    async function refresh(){if(document.hidden||refreshBusy)return;refreshBusy=true;$("networkChip").innerHTML='NETWORK <strong>SYNC</strong>';try{if(architectToken)await refreshSecure();else await refreshPublic();$("networkChip").innerHTML='NETWORK <strong>ONLINE</strong>'}catch(error){$("networkChip").innerHTML='NETWORK <strong>ERROR</strong>';$("controllerStatus").textContent=`CONTROLLER — ${error.message}`;$("controllerStatus").className="statusPill bad";if(architectToken&&["architect_authentication_required","invalid_architect_token"].includes(error.message)){architectToken="";sessionStorage.removeItem("citadel-architect-token");tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;toast("Authentication failed",error.message,"bad");await refreshPublic()}else setState(`Controller error: ${error.message}`)}finally{refreshBusy=false}}
 
     async function wakeNode(node){
       if(!node?.wake_available)return toast("Wake-on-LAN",lang==="he"?"אין relay חי או MAC/LAN עדיין לא ידועים":lang==="en"?"No live relay, or MAC/LAN is not known yet":"Нет живой relay-ноды или MAC/LAN ещё неизвестны","bad");
@@ -661,7 +665,7 @@
       tokenInput.value="";
       await refresh();
     });
-    logoutButton.addEventListener("click",async()=>{architectToken="";sessionStorage.removeItem("citadel-architect-token");releaseVersion="";lastOverview=null;lastPresence=[];tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;await refreshPublic()});
+    logoutButton.addEventListener("click",async()=>{architectToken="";sessionStorage.removeItem("citadel-architect-token");releaseVersion="";releaseFetchedAt=0;lastOverview=null;lastPresence=[];tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;await refreshPublic()});
     $("refreshButton").addEventListener("click",refresh);
     searchInput.addEventListener("input",()=>{nodePicker.value="";renderCurrent()});
     nodePicker.addEventListener("change",()=>{searchInput.value=nodePicker.value;renderCurrent()});
@@ -678,6 +682,7 @@
       $("clock").textContent=now.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",hour12:false});
       updateSiteClock();
     }
+    document.addEventListener("visibilitychange",()=>{if(!document.hidden)refresh()});
     installHubCollapsers();updateClocks();setInterval(updateClocks,15000);applyLanguage(lang);updateSsh();refresh();setInterval(refresh,60000);
   </script>
 </body>

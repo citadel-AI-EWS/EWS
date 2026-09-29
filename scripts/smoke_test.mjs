@@ -72,6 +72,12 @@ function assertReady(health, hub, api, root) {
 let lastError;
 for (let attempt = 1; attempt <= attempts; attempt += 1) {
   try {
+    const d1Usage = await getJson("/api/v1/status/d1-usage", attempt);
+    if (d1Usage.status !== "ready" || !Number.isFinite(Number(d1Usage.usage_percent))) {
+      throw new Error("D1 usage meter is not ready");
+    }
+    console.log(`D1 usage meter: ${Number(d1Usage.usage_percent).toFixed(1)}% · reset ${d1Usage.reset_at || "unknown"}`);
+
     const [health, hub, api, root] = await Promise.all([
       getJson("/api/health", attempt),
       getJson("/api/v1/hub/nodes", attempt),
@@ -85,6 +91,7 @@ for (let attempt = 1; attempt <= attempts; attempt += 1) {
       deploy_sha: deploySha,
       registered_nodes: hub.nodes.length,
       project_execution: health.project_execution,
+      d1_usage_percent: Number(d1Usage.usage_percent),
       openrouter_quality: health.openrouter_quality,
       project_readiness_error: health.project_readiness_error,
       project_online_nodes: health.project_online_nodes,
