@@ -129,12 +129,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${XAI_API_KEY:-}" ]]; then
-            echo "provider=xai" >> "$GITHUB_OUTPUT"
-            echo "model=${XAI_MODEL:-grok-4.7}" >> "$GITHUB_OUTPUT"
-          elif [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
+          if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
             echo "provider=openrouter" >> "$GITHUB_OUTPUT"
             echo "model=${OPENROUTER_GROK_MODEL:-x-ai/grok-4.7}" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${XAI_API_KEY:-}" ]]; then
+            echo "provider=xai" >> "$GITHUB_OUTPUT"
+            echo "model=${XAI_MODEL:-grok-4.7}" >> "$GITHUB_OUTPUT"
           else
             echo "provider=none" >> "$GITHUB_OUTPUT"
             echo "model=none" >> "$GITHUB_OUTPUT"
