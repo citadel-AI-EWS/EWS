@@ -26,6 +26,7 @@ try {
   assert.equal(publicStatus.status,'ready');
   assert.equal(publicStatus.usage_percent,90);
   assert.equal(publicStatus.reset_at,'2026-09-27T00:00:00.000Z');
+  assert.equal(publicStatus.error,null);
   assert.equal(requests,1,'public status must reuse cached analytics');
   assert.ok(!('account' in publicStatus),'public D1 meter must not expose account details');
   assert.ok(!('database' in publicStatus),'public D1 meter must not expose database details');
@@ -37,8 +38,17 @@ try {
   const paid=await d1UsageOverview({...env,D1_USAGE_PLAN:'paid'},now);
   assert.equal(paid.account.rows_read.percent,null,'daily usage cannot be compared with paid monthly allowance');
   globalThis.fetch=async()=>Response.json({errors:[{message:'secret-like detail'}]});
-  const failed=await d1UsageOverview(env,new Date(+now+360000));
+  const failedAt=new Date(+now+360000);
+  const failed=await d1UsageOverview(env,failedAt);
   assert.equal(failed.status,'unavailable'); assert.equal(failed.account.rows_read.used,null);
+  const publicFailed=await d1UsageStatus(env,failedAt);
+  assert.equal(publicFailed.status,'unavailable');
+  assert.equal(publicFailed.error,'cloudflare_api_error');
+  assert.ok(!JSON.stringify(publicFailed).includes('secret-like'));
   assert.ok(!JSON.stringify(failed).includes('secret-like'));
-  console.log('D1 overview: analytics-only account scope, exact arithmetic, caching, paid plan and errors PASS');
+  globalThis.fetch=async()=>new Response('forbidden',{status:403});
+  const forbidden=await d1UsageStatus(env,new Date(+now+420000));
+  assert.equal(forbidden.status,'unavailable');
+  assert.equal(forbidden.error,'cloudflare_http_403');
+  console.log('D1 overview: analytics-only account scope, exact arithmetic, caching, paid plan and safe errors PASS');
 } finally {globalThis.fetch=saved;}
