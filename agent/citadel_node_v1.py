@@ -1598,20 +1598,22 @@ class Agent:
 
     @staticmethod
     def _local_port_open(port: int) -> bool:
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.75):
-                return True
-        except OSError:
-            return False
+        for host in ("127.0.0.1", "::1"):
+            try:
+                with socket.create_connection((host, port), timeout=0.75):
+                    return True
+            except OSError:
+                continue
+        return False
 
     @staticmethod
-    def _ssh_protocol_banner() -> bool:
-        """Read only, bounded SSH identification exchange; no authentication or shell."""
+    def _ssh_protocol_banner_at(host: str) -> bool:
+        """Read one bounded SSH identification exchange on a loopback address."""
         try:
-            with socket.create_connection(("127.0.0.1", 22), timeout=1.5) as connection:
+            with socket.create_connection((host, 22), timeout=1.5) as connection:
                 deadline = time.monotonic() + 2.0
                 banner = b""
-                for _ in range(51):  # RFC 4253 requires accepting at least 50 preliminary lines.
+                for _ in range(51):
                     line = b""
                     while len(line) < 256:
                         remaining = deadline - time.monotonic()
@@ -1632,6 +1634,11 @@ class Agent:
         except (OSError, TimeoutError):
             pass
         return False
+
+    @classmethod
+    def _ssh_protocol_banner(cls) -> bool:
+        """Read only, bounded SSH identification exchange; no authentication or shell."""
+        return any(cls._ssh_protocol_banner_at(host) for host in ("127.0.0.1", "::1"))
 
     @staticmethod
     def _active_ssh_tunnel_hostname() -> str | None:
@@ -1655,25 +1662,50 @@ class Agent:
                     continue
                 lines = path.read_text(encoding="utf-8").splitlines()
                 inside = False
-                hostname = None
+                item: dict[str, str | None] | None = None
+
+                def ready_hostname(candidate: dict[str, str | None] | None) -> str | None:
+                    if not candidate:
+                        return None
+                    hostname = str(candidate.get("hostname") or "").lower()
+                    service = str(candidate.get("service") or "").lower()
+                    if service not in {"ssh://localhost:22", "ssh://127.0.0.1:22", "ssh://[::1]:22"}:
+                        return None
+                    if not re.fullmatch(r"[a-z0-9]+(?:[a-z0-9.-]*[a-z0-9])?", hostname):
+                        return None
+                    if "." not in hostname or ".." in hostname:
+                        return None
+                    return hostname
+
                 for raw_line in lines:
                     line = raw_line.split(" #", 1)[0].rstrip()
                     if line.strip() == "ingress:":
                         inside = True
+                        item = None
                         continue
                     if not inside:
                         continue
                     if line and not line[0].isspace():
                         break
-                    entry = re.match(r"^\s+-\s+hostname:\s*['\"]?([a-zA-Z0-9.-]+)['\"]?\s*$", line)
-                    if entry:
-                        hostname = entry.group(1).lower()
+                    list_item = re.match(r"^\s+-\s*(.*)$", line)
+                    if list_item:
+                        matched = ready_hostname(item)
+                        if matched:
+                            return matched
+                        item = {"hostname": None, "service": None}
+                        field_text = list_item.group(1).strip()
+                    else:
+                        if item is None:
+                            continue
+                        field_text = line.strip()
+                    field = re.match(r"^(hostname|service):\s*['\"]?([^'\"]+)['\"]?\s*$", field_text)
+                    if not field:
                         continue
-                    if re.match(r"^\s+-\s+", line):
-                        hostname = None
-                    service = re.match(r"^\s+service:\s*['\"]?ssh://(?:localhost|127\.0\.0\.1):22['\"]?\s*$", line)
-                    if service and hostname and re.fullmatch(r"[a-z0-9]+(?:[a-z0-9.-]*[a-z0-9])?", hostname) and "." in hostname and ".." not in hostname:
-                        return hostname
+                    key, value = field.group(1), field.group(2).strip()
+                    item[key] = value
+                matched = ready_hostname(item)
+                if matched:
+                    return matched
         except (psutil.Error, OSError, UnicodeError):
             return None
         return None
