@@ -1,4 +1,7 @@
-# TEST — EWS Controller v0.3
+# TEST — EWS Controller v0.3 (legacy)
+
+> [!IMPORTANT]
+> This is a **legacy AWS Controller test note** retained for historical context. It is not the current public testing entry point. External testers should start with [TESTING.md](TESTING.md).
 
 **Not for clients. Not a production release.**
 
