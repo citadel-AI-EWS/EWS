@@ -1176,23 +1176,29 @@ class Agent:
             reason="import_failed",
         )
 
-    def _dependency_requirements(self) -> dict[str, str]:
-        requirements_path = Path(__file__).resolve().with_name("requirements.txt")
-        if not requirements_path.is_file():
-            raise RuntimeError("dependency_requirements_missing")
+    @classmethod
+    def _parse_dependency_requirements_text(cls, text: str) -> dict[str, str]:
         requirements: dict[str, str] = {}
-        for raw_line in requirements_path.read_text(encoding="utf-8-sig").splitlines():
+        for raw_line in text.splitlines():
             line = raw_line.strip()
             if not line or line.startswith("#"):
                 continue
             match = DEPENDENCY_REQUIREMENT_RE.fullmatch(line)
             if not match:
                 raise RuntimeError("dependency_requirements_not_strict")
-            name = self._canonical_dependency_name(match.group(1))
+            name = cls._canonical_dependency_name(match.group(1))
             requirements[name] = match.group(2)
         if not requirements:
             raise RuntimeError("dependency_requirements_empty")
         return requirements
+
+    def _dependency_requirements(self) -> dict[str, str]:
+        requirements_path = Path(__file__).resolve().with_name("requirements.txt")
+        if not requirements_path.is_file():
+            raise RuntimeError("dependency_requirements_missing")
+        return self._parse_dependency_requirements_text(
+            requirements_path.read_text(encoding="utf-8-sig")
+        )
 
     def _installed_dependency_versions(
         self,
@@ -3763,11 +3769,22 @@ def self_test() -> int:
             ) is None,
             "dependency same-major update policy failed",
         )
-        dependency_requirements = agent._dependency_requirements()
-        require_test(
-            {"cryptography", "psutil"} <= set(dependency_requirements),
-            "strict direct dependency allowlist missing",
+        dependency_requirements = agent._parse_dependency_requirements_text(
+            "cryptography==50.0.1\npsutil==7.2.2\n"
         )
+        require_test(
+            dependency_requirements == {
+                "cryptography": "50.0.1",
+                "psutil": "7.2.2",
+            },
+            "strict direct dependency allowlist parser failed",
+        )
+        requirements_path = Path(__file__).resolve().with_name("requirements.txt")
+        if requirements_path.is_file():
+            require_test(
+                {"cryptography", "psutil"} <= set(agent._dependency_requirements()),
+                "release dependency allowlist missing",
+            )
         require_test(
             agent.validate_lmstudio_uninstall_payload({"purge_data": False})
             and agent.validate_lmstudio_uninstall_payload({"purge_data": True})
