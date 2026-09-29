@@ -38,6 +38,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+VERSION = "0.3.21"
 DEPENDENCY_OVERLAY_ENV = "CITADEL_DEPENDENCY_OVERLAY"
 DEPENDENCY_OVERLAY_MARKER = ".citadel-overlay.json"
 DEPENDENCY_STATE_FILE = "dependency-maintenance.json"
@@ -89,8 +90,18 @@ def _bootstrap_dependency_overlay() -> tuple[Path | None, bool]:
             candidate.relative_to(overlay_root)
         except ValueError:
             return None, False
-        if candidate.is_dir() and (candidate / DEPENDENCY_OVERLAY_MARKER).is_file():
-            return candidate, False
+        marker_path = candidate / DEPENDENCY_OVERLAY_MARKER
+        requirements_path = Path(__file__).resolve().with_name("requirements.txt")
+        if not candidate.is_dir() or not marker_path.is_file() or not requirements_path.is_file():
+            return None, False
+        marker = json.loads(marker_path.read_text(encoding="utf-8-sig"))
+        requirements_sha256 = hashlib.sha256(requirements_path.read_bytes()).hexdigest()
+        if (
+            marker.get("agent_version") != VERSION
+            or marker.get("requirements_sha256") != requirements_sha256
+        ):
+            return None, False
+        return candidate, False
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None, False
     return None, False
@@ -137,7 +148,6 @@ except Exception as exc:
             "Dependency overlay and base dependencies are both unusable"
         ) from fallback_exc
 
-VERSION = "0.3.21"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -1361,6 +1371,9 @@ class Agent:
                 "schema": 1,
                 "created_at": now_iso(),
                 "agent_version": VERSION,
+                "requirements_sha256": hashlib.sha256(
+                    Path(__file__).resolve().with_name("requirements.txt").read_bytes()
+                ).hexdigest(),
                 "updated_package": package,
                 "from_version": installed[package],
                 "to_version": candidate,
