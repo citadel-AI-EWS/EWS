@@ -41,7 +41,7 @@ const LATEST_NODE_RELEASE = Object.freeze({
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "d8a1c84500adbb64c5d1e7896da755f6ed9f66140b89ed7f9ea123adb0a35338"
+      sha256: "0361fa3b5827f6387522c05be2452ff117b1dced1e6df78b4b4a88340f1ddd4d"
     },
     {
       path: "citadel_node_v2.py",
@@ -5943,7 +5943,12 @@ async function architectCreateCommand(request, env, nodeId) {
     payloadJson,
     createdAt
   );
-  const detailsJson = JSON.stringify({ node_id: nodeId, command_type: commandType });
+  const detailsJson = JSON.stringify({
+    node_id: nodeId,
+    command_type: commandType,
+    actor_role: actor.role,
+    token_id: actor.token_id
+  });
 
   try {
     await env.DB.batch([
@@ -5955,9 +5960,9 @@ async function architectCreateCommand(request, env, nodeId) {
       env.DB.prepare(
         "INSERT INTO audit_events (" +
         "actor_type, actor_id, action, target_type, target_id, details_json" +
-        ") SELECT 'architect', 'test-console', 'command.created', 'command', ?, ? " +
+        ") SELECT 'architect', ?, 'command.created', 'command', ?, ? " +
         "WHERE EXISTS (SELECT 1 FROM commands WHERE command_id = ?)"
-      ).bind(commandId, detailsJson, commandId)
+      ).bind(actor.actor_id, commandId, detailsJson, commandId)
     ]);
   } catch (error) {
     if (String(error).includes("idx_commands_one_active_per_node") || String(error).includes("UNIQUE")) {
@@ -6830,7 +6835,8 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/v1/architect/machines") {
     if (request.method !== "GET") return methodNotAllowed(["GET"]);
     await authenticateArchitect(request, env);
-    await ensureNodeAiStorage(env);
+    await Promise.all([ensureNodeAiStorage(env), ensureCommandStorage(env)]);
+    await expireStaleCommands(env);
     const [nodes, commands] = await Promise.all([
       env.DB.prepare(`SELECT n.node_id, n.hostname, n.agent_version, n.cpu_percent, n.memory_percent,
         n.last_seen_at, CASE WHEN n.status = 'online' AND
