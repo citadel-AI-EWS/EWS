@@ -44,11 +44,15 @@ try {
   const failedPublic=await d1UsageStatus(env,failedAt);
   assert.equal(failedPublic.status,'unavailable');
   assert.equal(failedPublic.usage_percent,null);
-  assert.equal(failedPublic.availability_error,'analytics_unavailable');
+  assert.equal(failedPublic.availability_error,'cloudflare_api_error');
   assert.ok(!JSON.stringify(failedPublic).includes('secret-like'));
   globalThis.fetch=async()=>new Response('',{status:403});
   const deniedPublic=await d1UsageStatus(env,new Date(+now+400000));
   assert.equal(deniedPublic.status,'unavailable');
   assert.equal(deniedPublic.availability_error,'cloudflare_http_403');
+  globalThis.fetch=async()=>Response.json({data:{viewer:{accounts:[]}}});
+  const missingAccount=await d1UsageStatus(env,new Date(+now+450000));
+  assert.equal(missingAccount.status,'unavailable');
+  assert.equal(missingAccount.availability_error,'analytics_account_unavailable');
   console.log('D1 overview: analytics-only account scope, exact arithmetic, caching, paid plan and safe errors PASS');
 } finally {globalThis.fetch=saved;}
