@@ -18,7 +18,7 @@ on:
 permissions:
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write
 
 concurrency:
   group: grok-review-${{ github.event.issue.number || inputs.number }}
