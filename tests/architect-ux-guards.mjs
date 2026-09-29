@@ -385,6 +385,10 @@ assert.doesNotMatch(deployWorkflow, /wrangler d1 execute/);
 assert.match(index, /function publicHubQueryErrorCode/);
 assert.match(index, /hub_d1_daily_read_limit_exceeded/);
 assert.match(index, /hub_d1_daily_write_limit_exceeded/);
+assert.match(index, /\/api\/v1\/status\/d1-usage/);
+assert.match(index, /d1UsageStatus\(env\)/);
+assert.ok(operations.includes("fetch('/api/v1/status/d1-usage'"), "D1 meter must not depend on Architect D1 authentication");
+assert.ok(!operations.includes("api('/d1-usage')"), "D1 meter must not call the D1-backed Architect auth route");
 assert.match(index, /hub_d1_overloaded/);
 {
   const start = index.indexOf("async function architectOverview");
