@@ -45,6 +45,18 @@ assert.equal(task.attempt, 1);
 assert.equal(task.routing.node_id, "node_demo");
 assert.equal(task.expected_output.schema, RESULT_ENVELOPE_SCHEMA);
 
+const driveTask = buildTaskEnvelope({
+  projectId: "project_drive",
+  workItemId: "work_drive",
+  roleName: "researcher",
+  taskText: null,
+  taskPayloadId: "payload_demo",
+  executionMode: "ai",
+  nodeId: "node_demo"
+});
+assert.equal(driveTask.goal, null);
+assert.equal(driveTask.goal_payload_id, "payload_demo");
+
 const report = {
   project_id: "project_demo",
   work_item_id: "work_demo",
