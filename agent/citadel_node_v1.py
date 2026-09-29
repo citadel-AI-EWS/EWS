@@ -1597,14 +1597,16 @@ class Agent:
         return False
 
     @staticmethod
-    def _local_port_open(port: int) -> bool:
-        for host in ("127.0.0.1", "::1"):
-            try:
-                with socket.create_connection((host, port), timeout=0.75):
-                    return True
-            except OSError:
-                continue
-        return False
+    def _local_port_open_at(host: str, port: int) -> bool:
+        try:
+            with socket.create_connection((host, port), timeout=0.75):
+                return True
+        except OSError:
+            return False
+
+    @classmethod
+    def _local_port_open(cls, port: int) -> bool:
+        return any(cls._local_port_open_at(host, port) for host in ("127.0.0.1", "::1"))
 
     @staticmethod
     def _ssh_protocol_banner_at(host: str) -> bool:
@@ -1641,8 +1643,8 @@ class Agent:
         return any(cls._ssh_protocol_banner_at(host) for host in ("127.0.0.1", "::1"))
 
     @staticmethod
-    def _active_ssh_tunnel_hostname() -> str | None:
-        """Read the active cloudflared ingress config; token-only tunnels fail closed."""
+    def _active_ssh_tunnel() -> tuple[str, str] | None:
+        """Return the mapped access hostname and the loopback origin used by cloudflared."""
         try:
             processes = psutil.process_iter(["name", "cmdline"])
             for process in processes:
@@ -1664,18 +1666,24 @@ class Agent:
                 inside = False
                 item: dict[str, str | None] | None = None
 
-                def ready_hostname(candidate: dict[str, str | None] | None) -> str | None:
+                def ready_tunnel(candidate: dict[str, str | None] | None) -> tuple[str, str] | None:
                     if not candidate:
                         return None
                     hostname = str(candidate.get("hostname") or "").lower()
                     service = str(candidate.get("service") or "").lower()
-                    if service not in {"ssh://localhost:22", "ssh://127.0.0.1:22", "ssh://[::1]:22"}:
+                    origin_by_service = {
+                        "ssh://localhost:22": "localhost",
+                        "ssh://127.0.0.1:22": "127.0.0.1",
+                        "ssh://[::1]:22": "::1",
+                    }
+                    origin = origin_by_service.get(service)
+                    if origin is None:
                         return None
                     if not re.fullmatch(r"[a-z0-9]+(?:[a-z0-9.-]*[a-z0-9])?", hostname):
                         return None
                     if "." not in hostname or ".." in hostname:
                         return None
-                    return hostname
+                    return hostname, origin
 
                 for raw_line in lines:
                     line = raw_line.split(" #", 1)[0].rstrip()
@@ -1689,7 +1697,7 @@ class Agent:
                         break
                     list_item = re.match(r"^\s+-\s*(.*)$", line)
                     if list_item:
-                        matched = ready_hostname(item)
+                        matched = ready_tunnel(item)
                         if matched:
                             return matched
                         item = {"hostname": None, "service": None}
@@ -1703,12 +1711,17 @@ class Agent:
                         continue
                     key, value = field.group(1), field.group(2).strip()
                     item[key] = value
-                matched = ready_hostname(item)
+                matched = ready_tunnel(item)
                 if matched:
                     return matched
         except (psutil.Error, OSError, UnicodeError):
             return None
         return None
+
+    @classmethod
+    def _active_ssh_tunnel_hostname(cls) -> str | None:
+        tunnel = cls._active_ssh_tunnel()
+        return tunnel[0] if tunnel else None
 
     def probe_ssh_readiness(self) -> dict[str, Any]:
         """Read-only SSH/Cloudflare readiness probe; never opens ports or changes sshd."""
@@ -1729,10 +1742,21 @@ class Agent:
                     cloudflared = str(candidate)
                     break
 
-        port_open = self._local_port_open(22)
-        ssh_running = bool(sshd and port_open and self._process_running({"sshd", "sshd.exe"}) and self._ssh_protocol_banner())
         cloudflared_running = self._process_running({"cloudflared", "cloudflared.exe"})
-        tunnel_hostname = self._active_ssh_tunnel_hostname() if cloudflared_running else None
+        tunnel = self._active_ssh_tunnel() if cloudflared_running else None
+        tunnel_hostname = tunnel[0] if tunnel else None
+        tunnel_origin = tunnel[1] if tunnel else "localhost"
+        probe_hosts = ("127.0.0.1", "::1") if tunnel_origin == "localhost" else (tunnel_origin,)
+        port_open = False
+        ssh_banner_ok = False
+        for host in probe_hosts:
+            if not self._local_port_open_at(host, 22):
+                continue
+            port_open = True
+            if self._ssh_protocol_banner_at(host):
+                ssh_banner_ok = True
+                break
+        ssh_running = bool(sshd and ssh_banner_ok and self._process_running({"sshd", "sshd.exe"}))
         tunnel_configured = bool(cloudflared_running and tunnel_hostname)
         return {
             "ssh_server_installed": bool(sshd),
