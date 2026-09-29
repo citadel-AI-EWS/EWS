@@ -2,6 +2,7 @@ import { getProjectExperienceRegistry } from "./experience/registry.js";
 import { d1UsageOverview } from "./d1-usage.js";
 import { openRouterQualityConfig, reviewWithOpenRouter } from "./quality/openrouter.js";
 import { ARCHITECT_ROLE_PERMISSIONS, DEFAULT_ENTERPRISE_POLICY, evaluateEnterpriseNode, normalizeEnterprisePolicy, requiredArchitectPermission, roleHasPermission } from "./enterprise/policy.js";
+import { buildAgentCapabilityContract, buildTaskEnvelope, buildResultEnvelope, verifyProjectResultEnvelope } from "./agent-contracts.js";
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -1837,13 +1838,28 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
     const missionType = executionMode === "python" ? "project_python" : "project_text";
     const taskPayloadId = drivePointerId(work.task_text);
     const taskText = taskPayloadId ? null : await resolveDriveText(env, work.task_text);
+    const routingReason = work.preferred_node_id === nodeId
+      ? "preferred_ready_node"
+      : (work.preferred_node_id ? "preferred_node_unavailable" : "eligible_ready_node");
+    const taskEnvelope = buildTaskEnvelope({
+      projectId: work.project_id,
+      workItemId: work.work_item_id,
+      roleName: work.role_name,
+      taskText: taskText || "",
+      executionMode,
+      attempt: 1,
+      nodeId,
+      routingReason
+    });
     const payloadJson = JSON.stringify({
       project_id: work.project_id,
       work_item_id: work.work_item_id,
       role_name: work.role_name,
       task_payload_id: taskPayloadId,
       task_text: taskPayloadId ? undefined : taskText,
-      execution_mode: executionMode
+      execution_mode: executionMode,
+      contract_version: 1,
+      task_envelope: taskEnvelope
     });
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     const results = await env.DB.batch([
@@ -5728,7 +5744,23 @@ async function architectNodeDetails(request, env, nodeId) {
   if (!row) throw new ApiError(404, "node_not_found");
 
   const macAddresses = safeJson(row.mac_addresses_json, []);
+  const gpus = safeJson(row.gpus_json, []);
   const ai = await nodeAiStateResponse(env, nodeId);
+  const agentCapability = buildAgentCapabilityContract({
+    node_id: row.node_id,
+    agent_version: row.agent_version,
+    status: row.status,
+    last_seen_at: row.last_seen_at,
+    capabilities: safeJson(row.capabilities_json, []),
+    installed: ai?.installed ? 1 : 0,
+    server_running: ai?.server_running ? 1 : 0,
+    loaded_model: ai?.loaded_model || null,
+    cpu_percent: row.cpu_percent,
+    memory_percent: row.memory_percent,
+    memory_total_bytes: Number(row.memory_total_bytes || 0) || null,
+    cpu_logical_count: Number(row.cpu_logical_count || 0) || null,
+    gpus: Array.isArray(gpus) ? gpus : []
+  });
   return json({
     ok: true,
     node: {
@@ -5755,9 +5787,10 @@ async function architectNodeDetails(request, env, nodeId) {
     hardware: {
       memory_total_bytes: Number(row.memory_total_bytes || 0) || null,
       cpu_logical_count: Number(row.cpu_logical_count || 0) || null,
-      gpus: safeJson(row.gpus_json, []),
+      gpus: Array.isArray(gpus) ? gpus : [],
       updated_at: row.hardware_updated_at || null
     },
+    agent_capability: agentCapability,
     model_recommendation: modelRecommendationProfile({
       memory_total_bytes: Number(row.memory_total_bytes || 0) || null,
       gpus: safeJson(row.gpus_json, [])
