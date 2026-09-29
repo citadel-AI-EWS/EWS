@@ -752,6 +752,24 @@ async function ensureCommandStorage(env) {
         `)
       ]);
 
+      // CREATE TABLE IF NOT EXISTS does not upgrade an already-existing legacy
+      // commands table. Some early TEST databases predate completed_at, while
+      // stale-command expiry and ACK handling both write that column. Repair
+      // that schema drift in place before touching stale rows.
+      const commandColumns = await env.DB.prepare("PRAGMA table_info(commands)").all();
+      const commandColumnNames = new Set(
+        (commandColumns.results || []).map((row) => String(row.name || ""))
+      );
+      if (!commandColumnNames.has("completed_at")) {
+        try {
+          await env.DB.prepare("ALTER TABLE commands ADD COLUMN completed_at TEXT").run();
+        } catch (error) {
+          // Concurrent requests can race the one-time repair. A duplicate-column
+          // result means the other request already completed the same safe repair.
+          if (!String(error).toLowerCase().includes("duplicate column")) throw error;
+        }
+      }
+
       // Existing TEST databases may contain an old pending/accepted command.
       // Drain stale rows before creating the partial UNIQUE index; otherwise
       // SQLite can reject index creation and surface an opaque internal_error.
