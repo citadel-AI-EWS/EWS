@@ -42,12 +42,13 @@ $PipArgs = @(
   "--disable-pip-version-check",
   "--only-binary=:all:",
   "--requirement", (Join-Path $RepoRoot "agent\requirements.txt"),
+  "pip==26.2.1",
   "--target", $RuntimeSitePackages
 )
 & python @PipArgs
 if ($LASTEXITCODE -ne 0) { throw "Unable to freeze Windows agent dependencies." }
 
-foreach ($Name in @("citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1")) {
+foreach ($Name in @("citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1", "requirements.txt")) {
   Copy-Item -LiteralPath (Join-Path $RepoRoot "agent\$Name") -Destination (Join-Path $Payload $Name) -Force
 }
 New-Item -ItemType Directory -Force -Path (Join-Path $Payload "lmstudio") | Out-Null
@@ -74,6 +75,11 @@ $RuntimePython = Join-Path $Runtime "python.exe"
 $OldPythonHome = $env:PYTHONHOME
 try {
   $env:PYTHONHOME = $Runtime
+  & $RuntimePython -m pip --version
+  if ($LASTEXITCODE -ne 0) { throw "Bundled maintenance pip is unavailable." }
+  if (-not (Test-Path -LiteralPath (Join-Path $Payload "requirements.txt"))) {
+    throw "Bundled dependency policy file is unavailable."
+  }
   & $RuntimePython (Join-Path $Payload "citadel_node_v2.py") self-test
   if ($LASTEXITCODE -ne 0) { throw "Bundled agent self-test failed." }
   & $RuntimePython (Join-Path $Payload "citadel_node_v2.py") doctor --config $ConfigProbe

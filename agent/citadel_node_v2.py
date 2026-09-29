@@ -22,6 +22,8 @@ v1.USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 
 WARN_EVENTS = {
     "resource_guard",
+    "dependency_maintenance_failed",
+    "dependency_overlay_rolled_back",
     "assignment_rejected_local",
     "result_queued",
     "command_signature_rejected",
@@ -70,6 +72,12 @@ ALLOWED_EVENTS = {
     "lmstudio_model_key_resolution_fallback",
     "command_failure_ack_failed",
     "command_failed",
+    "dependency_check_scheduled",
+    "dependency_maintenance_checked",
+    "dependency_maintenance_deferred",
+    "dependency_maintenance_failed",
+    "dependency_overlay_activated",
+    "dependency_overlay_rolled_back",
 }
 MAX_BATCH_EVENTS = 50
 MAX_PAYLOAD_BYTES = 60 * 1024
