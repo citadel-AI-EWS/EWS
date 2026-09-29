@@ -83,7 +83,8 @@ db.exec(`
     ('nodeA', 'online', datetime('now')),
     ('nodeB', 'offline', datetime('now', '-30 minutes')),
     ('nodeC', 'online', datetime('now')),
-    ('nodeD', 'online', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 minutes'));
+    ('nodeD', 'online', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 minutes')),
+    ('nodeE', 'online', datetime('now', '-30 minutes'));
 
   INSERT INTO assignments VALUES
     ('assignment_w1','nodeA','assigned',datetime('now','-20 minutes'),NULL,NULL),
@@ -91,7 +92,8 @@ db.exec(`
     ('assignment_w3','nodeB','running',datetime('now','-2 hours'),datetime('now','-60 minutes'),NULL),
     ('assignment_w4','nodeC','running',datetime('now','-2 hours'),datetime('now','-60 minutes'),NULL),
     ('assignment_w5','nodeB','assigned',datetime('now','-20 minutes'),NULL,NULL),
-    ('assignment_w6','nodeD','running',datetime('now','-2 hours'),datetime('now','-60 minutes'),NULL);
+    ('assignment_w6','nodeD','running',datetime('now','-2 hours'),datetime('now','-60 minutes'),NULL),
+    ('assignment_w7','nodeE','running',datetime('now','-2 hours'),datetime('now','-60 minutes'),NULL);
 
   INSERT INTO project_work_items VALUES
     ('w1','p1','nodeA','assigned'),
@@ -99,7 +101,8 @@ db.exec(`
     ('w3','p1','nodeB','running'),
     ('w4','p1','nodeC','running'),
     ('w5','p1','nodeB','assigned'),
-    ('w6','p1','nodeD','running');
+    ('w6','p1','nodeD','running'),
+    ('w7','p1','nodeE','running');
 
   INSERT INTO results VALUES ('result_w5','assignment_w5');
 `);
@@ -112,12 +115,17 @@ assert.equal(Number(secondGate.changes), 0, "second poll inside one minute must 
 const assigned = db.prepare(assignedScanSql).all().map((row) => row.assignment_id);
 assert.deepEqual(assigned, ["assignment_w1"], "assigned scan must select only stale, result-less leases");
 
-const nodeLivenessCutoff = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-const running = db.prepare(runningScanSql).all(nodeLivenessCutoff).map((row) => row.assignment_id);
+const nodeLivenessCutoffIso = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+const nodeLivenessCutoffSqlite = nodeLivenessCutoffIso
+  .replace("T", " ")
+  .replace(/\.\d{3}Z$/, "");
+const running = db.prepare(runningScanSql)
+  .all(nodeLivenessCutoffIso, nodeLivenessCutoffSqlite)
+  .map((row) => row.assignment_id);
 assert.deepEqual(
   running,
-  ["assignment_w3", "assignment_w6"],
-  "running scan must require both age and lost node liveness, including ISO heartbeat timestamps"
+  ["assignment_w3", "assignment_w6", "assignment_w7"],
+  "running scan must require age and lost liveness for both ISO and SQLite heartbeat timestamps"
 );
 
 assert.match(index, /UPDATE assignments[\s\S]*SET status = 'failed'[\s\S]*NOT EXISTS \([\s\S]*results\.assignment_id = assignments\.assignment_id/);
