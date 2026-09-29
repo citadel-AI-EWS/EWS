@@ -11,7 +11,7 @@ const POLLS_PER_DAY = 86_400 / POLL_SECONDS;
 // Each unit is one bounded indexed target/probe row. This deliberately counts
 // UPDATE target matching as a read-equivalent for budget conservatism; actual
 // Cloudflare Analytics remains the authority for production usage.
-const COMMAND_POLL_ROW_EQUIVALENTS = 3; // node auth + active rollout probe + active command probe
+const COMMAND_POLL_ROW_EQUIVALENTS = 2; // node auth + active command probe; current versions skip rollout discovery
 const ASSIGNMENT_POLL_ROW_EQUIVALENTS = 3; // node auth + planned-work probe + active assignment probe
 const HEARTBEAT_ROW_EQUIVALENTS = 2; // node auth + node UPDATE target
 const ROW_EQUIVALENTS_PER_POLL =
@@ -20,6 +20,8 @@ const ROW_EQUIVALENTS_PER_POLL =
   HEARTBEAT_ROW_EQUIVALENTS;
 
 assert.match(index, /if \(!rollout\) return;/, "no-rollout fast return missing");
+assert.match(index, /node\.agent_version !== LATEST_NODE_RELEASE\.version/,
+  "current agent versions must skip rollout discovery");
 assert.match(index, /SELECT work_item_id FROM project_work_items WHERE status = 'planned' LIMIT 1/,
   "planned-work fast probe missing");
 assert.doesNotMatch(
