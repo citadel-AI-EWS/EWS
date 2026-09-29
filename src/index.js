@@ -1819,6 +1819,7 @@ async function recoverStaleProjectAssignments(env) {
   `).run();
   if ((gate?.meta?.changes || 0) !== 1) return 0;
 
+  const nodeLivenessCutoff = new Date(Date.now() - 5 * 60 * 1000).toISOString();
   const scans = await env.DB.batch([
     env.DB.prepare(`
       SELECT
@@ -1865,11 +1866,11 @@ async function recoverStaleProjectAssignments(env) {
         AND (
           n.node_id IS NULL
           OR n.status != 'online'
-          OR n.last_seen_at < datetime('now', '-5 minutes')
+          OR n.last_seen_at < ?
         )
       ORDER BY COALESCE(a.started_at, a.assigned_at) ASC
       LIMIT 50
-    `)
+    `).bind(nodeLivenessCutoff)
   ]);
 
   const stale = [...(scans[0]?.results || []), ...(scans[1]?.results || [])];
