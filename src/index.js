@@ -1782,38 +1782,73 @@ async function recoverStaleProjectAssignments(env) {
     const reason = row.assignment_status === "running"
       ? "running_node_heartbeat_lost"
       : "assigned_accept_lease_expired";
-    const claim = await env.DB.prepare(`
-      UPDATE assignments
-      SET status = 'failed', completed_at = CURRENT_TIMESTAMP
-      WHERE assignment_id = ?
-        AND status = ?
-        AND NOT EXISTS (
-          SELECT 1 FROM results WHERE results.assignment_id = assignments.assignment_id
-        )
-    `).bind(row.assignment_id, row.assignment_status).run();
-    if ((claim?.meta?.changes || 0) !== 1) continue;
-
-    await env.DB.batch([
+    const detailsJson = JSON.stringify({
+      project_id: row.project_id,
+      previous_node_id: row.node_id,
+      previous_assignment_status: row.assignment_status,
+      reason
+    });
+    const requeue = await env.DB.batch([
+      env.DB.prepare(`
+        UPDATE assignments
+        SET status = 'failed', completed_at = CURRENT_TIMESTAMP
+        WHERE assignment_id = ?
+          AND node_id = ?
+          AND status = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM results WHERE results.assignment_id = assignments.assignment_id
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM project_work_items AS w
+            WHERE w.work_item_id = ?
+              AND w.project_id = ?
+              AND w.node_id = ?
+              AND w.status = ?
+          )
+      `).bind(
+        row.assignment_id,
+        row.node_id,
+        row.assignment_status,
+        row.work_item_id,
+        row.project_id,
+        row.node_id,
+        row.assignment_status
+      ),
       env.DB.prepare(`
         UPDATE project_work_items
         SET node_id = NULL, status = 'planned', updated_at = CURRENT_TIMESTAMP
         WHERE work_item_id = ?
           AND project_id = ?
+          AND node_id = ?
           AND status = ?
-      `).bind(row.work_item_id, row.project_id, row.assignment_status),
+          AND changes() = 1
+      `).bind(row.work_item_id, row.project_id, row.node_id, row.assignment_status),
       env.DB.prepare(`
         INSERT INTO audit_events (
           actor_type, actor_id, action, target_type, target_id, details_json
-        ) VALUES ('controller', 'assignment-reaper', 'project.work.requeued_stale',
-          'project_work_item', ?, ?)
-      `).bind(row.work_item_id, JSON.stringify({
-        project_id: row.project_id,
-        previous_node_id: row.node_id,
-        previous_assignment_status: row.assignment_status,
-        reason
-      }))
+        )
+        SELECT 'controller', 'assignment-reaper', 'project.work.requeued_stale',
+          'project_work_item', ?, ?
+        WHERE EXISTS (
+          SELECT 1 FROM project_work_items
+          WHERE work_item_id = ? AND project_id = ? AND status = 'planned' AND node_id IS NULL
+        )
+          AND EXISTS (
+            SELECT 1 FROM assignments
+            WHERE assignment_id = ? AND status = 'failed'
+          )
+      `).bind(
+        row.work_item_id,
+        detailsJson,
+        row.work_item_id,
+        row.project_id,
+        row.assignment_id
+      )
     ]);
-    recovered += 1;
+    if ((requeue[0]?.meta?.changes || 0) === 1 && (requeue[1]?.meta?.changes || 0) === 1) {
+      recovered += 1;
+    }
   }
   return recovered;
 }
@@ -1913,6 +1948,10 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
   for (const work of candidates) {
     const missionId = projectMissionId(work.work_item_id);
     const assignmentId = projectAssignmentId(work.work_item_id);
+    const scheduling = schedulingFromChecks(work.checks_json);
+    const enforceDistinctHost = Number(work.interactive_followup || 0) !== 1 &&
+      scheduling.target_mode !== "auto" &&
+      Number.isInteger(scheduling.desired_workers);
     const executionMode = projectExecutionMode(work.source_type);
     const missionType = executionMode === "python" ? "project_python" : "project_text";
     const taskPayloadId = drivePointerId(work.task_text);
@@ -1930,8 +1969,35 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
       env.DB.prepare(`
         UPDATE project_work_items
         SET node_id = ?, status = 'assigned', updated_at = CURRENT_TIMESTAMP
-        WHERE work_item_id = ? AND status = 'planned'
-      `).bind(nodeId, work.work_item_id),
+        WHERE work_item_id = ?
+          AND status = 'planned'
+          AND (
+            ? = 0
+            OR (
+              NOT EXISTS (
+                SELECT 1
+                FROM project_work_items AS same_node
+                WHERE same_node.project_id = project_work_items.project_id
+                  AND same_node.work_item_id != project_work_items.work_item_id
+                  AND same_node.node_id = ?
+                  AND same_node.status IN ('assigned','running')
+              )
+              AND (
+                SELECT COUNT(DISTINCT active.node_id)
+                FROM project_work_items AS active
+                WHERE active.project_id = project_work_items.project_id
+                  AND active.node_id IS NOT NULL
+                  AND active.status IN ('assigned','running')
+              ) < ?
+            )
+          )
+      `).bind(
+        nodeId,
+        work.work_item_id,
+        enforceDistinctHost ? 1 : 0,
+        nodeId,
+        scheduling.desired_workers || 50
+      ),
       env.DB.prepare(`
         INSERT OR IGNORE INTO missions (
           mission_id, title, role_name, mission_type, payload_json,
@@ -1949,6 +2015,34 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
         missionType,
         payloadJson,
         expiresAt,
+        work.work_item_id,
+        nodeId
+      ),
+      env.DB.prepare(`
+        UPDATE missions
+        SET title = ?,
+            role_name = ?,
+            mission_type = ?,
+            payload_json = ?,
+            priority = 40,
+            status = 'assigned',
+            expires_at = ?
+        WHERE mission_id = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM results WHERE assignment_id = ?
+          )
+          AND EXISTS (
+            SELECT 1 FROM project_work_items
+            WHERE work_item_id = ? AND node_id = ? AND status = 'assigned'
+          )
+      `).bind(
+        `Project: ${work.project_title} · block ${work.sequence_no}`,
+        work.role_name,
+        missionType,
+        payloadJson,
+        expiresAt,
+        missionId,
+        assignmentId,
         work.work_item_id,
         nodeId
       ),
@@ -1971,7 +2065,7 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
             started_at = NULL,
             completed_at = NULL
         WHERE assignment_id = ?
-          AND status = 'failed'
+          AND status IN ('failed','assigned')
           AND NOT EXISTS (
             SELECT 1 FROM results WHERE results.assignment_id = assignments.assignment_id
           )
@@ -3448,7 +3542,13 @@ async function acceptAssignment(request, env, nodeId, assignmentId, url) {
       WHERE ('assignment_' || work_item_id) = ?
         AND node_id = ?
         AND status = 'assigned'
-    `).bind(assignmentId, nodeId),
+        AND EXISTS (
+          SELECT 1 FROM assignments
+          WHERE assignments.assignment_id = ?
+            AND assignments.node_id = ?
+            AND assignments.status = 'running'
+        )
+    `).bind(assignmentId, nodeId, assignmentId, nodeId),
     env.DB.prepare(`
       UPDATE architect_projects
       SET status = 'running', updated_at = CURRENT_TIMESTAMP
