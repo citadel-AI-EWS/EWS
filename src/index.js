@@ -1845,7 +1845,8 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
       projectId: work.project_id,
       workItemId: work.work_item_id,
       roleName: work.role_name,
-      taskText: taskText || "",
+      taskText: taskText || null,
+      taskPayloadId,
       executionMode,
       attempt: 1,
       nodeId,
@@ -1923,7 +1924,9 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
           project_id: work.project_id,
           node_id: nodeId,
           role_name: work.role_name,
-          execution_mode: executionMode
+          execution_mode: executionMode,
+          routing_reason: routingReason,
+          task_schema: taskEnvelope.schema
         }),
         assignmentId,
         nodeId
@@ -3312,6 +3315,13 @@ async function listAssignments(request, env, nodeId, url) {
     const payload = safeJson(row.payload_json, {});
     if (payload && typeof payload === "object" && payload.task_payload_id && !payload.task_text) {
       payload.task_text = await resolveDriveText(env, drivePointer(payload.task_payload_id));
+      if (payload.task_envelope && typeof payload.task_envelope === "object") {
+        payload.task_envelope = {
+          ...payload.task_envelope,
+          goal: payload.task_text,
+          goal_payload_id: payload.task_payload_id
+        };
+      }
     }
     return {
       ...row,
