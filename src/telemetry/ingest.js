@@ -1,3 +1,4 @@
+import { keepOperationalEvent } from "./retention.js";
 import {
   TELEMETRY_LIMITS,
   TelemetryError,
@@ -28,7 +29,8 @@ export async function ingestNodeLogs(request, env, nodeId, url) {
   if (body.events.length > TELEMETRY_LIMITS.batch_events) {
     throw new TelemetryError(413, "too_many_events");
   }
-  const events = body.events.map(normalizeTelemetryEvent);
+  const normalized = body.events.map(normalizeTelemetryEvent);
+  const events = normalized.filter(keepOperationalEvent);
 
   const insertStatements = events.map((event) => env.DB.prepare(`
     INSERT OR IGNORE INTO node_logs (
@@ -43,7 +45,7 @@ export async function ingestNodeLogs(request, env, nodeId, url) {
     event.details_json,
     event.created_at
   ));
-  const results = await env.DB.batch(insertStatements);
+  const results = insertStatements.length ? await env.DB.batch(insertStatements) : [];
   const accepted = results.reduce(
     (sum, result) => sum + (result?.meta?.changes || 0),
     0
@@ -51,11 +53,9 @@ export async function ingestNodeLogs(request, env, nodeId, url) {
 
   // Telemetry batches are intentionally not mirrored into audit_events: doing so
   // would make the supposedly bounded observability path grow D1 indefinitely.
-  await env.DB.batch([
-    env.DB.prepare(`
-      DELETE FROM node_logs
-      WHERE datetime(received_at) < datetime('now', '-7 days')
-    `),
+  // The per-node cap stays strict. A server-controlled scheduled Worker trigger
+  // enforces age-based retention independently of node-supplied event IDs.
+  const retention = [
     env.DB.prepare(`
       DELETE FROM node_logs
       WHERE node_id = ?
@@ -66,11 +66,13 @@ export async function ingestNodeLogs(request, env, nodeId, url) {
           LIMIT 5000
         )
     `).bind(nodeId, nodeId)
-  ]);
+  ];
+  await env.DB.batch(retention);
 
   return json({
     ok: true,
-    received: events.length,
+    received: normalized.length,
+    discarded: normalized.length - events.length,
     accepted,
     duplicates: events.length - accepted,
     retention_days: TELEMETRY_LIMITS.retention_days,

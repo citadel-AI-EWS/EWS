@@ -11,8 +11,14 @@ const agentV1 = fs.readFileSync("agent/citadel_node_v1.py", "utf8");
 const agentV2 = fs.readFileSync("agent/citadel_node_v2.py", "utf8");
 const telemetry = fs.readFileSync("src/telemetry/normalize.js", "utf8");
 const telemetryCommon = fs.readFileSync("src/telemetry/common.js", "utf8");
+const telemetryIngest = fs.readFileSync("src/telemetry/ingest.js", "utf8");
+const telemetrySchema = fs.readFileSync("src/telemetry/schema.js", "utf8");
+const worker = fs.readFileSync("src/worker.js", "utf8");
+const wrangler = fs.readFileSync("wrangler.jsonc", "utf8");
 const buildSite = fs.readFileSync("scripts/build_site.sh", "utf8");
 const hub = fs.readFileSync("hub.html", "utf8");
+const operations = fs.readFileSync("operations.html", "utf8");
+const deployWorkflow = fs.readFileSync(".github/workflows/deploy-cloudflare.yml", "utf8");
 need(index.includes("auto_enrollment_windows"), "global auto-enrollment window missing");
 need(index.includes("AUTO_ENROLL_MAX_NEW_PER_HOUR"), "enrollment hourly setting missing");
 need(index.includes("AUTO_ENROLL_MAX_NODES"), "enrollment node cap setting missing");
@@ -23,8 +29,11 @@ need(index.includes("LEFT JOIN node_numbers AS nn"), "Architect node number join
 need(!readme.includes("-EnrollmentToken"), "README still documents EnrollmentToken");
 need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_token");
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
-need(agentV1.includes('VERSION = "0.3.13"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.13"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.20"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.20"'), "v2 release not bumped");
+need(agentV1.includes("hardware_snapshot"), "node hardware snapshot missing");
+need(agentV1.includes("gpu_inventory"), "GPU/VRAM discovery missing");
+need(agentV1.includes('"hardware"'), "hardware heartbeat payload missing");
 need(setup.includes('ServiceName = "CitadelEWSNode"'), "Windows Core Service name missing");
 need(setup.includes('LegacyUserSid'), "original user SID preservation missing");
 need(setup.includes('Set-CitadelDirectoryAcl'), "Windows clean ACL reconstruction missing");
@@ -59,6 +68,7 @@ need(agentV1.includes("CryptUnprotectData"), "Windows DPAPI unprotect call missi
 need(agentV1.includes("private_key_dpapi"), "protected Windows identity field missing");
 need(setup.includes("DirectorySecurity"), "Windows state ACL reconstruction missing");
 need(agentV2.includes('"windows_sleep_hibernate_inhibit"'), "agent drops sleep/hibernate event");
+need(agentV2.includes('"network_recovery_not_needed"'), "agent drops network recovery no-op event");
 for (const eventType of [
   "windows_sleep_hibernate_inhibit",
   "agent_updated",
@@ -97,24 +107,81 @@ need(telemetryCommon.includes("replayed_request"), "telemetry replay rejection m
 need(index.includes("node_request_nonces"), "Controller request nonce storage missing");
 need(index.includes("agentRequiresRequestId"), "Controller compatibility gate for replay protection missing");
 need(index.includes("replayed_request"), "Controller replay rejection missing");
-need(index.includes("await expireStaleNodeCommands(env, nodeId);\n  await ensureRolloutCommandForNode(env, nodeId);"), "stale command expiry must run before rollout scheduling");
+need(index.includes('requestId.endsWith("0")'), "nonce cleanup must be opportunistic instead of every signed poll");
+need(index.includes("received_at < datetime('now', '-10 minutes')"), "nonce cleanup must use the received_at index");
+need(!index.includes("datetime(received_at) < datetime('now', '-10 minutes')"), "nonce cleanup must not wrap the indexed timestamp column");
+need(!telemetryIngest.includes("retentionKey.endsWith"), "telemetry retention must not depend on node-controlled event IDs");
+need(!telemetryIngest.includes("datetime(received_at) < datetime('now', '-7 days')"), "telemetry ingestion must not full-scan received_at retention");
+need(telemetrySchema.includes("received_at < datetime('now', '-7 days')"), "telemetry prune helper must use the received_at index");
+need(worker.includes("async scheduled(_controller, env)") && worker.includes("await pruneExpiredTelemetry(env)"), "scheduled telemetry retention missing");
+need(wrangler.includes('"crons": ["17 * * * *"]'), "telemetry retention cron missing");
+{
+  const rolloutStart = index.indexOf("async function ensureRolloutCommandForNode");
+  const rolloutEnd = index.indexOf("const WORK_ROLE_REGISTRY", rolloutStart);
+  const rolloutBlock = rolloutStart >= 0 && rolloutEnd > rolloutStart ? index.slice(rolloutStart, rolloutEnd) : "";
+  const noRolloutReturn = rolloutBlock.indexOf("if (!rollout) return;");
+  const staleCleanup = rolloutBlock.indexOf("await expireStaleNodeCommands(env, nodeId);");
+  need(noRolloutReturn >= 0 && staleCleanup > noRolloutReturn, "steady-state command polling must skip stale cleanup when no rollout is active");
+}
+{
+  const listStart = index.indexOf("async function listCommands");
+  const listEnd = index.indexOf("async function acknowledgeCommand", listStart);
+  const listBlock = listStart >= 0 && listEnd > listStart ? index.slice(listStart, listEnd) : "";
+  need(!listBlock.includes("expireStaleNodeCommands"), "normal command polling must not scan stale commands every cycle");
+  need(listBlock.includes("datetime(created_at) >= datetime(?)"), "normal command polling must hide expired commands without cleanup scans");
+}
+need(index.includes("do {") && index.includes("expiredBatchSize = await expireStaleCommands(env);") && index.includes("while (expiredBatchSize === 250);"), "command storage must drain every full stale-command batch before creating the active-command unique index");
+need(index.includes('throw new ApiError(409, "command_already_pending")'), "command storage UNIQUE conflicts must not surface as internal_error");
+{
+  const start = index.indexOf("async function architectCreateCommand");
+  const end = index.indexOf("async function nodeUpdateAiState", start);
+  const block = start >= 0 && end > start ? index.slice(start, end) : "";
+  const expireAt = block.indexOf("await expireStaleNodeCommands(env, nodeId);");
+  const storageAt = block.indexOf("await ensureCommandStorage(env);");
+  need(
+    storageAt >= 0 && expireAt > storageAt,
+    "Architect command path must bootstrap command storage before stale-command cleanup"
+  );
+}
 need(index.includes("expireStaleNodeCommands"), "stale command expiry missing");
 need(agentV1.includes("x-node-request-id"), "agent request nonce header missing");
 need(agentV1.includes("recover_network"), "bounded network recovery missing");
+need(agentV1.includes('"always_on_guard"'), "always-on capability missing");
+need(agentV1.includes('"known_network_recovery"'), "known-network recovery capability missing");
+need(agentV1.includes("prevent_automatic_sleep"), "automatic sleep guard config missing");
+need(agentV1.includes("allowed_wifi_profiles"), "Wi-Fi recovery allowlist missing");
+need(agentV1.includes("controller_reachable"), "network recovery reachability verification missing");
+need(agentV1.includes("wifi_primary_retry:") && agentV1.includes("wifi_fallback_profile:"), "preferred/fallback Wi-Fi recovery loop missing");
+need(agentV1.includes("SetThreadExecutionState"), "Windows power execution-state guard missing");
 need(agentV1.includes("stream_lmstudio_answer"), "streaming Hybrid answer missing");
 need(agentV1.includes("/api/v1/models/download/status/"), "LM Studio download progress polling missing");
 need(index.includes("node_ai_runtime_state"), "extended AI runtime state missing");
 need(index.includes("nodeUpdateAiState"), "signed node AI-state endpoint missing");
 need(index.includes("architectSearchModels"), "Hugging Face model search missing");
+need(index.includes("architectRecommendModels"), "node-aware model recommendation endpoint missing");
+need(index.includes("node_hardware_state"), "node hardware storage missing");
+need(index.includes("modelRecommendationProfile"), "hardware model sizing logic missing");
+need(index.includes("openrouter_quality"), "OpenRouter health state missing");
+need(operations.includes("recommendModelsForNode"), "operations model recommendation action missing");
+need(operations.includes("/models/search?q="), "operations Hugging Face search missing");
+need(operations.includes("modelSource"), "operations model source selector missing");
+need(deployWorkflow.includes("/tmp/openrouter-key"), "OpenRouter key normalization missing");
+need(deployWorkflow.includes("OpenRouter key probe: authenticated"), "OpenRouter authentication probe missing");
 need(index.includes('"lmstudio_probe"'), "LM Studio probe command missing from Controller allow-list");
 need(index.includes('"hybrid_query"'), "Hybrid command missing from Controller allow-list");
 need(agentV1.includes("validate_hybrid_payload"), "Hybrid payload validation missing");
 need(agentV1.includes("execute_project_text"), "LM Studio project text worker missing");
+need(agentV1.includes("_project_llm_chat"), "local LLM mini-agent chat helper missing");
+need(agentV1.includes("llm-mini-"), "bounded LLM mini-agent orchestration missing");
+need(agentV1.includes("mini_agent_count"), "LLM mini-agent result metadata missing");
 need(agentV1.includes('"project_text"'), "project_text capability missing");
 need(agentV1.includes('"127.0.0.1"'), "project worker must stay on local LM Studio endpoint");
 need(index.includes("materializeProjectWorkForNode"), "planned project materializer missing");
 need(index.includes("waiting_for_lmstudio_project_worker"), "planned project waiting reason missing");
 need(index.includes("final_report:"), "project final report aggregation missing");
+need(index.includes("project_execution"), "project execution readiness health missing");
+need(index.includes("project_ai_ready_workers"), "AI project worker readiness count missing");
+need(index.includes("project_python_ready_workers"), "Python project worker readiness count missing");
 need(agentV1.includes("shell=False"), "fixed argv execution guard missing");
 need(!agentV1.includes('"shell" in SUPPORTED_COMMANDS'), "arbitrary shell command registered");
 need(!buildSite.includes("execute-api.*.amazonaws.com"), "invalid CSP API Gateway wildcard returned");
@@ -127,5 +194,7 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.13"'), "Controller release not bumped");
+need(index.includes('version: "0.3.20"'), "Controller release not bumped");
 console.log("Review backlog guards: PASS");
+
+need(agentV1.includes("lmstudio_heartbeat_probe_failed"), "routine heartbeat does not refresh LM Studio readiness");

@@ -1,6 +1,8 @@
 import { getProjectExperienceRegistry } from "./experience/registry.js";
+import { d1UsageOverview, d1UsageStatus } from "./d1-usage.js";
 import { openRouterQualityConfig, reviewWithOpenRouter } from "./quality/openrouter.js";
 import { ARCHITECT_ROLE_PERMISSIONS, DEFAULT_ENTERPRISE_POLICY, evaluateEnterpriseNode, normalizeEnterprisePolicy, requiredArchitectPermission, roleHasPermission } from "./enterprise/policy.js";
+import { buildAgentCapabilityContract, buildTaskEnvelope, buildResultEnvelope, verifyProjectResultEnvelope } from "./agent-contracts.js";
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -16,6 +18,9 @@ const MAX_SESSION_BODY_BYTES = 24 * 1024;
 const MAX_SESSION_SNAPSHOT_BYTES = 16 * 1024;
 const SIGNATURE_WINDOW_SECONDS = 300;
 const COMMAND_MAX_AGE_SECONDS = 15 * 60;
+const NODE_LIVE_WINDOW_MINUTES = 5;
+const NODE_STALE_AFTER_MINUTES = 24 * 60;
+const NODE_ARCHIVE_AFTER_MINUTES = 7 * 24 * 60;
 const REPLAY_PROTECTED_AGENT_VERSION = "0.3.10";
 const AUTO_ENROLLMENT_DEFAULT_HOURLY_LIMIT = 120;
 const AUTO_ENROLLMENT_DEFAULT_NODE_CAP = 10000;
@@ -28,20 +33,20 @@ const ALLOWED_REPORT_SENSITIVITIES = new Set([
 ]);
 const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
-const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
-const POWER_COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN" });
+const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
+const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.13",
+  version: "0.3.20",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "4461906dc1c1c4cd47c60a22c0fd2904ed1c6f8303ac0e88fdd9f9578701eb5a"
+      sha256: "9f2722f58b1a831d87b414172c057adf72942c3fcb1025c637f5fb7d0eb5e999"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "43d6d8492d43e3434c7ce90c946804c7cc1c05344ae3aaf27c7ed8220d34e803"
+      sha256: "f34cbdf57c86651f428e2ff495e3a89e7364293b29562a3e726197f9d2ad4f38"
     }
   ]
 });
@@ -52,12 +57,12 @@ const LMSTUDIO_INTEGRATION = Object.freeze({
   windows_asset: Object.freeze({
     path: "install_llmstudio_headless.ps1",
     url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/install_llmstudio_headless.ps1",
-    sha256: "d9a96026bea2e7729f0b086d8d668c3f4f93b7725b5e0af3f2936b68f89475cf"
+    sha256: "0d24fb0ce1d7ba40539b98c30875f2244d93b328dc32358bcf880d4c8cfd78fc"
   }),
   linux_asset: Object.freeze({
     path: "install_llmstudio_headless.sh",
     url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/install_llmstudio_headless.sh",
-    sha256: "15dcfd76d3c929ec2ca459a19879d565a9ec6483c33fcf9b3d8ba5a8ef145d39"
+    sha256: "3d112dfa579562953919cfeccb6203d86333a99a473aaf4b76bdd2c39b70f67b"
   }),
   model_presets: Object.freeze([
     { id: "ibm/granite-4-micro", label: "IBM Granite 4 Micro" },
@@ -65,11 +70,17 @@ const LMSTUDIO_INTEGRATION = Object.freeze({
   ])
 });
 const CONTROLLER_COMMAND_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0";
+const DEFAULT_GOOGLE_DRIVE_PAYLOAD_FOLDER_ID = "135_YkqQRJpkM1gmk_oh2uV8ldROqVmbn";
+const DRIVE_POINTER_PREFIX = "@drive:";
+let driveAccessTokenCache = { token: null, expires_at_ms: 0 };
+let payloadSchemaPromise;
 let reportSchemaPromise;
 let legacyReportBackfillPromise;
 let sessionSchemaPromise;
 let commandIndexPromise;
+let commandReadIndexPromise;
 let nodeNetworkSchemaPromise;
+let nodeHardwareSchemaPromise;
 let rolloutSchemaPromise;
 let projectSchemaPromise;
 let nodeAiSchemaPromise;
@@ -170,6 +181,42 @@ function normalizeNodeNetwork(value) {
   };
 }
 
+function normalizeNodeHardware(value) {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ApiError(400, "invalid_hardware");
+  }
+  const memoryTotal = Number(value.memory_total_bytes);
+  const cpuLogical = Number(value.cpu_logical_count);
+  if (!Number.isSafeInteger(memoryTotal) || memoryTotal < 256 * 1024 * 1024 || memoryTotal > 4 * 1024 ** 5) {
+    throw new ApiError(400, "invalid_hardware_memory");
+  }
+  if (!Number.isInteger(cpuLogical) || cpuLogical < 1 || cpuLogical > 4096) {
+    throw new ApiError(400, "invalid_hardware_cpu");
+  }
+  const rawGpus = value.gpus === undefined ? [] : value.gpus;
+  if (!Array.isArray(rawGpus) || rawGpus.length > 8) throw new ApiError(400, "invalid_hardware_gpus");
+  const gpus = rawGpus.map((gpu) => {
+    if (!gpu || typeof gpu !== "object" || Array.isArray(gpu)) throw new ApiError(400, "invalid_hardware_gpu");
+    const name = requireString(gpu.name, "gpu_name", 160);
+    const rawVram = gpu.vram_total_bytes;
+    let vramTotalBytes = null;
+    if (rawVram !== undefined && rawVram !== null) {
+      const parsed = Number(rawVram);
+      if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 1024 ** 5) {
+        throw new ApiError(400, "invalid_hardware_vram");
+      }
+      vramTotalBytes = parsed;
+    }
+    return { name, vram_total_bytes: vramTotalBytes };
+  });
+  return {
+    memory_total_bytes: memoryTotal,
+    cpu_logical_count: cpuLogical,
+    gpus
+  };
+}
+
 function subnet24(value) {
   const parts = typeof value === "string" ? value.split(".") : [];
   return parts.length === 4 ? parts.slice(0, 3).join(".") : null;
@@ -180,6 +227,20 @@ function agentRequiresRequestId(version) {
   if (!match) return false;
   const major = Number(match[1]), minor = Number(match[2]), patch = Number(match[3]);
   return major > 0 || minor > 3 || (minor === 3 && patch >= 10);
+}
+
+function agentVersionAtLeast(version, minimum) {
+  const parse = (value) => {
+    const match = String(value || "").match(/^(\d+)\.(\d+)\.(\d+)/);
+    return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+  };
+  const actual = parse(version);
+  const required = parse(minimum);
+  if (!actual || !required) return false;
+  for (let i = 0; i < 3; i += 1) {
+    if (actual[i] !== required[i]) return actual[i] > required[i];
+  }
+  return true;
 }
 
 function parseJsonObject(text) {
@@ -257,6 +318,280 @@ async function readBody(request, maxBytes) {
 
 async function readBodyText(request, maxBytes) {
   return (await readBody(request, maxBytes)).text;
+}
+
+
+function googleDrivePayloadConfig(env) {
+  const clientId = typeof env.GOOGLE_DRIVE_CLIENT_ID === "string" ? env.GOOGLE_DRIVE_CLIENT_ID.trim() : "";
+  const clientSecret = typeof env.GOOGLE_DRIVE_CLIENT_SECRET === "string" ? env.GOOGLE_DRIVE_CLIENT_SECRET.trim() : "";
+  const refreshToken = typeof env.GOOGLE_DRIVE_REFRESH_TOKEN === "string" ? env.GOOGLE_DRIVE_REFRESH_TOKEN.trim() : "";
+  const accessToken = typeof env.GOOGLE_DRIVE_ACCESS_TOKEN === "string" ? env.GOOGLE_DRIVE_ACCESS_TOKEN.trim() : "";
+  const folderId = typeof env.GOOGLE_DRIVE_REPORTS_FOLDER_ID === "string" && env.GOOGLE_DRIVE_REPORTS_FOLDER_ID.trim()
+    ? env.GOOGLE_DRIVE_REPORTS_FOLDER_ID.trim()
+    : DEFAULT_GOOGLE_DRIVE_PAYLOAD_FOLDER_ID;
+  return {
+    folder_id: folderId,
+    access_token: accessToken,
+    client_id: clientId,
+    client_secret: clientSecret,
+    refresh_token: refreshToken,
+    configured: Boolean(folderId && (accessToken || (clientId && clientSecret && refreshToken)))
+  };
+}
+
+async function googleDriveAccessToken(env) {
+  const config = googleDrivePayloadConfig(env);
+  if (!config.configured) throw new ApiError(503, "drive_payload_storage_unavailable");
+  if (config.access_token) return config.access_token;
+  if (driveAccessTokenCache.token && Date.now() < driveAccessTokenCache.expires_at_ms - 60000) {
+    return driveAccessTokenCache.token;
+  }
+  const body = new URLSearchParams({
+    client_id: config.client_id,
+    client_secret: config.client_secret,
+    refresh_token: config.refresh_token,
+    grant_type: "refresh_token"
+  });
+  let response;
+  try {
+    response = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body
+    });
+  } catch {
+    throw new ApiError(503, "drive_payload_storage_unavailable");
+  }
+  if (!response.ok) throw new ApiError(503, "drive_payload_auth_failed");
+  const data = await response.json().catch(() => ({}));
+  if (typeof data.access_token !== "string" || !data.access_token) {
+    throw new ApiError(503, "drive_payload_auth_failed");
+  }
+  const expiresIn = Number(data.expires_in || 3600);
+  driveAccessTokenCache = {
+    token: data.access_token,
+    expires_at_ms: Date.now() + Math.max(300, expiresIn) * 1000
+  };
+  return data.access_token;
+}
+
+async function ensurePayloadStorage(env) {
+  if (!payloadSchemaPromise) {
+    payloadSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS payload_objects (
+          payload_id TEXT PRIMARY KEY,
+          owner_type TEXT NOT NULL,
+          owner_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          drive_file_id TEXT NOT NULL UNIQUE,
+          sha256 TEXT NOT NULL,
+          size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_payload_objects_owner
+        ON payload_objects(owner_type, owner_id, kind, created_at)
+      `),
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS interactive_threads (
+          thread_id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          work_item_id TEXT,
+          node_id TEXT,
+          role_name TEXT NOT NULL,
+          execution_mode TEXT NOT NULL CHECK (execution_mode IN ('ai','python')),
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','closed')),
+          message_count INTEGER NOT NULL DEFAULT 0 CHECK (message_count >= 0),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (project_id) REFERENCES architect_projects(project_id) ON DELETE CASCADE,
+          FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE SET NULL
+        )
+      `),
+      env.DB.prepare(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_interactive_threads_project_work
+        ON interactive_threads(project_id, work_item_id)
+        WHERE work_item_id IS NOT NULL
+      `),
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS interactive_messages (
+          message_id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL,
+          sequence_no INTEGER NOT NULL CHECK (sequence_no >= 1),
+          actor TEXT NOT NULL CHECK (actor IN ('user','agent','system')),
+          payload_id TEXT NOT NULL,
+          response_work_item_id TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (thread_id) REFERENCES interactive_threads(thread_id) ON DELETE CASCADE,
+          FOREIGN KEY (payload_id) REFERENCES payload_objects(payload_id) ON DELETE RESTRICT,
+          UNIQUE (thread_id, sequence_no)
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_interactive_messages_thread
+        ON interactive_messages(thread_id, sequence_no)
+      `)
+    ]).catch((error) => {
+      payloadSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await payloadSchemaPromise;
+}
+
+function drivePointer(payloadId) {
+  return DRIVE_POINTER_PREFIX + payloadId;
+}
+
+function drivePointerId(value) {
+  if (typeof value !== "string" || !value.startsWith(DRIVE_POINTER_PREFIX)) return null;
+  const payloadId = value.slice(DRIVE_POINTER_PREFIX.length).trim();
+  return payloadId || null;
+}
+
+async function deleteDriveFileBestEffort(env, fileId) {
+  if (!fileId) return true;
+  try {
+    const token = await googleDriveAccessToken(env);
+    const response = await fetch("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(fileId), {
+      method: "DELETE",
+      headers: { authorization: "Bearer " + token }
+    });
+    return response.ok || response.status === 404;
+  } catch {
+    return false;
+  }
+}
+
+async function deletePayloadBestEffort(env, payloadId) {
+  if (!payloadId) return true;
+  try {
+    const row = await env.DB.prepare(
+      "SELECT drive_file_id FROM payload_objects WHERE payload_id = ?"
+    ).bind(payloadId).first();
+    if (!row) return true;
+    if (row.drive_file_id && !(await deleteDriveFileBestEffort(env, row.drive_file_id))) {
+      return false;
+    }
+    await env.DB.prepare("DELETE FROM payload_objects WHERE payload_id = ?").bind(payloadId).run();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function persistDrivePayload(env, { owner_type, owner_id, kind, value }) {
+  await ensurePayloadStorage(env);
+  const config = googleDrivePayloadConfig(env);
+  if (!config.configured) throw new ApiError(503, "drive_payload_storage_unavailable");
+  const payloadId = "payload_" + crypto.randomUUID();
+  const jsonText = JSON.stringify(value);
+  const sizeBytes = new TextEncoder().encode(jsonText).byteLength;
+  const sha256 = await sha256Hex(jsonText);
+  const token = await googleDriveAccessToken(env);
+  const safeOwner = String(owner_id || "unknown").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 80);
+  const safeKind = String(kind || "payload").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 48);
+  const metadata = {
+    name: safeOwner + "__" + safeKind + "__" + payloadId + ".json",
+    parents: [config.folder_id],
+    mimeType: "application/json",
+    appProperties: {
+      citadel_payload_id: payloadId,
+      citadel_owner_type: String(owner_type || "").slice(0, 64),
+      citadel_owner_id: String(owner_id || "").slice(0, 120),
+      citadel_kind: String(kind || "").slice(0, 64),
+      citadel_sha256: sha256
+    }
+  };
+  const boundary = "citadel_" + crypto.randomUUID().replace(/-/g, "");
+  const multipart =
+    "--" + boundary + "\r\n" +
+    "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+    JSON.stringify(metadata) + "\r\n" +
+    "--" + boundary + "\r\n" +
+    "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+    jsonText + "\r\n" +
+    "--" + boundary + "--";
+  let response;
+  try {
+    response = await fetch(
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,size",
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "multipart/related; boundary=" + boundary
+        },
+        body: multipart
+      }
+    );
+  } catch {
+    throw new ApiError(503, "drive_payload_upload_failed");
+  }
+  if (!response.ok) throw new ApiError(503, "drive_payload_upload_failed");
+  const uploaded = await response.json().catch(() => ({}));
+  const fileId = typeof uploaded.id === "string" ? uploaded.id : "";
+  if (!fileId) throw new ApiError(503, "drive_payload_upload_failed");
+  try {
+    await env.DB.prepare(`
+      INSERT INTO payload_objects (
+        payload_id, owner_type, owner_id, kind, drive_file_id, sha256, size_bytes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(payloadId, owner_type, owner_id, kind, fileId, sha256, sizeBytes).run();
+  } catch (error) {
+    await deleteDriveFileBestEffort(env, fileId);
+    throw error;
+  }
+  return { payload_id: payloadId, drive_file_id: fileId, sha256, size_bytes: sizeBytes };
+}
+
+async function readDrivePayload(env, payloadId) {
+  await ensurePayloadStorage(env);
+  const row = await env.DB.prepare(`
+    SELECT payload_id, drive_file_id, sha256, size_bytes
+    FROM payload_objects WHERE payload_id = ?
+  `).bind(payloadId).first();
+  if (!row) throw new ApiError(404, "payload_not_found");
+  const token = await googleDriveAccessToken(env);
+  let response;
+  try {
+    response = await fetch(
+      "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(row.drive_file_id) + "?alt=media",
+      { headers: { authorization: "Bearer " + token } }
+    );
+  } catch {
+    throw new ApiError(503, "drive_payload_read_failed");
+  }
+  if (!response.ok) throw new ApiError(503, "drive_payload_read_failed");
+  const text = await response.text();
+  if ((new TextEncoder().encode(text).byteLength) !== Number(row.size_bytes)) {
+    throw new ApiError(502, "drive_payload_size_mismatch");
+  }
+  if ((await sha256Hex(text)) !== row.sha256) {
+    throw new ApiError(502, "drive_payload_hash_mismatch");
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new ApiError(502, "drive_payload_invalid_json");
+  }
+}
+
+async function resolveDriveText(env, value) {
+  const payloadId = drivePointerId(value);
+  if (!payloadId) return String(value || "");
+  const payload = await readDrivePayload(env, payloadId);
+  if (typeof payload === "string") return payload;
+  if (payload && typeof payload.text === "string") return payload.text;
+  throw new ApiError(502, "drive_payload_missing_text");
+}
+
+async function resolveDriveJson(env, value) {
+  const payloadId = drivePointerId(value);
+  if (!payloadId) return safeJson(value, null);
+  return readDrivePayload(env, payloadId);
 }
 
 async function ensureReportStorage(env) {
@@ -377,13 +712,104 @@ async function ensureSessionStorage(env) {
   await sessionSchemaPromise;
 }
 
+async function ensureCommandReadIndexes(env) {
+  if (!commandReadIndexPromise) {
+    commandReadIndexPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_commands_status_created
+        ON commands(status, created_at DESC, command_id DESC)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_commands_created_time
+        ON commands(datetime(created_at) DESC, command_id DESC)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_audit_events_target_action
+        ON audit_events(target_type, target_id, action, event_id DESC)
+      `)
+    ]).catch((error) => {
+      commandReadIndexPromise = undefined;
+      throw error;
+    });
+  }
+  await commandReadIndexPromise;
+}
+
 async function ensureCommandStorage(env) {
   if (!commandIndexPromise) {
-    commandIndexPromise = env.DB.prepare(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_one_active_per_node
-      ON commands(node_id)
-      WHERE status IN ('pending', 'accepted')
-    `).run().catch((error) => {
+    commandIndexPromise = (async () => {
+      // Runtime-bootstrap the core command/audit tables as well as the index.
+      // A partially initialized D1 must never turn LM Studio install into an
+      // opaque 500 just because the migration history is incomplete.
+      await env.DB.batch([
+        env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS commands (
+            command_id TEXT PRIMARY KEY,
+            node_id TEXT NOT NULL,
+            command_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            signature TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at TEXT,
+            FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+          )
+        `),
+        env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS audit_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor_type TEXT NOT NULL,
+            actor_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target_type TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+          )
+        `),
+        env.DB.prepare(`
+          CREATE INDEX IF NOT EXISTS idx_commands_node_status_created
+          ON commands(node_id, status, created_at)
+        `),
+        env.DB.prepare(`
+          CREATE INDEX IF NOT EXISTS idx_commands_status_created
+          ON commands(status, created_at DESC, command_id DESC)
+        `),
+        env.DB.prepare(`
+          CREATE INDEX IF NOT EXISTS idx_commands_created_time
+          ON commands(datetime(created_at) DESC, command_id DESC)
+        `),
+        env.DB.prepare(`
+          CREATE INDEX IF NOT EXISTS idx_audit_events_created
+          ON audit_events(event_id DESC)
+        `),
+        env.DB.prepare(`
+          CREATE INDEX IF NOT EXISTS idx_audit_events_target_action
+          ON audit_events(target_type, target_id, action, event_id DESC)
+        `)
+      ]);
+
+      // Existing TEST databases may contain an old pending/accepted command.
+      // Drain stale rows before creating the partial UNIQUE index; otherwise
+      // SQLite can reject index creation and surface an opaque internal_error.
+      let expiredBatchSize;
+      do {
+        expiredBatchSize = await expireStaleCommands(env);
+      } while (expiredBatchSize === 250);
+      try {
+        await env.DB.prepare(`
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_one_active_per_node
+          ON commands(node_id)
+          WHERE status IN ('pending', 'accepted')
+        `).run();
+      } catch (error) {
+        const message = String(error);
+        if (message.includes("UNIQUE") || message.includes("idx_commands_one_active_per_node")) {
+          throw new ApiError(409, "command_already_pending");
+        }
+        throw error;
+      }
+    })().catch((error) => {
       commandIndexPromise = undefined;
       throw error;
     });
@@ -438,6 +864,31 @@ async function ensureNodeNetworkStorage(env) {
     });
   }
   await nodeNetworkSchemaPromise;
+}
+
+async function ensureNodeHardwareStorage(env) {
+  if (!nodeHardwareSchemaPromise) {
+    nodeHardwareSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS node_hardware_state (
+          node_id TEXT PRIMARY KEY,
+          memory_total_bytes INTEGER NOT NULL,
+          cpu_logical_count INTEGER NOT NULL,
+          gpus_json TEXT NOT NULL DEFAULT '[]',
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_node_hardware_updated
+        ON node_hardware_state(updated_at DESC)
+      `)
+    ]).catch((error) => {
+      nodeHardwareSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await nodeHardwareSchemaPromise;
 }
 
 async function ensureNodeAiStorage(env) {
@@ -594,31 +1045,49 @@ async function startUpdateAllRollout(request, env) {
       "VALUES ('architect', 'test-console', 'agent.rollout.started', 'rollout', ?, ?)"
     ).bind(rolloutId, JSON.stringify({ target_version: LATEST_NODE_RELEASE.version }))
   ]);
-  const counts = await env.DB.prepare(
-    "SELECT COUNT(*) AS total, " +
-    "SUM(CASE WHEN status != 'revoked' AND agent_version != ? THEN 1 ELSE 0 END) AS outdated " +
-    "FROM nodes"
-  ).bind(LATEST_NODE_RELEASE.version).first();
+  const nodeRows = await env.DB.prepare(
+    "SELECT node_id, hostname, agent_version, status, last_seen_at " +
+    "FROM nodes WHERE status != 'revoked'"
+  ).all();
+  const registered = nodeRows.results || [];
+  const productionNodes = registered.filter((node) => !isTestNodeRecord(node));
+  const outdatedNodes = productionNodes.filter(
+    (node) => node.agent_version !== LATEST_NODE_RELEASE.version
+  );
+  const updateableNow = outdatedNodes.filter(
+    (node) => operationalNodeState(node) === "live"
+  );
   return json({
     ok: true,
     rollout: {
       rollout_id: rolloutId,
       target_version: LATEST_NODE_RELEASE.version,
       status: "active",
-      registered_nodes: Number(counts?.total || 0),
-      nodes_waiting_for_update: Number(counts?.outdated || 0)
+      registered_nodes: productionNodes.length,
+      nodes_waiting_for_update: outdatedNodes.length,
+      nodes_updateable_now: updateableNow.length,
+      nodes_deferred: Math.max(0, outdatedNodes.length - updateableNow.length),
+      excluded_test_nodes: Math.max(0, registered.length - productionNodes.length)
     }
   }, 201);
 }
 
 async function ensureRolloutCommandForNode(env, nodeId) {
   await Promise.all([ensureRolloutStorage(env), ensureCommandStorage(env)]);
-  const [rollout, node, pending, recentCompletedUpdate] = await Promise.all([
+  // Rollouts are exceptional. On the steady-state polling path, do one indexed
+  // lookup and return before touching node/command history.
+  const rollout = await env.DB.prepare(
+    "SELECT rollout_id, target_version, release_json FROM agent_rollouts WHERE status = 'active' ORDER BY created_at DESC LIMIT 1"
+  ).first();
+  if (!rollout) return;
+
+  // Stale active commands only need cleanup when a rollout actually needs the
+  // single-active-command slot. Normal agent polling must not scan for stale
+  // commands every 30 seconds.
+  await expireStaleNodeCommands(env, nodeId);
+  const [node, pending, recentCompletedUpdate] = await Promise.all([
     env.DB.prepare(
-      "SELECT rollout_id, target_version, release_json FROM agent_rollouts WHERE status = 'active' ORDER BY created_at DESC LIMIT 1"
-    ).first(),
-    env.DB.prepare(
-      "SELECT node_id, status, agent_version FROM nodes WHERE node_id = ?"
+      "SELECT node_id, hostname, status, agent_version, last_seen_at FROM nodes WHERE node_id = ?"
     ).bind(nodeId).first(),
     env.DB.prepare(
       "SELECT command_id FROM commands WHERE node_id = ? AND status IN ('pending', 'accepted') LIMIT 1"
@@ -630,7 +1099,13 @@ async function ensureRolloutCommandForNode(env, nodeId) {
       "ORDER BY completed_at DESC LIMIT 1"
     ).bind(nodeId).first()
   ]);
-  if (!rollout || !node || pending || node.status === "revoked" || node.agent_version === rollout.target_version) {
+  if (
+    !node ||
+    pending ||
+    node.status === "revoked" ||
+    isTestNodeRecord(node) ||
+    node.agent_version === rollout.target_version
+  ) {
     return;
   }
   const recentlyInstalled = recentCompletedUpdate
@@ -670,7 +1145,9 @@ const WORK_ROLE_REGISTRY = Object.freeze([
   { id: "recovery", label: "Recovery", kind: "worker", origin: "legacy_simulation" },
   { id: "programmer", label: "Programmer", kind: "worker", origin: "architect_extension_2026_09_18" },
   { id: "mathematician", label: "Mathematician", kind: "worker", origin: "architect_extension_2026_09_18" },
-  { id: "security_analyst", label: "Security Analyst", kind: "worker", origin: "architect_extension_2026_09_18" }
+  { id: "security_analyst", label: "Security Analyst", kind: "worker", origin: "architect_extension_2026_09_18" },
+  { id: "engineer", label: "Engineer", kind: "worker", origin: "ee_professions_2026_09" },
+  { id: "scientist", label: "Scientist", kind: "worker", origin: "ee_professions_2026_09" }
 ]);
 
 const WORKER_ROLE_IDS = new Set(
@@ -691,6 +1168,56 @@ function normalizeRequestedProjectRoles(value) {
   return roles;
 }
 
+function normalizeProjectWorkerTarget(value) {
+  if (value === undefined || value === null || value === "" || value === "auto") return { mode: "auto", count: null };
+  if (value === "all") return { mode: "all", count: null };
+  const count = Number(value);
+  if (!Number.isInteger(count) || count < 1 || count > 50) throw new ApiError(400, "invalid_worker_target");
+  return { mode: "fixed", count };
+}
+
+function schedulingFromChecks(checksJson) {
+  const checks = typeof checksJson === "string" ? safeJson(checksJson, {}) : (checksJson || {});
+  const scheduling = checks?.scheduling;
+  const mode = ["auto", "fixed", "all"].includes(scheduling?.target_mode) ? scheduling.target_mode : "auto";
+  const desired = Number(scheduling?.desired_workers);
+  return {
+    target_mode: mode,
+    desired_workers: Number.isInteger(desired) && desired >= 1 && desired <= 50 ? desired : null
+  };
+}
+
+function targetProjectWork(taskText, requestedRoles, executionMode, desiredWorkers) {
+  const sourceText = String(taskText || "").trim();
+  const explicitRoles = Array.isArray(requestedRoles) && requestedRoles.length
+    ? requestedRoles
+    : [];
+  let items = executionMode === "python"
+    ? (explicitRoles.length
+        ? explicitRoles.map((roleName, index) => ({
+            sequence_no: index + 1,
+            role_name: roleName,
+            task_text: sourceText,
+            role_source: "architect_added"
+          }))
+        : [{ sequence_no: 1, role_name: "programmer", task_text: sourceText, role_source: "hub_recommended" }])
+    : planProjectWork(sourceText, requestedRoles);
+  if (!Number.isInteger(desiredWorkers)) return items;
+  const target = Math.max(1, Math.min(50, desiredWorkers));
+  if (items.length > target) items = items.slice(0, target);
+  const roles = items.map((item) => item.role_name).filter(Boolean);
+  const fallbackRoles = roles.length ? roles : (executionMode === "python" ? ["programmer"] : ["planner"]);
+  while (items.length < target) {
+    const slot = items.length;
+    const roleName = fallbackRoles[slot % fallbackRoles.length];
+    const task = executionMode === "python"
+      ? sourceText
+      : "Act as an independent CITADEL worker in a multi-host run. Analyze the original task from your assigned role, avoid generic duplication, and return evidence, reasoning, edge cases or a concrete solution that improves the final synthesis.\n\nWorker " + (slot + 1) + " of " + target + " · role: " + roleName + "\n\nOriginal task:\n" + sourceText;
+    items.push({ sequence_no: slot + 1, role_name: roleName, task_text: task, role_source: "hub_recommended" });
+  }
+  return items.map((item, index) => ({ ...item, sequence_no: index + 1 }));
+}
+
 function roleMetadata(roleId) {
   return WORK_ROLE_REGISTRY.find((role) => role.id === roleId) || {
     id: roleId,
@@ -704,6 +1231,8 @@ function classifyWorkRole(text) {
   const value = String(text || "").toLowerCase();
   const tests = [
     ["security_analyst", /(security|secure|vulnerab|threat|malware|audit|шифр|безопас|уязв|угроз|вредонос)/],
+    ["engineer", /(engineer|engineering|architecture|infrastructure|system design|hardware|network design|инженер|архитектур|инфраструктур|системн.*проект)/],
+    ["scientist", /(scientist|science|scientific|hypothesis|experiment|physics|chemistry|biology|уч[её]н|научн|гипотез|эксперимент|физик|хими|биолог)/],
     ["programmer", /(python|javascript|typescript|java|code|coding|program|function|api|sql|html|css|код|программ|функц|скрипт|база данных)/],
     ["mathematician", /(math|equation|formula|algebra|geometry|calculus|probab|combin|математ|формул|уравнен|алгебр|геометр|вероятност)/],
     ["metrics", /(metric|statistics|chart|graph|median|average|variance|метрик|статист|график|медиан|средн)/],
@@ -777,6 +1306,18 @@ async function ensureProjectStorage(env) {
         ON project_work_items(node_id, status, created_at)
       `),
       env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_project_work_items_status_project_created
+        ON project_work_items(status, project_id, created_at, sequence_no)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_nodes_status_last_seen
+        ON nodes(status, last_seen_at DESC, node_id)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_audit_events_created_action
+        ON audit_events(created_at DESC, action)
+      `),
+      env.DB.prepare(`
         CREATE TABLE IF NOT EXISTS project_specializations (
           project_id TEXT NOT NULL,
           role_name TEXT NOT NULL,
@@ -840,13 +1381,16 @@ function qualityGateErrorCode(error) {
   return value.replace(/[^a-zA-Z0-9_.:-]/g, "_").slice(0, 120) || "quality_gate_failed";
 }
 
-function qualityGateResultFromRow(row, rawText) {
+async function qualityGateResultFromRow(env, row, rawText) {
   if (!row) return null;
   if (row.status === "completed" && typeof row.final_text === "string" && row.final_text.trim()) {
+    const content = drivePointerId(row.final_text)
+      ? await resolveDriveText(env, row.final_text)
+      : row.final_text;
     return {
       ready: true,
       status: "completed",
-      content: row.final_text,
+      content,
       reviewed: true,
       model: row.resolved_model || row.requested_model || null,
       error_code: null
@@ -912,7 +1456,7 @@ async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
   `).bind(projectId).first();
 
   if (current?.source_sha256 === sourceSha256) {
-    const cached = qualityGateResultFromRow(current, draft);
+    const cached = await qualityGateResultFromRow(env, current, draft);
     if (cached?.ready || current.status === "processing") {
       if (current.status !== "processing") return cached;
       const newClaimId = crypto.randomUUID();
@@ -943,6 +1487,9 @@ async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
   const claimId = current?.source_sha256 === sourceSha256 && current?.status === "processing"
     ? current.claim_id
     : crypto.randomUUID();
+  const supersededQualityPayloadId = current?.source_sha256 !== sourceSha256
+    ? drivePointerId(current?.final_text)
+    : null;
 
   if (!(current?.source_sha256 === sourceSha256 && current?.status === "processing")) {
     const claim = await env.DB.prepare(`
@@ -970,13 +1517,16 @@ async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
       claimId
     ).run();
 
+    if ((claim?.meta?.changes || 0) === 1 && supersededQualityPayloadId) {
+      await deletePayloadBestEffort(env, supersededQualityPayloadId);
+    }
     if ((claim?.meta?.changes || 0) === 0) {
       const row = await env.DB.prepare(`
         SELECT project_id, source_sha256, status, requested_model, resolved_model,
           fusion_preset, final_text, error_code, claim_id, updated_at
         FROM project_quality_gates WHERE project_id = ?
       `).bind(projectId).first();
-      return qualityGateResultFromRow(row, draft) || {
+      return await qualityGateResultFromRow(env, row, draft) || {
         ready: false,
         status: "processing",
         content: null,
@@ -993,6 +1543,13 @@ async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
       originalTask,
       draftAnswer: draft
     });
+    const qualityPayload = await persistDrivePayload(env, {
+      owner_type: "project",
+      owner_id: projectId,
+      kind: "quality_final",
+      value: { text: reviewed.content, model: reviewed.model }
+    });
+    const qualityPointer = drivePointer(qualityPayload.payload_id);
     const saved = await env.DB.prepare(`
       UPDATE project_quality_gates
       SET status = 'completed',
@@ -1004,7 +1561,7 @@ async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
         AND source_sha256 = ?
         AND claim_id = ?
         AND status = 'processing'
-    `).bind(reviewed.model, reviewed.content, projectId, sourceSha256, claimId).run();
+    `).bind(reviewed.model, qualityPointer, projectId, sourceSha256, claimId).run();
 
     if ((saved?.meta?.changes || 0) === 1) {
       return {
@@ -1017,12 +1574,13 @@ async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
       };
     }
 
+    await deletePayloadBestEffort(env, qualityPayload.payload_id);
     const row = await env.DB.prepare(`
       SELECT project_id, source_sha256, status, requested_model, resolved_model,
         fusion_preset, final_text, error_code, claim_id, updated_at
       FROM project_quality_gates WHERE project_id = ?
     `).bind(projectId).first();
-    return qualityGateResultFromRow(row, draft) || {
+    return await qualityGateResultFromRow(env, row, draft) || {
       ready: false,
       status: "processing",
       content: null,
@@ -1150,10 +1708,24 @@ function projectWorkerProfile(text, requestedRoles = []) {
 }
 
 function projectFinalText(sections) {
-  return (sections || [])
-    .filter((item) => typeof item?.content === "string" && item.content.trim())
-    .map((item) => `#${item.sequence_no} ${item.role_name}\n${item.content.trim()}`)
-    .join("\n\n");
+  const maxSectionChars = 12000;
+  const maxCombinedChars = 180000;
+  const parts = [];
+  let used = 0;
+  for (const item of sections || []) {
+    if (typeof item?.content !== "string" || !item.content.trim()) continue;
+    const header = `#${item.sequence_no} ${item.role_name}\n`;
+    let body = item.content.trim();
+    if (body.length > maxSectionChars) body = body.slice(0, maxSectionChars) + "\n[worker output truncated]";
+    const remaining = maxCombinedChars - used - header.length - (parts.length ? 2 : 0);
+    if (remaining <= 0) break;
+    if (body.length > remaining) body = body.slice(0, Math.max(0, remaining)) + "\n[combined output truncated]";
+    const part = header + body;
+    parts.push(part);
+    used += part.length + (parts.length > 1 ? 2 : 0);
+    if (used >= maxCombinedChars) break;
+  }
+  return parts.join("\n\n");
 }
 
 function planProjectWork(text, requestedRoles = []) {
@@ -1211,89 +1783,197 @@ function projectAssignmentId(workItemId) {
   return "assignment_" + workItemId;
 }
 
+function projectExecutionMode(sourceType) {
+  return sourceType === "architect_python" ? "python" : "ai";
+}
+
+function projectNodeReady(node, sourceType) {
+  if (!node || operationalNodeState({ ...node, status: node.status || "online" }) !== "live" || isTestNodeRecord(node)) {
+    return false;
+  }
+  const capabilities = safeJson(node.capabilities_json, []);
+  if (!Array.isArray(capabilities)) return false;
+  if (projectExecutionMode(sourceType) === "python") {
+    return capabilities.includes("project_python");
+  }
+  return capabilities.includes("project_text") &&
+    Number(node.installed || node.lmstudio_installed || 0) === 1 &&
+    Number(node.server_running || node.lmstudio_server_running || 0) === 1 &&
+    typeof (node.loaded_model || node.lmstudio_loaded_model) === "string" &&
+    (node.loaded_model || node.lmstudio_loaded_model).length > 0;
+}
+
+/**
+ * Materialize compatible planned project work for one live node.
+ * Compatibility is applied before the scan limit so mixed AI/Python queues cannot starve later work.
+ */
 async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
-  await Promise.all([ensureProjectStorage(env), ensureNodeAiStorage(env)]);
+  await Promise.all([ensureProjectStorage(env), ensureNodeAiStorage(env), ensurePayloadStorage(env)]);
+  // Most assignment polls happen with no queued project work. Use the
+  // status-first index to prove that cheaply before loading node AI state and
+  // the fleet-wide readiness set.
+  const plannedWork = projectId
+    ? await env.DB.prepare(
+        "SELECT work_item_id FROM project_work_items WHERE status = 'planned' AND project_id = ? LIMIT 1"
+      ).bind(projectId).first()
+    : await env.DB.prepare(
+        "SELECT work_item_id FROM project_work_items WHERE status = 'planned' LIMIT 1"
+      ).first();
+  if (!plannedWork) return 0;
+
   const node = await env.DB.prepare(`
-    SELECT n.node_id, n.status, n.last_seen_at, n.capabilities_json,
+    SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
       ai.installed, ai.loaded_model, ai.server_running
     FROM nodes AS n
     LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
     WHERE n.node_id = ?
   `).bind(nodeId).first();
-  if (!node || node.status !== "online") return 0;
-  const capabilities = safeJson(node.capabilities_json, []);
-  const ready =
-    Array.isArray(capabilities) &&
-    capabilities.includes("project_text") &&
-    Number(node.installed || 0) === 1 &&
-    Number(node.server_running || 0) === 1 &&
-    typeof node.loaded_model === "string" &&
-    node.loaded_model.length > 0;
-  if (!ready) return 0;
+  if (!node || operationalNodeState(node) !== "live" || isTestNodeRecord(node)) return 0;
+
+  const canRunPython = projectNodeReady(node, "architect_python");
+  const canRunAi = projectNodeReady(node, "architect_manual");
+  if (!canRunPython && !canRunAi) return 0;
 
   const [planned, readyNodesQuery] = await Promise.all([
     env.DB.prepare(`
       SELECT w.work_item_id, w.project_id, w.sequence_no, w.role_name, w.task_text,
-        w.node_id AS preferred_node_id, p.title AS project_title
+        w.node_id AS preferred_node_id, p.title AS project_title, p.source_type, p.checks_json,
+        EXISTS (
+          SELECT 1 FROM interactive_messages AS im
+          WHERE im.response_work_item_id = w.work_item_id
+        ) AS interactive_followup
       FROM project_work_items AS w
       JOIN architect_projects AS p ON p.project_id = w.project_id
       WHERE w.status = 'planned'
         AND p.status IN ('planned','running')
         AND (? IS NULL OR w.project_id = ?)
+        AND (
+          (p.source_type = 'architect_python' AND ? = 1)
+          OR (p.source_type != 'architect_python' AND ? = 1)
+        )
       ORDER BY CASE WHEN w.node_id = ? THEN 0 WHEN w.node_id IS NULL THEN 1 ELSE 2 END,
         datetime(p.created_at) ASC, w.sequence_no ASC
       LIMIT 32
-    `).bind(projectId, projectId, nodeId).all(),
+    `).bind(projectId, projectId, canRunPython ? 1 : 0, canRunAi ? 1 : 0, nodeId).all(),
     env.DB.prepare(`
-      SELECT n.node_id, n.capabilities_json, ai.installed, ai.loaded_model, ai.server_running
+      SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
+        ai.installed, ai.loaded_model, ai.server_running
       FROM nodes AS n
       LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
       WHERE n.status = 'online'
         AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes')
     `).all()
   ]);
-  const readyNodeIds = new Set(
-    (readyNodesQuery.results || [])
-      .filter((candidate) => {
-        const candidateCapabilities = safeJson(candidate.capabilities_json, []);
-        return Array.isArray(candidateCapabilities) &&
-          candidateCapabilities.includes("project_text") &&
-          Number(candidate.installed || 0) === 1 &&
-          Number(candidate.server_running || 0) === 1 &&
-          typeof candidate.loaded_model === "string" &&
-          candidate.loaded_model.length > 0;
-      })
-      .map((candidate) => candidate.node_id)
-  );
+  const readyNodes = new Map((readyNodesQuery.results || []).map((candidate) => [candidate.node_id, candidate]));
 
   let created = 0;
-  const candidates = (planned.results || []).filter((work) =>
-    !work.preferred_node_id ||
-    work.preferred_node_id === nodeId ||
-    !readyNodeIds.has(work.preferred_node_id)
-  ).slice(0, 2);
+  const eligible = (planned.results || []).filter((work) => {
+    if (!projectNodeReady(node, work.source_type)) return false;
+    if (Number(work.interactive_followup || 0) === 1) {
+      return Boolean(work.preferred_node_id) && work.preferred_node_id === nodeId;
+    }
+    const scheduling = schedulingFromChecks(work.checks_json);
+    if (scheduling.target_mode !== "auto" && scheduling.desired_workers) {
+      // Explicit fanout starts with whichever distinct physical hosts are ready
+      // now. A preferred node only affects ordering; it must not pin a work item
+      // to a duplicate enrollment of a physical host that already participated.
+      // The winning UPDATE below owns the one-host/desired-host invariants.
+      return true;
+    }
+    const preferred = work.preferred_node_id ? readyNodes.get(work.preferred_node_id) : null;
+    return !work.preferred_node_id || work.preferred_node_id === nodeId || !projectNodeReady(preferred, work.source_type);
+  });
+  const interactive = eligible.find((work) => Number(work.interactive_followup || 0) === 1);
+  const targeted = eligible.find((work) => Number(work.interactive_followup || 0) !== 1 && schedulingFromChecks(work.checks_json).target_mode !== "auto");
+  const candidates = interactive ? [interactive] : targeted ? [targeted] : eligible.slice(0, 2);
+
   for (const work of candidates) {
     const missionId = projectMissionId(work.work_item_id);
     const assignmentId = projectAssignmentId(work.work_item_id);
+    const scheduling = schedulingFromChecks(work.checks_json);
+    const enforceDistinctHost = Number(work.interactive_followup || 0) !== 1 &&
+      scheduling.target_mode !== "auto" &&
+      Number.isInteger(scheduling.desired_workers);
+    const hostKey = String(node.hostname || "").trim().toLowerCase() || nodeId;
+    const executionMode = projectExecutionMode(work.source_type);
+    const missionType = executionMode === "python" ? "project_python" : "project_text";
+    const taskPayloadId = drivePointerId(work.task_text);
+    const taskText = taskPayloadId ? null : await resolveDriveText(env, work.task_text);
+    const routingReason = work.preferred_node_id === nodeId
+      ? "preferred_ready_node"
+      : (work.preferred_node_id ? "preferred_node_unavailable" : "eligible_ready_node");
+    const taskEnvelope = buildTaskEnvelope({
+      projectId: work.project_id,
+      workItemId: work.work_item_id,
+      roleName: work.role_name,
+      taskText: taskText || null,
+      taskPayloadId,
+      executionMode,
+      attempt: 1,
+      nodeId,
+      routingReason
+    });
     const payloadJson = JSON.stringify({
       project_id: work.project_id,
       work_item_id: work.work_item_id,
       role_name: work.role_name,
-      task_text: work.task_text
+      task_payload_id: taskPayloadId,
+      task_text: taskPayloadId ? undefined : taskText,
+      execution_mode: executionMode,
+      contract_version: 1,
+      task_envelope: taskEnvelope
     });
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     const results = await env.DB.batch([
       env.DB.prepare(`
         UPDATE project_work_items
         SET node_id = ?, status = 'assigned', updated_at = CURRENT_TIMESTAMP
-        WHERE work_item_id = ? AND status = 'planned'
-      `).bind(nodeId, work.work_item_id),
+        WHERE work_item_id = ?
+          AND status = 'planned'
+          AND (
+            ? = 0
+            OR (
+              NOT EXISTS (
+                SELECT 1
+                FROM project_work_items AS same_host
+                JOIN nodes AS same_node ON same_node.node_id = same_host.node_id
+                WHERE same_host.project_id = project_work_items.project_id
+                  AND same_host.work_item_id != project_work_items.work_item_id
+                  AND same_host.status IN ('assigned','running','completed')
+                  AND (
+                    CASE
+                      WHEN trim(same_node.hostname) = '' THEN same_node.node_id
+                      ELSE lower(trim(same_node.hostname))
+                    END
+                  ) = ?
+              )
+              AND (
+                SELECT COUNT(DISTINCT (
+                  CASE
+                    WHEN trim(active_node.hostname) = '' THEN active_node.node_id
+                    ELSE lower(trim(active_node.hostname))
+                  END
+                ))
+                FROM project_work_items AS active
+                JOIN nodes AS active_node ON active_node.node_id = active.node_id
+                WHERE active.project_id = project_work_items.project_id
+                  AND active.status IN ('assigned','running','completed')
+              ) < ?
+            )
+          )
+      `).bind(
+        nodeId,
+        work.work_item_id,
+        enforceDistinctHost ? 1 : 0,
+        hostKey,
+        scheduling.desired_workers || 50
+      ),
       env.DB.prepare(`
         INSERT OR IGNORE INTO missions (
           mission_id, title, role_name, mission_type, payload_json,
           priority, status, expires_at
         )
-        SELECT ?, ?, ?, 'project_text', ?, 40, 'assigned', ?
+        SELECT ?, ?, ?, ?, ?, 40, 'assigned', ?
         WHERE EXISTS (
           SELECT 1 FROM project_work_items
           WHERE work_item_id = ? AND node_id = ? AND status = 'assigned'
@@ -1302,6 +1982,7 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
         missionId,
         `Project: ${work.project_title} · block ${work.sequence_no}`,
         work.role_name,
+        missionType,
         payloadJson,
         expiresAt,
         work.work_item_id,
@@ -1338,7 +2019,14 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
         )
       `).bind(
         work.work_item_id,
-        JSON.stringify({ project_id: work.project_id, node_id: nodeId, role_name: work.role_name }),
+        JSON.stringify({
+          project_id: work.project_id,
+          node_id: nodeId,
+          role_name: work.role_name,
+          execution_mode: executionMode,
+          routing_reason: routingReason,
+          task_schema: taskEnvelope.schema
+        }),
         assignmentId,
         nodeId
       )
@@ -1348,23 +2036,61 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
   return created;
 }
 
+function projectTextPreflight(taskText) {
+  const text = String(taskText || "");
+  const spellingWarnings = [];
+  const logicWarnings = [];
+  const repeatedWord = /\b([\p{L}\p{N}_-]{2,})\s+\1\b/giu.exec(text);
+  if (repeatedWord) spellingWarnings.push("repeated_word:" + repeatedWord[1].slice(0, 40));
+  if (/\s{3,}/u.test(text)) spellingWarnings.push("excessive_whitespace");
+  if (/[!?.,]{4,}/u.test(text)) spellingWarnings.push("repeated_punctuation");
+  if (/([\p{L}])\1{5,}/giu.test(text)) spellingWarnings.push("repeated_character_sequence");
+  const pairs = [["(", ")"], ["[", "]"], ["{", "}"]];
+  for (const [open, close] of pairs) {
+    const opens = [...text].filter((ch) => ch === open).length;
+    const closes = [...text].filter((ch) => ch === close).length;
+    if (opens !== closes) spellingWarnings.push("unbalanced_delimiter:" + open + close);
+  }
+  const lowered = text.toLocaleLowerCase();
+  const aiRequired = /(используй|включи|use|enable)\s+(ии|ai|lm\s*studio|llm)/iu.test(lowered);
+  const aiForbidden = /(без|не\s+используй|no|without|disable)\s+(ии|ai|lm\s*studio|llm)/iu.test(lowered);
+  if (aiRequired && aiForbidden) logicWarnings.push("conflicting_ai_mode_instructions");
+  const pythonRequired = /(только\s+python|python\s+only|без\s+ии)/iu.test(lowered);
+  const lmRequired = /(обязательно\s+lm|use\s+lm\s*studio|используй\s+lm)/iu.test(lowered);
+  if (pythonRequired && lmRequired) logicWarnings.push("conflicting_python_and_lmstudio_modes");
+  const nonEmptyLines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (nonEmptyLines.length > 1 && new Set(nonEmptyLines.map((line) => line.toLocaleLowerCase())).size < nonEmptyLines.length) {
+    logicWarnings.push("duplicate_instruction_lines");
+  }
+  return {
+    passed: true,
+    engine: "deterministic_preflight",
+    spelling_warnings: spellingWarnings.slice(0, 12),
+    logic_warnings: logicWarnings.slice(0, 12),
+    warning_count: Math.min(24, spellingWarnings.length + logicWarnings.length),
+    detail: spellingWarnings.length || logicWarnings.length ? "review_warnings_before_execution" : "no_structural_text_warnings"
+  };
+}
+
 async function evaluateProjectChecks(env, sourceType, title, taskText) {
   await ensureProjectStorage(env);
-  const sourceAllowed = sourceType === "architect_manual";
+  const sourceAllowed = ["architect_manual", "architect_ee", "architect_python"].includes(sourceType);
   const validationPass = title.length >= 1 && title.length <= 160 &&
     taskText.length >= 1 && taskText.length <= 20000;
   const taskSha256 = await sha256Hex(taskText);
   const duplicate = await env.DB.prepare(
     "SELECT project_id, status FROM architect_projects " +
-    "WHERE task_sha256 = ? AND status IN ('planned','running') ORDER BY created_at DESC LIMIT 1"
-  ).bind(taskSha256).first();
+    "WHERE task_sha256 = ? AND source_type = ? AND status IN ('planned','running') ORDER BY created_at DESC LIMIT 1"
+  ).bind(taskSha256, sourceType).first();
   const safety = projectSafetyClassification(taskText);
+  const textPreflight = projectTextPreflight(taskText);
   return {
     task_sha256: taskSha256,
+    text_preflight: textPreflight,
     checks: {
       source_allowlisting: {
         passed: sourceAllowed,
-        detail: sourceAllowed ? "architect_manual_allowed" : "source_not_allowed"
+        detail: sourceAllowed ? sourceType + "_allowed" : "source_not_allowed"
       },
       validation: {
         passed: validationPass,
@@ -1395,19 +2121,35 @@ async function architectCheckProject(request, env) {
   const title = requireString(body.title, "title", 160);
   const taskText = requireString(body.task_text, "task_text", 20000);
   const requestedRoles = normalizeRequestedProjectRoles(body.requested_roles);
+  const workerTarget = normalizeProjectWorkerTarget(body.worker_target);
+  const executionMode = projectExecutionMode(sourceType);
+  const effectiveRequestedRoles = requestedRoles;
   const result = await evaluateProjectChecks(env, sourceType, title, taskText);
-  const recommendedWork = planProjectWork(taskText);
-  const plannedWork = planProjectWork(taskText, requestedRoles);
+  const recommendedWork = executionMode === "python"
+    ? (effectiveRequestedRoles.length
+        ? effectiveRequestedRoles.map((roleName, index) => ({
+            sequence_no: index + 1,
+            role_name: roleName,
+            task_text: taskText,
+            role_source: "architect_added"
+          }))
+        : [{ sequence_no: 1, role_name: "programmer", task_text: taskText, role_source: "hub_recommended" }])
+    : planProjectWork(taskText);
+  const autoDesiredWorkers = executionMode === "python" ? Math.max(1, effectiveRequestedRoles.length || 1) : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers;
+  const previewDesiredWorkers = workerTarget.mode === "fixed" ? workerTarget.count : autoDesiredWorkers;
+  const plannedWork = targetProjectWork(taskText, effectiveRequestedRoles, executionMode, workerTarget.mode === "all" ? null : previewDesiredWorkers);
   const recommendedRolePlan = rolePlanSummary(recommendedWork);
   const selectedRolePlan = rolePlanSummary(plannedWork);
   return json({
     ok: true,
+    execution_mode: executionMode,
     ready_for_architect_approval: projectChecksPassed(result.checks),
     recommended_role_plan: recommendedRolePlan,
     recommended_roles: Object.keys(recommendedRolePlan),
-    requested_roles: requestedRoles,
+    requested_roles: effectiveRequestedRoles,
     selected_roles: Object.keys(selectedRolePlan),
-    desired_workers: projectWorkerProfile(taskText, requestedRoles).desired_workers,
+    worker_target: workerTarget,
+    desired_workers: workerTarget.mode === "all" ? null : previewDesiredWorkers,
     role_plan: selectedRolePlan,
     work_preview: plannedWork.map(({ sequence_no, role_name, role_source }) => ({
       sequence_no,
@@ -1418,6 +2160,10 @@ async function architectCheckProject(request, env) {
   });
 }
 
+/**
+ * Create a durable Architect project after validation.
+ * The project remains planned with unassigned work when no execution-ready node exists yet.
+ */
 async function architectCreateProject(request, env) {
   await authenticateArchitect(request, env);
   const body = parseJsonObject(await readBodyText(request, 64 * 1024));
@@ -1425,14 +2171,17 @@ async function architectCreateProject(request, env) {
   const title = requireString(body.title, "title", 160);
   const taskText = requireString(body.task_text, "task_text", 20000);
   const requestedRoles = normalizeRequestedProjectRoles(body.requested_roles);
+  const workerTarget = normalizeProjectWorkerTarget(body.worker_target);
+  const executionMode = projectExecutionMode(sourceType);
+  const effectiveRequestedRoles = requestedRoles;
   const evaluated = await evaluateProjectChecks(env, sourceType, title, taskText);
   if (!projectChecksPassed(evaluated.checks)) {
     throw new ApiError(409, "project_checks_failed");
   }
 
-  await ensureNodeAiStorage(env);
+  await Promise.all([ensureNodeAiStorage(env), ensureAutoEnrollmentStorage(env)]);
   const nodesQuery = await env.DB.prepare(
-    "SELECT n.node_id, n.hostname, n.agent_version, n.capabilities_json, nn.node_number, " +
+    "SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.agent_version, n.capabilities_json, nn.node_number, " +
     "ai.installed AS lmstudio_installed, ai.loaded_model AS lmstudio_loaded_model, " +
     "ai.server_running AS lmstudio_server_running " +
     "FROM nodes AS n " +
@@ -1441,24 +2190,56 @@ async function architectCreateProject(request, env) {
     "WHERE n.status = 'online' AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes') " +
     "ORDER BY n.last_seen_at DESC, n.node_id ASC"
   ).all();
-  const onlineNodes = nodesQuery.results || [];
-  if (!onlineNodes.length) throw new ApiError(409, "no_available_nodes");
-  const nodes = onlineNodes.filter((node) => {
-    const capabilities = safeJson(node.capabilities_json, []);
-    return Array.isArray(capabilities) &&
-      capabilities.includes("project_text") &&
-      Number(node.lmstudio_installed || 0) === 1 &&
-      Number(node.lmstudio_server_running || 0) === 1 &&
-      typeof node.lmstudio_loaded_model === "string" &&
-      node.lmstudio_loaded_model.length > 0;
-  });
+  const onlineNodes = (nodesQuery.results || []).filter((node) => !isTestNodeRecord(node));
+  // A project is durable work, not a one-shot dispatch request. Save it even when
+  // no executor is READY right now; normal node assignment polling will materialize
+  // the planned work as soon as a compatible live worker becomes ready.
+  const nodes = onlineNodes.filter((node) => projectNodeReady(node, sourceType));
 
-  const recommendedWork = planProjectWork(taskText);
+  const recommendedWork = executionMode === "python"
+    ? (effectiveRequestedRoles.length
+        ? effectiveRequestedRoles.map((roleName, index) => ({
+            sequence_no: index + 1,
+            role_name: roleName,
+            task_text: taskText,
+            role_source: "architect_added"
+          }))
+        : [{ sequence_no: 1, role_name: "programmer", task_text: taskText, role_source: "hub_recommended" }])
+    : planProjectWork(taskText);
   const recommendedRoles = new Set(recommendedWork.map((item) => item.role_name));
-  const plannedWork = planProjectWork(taskText, requestedRoles);
-  const workerCount = Math.min(nodes.length, plannedWork.length);
+  const autoDesiredWorkers = executionMode === "python" ? Math.max(1, effectiveRequestedRoles.length || 1) : projectWorkerProfile(taskText, effectiveRequestedRoles).desired_workers;
+  const desiredWorkers = workerTarget.mode === "fixed"
+    ? workerTarget.count
+    : workerTarget.mode === "all"
+      ? Math.max(1, Math.min(50, nodes.length))
+      : autoDesiredWorkers;
+  const plannedWork = targetProjectWork(taskText, effectiveRequestedRoles, executionMode, desiredWorkers);
+  const workerCount = Math.min(nodes.length, desiredWorkers);
   const projectId = "project_" + crypto.randomUUID();
-  const checksJson = JSON.stringify(evaluated.checks);
+  await ensurePayloadStorage(env);
+  const createdPayloadIds = [];
+  const projectTaskPayload = await persistDrivePayload(env, {
+    owner_type: "project",
+    owner_id: projectId,
+    kind: "project_task",
+    value: {
+      text: taskText,
+      source_type: sourceType,
+      requested_roles: effectiveRequestedRoles
+    }
+  });
+  createdPayloadIds.push(projectTaskPayload.payload_id);
+  const projectTaskPointer = drivePointer(projectTaskPayload.payload_id);
+  const workTaskPayloads = new Map();
+  const checksJson = JSON.stringify({
+    ...evaluated.checks,
+    scheduling: {
+      passed: true,
+      detail: workerTarget.mode === "auto" ? "automatic_worker_target" : "explicit_distinct_worker_target",
+      target_mode: workerTarget.mode,
+      desired_workers: desiredWorkers
+    }
+  });
   const selectedRoleNames = [...new Set(plannedWork.map((item) => item.role_name))];
   const specializationSummary = selectedRoleNames.map((roleName) => ({
     ...roleMetadata(roleName),
@@ -1469,7 +2250,7 @@ async function architectCreateProject(request, env) {
       "INSERT INTO architect_projects (" +
       "project_id, title, source_type, task_text, task_sha256, checks_json, architect_approved, status, worker_count" +
       ") VALUES (?, ?, ?, ?, ?, ?, 1, 'planned', ?)"
-    ).bind(projectId, title, sourceType, taskText, evaluated.task_sha256, checksJson, workerCount),
+    ).bind(projectId, title, sourceType, projectTaskPointer, evaluated.task_sha256, checksJson, workerCount),
     env.DB.prepare(
       "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
       "VALUES ('architect', 'test-console', 'project.created', 'project', ?, ?)"
@@ -1477,7 +2258,10 @@ async function architectCreateProject(request, env) {
       worker_count: workerCount,
       work_items: plannedWork.length,
       roles: rolePlanSummary(plannedWork),
-      requested_roles: requestedRoles
+      requested_roles: effectiveRequestedRoles,
+      execution_mode: executionMode,
+      worker_target: workerTarget,
+      desired_workers: desiredWorkers
     }))
   ];
   for (const specialization of specializationSummary) {
@@ -1488,9 +2272,28 @@ async function architectCreateProject(request, env) {
 
   const workItems = [];
   for (let index = 0; index < plannedWork.length; index += 1) {
-    const node = workerCount > 0 ? nodes[index % workerCount] : null;
+    const node = workerCount > 0
+      ? (workerTarget.mode === "auto" ? nodes[index % workerCount] : (index < workerCount ? nodes[index] : null))
+      : null;
     const planned = plannedWork[index];
     const workItemId = "work_" + crypto.randomUUID();
+    let taskPayload = workTaskPayloads.get(planned.task_text);
+    if (!taskPayload) {
+      try {
+        taskPayload = await persistDrivePayload(env, {
+          owner_type: "project",
+          owner_id: projectId,
+          kind: "work_task",
+          value: { text: planned.task_text }
+        });
+      } catch (error) {
+        await Promise.all(createdPayloadIds.map((payloadId) => deletePayloadBestEffort(env, payloadId)));
+        throw error;
+      }
+      workTaskPayloads.set(planned.task_text, taskPayload);
+      createdPayloadIds.push(taskPayload.payload_id);
+    }
+    const taskPointer = drivePointer(taskPayload.payload_id);
     workItems.push({
       work_item_id: workItemId,
       sequence_no: planned.sequence_no,
@@ -1498,7 +2301,7 @@ async function architectCreateProject(request, env) {
       node_id: node?.node_id || null,
       hostname: node?.hostname || null,
       node_number: node?.node_number || null,
-      task_text: planned.task_text,
+      task_payload_id: taskPayload.payload_id,
       role_source: planned.role_source,
       status: "planned"
     });
@@ -1506,56 +2309,118 @@ async function architectCreateProject(request, env) {
       env.DB.prepare(
         "INSERT INTO project_work_items (work_item_id, project_id, sequence_no, node_id, role_name, task_text, status) " +
         "VALUES (?, ?, ?, ?, ?, ?, 'planned')"
-      ).bind(workItemId, projectId, planned.sequence_no, node?.node_id || null, planned.role_name, planned.task_text)
+      ).bind(workItemId, projectId, planned.sequence_no, node?.node_id || null, planned.role_name, taskPointer)
     );
   }
-  await env.DB.batch(statements);
+  try {
+    await env.DB.batch(statements);
+  } catch (error) {
+    await Promise.all(createdPayloadIds.map((payloadId) => deletePayloadBestEffort(env, payloadId)));
+    throw error;
+  }
   return json({
     ok: true,
     project: {
       project_id: projectId,
       title,
+      source_type: sourceType,
+      execution_mode: executionMode,
       status: "planned",
       architect_approved: true,
       worker_count: workerCount,
-      desired_workers: projectWorkerProfile(taskText, requestedRoles).desired_workers,
+      worker_target: workerTarget,
+      desired_workers: desiredWorkers,
       work_item_count: plannedWork.length,
+      payload_storage: "google_drive",
+      task_payload_id: projectTaskPayload.payload_id,
       role_plan: rolePlanSummary(plannedWork),
       recommended_roles: [...recommendedRoles],
-      requested_roles: requestedRoles,
+      requested_roles: effectiveRequestedRoles,
       specializations: specializationSummary,
       checks: evaluated.checks,
       work_items: workItems
     },
     execution: {
       state: "planned",
+      execution_mode: executionMode,
       completed_work_items: 0,
       total_work_items: plannedWork.length,
       final_report_ready: false,
-      detail: "hub_plan_created_waiting_for_project_worker_execution"
+      worker_target: workerTarget,
+      desired_workers: desiredWorkers,
+      detail: workerCount === 0
+        ? (executionMode === "python"
+            ? "hub_plan_saved_waiting_for_python_worker"
+            : "hub_plan_saved_waiting_for_ready_lmstudio_worker")
+        : executionMode === "python"
+          ? "hub_plan_created_waiting_for_python_worker_execution"
+          : "hub_plan_created_waiting_for_project_worker_execution"
     }
   }, 201);
+}
+
+async function expireStalePlannedProjects(env) {
+  // Never-started planned projects must not occupy Operations forever.
+  await env.DB.batch([
+    env.DB.prepare(`
+      UPDATE project_work_items
+      SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+      WHERE status = 'planned'
+        AND project_id IN (
+          SELECT p.project_id
+          FROM architect_projects AS p
+          WHERE p.status = 'planned'
+            AND datetime(p.updated_at) <= datetime('now', '-24 hours')
+            AND NOT EXISTS (
+              SELECT 1 FROM project_work_items AS w2
+              WHERE w2.project_id = p.project_id
+                AND w2.status IN ('assigned','running','completed','failed')
+            )
+        )
+    `),
+    env.DB.prepare(`
+      UPDATE architect_projects
+      SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+      WHERE status = 'planned'
+        AND datetime(updated_at) <= datetime('now', '-24 hours')
+        AND NOT EXISTS (
+          SELECT 1 FROM project_work_items AS w
+          WHERE w.project_id = architect_projects.project_id
+            AND w.status IN ('assigned','running','completed','failed')
+        )
+    `)
+  ]);
 }
 
 async function architectListProjects(request, env) {
   await authenticateArchitect(request, env);
   await ensureProjectStorage(env);
+  await expireStalePlannedProjects(env);
   const rows = await env.DB.prepare(
-    "SELECT p.project_id, p.title, p.status, p.worker_count, p.created_at, p.updated_at, " +
+    "SELECT p.project_id, p.title, p.source_type, p.status, p.worker_count, p.created_at, p.updated_at, " +
+    "COALESCE(CAST(json_extract(p.checks_json, '$.scheduling.desired_workers') AS INTEGER), p.worker_count) AS desired_workers, " +
+    "COALESCE(json_extract(p.checks_json, '$.scheduling.target_mode'), 'auto') AS worker_target_mode, " +
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id) AS work_item_count, " +
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'completed') AS completed_work_items, " +
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'failed') AS failed_work_items, " +
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'assigned') AS assigned_work_items, " +
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'running') AS running_work_items, " +
     "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status IN ('completed','failed','cancelled')) AS finished_work_items " +
-    "FROM architect_projects AS p ORDER BY p.created_at DESC LIMIT 50"
+    "FROM architect_projects AS p " +
+    "WHERE NOT (p.status = 'cancelled' AND datetime(p.updated_at) < datetime('now', '-24 hours')) " +
+    "ORDER BY p.created_at DESC LIMIT 50"
   ).all();
   return json({ ok: true, projects: rows.results || [] });
 }
 
 async function architectGetProject(request, env, projectId) {
   await authenticateArchitect(request, env);
-  await Promise.all([ensureProjectStorage(env), ensureNodeAiStorage(env), ensureReportStorage(env)]);
+  await Promise.all([
+    ensureProjectStorage(env),
+    ensureNodeAiStorage(env),
+    ensureReportStorage(env),
+    ensureAutoEnrollmentStorage(env)
+  ]);
   const project = await env.DB.prepare(`
     SELECT project_id, title, source_type, task_text, checks_json,
       architect_approved, status, worker_count, created_at, updated_at
@@ -1563,6 +2428,7 @@ async function architectGetProject(request, env, projectId) {
     WHERE project_id = ?
   `).bind(projectId).first();
   if (!project) throw new ApiError(404, "project_not_found");
+  const projectTaskText = await resolveDriveText(env, project.task_text);
 
   const readinessQuery = await env.DB.prepare(`
     SELECT
@@ -1573,7 +2439,8 @@ async function architectGetProject(request, env, projectId) {
         THEN 1 ELSE 0 END AS recently_seen,
       ai.installed AS lmstudio_installed,
       ai.loaded_model AS lmstudio_loaded_model,
-      ai.server_running AS lmstudio_server_running
+      ai.server_running AS lmstudio_server_running,
+      ai.updated_at AS lmstudio_state_updated_at
     FROM nodes AS n
     LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id
     LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
@@ -1582,22 +2449,36 @@ async function architectGetProject(request, env, projectId) {
     LIMIT 100
   `).all();
 
+  const executionMode = projectExecutionMode(project.source_type);
   const workerReadiness = (readinessQuery.results || []).map((node) => {
     const capabilities = safeJson(node.capabilities_json, []);
     const hasProjectText = Array.isArray(capabilities) && capabilities.includes("project_text");
+    const hasProjectPython = Array.isArray(capabilities) && capabilities.includes("project_python");
     const live = Number(node.recently_seen || 0) === 1;
+    const testNode = isTestNodeRecord(node);
+    const aiStateKnown = typeof node.lmstudio_state_updated_at === "string" && node.lmstudio_state_updated_at.length > 0;
     const installed = Number(node.lmstudio_installed || 0) === 1;
     const serverRunning = Number(node.lmstudio_server_running || 0) === 1;
     const loadedModel = typeof node.lmstudio_loaded_model === "string" && node.lmstudio_loaded_model.length > 0;
     const blockers = [];
+    if (testNode) blockers.push("test_node_excluded");
     if (!live) blockers.push("offline");
-    if (!hasProjectText) blockers.push(
-      node.agent_version !== LATEST_NODE_RELEASE.version ? "agent_outdated" : "project_text_missing"
-    );
-    if (!installed) blockers.push("lmstudio_not_installed");
-    else {
-      if (!serverRunning) blockers.push("lmstudio_server_stopped");
-      if (!loadedModel) blockers.push("lmstudio_model_not_loaded");
+    if (executionMode === "python") {
+      if (!hasProjectPython) blockers.push(
+        node.agent_version !== LATEST_NODE_RELEASE.version ? "agent_outdated" : "project_python_missing"
+      );
+    } else {
+      if (!hasProjectText) blockers.push(
+        !agentVersionAtLeast(node.agent_version, "0.3.19") ? "agent_outdated" : "project_text_missing"
+      );
+      if (!aiStateKnown) {
+        blockers.push("lmstudio_state_unknown");
+      } else if (!installed) {
+        blockers.push("lmstudio_not_installed");
+      } else {
+        if (!serverRunning) blockers.push("lmstudio_server_stopped");
+        if (!loadedModel) blockers.push("lmstudio_model_not_loaded");
+      }
     }
     return {
       node_id: node.node_id,
@@ -1605,7 +2486,12 @@ async function architectGetProject(request, env, projectId) {
       hostname: node.hostname || null,
       agent_version: node.agent_version || null,
       live,
+      operational_state: testNode ? "test" : operationalNodeState(node),
+      execution_mode: executionMode,
       project_text: hasProjectText,
+      project_python: hasProjectPython,
+      lmstudio_state_known: aiStateKnown,
+      lmstudio_state_updated_at: node.lmstudio_state_updated_at || null,
       lmstudio_installed: installed,
       lmstudio_server_running: serverRunning,
       lmstudio_loaded_model: node.lmstudio_loaded_model || null,
@@ -1621,7 +2507,7 @@ async function architectGetProject(request, env, projectId) {
     }
   }
 
-  const [workQuery, specializationQuery] = await Promise.all([
+  const [workQuery, specializationQuery, taskLogQuery] = await Promise.all([
     env.DB.prepare(`
       SELECT
         w.work_item_id, w.sequence_no, w.role_name, w.task_text, w.status,
@@ -1652,14 +2538,44 @@ async function architectGetProject(request, env, projectId) {
       FROM project_specializations
       WHERE project_id = ?
       ORDER BY created_at ASC, role_name ASC
-    `).bind(projectId).all()
+    `).bind(projectId).all(),
+    env.DB.prepare(`
+      SELECT event_id, actor_type, action, target_type, target_id, details_json, created_at
+      FROM audit_events
+      WHERE target_id = ? OR instr(details_json, ?) > 0
+      ORDER BY event_id ASC
+      LIMIT 250
+    `).bind(projectId, projectId).all()
   ]);
 
-  const workItems = (workQuery.results || []).map((item) => ({
-    ...item,
-    result: safeJson(item.result_json, null),
-    result_json: undefined
+  const taskLogs = (taskLogQuery.results || []).map((event) => ({
+    event_id: event.event_id,
+    actor_type: event.actor_type,
+    action: event.action,
+    target_type: event.target_type,
+    target_id: event.target_id,
+    details: safeJson(event.details_json, {}),
+    created_at: event.created_at
   }));
+
+  const textCache = new Map();
+  const jsonCache = new Map();
+  const resolveCachedText = (value) => {
+    const key = String(value || "");
+    if (!textCache.has(key)) textCache.set(key, resolveDriveText(env, value));
+    return textCache.get(key);
+  };
+  const resolveCachedJson = (value) => {
+    const key = String(value || "");
+    if (!jsonCache.has(key)) jsonCache.set(key, resolveDriveJson(env, value));
+    return jsonCache.get(key);
+  };
+  const workItems = await Promise.all((workQuery.results || []).map(async (item) => ({
+    ...item,
+    task_text: await resolveCachedText(item.task_text),
+    result: item.result_json ? await resolveCachedJson(item.result_json) : null,
+    result_json: undefined
+  })));
   let specializationRows = specializationQuery.results || [];
   if (!specializationRows.length) {
     specializationRows = [...new Set(workItems.map((item) => item.role_name))].map((roleName) => ({
@@ -1701,27 +2617,55 @@ async function architectGetProject(request, env, projectId) {
       role_name: item.role_name,
       node_id: item.node_id,
       model: item.result.model || null,
-      content: typeof item.result.content === "string" ? item.result.content : null,
+      content: typeof item.result.content === "string" && item.result.content.trim()
+        ? item.result.content
+        : item.status === "failed"
+          ? `ERROR: ${String(item.result.error_code || item.result.error_type || "worker_failed")}`
+          : null,
+      error_code: typeof item.result.error_code === "string" ? item.result.error_code : null,
       status: item.status
     }));
   const workComplete = total > 0 && finished === total;
   const rawResultText = workComplete ? projectFinalText(finalSections) : null;
-  const qualityGate = workComplete
-    ? await finalizeProjectAnswer(env, project.project_id, project.task_text, rawResultText)
-    : {
-        ready: false,
-        status: "waiting_for_workers",
-        content: null,
+  const qualityConfig = openRouterQualityConfig(env);
+  const qualityGate = workComplete && executionMode === "python"
+    ? {
+        ready: true,
+        status: "not_applicable_python",
+        content: rawResultText,
         reviewed: false,
         model: null,
         error_code: null
-      };
-  const finalReportReady = workComplete && qualityGate.ready;
-  const finalResultText = finalReportReady ? qualityGate.content : null;
+      }
+    : workComplete && !qualityConfig.configured
+      ? await finalizeProjectAnswer(env, project.project_id, projectTaskText, rawResultText)
+      : workComplete
+        ? {
+            ready: true,
+            status: "deferred",
+            content: rawResultText,
+            reviewed: false,
+            model: qualityConfig.model || null,
+            error_code: null
+          }
+        : {
+            ready: false,
+            status: "waiting_for_workers",
+            content: null,
+            reviewed: false,
+            model: null,
+            error_code: null
+          };
+  // A completed local worker result is the baseline answer. OpenRouter may
+  // enrich it, but a slow/processing quality gate must never hide it.
+  const finalResultText = workComplete ? (qualityGate.content || rawResultText || null) : null;
+  const finalReportReady = workComplete && Boolean(finalResultText);
   return json({
     ok: true,
     project: {
       ...project,
+      task_text: projectTaskText,
+      payload_storage: drivePointerId(project.task_text) ? "google_drive" : "legacy_d1",
       checks: safeJson(project.checks_json, {}),
       checks_json: undefined,
       role_plan: rolePlanSummary(workItems),
@@ -1730,7 +2674,12 @@ async function architectGetProject(request, env, projectId) {
       execution: {
         state: executionState,
         counts,
-        desired_workers: projectWorkerProfile(project.task_text, specializations.filter((item) => item.source === "architect_added").map((item) => item.id)).desired_workers,
+        execution_mode: executionMode,
+        desired_workers: schedulingFromChecks(project.checks_json).desired_workers ||
+          (executionMode === "python"
+            ? 1
+            : projectWorkerProfile(projectTaskText, specializations.filter((item) => item.source === "architect_added").map((item) => item.id)).desired_workers),
+        worker_target_mode: schedulingFromChecks(project.checks_json).target_mode,
         ready_workers_at_creation: Number(project.worker_count || 0),
         ready_workers_now: readyWorkers.length,
         worker_readiness: workerReadiness,
@@ -1738,18 +2687,22 @@ async function architectGetProject(request, env, projectId) {
         total_work_items: total,
         final_report_ready: finalReportReady,
         progress_percent: total ? Math.round((finished / total) * 100) : 0,
-        detail: workComplete && !finalReportReady
-          ? "final_quality_gate_running"
+        detail: workComplete && qualityGate.status === "processing" && finalReportReady
+          ? "local_result_ready_quality_gate_running"
+          : workComplete && !finalReportReady
+            ? "final_quality_gate_running"
           : finalReportReady && qualityGate.reviewed
             ? "final_quality_gate_completed"
             : finalReportReady && qualityGate.status === "degraded"
               ? "final_quality_gate_degraded"
               : executionState === "planned"
-                ? "waiting_for_lmstudio_project_worker"
+                ? (executionMode === "python" ? "waiting_for_python_project_worker" : "waiting_for_lmstudio_project_worker")
                 : executionState === "completed"
                   ? "all_project_work_items_completed"
                   : executionState
       },
+      text_preflight: projectTextPreflight(projectTaskText),
+      task_logs: taskLogs,
       final_report: {
         ready: finalReportReady,
         sections: finalSections,
@@ -2144,9 +3097,14 @@ async function authenticateNode(request, env, nodeId, url, bodyBytes) {
     if ((nonce?.meta?.changes || 0) !== 1) {
       throw new ApiError(409, "replayed_request");
     }
-    await env.DB.prepare(
-      "DELETE FROM node_request_nonces WHERE datetime(received_at) < datetime('now', '-10 minutes')"
-    ).run();
+    // Replay protection is enforced by the PRIMARY KEY insert above. Cleanup
+    // can be opportunistic: retaining expired nonces longer is safe, while
+    // pruning on every signed poll caused repeated D1 scans.
+    if (requestId.endsWith("0")) {
+      await env.DB.prepare(
+        "DELETE FROM node_request_nonces WHERE received_at < datetime('now', '-10 minutes')"
+      ).run();
+    }
   }
   return node;
 }
@@ -2345,7 +3303,7 @@ async function enrollNode(request, env) {
 
 async function heartbeat(request, env, nodeId, url) {
   const { bytes: bodyBytes, text: bodyText } = await readBody(request, MAX_NODE_BODY_BYTES);
-  await authenticateNode(request, env, nodeId, url, bodyBytes);
+  const node = await authenticateNode(request, env, nodeId, url, bodyBytes);
   const body = parseJsonObject(bodyText);
 
   const cpuPercent = optionalPercent(body.cpu_percent, "cpu_percent");
@@ -2355,14 +3313,10 @@ async function heartbeat(request, env, nodeId, url) {
     ? null
     : normalizeCapabilities(body.capabilities);
   const network = normalizeNodeNetwork(body.network);
+  const hardware = normalizeNodeHardware(body.hardware);
   if (network) await ensureNodeNetworkStorage(env);
-  const detailsJson = JSON.stringify({
-    cpu_percent: cpuPercent,
-    memory_percent: memoryPercent,
-    agent_version: agentVersion,
-    lan_ipv4: network?.lan_ipv4 || null
-  });
-
+  if (hardware) await ensureNodeHardwareStorage(env);
+  const heartbeatAt = new Date().toISOString();
   const heartbeatStatements = [
     env.DB.prepare(`
       UPDATE nodes
@@ -2371,16 +3325,9 @@ async function heartbeat(request, env, nodeId, url) {
           agent_version = COALESCE(?, agent_version),
           capabilities_json = COALESCE(?, capabilities_json),
           status = CASE WHEN status = 'paused' THEN 'paused' ELSE 'online' END,
-          last_seen_at = CURRENT_TIMESTAMP
+          last_seen_at = ?
       WHERE node_id = ? AND status != 'revoked'
-    `).bind(cpuPercent, memoryPercent, agentVersion, capabilitiesJson, nodeId),
-    env.DB.prepare(`
-      INSERT INTO audit_events (
-        actor_type, actor_id, action, target_type, target_id, details_json
-      )
-      SELECT 'node', ?, 'node.heartbeat', 'node', ?, ?
-      WHERE changes() = 1
-    `).bind(nodeId, nodeId, detailsJson)
+    `).bind(cpuPercent, memoryPercent, agentVersion, capabilitiesJson, heartbeatAt, nodeId)
   ];
   if (network) {
     heartbeatStatements.push(env.DB.prepare(`
@@ -2402,16 +3349,34 @@ async function heartbeat(request, env, nodeId, url) {
       JSON.stringify(network.mac_addresses)
     ));
   }
+  if (hardware) {
+    heartbeatStatements.push(env.DB.prepare(`
+      INSERT INTO node_hardware_state (
+        node_id, memory_total_bytes, cpu_logical_count, gpus_json, updated_at
+      ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(node_id) DO UPDATE SET
+        memory_total_bytes = excluded.memory_total_bytes,
+        cpu_logical_count = excluded.cpu_logical_count,
+        gpus_json = excluded.gpus_json,
+        updated_at = CURRENT_TIMESTAMP
+    `).bind(
+      nodeId,
+      hardware.memory_total_bytes,
+      hardware.cpu_logical_count,
+      JSON.stringify(hardware.gpus)
+    ));
+  }
   const results = await env.DB.batch(heartbeatStatements);
 
   if ((results[0]?.meta?.changes || 0) !== 1) {
     throw new ApiError(404, "node_not_found");
   }
 
-  const node = await env.DB.prepare(
-    "SELECT status, last_seen_at FROM nodes WHERE node_id = ?"
-  ).bind(nodeId).first();
-  return json({ ok: true, node_id: nodeId, ...node });
+  // authenticateNode already loaded the current status. The UPDATE above can
+  // only preserve paused or move a non-revoked node to online, so a second
+  // point SELECT just to echo the heartbeat would double-read this hot path.
+  const status = node.status === "paused" ? "paused" : "online";
+  return json({ ok: true, node_id: nodeId, status, last_seen_at: heartbeatAt });
 }
 
 async function listAssignments(request, env, nodeId, url) {
@@ -2447,10 +3412,23 @@ async function listAssignments(request, env, nodeId, url) {
     LIMIT 20
   `).bind(nodeId).all();
 
-  const assignments = (query.results || []).map((row) => ({
-    ...row,
-    payload: safeJson(row.payload_json, {}),
-    payload_json: undefined
+  const assignments = await Promise.all((query.results || []).map(async (row) => {
+    const payload = safeJson(row.payload_json, {});
+    if (payload && typeof payload === "object" && payload.task_payload_id && !payload.task_text) {
+      payload.task_text = await resolveDriveText(env, drivePointer(payload.task_payload_id));
+      if (payload.task_envelope && typeof payload.task_envelope === "object") {
+        payload.task_envelope = {
+          ...payload.task_envelope,
+          goal: payload.task_text,
+          goal_payload_id: payload.task_payload_id
+        };
+      }
+    }
+    return {
+      ...row,
+      payload,
+      payload_json: undefined
+    };
   }));
   return json({ ok: true, node_status: node.status, assignments });
 }
@@ -2549,6 +3527,7 @@ async function submitResult(request, env, nodeId, url) {
   }
 
   const summary = optionalString(body.summary, "summary", 4000);
+  const summaryIndex = summary ? summary.slice(0, 512) : null;
   const artifactKey = optionalString(body.artifact_key, "artifact_key", 512);
   const metricsJson = normalizeMetrics(body.metrics);
   const reportType = body.report_type === undefined
@@ -2587,11 +3566,62 @@ async function submitResult(request, env, nodeId, url) {
 
   const resultId = `result_${crypto.randomUUID()}`;
   const reportId = `report_${crypto.randomUUID()}`;
+  const reportPayload = await persistDrivePayload(env, {
+    owner_type: "report",
+    owner_id: reportId,
+    kind: "agent_report",
+    value: reportValue
+  });
+  const reportPointer = drivePointer(reportPayload.payload_id);
+  const effectiveArtifactKey = artifactKey || ("gdrive:" + reportPayload.drive_file_id);
   const assignmentStatus = outcome === "failed" ? "failed" : "completed";
-  const detailsJson = JSON.stringify({ result_id: resultId, outcome });
 
   const isProjectAssignment = assignmentId.startsWith("assignment_work_");
   if (isProjectAssignment) await ensureProjectStorage(env);
+  const workItemId = isProjectAssignment ? assignmentId.slice("assignment_".length) : null;
+  const workContext = workItemId
+    ? await env.DB.prepare(`
+        SELECT w.project_id, w.role_name, p.source_type
+        FROM project_work_items AS w
+        JOIN architect_projects AS p ON p.project_id = w.project_id
+        WHERE w.work_item_id = ?
+        LIMIT 1
+      `).bind(workItemId).first()
+    : null;
+  const resultEnvelope = workContext
+    ? buildResultEnvelope({
+        projectId: workContext.project_id,
+        workItemId,
+        assignmentId,
+        nodeId,
+        roleName: workContext.role_name,
+        executionMode: projectExecutionMode(workContext.source_type),
+        outcome,
+        report: reportValue,
+        reportSha256,
+        reportSizeBytes
+      })
+    : null;
+  const structuralVerification = resultEnvelope
+    ? verifyProjectResultEnvelope(resultEnvelope, reportValue)
+    : null;
+  const detailsJson = JSON.stringify({
+    result_id: resultId,
+    outcome,
+    result_envelope: resultEnvelope,
+    structural_verification: structuralVerification
+  });
+
+  const interactiveLink = workItemId
+    ? await env.DB.prepare(`
+        SELECT im.thread_id, t.message_count
+        FROM interactive_messages AS im
+        JOIN interactive_threads AS t ON t.thread_id = im.thread_id
+        WHERE im.response_work_item_id = ? AND im.actor = 'user'
+        ORDER BY im.sequence_no DESC
+        LIMIT 1
+      `).bind(workItemId).first()
+    : null;
 
   const resultStatements = [
     env.DB.prepare(`
@@ -2609,8 +3639,8 @@ async function submitResult(request, env, nodeId, url) {
       assignmentId,
       nodeId,
       outcome,
-      summary,
-      artifactKey,
+      summaryIndex,
+      effectiveArtifactKey,
       metricsJson,
       assignmentId,
       nodeId
@@ -2629,7 +3659,7 @@ async function submitResult(request, env, nodeId, url) {
     `).bind(
       reportId,
       reportType,
-      reportJson,
+      reportPointer,
       reportSha256,
       reportSizeBytes,
       sensitivity,
@@ -2685,6 +3715,49 @@ async function submitResult(request, env, nodeId, url) {
     );
   }
 
+  if (interactiveLink?.thread_id) {
+    const agentSequence = Number(interactiveLink.message_count || 0) + 1;
+    resultStatements.push(
+      env.DB.prepare(`
+        INSERT INTO interactive_messages (
+          message_id, thread_id, sequence_no, actor, payload_id
+        ) VALUES (?, ?, ?, 'agent', ?)
+      `).bind(
+        "message_" + crypto.randomUUID(),
+        interactiveLink.thread_id,
+        agentSequence,
+        reportPayload.payload_id
+      ),
+      env.DB.prepare(`
+        UPDATE interactive_threads
+        SET message_count = CASE WHEN message_count < ? THEN ? ELSE message_count END,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE thread_id = ?
+      `).bind(agentSequence, agentSequence, interactiveLink.thread_id)
+    );
+  }
+
+  if (resultEnvelope && structuralVerification) {
+    resultStatements.push(
+      env.DB.prepare(`
+        INSERT INTO audit_events (
+          actor_type, actor_id, action, target_type, target_id, details_json
+        )
+        SELECT 'controller', 'structural-verifier-v1', 'project.result.structural_verification',
+          'project_work_item', ?, ?
+        WHERE EXISTS (SELECT 1 FROM results WHERE result_id = ?)
+      `).bind(
+        workItemId,
+        JSON.stringify({
+          result_id: resultId,
+          envelope: resultEnvelope,
+          verification: structuralVerification
+        }),
+        resultId
+      )
+    );
+  }
+
   resultStatements.push(
     env.DB.prepare(`
       UPDATE missions
@@ -2714,6 +3787,7 @@ async function submitResult(request, env, nodeId, url) {
   try {
     statements = await env.DB.batch(resultStatements);
   } catch (error) {
+    await deletePayloadBestEffort(env, reportPayload.payload_id);
     if (String(error).includes("results.assignment_id")) {
       throw new ApiError(409, "result_already_exists");
     }
@@ -2721,6 +3795,7 @@ async function submitResult(request, env, nodeId, url) {
   }
 
   if ((statements[0]?.meta?.changes || 0) !== 1) {
+    await deletePayloadBestEffort(env, reportPayload.payload_id);
     throw new ApiError(409, "assignment_not_active");
   }
 
@@ -2729,8 +3804,11 @@ async function submitResult(request, env, nodeId, url) {
     result: {
       result_id: resultId,
       report_id: reportId,
+      report_payload_id: reportPayload.payload_id,
       assignment_id: assignmentId,
-      outcome
+      outcome,
+      contract: resultEnvelope,
+      structural_verification: structuralVerification
     }
   }, 201);
 }
@@ -2829,16 +3907,336 @@ async function architectGetReport(request, env, reportId) {
     throw new ApiError(404, "report_not_found");
   }
 
+  const content = await resolveDriveJson(env, report.report_json);
+  if (drivePointerId(report.report_json)) {
+    const serialized = JSON.stringify(content);
+    const sizeBytes = new TextEncoder().encode(serialized).byteLength;
+    if (sizeBytes !== Number(report.report_size_bytes) || (await sha256Hex(serialized)) !== report.report_sha256) {
+      throw new ApiError(502, "drive_report_integrity_mismatch");
+    }
+  }
   return json({
     ok: true,
     report: {
       ...report,
+      storage: drivePointerId(report.report_json) ? "google_drive" : "legacy_d1",
       metrics: safeJson(report.metrics_json, {}),
-      content: safeJson(report.report_json, null),
+      content,
       metrics_json: undefined,
       report_json: undefined
     }
   });
+}
+
+
+function interactivePayloadText(payload) {
+  if (typeof payload === "string") return payload;
+  if (!payload || typeof payload !== "object") return "";
+  if (typeof payload.text === "string") return payload.text;
+  if (typeof payload.content === "string") return payload.content;
+  if (typeof payload.summary === "string") return payload.summary;
+  if (typeof payload.error_code === "string") return "ERROR: " + payload.error_code;
+  const serialized = JSON.stringify(payload);
+  return serialized.length <= 4000 ? serialized : serialized.slice(0, 4000) + "…";
+}
+
+async function interactiveThreadBase(env, projectId, workItemId) {
+  await Promise.all([ensureProjectStorage(env), ensureReportStorage(env), ensurePayloadStorage(env)]);
+  const base = await env.DB.prepare(`
+    SELECT
+      w.work_item_id, w.project_id, w.node_id, w.role_name, w.status AS work_status,
+      p.source_type, p.status AS project_status, p.title,
+      n.hostname,
+      (
+        SELECT ar.report_json
+        FROM agent_reports AS ar
+        WHERE ar.assignment_id = ('assignment_' || w.work_item_id)
+        ORDER BY datetime(ar.created_at) DESC
+        LIMIT 1
+      ) AS result_json
+    FROM project_work_items AS w
+    JOIN architect_projects AS p ON p.project_id = w.project_id
+    LEFT JOIN nodes AS n ON n.node_id = w.node_id
+    WHERE w.project_id = ? AND w.work_item_id = ?
+  `).bind(projectId, workItemId).first();
+  if (!base) throw new ApiError(404, "project_work_item_not_found");
+  if (!base.node_id) throw new ApiError(409, "interactive_worker_not_assigned");
+  return base;
+}
+
+async function ensureInteractiveThread(env, projectId, workItemId) {
+  const base = await interactiveThreadBase(env, projectId, workItemId);
+  let thread = await env.DB.prepare(`
+    SELECT thread_id, project_id, work_item_id, node_id, role_name, execution_mode,
+      status, message_count, created_at, updated_at
+    FROM interactive_threads
+    WHERE project_id = ? AND work_item_id = ?
+  `).bind(projectId, workItemId).first();
+
+  if (!thread) {
+    const threadId = "thread_" + crypto.randomUUID();
+    await env.DB.prepare(`
+      INSERT OR IGNORE INTO interactive_threads (
+        thread_id, project_id, work_item_id, node_id, role_name, execution_mode
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(
+      threadId,
+      projectId,
+      workItemId,
+      base.node_id,
+      base.role_name,
+      projectExecutionMode(base.source_type)
+    ).run();
+    thread = await env.DB.prepare(`
+      SELECT thread_id, project_id, work_item_id, node_id, role_name, execution_mode,
+        status, message_count, created_at, updated_at
+      FROM interactive_threads
+      WHERE project_id = ? AND work_item_id = ?
+    `).bind(projectId, workItemId).first();
+  }
+
+  if (!thread) throw new ApiError(500, "interactive_thread_create_failed");
+
+  if (Number(thread.message_count || 0) === 0 && base.result_json) {
+    let initialPayloadId = drivePointerId(base.result_json);
+    let createdPayloadId = null;
+    if (!initialPayloadId) {
+      const legacyResult = safeJson(base.result_json, null);
+      if (legacyResult) {
+        const migrated = await persistDrivePayload(env, {
+          owner_type: "thread",
+          owner_id: thread.thread_id,
+          kind: "legacy_initial_agent_report",
+          value: legacyResult
+        });
+        initialPayloadId = migrated.payload_id;
+        createdPayloadId = migrated.payload_id;
+      }
+    }
+    if (initialPayloadId) {
+      try {
+        const inserted = await env.DB.prepare(`
+          INSERT OR IGNORE INTO interactive_messages (
+            message_id, thread_id, sequence_no, actor, payload_id
+          ) VALUES (?, ?, 1, 'agent', ?)
+        `).bind("message_" + crypto.randomUUID(), thread.thread_id, initialPayloadId).run();
+        if ((inserted?.meta?.changes || 0) === 1) {
+          await env.DB.prepare(`
+            UPDATE interactive_threads
+            SET message_count = 1, updated_at = CURRENT_TIMESTAMP
+            WHERE thread_id = ?
+          `).bind(thread.thread_id).run();
+        } else if (createdPayloadId) {
+          await deletePayloadBestEffort(env, createdPayloadId);
+        }
+      } catch (error) {
+        if (createdPayloadId) await deletePayloadBestEffort(env, createdPayloadId);
+        throw error;
+      }
+    }
+  }
+
+  const refreshed = await env.DB.prepare(`
+    SELECT thread_id, project_id, work_item_id, node_id, role_name, execution_mode,
+      status, message_count, created_at, updated_at
+    FROM interactive_threads
+    WHERE thread_id = ?
+  `).bind(thread.thread_id).first();
+  return {
+    ...(refreshed || thread),
+    hostname: base.hostname || null,
+    source_type: base.source_type,
+    project_status: base.project_status,
+    work_status: base.work_status
+  };
+}
+
+async function interactiveThreadMessages(env, threadId) {
+  const query = await env.DB.prepare(`
+    SELECT message_id, sequence_no, actor, payload_id, response_work_item_id, created_at
+    FROM interactive_messages
+    WHERE thread_id = ?
+    ORDER BY sequence_no ASC
+    LIMIT 200
+  `).bind(threadId).all();
+  return Promise.all((query.results || []).map(async (message) => {
+    const payload = await readDrivePayload(env, message.payload_id);
+    return {
+      ...message,
+      text: interactivePayloadText(payload)
+    };
+  }));
+}
+
+async function architectGetInteractiveThread(request, env, projectId, workItemId) {
+  await authenticateArchitect(request, env);
+  const thread = await ensureInteractiveThread(env, projectId, workItemId);
+  const [messages, pendingRow] = await Promise.all([
+    interactiveThreadMessages(env, thread.thread_id),
+    env.DB.prepare(`
+      SELECT COUNT(*) AS pending
+      FROM project_work_items AS w
+      WHERE w.work_item_id IN (
+        SELECT response_work_item_id
+        FROM interactive_messages
+        WHERE thread_id = ? AND actor = 'user' AND response_work_item_id IS NOT NULL
+      )
+        AND w.status IN ('planned','assigned','running')
+    `).bind(thread.thread_id).first()
+  ]);
+  return json({
+    ok: true,
+    thread: {
+      ...thread,
+      role: roleMetadata(thread.role_name),
+      pending_responses: Number(pendingRow?.pending || 0),
+      messages
+    }
+  });
+}
+
+async function architectPostInteractiveMessage(request, env, projectId, workItemId) {
+  await authenticateArchitect(request, env);
+  const body = parseJsonObject(await readBodyText(request, 16 * 1024));
+  const messageText = requireString(body.message, "interactive_message", 8000);
+  const thread = await ensureInteractiveThread(env, projectId, workItemId);
+  if (thread.status !== "active") throw new ApiError(409, "interactive_thread_closed");
+  if (thread.project_status === "cancelled") throw new ApiError(409, "project_cancelled");
+
+  const historyRows = await env.DB.prepare(`
+    SELECT sequence_no, actor, payload_id
+    FROM interactive_messages
+    WHERE thread_id = ?
+    ORDER BY sequence_no DESC
+    LIMIT 12
+  `).bind(thread.thread_id).all();
+  const history = (await Promise.all(
+    (historyRows.results || []).reverse().map(async (row) => ({
+      actor: row.actor,
+      text: interactivePayloadText(await readDrivePayload(env, row.payload_id))
+    }))
+  )).filter((item) => item.text);
+
+  const userPayload = await persistDrivePayload(env, {
+    owner_type: "thread",
+    owner_id: thread.thread_id,
+    kind: "user_message",
+    value: { text: messageText }
+  });
+  const createdPayloadIds = [userPayload.payload_id];
+
+  let taskText = messageText;
+  let taskPayload = userPayload;
+  if (thread.execution_mode === "ai") {
+    const historyText = history
+      .slice(-10)
+      .map((item) => (item.actor === "user" ? "USER" : "AGENT") + ": " + item.text)
+      .join("\n\n")
+      .slice(-12000);
+    taskText = [
+      "Continue the same CITADEL interactive report with the same expert role and the same node.",
+      "Role: " + thread.role_name,
+      "Do not restart the analysis from zero. Answer the user's follow-up using the prior report/dialogue context.",
+      historyText ? "Conversation so far:\n" + historyText : "",
+      "USER FOLLOW-UP:\n" + messageText
+    ].filter(Boolean).join("\n\n");
+    try {
+      taskPayload = await persistDrivePayload(env, {
+        owner_type: "thread",
+        owner_id: thread.thread_id,
+        kind: "followup_task",
+        value: { text: taskText }
+      });
+    } catch (error) {
+      await deletePayloadBestEffort(env, userPayload.payload_id);
+      throw error;
+    }
+    createdPayloadIds.push(taskPayload.payload_id);
+  }
+
+  const sequenceRow = await env.DB.prepare(
+    "SELECT COALESCE(MAX(sequence_no), 0) AS max_sequence FROM project_work_items WHERE project_id = ?"
+  ).bind(projectId).first();
+  const messageSequenceRow = await env.DB.prepare(
+    "SELECT COALESCE(MAX(sequence_no), 0) AS max_sequence FROM interactive_messages WHERE thread_id = ?"
+  ).bind(thread.thread_id).first();
+  const workSequence = Number(sequenceRow?.max_sequence || 0) + 1;
+  const messageSequence = Number(messageSequenceRow?.max_sequence || 0) + 1;
+  const responseWorkItemId = "work_" + crypto.randomUUID();
+  const taskPointer = drivePointer(taskPayload.payload_id);
+
+  try {
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO project_work_items (
+          work_item_id, project_id, sequence_no, node_id, role_name, task_text, status
+        ) VALUES (?, ?, ?, ?, ?, ?, 'planned')
+      `).bind(
+        responseWorkItemId,
+        projectId,
+        workSequence,
+        thread.node_id,
+        thread.role_name,
+        taskPointer
+      ),
+      env.DB.prepare(`
+        INSERT INTO interactive_messages (
+          message_id, thread_id, sequence_no, actor, payload_id, response_work_item_id
+        ) VALUES (?, ?, ?, 'user', ?, ?)
+      `).bind(
+        "message_" + crypto.randomUUID(),
+        thread.thread_id,
+        messageSequence,
+        userPayload.payload_id,
+        responseWorkItemId
+      ),
+      env.DB.prepare(`
+        UPDATE interactive_threads
+        SET message_count = message_count + 1, updated_at = CURRENT_TIMESTAMP
+        WHERE thread_id = ?
+      `).bind(thread.thread_id),
+      env.DB.prepare(`
+        UPDATE architect_projects
+        SET status = 'running', updated_at = CURRENT_TIMESTAMP
+        WHERE project_id = ? AND status IN ('planned','running','completed','blocked')
+      `).bind(projectId),
+      env.DB.prepare(`
+        INSERT INTO audit_events (
+          actor_type, actor_id, action, target_type, target_id, details_json
+        ) VALUES ('architect', 'interactive-report', 'interactive.message.created',
+          'interactive_thread', ?, ?)
+      `).bind(thread.thread_id, JSON.stringify({
+        project_id: projectId,
+        work_item_id: responseWorkItemId,
+        node_id: thread.node_id,
+        role_name: thread.role_name,
+        execution_mode: thread.execution_mode
+      }))
+    ]);
+  } catch (error) {
+    await Promise.all(createdPayloadIds.map((payloadId) => deletePayloadBestEffort(env, payloadId)));
+    throw error;
+  }
+
+  let materialized = 0;
+  try {
+    materialized = await materializeProjectWorkForNode(env, thread.node_id, projectId);
+  } catch {
+    materialized = 0;
+  }
+  const queued = await env.DB.prepare(
+    "SELECT status FROM project_work_items WHERE work_item_id = ?"
+  ).bind(responseWorkItemId).first();
+
+  return json({
+    ok: true,
+    thread_id: thread.thread_id,
+    response_work_item_id: responseWorkItemId,
+    state: queued?.status || (materialized ? "assigned" : "planned"),
+    node_id: thread.node_id,
+    role_name: thread.role_name,
+    execution_mode: thread.execution_mode
+  }, 202);
 }
 
 function normalizeSessionUiState(value) {
@@ -2933,27 +4331,39 @@ async function architectCreateSession(request, env) {
 
   const sessionId = `session_${crypto.randomUUID()}`;
   const snapshotSha256 = await sha256Hex(snapshotJson);
-  await env.DB.batch([
-    env.DB.prepare(`
-      INSERT INTO architect_sessions (
-        session_id, name, schema_version, snapshot_json, snapshot_sha256,
-        snapshot_size_bytes, status, created_at, updated_at
-      ) VALUES (?, ?, 1, ?, ?, ?, 'active', ?, ?)
-    `).bind(
-      sessionId,
-      name,
-      snapshotJson,
-      snapshotSha256,
-      snapshotSizeBytes,
-      savedAt,
-      savedAt
-    ),
+  const snapshotPayload = await persistDrivePayload(env, {
+    owner_type: "session",
+    owner_id: sessionId,
+    kind: "session_snapshot",
+    value: snapshot
+  });
+  const snapshotPointer = drivePointer(snapshotPayload.payload_id);
+  try {
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO architect_sessions (
+          session_id, name, schema_version, snapshot_json, snapshot_sha256,
+          snapshot_size_bytes, status, created_at, updated_at
+        ) VALUES (?, ?, 1, ?, ?, ?, 'active', ?, ?)
+      `).bind(
+        sessionId,
+        name,
+        snapshotPointer,
+        snapshotSha256,
+        snapshotSizeBytes,
+        savedAt,
+        savedAt
+      ),
     env.DB.prepare(`
       INSERT INTO audit_events (
         actor_type, actor_id, action, target_type, target_id, details_json
       ) VALUES ('architect', 'test-console', 'session.created', 'session', ?, ?)
-    `).bind(sessionId, JSON.stringify({ name, schema_version: 1 }))
-  ]);
+      `).bind(sessionId, JSON.stringify({ name, schema_version: 1 }))
+    ]);
+  } catch (error) {
+    await deletePayloadBestEffort(env, snapshotPayload.payload_id);
+    throw error;
+  }
 
   return json({
     ok: true,
@@ -2982,11 +4392,20 @@ async function architectGetSession(request, env, sessionId) {
   if (!session) {
     throw new ApiError(404, "session_not_found");
   }
+  const snapshot = await resolveDriveJson(env, session.snapshot_json);
+  if (drivePointerId(session.snapshot_json)) {
+    const serialized = JSON.stringify(snapshot);
+    const sizeBytes = new TextEncoder().encode(serialized).byteLength;
+    if (sizeBytes !== Number(session.snapshot_size_bytes) || (await sha256Hex(serialized)) !== session.snapshot_sha256) {
+      throw new ApiError(502, "drive_session_integrity_mismatch");
+    }
+  }
   return json({
     ok: true,
     session: {
       ...session,
-      snapshot: safeJson(session.snapshot_json, null),
+      storage: drivePointerId(session.snapshot_json) ? "google_drive" : "legacy_d1",
+      snapshot,
       snapshot_json: undefined
     }
   });
@@ -3033,7 +4452,7 @@ async function architectDeleteSession(request, env, sessionId) {
   await authenticateArchitect(request, env);
   await ensureSessionStorage(env);
   const existing = await env.DB.prepare(
-    "SELECT session_id, name FROM architect_sessions WHERE session_id = ?"
+    "SELECT session_id, name, snapshot_json FROM architect_sessions WHERE session_id = ?"
   ).bind(sessionId).first();
   if (!existing) {
     throw new ApiError(404, "session_not_found");
@@ -3048,26 +4467,38 @@ async function architectDeleteSession(request, env, sessionId) {
       ) VALUES ('architect', 'test-console', 'session.deleted', 'session', ?, ?)
     `).bind(sessionId, JSON.stringify({ name: existing.name }))
   ]);
+  const snapshotPayloadId = drivePointerId(existing.snapshot_json);
+  if (snapshotPayloadId) await deletePayloadBestEffort(env, snapshotPayloadId);
   return json({ ok: true, deleted_session_id: sessionId });
 }
 
 async function architectStorageUsage(request, env) {
   await authenticateArchitect(request, env);
-  await Promise.all([backfillLegacyReports(env), ensureSessionStorage(env)]);
+  await Promise.all([backfillLegacyReports(env), ensureSessionStorage(env), ensurePayloadStorage(env)]);
   const usage = await env.DB.prepare(
     "SELECT " +
     "(SELECT COUNT(*) FROM agent_reports) AS report_count, " +
-    "(SELECT COALESCE(SUM(report_size_bytes), 0) FROM agent_reports) AS report_bytes, " +
+    "(SELECT COALESCE(SUM(report_size_bytes), 0) FROM agent_reports) AS report_payload_bytes, " +
     "(SELECT COUNT(*) FROM architect_sessions) AS session_count, " +
-    "(SELECT COALESCE(SUM(snapshot_size_bytes), 0) FROM architect_sessions) AS session_bytes"
+    "(SELECT COALESCE(SUM(snapshot_size_bytes), 0) FROM architect_sessions) AS session_payload_bytes, " +
+    "(SELECT COUNT(*) FROM payload_objects) AS payload_object_count, " +
+    "(SELECT COALESCE(SUM(size_bytes), 0) FROM payload_objects) AS drive_payload_bytes, " +
+    "(SELECT COUNT(*) FROM interactive_threads) AS interactive_thread_count, " +
+    "(SELECT COUNT(*) FROM interactive_messages) AS interactive_message_count"
   ).first();
   return json({
     ok: true,
     usage: {
       report_count: usage?.report_count || 0,
-      report_bytes: usage?.report_bytes || 0,
+      report_payload_bytes: usage?.report_payload_bytes || 0,
       session_count: usage?.session_count || 0,
-      session_bytes: usage?.session_bytes || 0,
+      session_payload_bytes: usage?.session_payload_bytes || 0,
+      payload_object_count: usage?.payload_object_count || 0,
+      drive_payload_bytes: usage?.drive_payload_bytes || 0,
+      interactive_thread_count: usage?.interactive_thread_count || 0,
+      interactive_message_count: usage?.interactive_message_count || 0,
+      payload_provider: "google_drive",
+      payload_configured: googleDrivePayloadConfig(env).configured,
       safe_d1_target_bytes: 400 * 1024 * 1024,
       d1_database_limit_bytes: 500 * 1024 * 1024,
       max_report_bytes: MAX_REPORT_BYTES
@@ -3075,17 +4506,55 @@ async function architectStorageUsage(request, env) {
   });
 }
 
-async function expireStaleNodeCommands(env, nodeId) {
+function parseControllerTimestamp(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const normalized = /[zZ]|[+-]\d\d:?\d\d$/.test(raw)
+    ? raw
+    : raw.replace(" ", "T") + "Z";
+  const parsed = Date.parse(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isTestNodeRecord(node) {
+  const identity = `${node?.hostname || ""} ${node?.node_id || ""}`;
+  return /(^|[^a-z0-9])(test|demo)([^a-z0-9]|$)/i.test(identity);
+}
+
+function operationalNodeState(node, now = Date.now()) {
+  if (!node || node.status === "revoked") return "revoked";
+  if (isTestNodeRecord(node)) return "test";
+  const seenAt = parseControllerTimestamp(node.last_seen_at);
+  if (seenAt === null) return "stale";
+  const ageMinutes = Math.max(0, (now - seenAt) / 60000);
+  if (ageMinutes >= NODE_ARCHIVE_AFTER_MINUTES) return "archived";
+  if (ageMinutes >= NODE_STALE_AFTER_MINUTES) return "stale";
+  if (node.status === "paused") return "paused";
+  if (node.status === "online" && ageMinutes <= NODE_LIVE_WINDOW_MINUTES) return "live";
+  return "offline";
+}
+
+async function expireStaleCommands(env, nodeId = null) {
   const cutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
-  const stale = await env.DB.prepare(`
-    SELECT command_id, command_type, status, created_at
-    FROM commands
-    WHERE node_id = ?
-      AND status IN ('pending', 'accepted')
-      AND datetime(created_at) < datetime(?)
-    ORDER BY created_at ASC
-    LIMIT 20
-  `).bind(nodeId, cutoff).all();
+  const stale = nodeId
+    ? await env.DB.prepare(`
+        SELECT command_id, node_id, command_type, status, created_at
+        FROM commands
+        WHERE node_id = ?
+          AND status IN ('pending', 'accepted')
+          AND datetime(created_at) < datetime(?)
+        ORDER BY created_at ASC
+        LIMIT 50
+      `).bind(nodeId, cutoff).all()
+    : await env.DB.prepare(`
+        SELECT command_id, node_id, command_type, status, created_at
+        FROM commands
+        WHERE status IN ('pending', 'accepted')
+          AND datetime(created_at) < datetime(?)
+        ORDER BY created_at ASC
+        LIMIT 250
+      `).bind(cutoff).all();
 
   const rows = stale.results || [];
   for (const row of rows) {
@@ -3093,10 +4562,9 @@ async function expireStaleNodeCommands(env, nodeId) {
       UPDATE commands
       SET status = 'failed', completed_at = CURRENT_TIMESTAMP
       WHERE command_id = ?
-        AND node_id = ?
         AND status IN ('pending', 'accepted')
         AND datetime(created_at) < datetime(?)
-    `).bind(row.command_id, nodeId, cutoff).run();
+    `).bind(row.command_id, cutoff).run();
     if ((update?.meta?.changes || 0) === 1) {
       await env.DB.prepare(`
         INSERT INTO audit_events (
@@ -3105,7 +4573,7 @@ async function expireStaleNodeCommands(env, nodeId) {
       `).bind(
         row.command_id,
         JSON.stringify({
-          node_id: nodeId,
+          node_id: row.node_id,
           command_type: row.command_type,
           previous_status: row.status,
           created_at: row.created_at,
@@ -3117,18 +4585,28 @@ async function expireStaleNodeCommands(env, nodeId) {
   return rows.length;
 }
 
+async function expireStaleNodeCommands(env, nodeId) {
+  return expireStaleCommands(env, nodeId);
+}
+
 async function listCommands(request, env, nodeId, url) {
   const node = await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
-  await expireStaleNodeCommands(env, nodeId);
-  await ensureRolloutCommandForNode(env, nodeId);
+  // Current-version nodes cannot benefit from rollout discovery. Skipping the
+  // lookup removes one D1 read from every steady-state command poll.
+  if (node.agent_version !== LATEST_NODE_RELEASE.version) {
+    await ensureRolloutCommandForNode(env, nodeId);
+  }
 
+  const cutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
   const query = await env.DB.prepare(`
     SELECT command_id, command_type, payload_json, signature, status, created_at
     FROM commands
-    WHERE node_id = ? AND status IN ('pending', 'accepted')
+    WHERE node_id = ?
+      AND status IN ('pending', 'accepted')
+      AND datetime(created_at) >= datetime(?)
     ORDER BY created_at ASC
     LIMIT 20
-  `).bind(nodeId).all();
+  `).bind(nodeId, cutoff).all();
 
   const commands = (query.results || []).map((row) => ({
     ...row,
@@ -3206,6 +4684,15 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
         VALUES (?, 1, 1, 'installed', CURRENT_TIMESTAMP)
         ON CONFLICT(node_id) DO UPDATE SET
           installed = 1, server_running = 1, last_action = 'installed', updated_at = CURRENT_TIMESTAMP
+      `).bind(nodeId));
+    } else if (current.command_type === "lmstudio_uninstall") {
+      statements.push(env.DB.prepare(`
+        INSERT INTO node_ai_state (
+          node_id, installed, selected_model, loaded_model, server_running, last_action, updated_at
+        ) VALUES (?, 0, NULL, NULL, 0, 'uninstalled', CURRENT_TIMESTAMP)
+        ON CONFLICT(node_id) DO UPDATE SET
+          installed = 0, selected_model = NULL, loaded_model = NULL,
+          server_running = 0, last_action = 'uninstalled', updated_at = CURRENT_TIMESTAMP
       `).bind(nodeId));
     } else if (current.command_type === "lmstudio_model_get") {
       statements.push(env.DB.prepare(`
@@ -3798,6 +5285,8 @@ async function architectEnterpriseOverview(request, env) {
 
   const nodes = [];
   let compliant = 0;
+  let complianceInScope = 0;
+  let excludedFromCompliance = 0;
   let enterpriseProbeReady = 0;
   let verifiedLatestInventories = 0;
   for (const node of nodesQuery.results || []) {
@@ -3812,13 +5301,20 @@ async function architectEnterpriseOverview(request, env) {
       );
       if (inventoryIntegrity) verifiedLatestInventories += 1;
     }
+    const operationalState = operationalNodeState(node);
+    const inComplianceScope = !["test", "stale", "archived"].includes(operationalState);
     const compliance = evaluateEnterpriseNode(
       node,
       inventory,
       policyState.policy,
       LATEST_NODE_RELEASE.version
     );
-    if (compliance.compliant) compliant += 1;
+    if (inComplianceScope) {
+      complianceInScope += 1;
+      if (compliance.compliant) compliant += 1;
+    } else {
+      excludedFromCompliance += 1;
+    }
     if (compliance.windows_enterprise?.available === true) enterpriseProbeReady += 1;
     const scope = scopes.get(node.node_id) || {};
     nodes.push({
@@ -3831,6 +5327,8 @@ async function architectEnterpriseOverview(request, env) {
       group_name: scope.group_name || null,
       latest_inventory_at: report?.created_at || null,
       latest_inventory_integrity: inventoryIntegrity,
+      operational_state: operationalState,
+      compliance_in_scope: inComplianceScope,
       compliance
     });
   }
@@ -3859,8 +5357,10 @@ async function architectEnterpriseOverview(request, env) {
     groups: groupsQuery.results || [],
     counts: {
       nodes: nodes.length,
+      active_nodes: complianceInScope,
+      excluded_nodes: excludedFromCompliance,
       compliant_nodes: compliant,
-      noncompliant_nodes: nodes.length - compliant,
+      noncompliant_nodes: Math.max(0, complianceInScope - compliant),
       windows_enterprise_probe_ready: enterpriseProbeReady
     },
     storage_integrity: {
@@ -4010,13 +5510,17 @@ async function architectEnterpriseRecoveryManifest(request, env) {
 async function architectOverview(request, env) {
   await authenticateArchitect(request, env);
   await Promise.all([
-    backfillLegacyReports(env),
     ensureSessionStorage(env),
     ensureAutoEnrollmentStorage(env),
     ensureProjectStorage(env),
     ensureNodeNetworkStorage(env),
-    ensureNodeAiStorage(env)
+    ensureNodeAiStorage(env),
+    ensureCommandReadIndexes(env)
   ]);
+  // Overview is a read path. Do not run command-retention housekeeping on every
+  // browser refresh; write/control paths expire stale commands before they need
+  // the active-command slot. Filter stale active rows in the read query instead.
+  const activeCommandCutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
 
   const [counts, nodesQuery, missionsQuery, commandsQuery] = await Promise.all([
     env.DB.prepare(
@@ -4083,13 +5587,17 @@ async function architectOverview(request, env) {
       "ORDER BY m.created_at DESC LIMIT 100"
     ).all(),
     env.DB.prepare(
-      "SELECT command_id, node_id, command_type, status, created_at, completed_at " +
-      "FROM commands WHERE status IN ('pending', 'accepted') " +
-      "OR command_id IN (" +
+      "SELECT c.command_id, c.node_id, c.command_type, c.status, c.created_at, c.completed_at, " +
+      "CASE WHEN EXISTS (SELECT 1 FROM audit_events AS ae " +
+      "WHERE ae.target_type = 'command' AND ae.target_id = c.command_id " +
+      "AND ae.action = 'command.expired') THEN 1 ELSE 0 END AS ttl_expired " +
+      "FROM commands AS c WHERE (c.status IN ('pending', 'accepted') " +
+      "AND datetime(c.created_at) >= datetime(?)) " +
+      "OR c.command_id IN (" +
       "SELECT command_id FROM commands WHERE status NOT IN ('pending', 'accepted') " +
       "ORDER BY created_at DESC LIMIT 50" +
-      ") ORDER BY created_at DESC"
-    ).all()
+      ") ORDER BY c.created_at DESC"
+    ).bind(activeCommandCutoff).all()
   ]);
 
   const missions = (missionsQuery.results || []).map((row) => {
@@ -4117,8 +5625,11 @@ async function architectOverview(request, env) {
           candidate.node_id !== node.node_id && subnet24(candidate.lan_ipv4) === prefix
         )
       : null;
+    const operationalState = operationalNodeState(node);
     return {
       ...node,
+      operational_state: operationalState,
+      test_node: operationalState === "test",
       lmstudio_runtime: safeJson(node.lmstudio_runtime_json, {}),
       lmstudio_runtime_json: undefined,
       mac_addresses: Array.isArray(macAddresses) ? macAddresses : [],
@@ -4133,6 +5644,9 @@ async function architectOverview(request, env) {
     counts: {
       nodes: counts?.nodes || 0,
       online_nodes: counts?.online_nodes || 0,
+      operational_nodes: nodes.filter((node) => ["live","offline","paused"].includes(node.operational_state)).length,
+      stale_nodes: nodes.filter((node) => ["stale","archived"].includes(node.operational_state)).length,
+      test_nodes: nodes.filter((node) => node.operational_state === "test").length,
       missions: counts?.active_missions || 0,
       active_missions: counts?.active_missions || 0,
       reports: counts?.reports || 0,
@@ -4144,52 +5658,103 @@ async function architectOverview(request, env) {
   });
 }
 
+function publicHubQueryErrorCode(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  if (message.includes("daily row read limit")) return "hub_d1_daily_read_limit_exceeded";
+  if (message.includes("daily row write limit")) return "hub_d1_daily_write_limit_exceeded";
+  if (message.includes("exceeded maximum db size")) return "hub_d1_database_size_exceeded";
+  if (message.includes("overloaded")) return "hub_d1_overloaded";
+  if (message.includes("no such table") && message.includes("nodes")) return "hub_nodes_table_missing";
+  if (message.includes("no such column")) return "hub_nodes_schema_mismatch";
+  if (message.includes("d1")) return "hub_nodes_d1_error";
+  return "hub_nodes_query_failed";
+}
+
 async function publicHubNodes(env) {
-  await ensureAutoEnrollmentStorage(env);
-  const query = await env.DB.prepare(
-    "SELECT nn.node_number, n.agent_version, n.status, n.enrolled_at, n.last_seen_at " +
-    "FROM node_numbers AS nn JOIN nodes AS n ON n.node_id = nn.node_id " +
-    "WHERE n.status != 'revoked' ORDER BY nn.node_number ASC LIMIT 500"
-  ).all();
+  let query;
+  try {
+    query = await env.DB.prepare(
+      "SELECT node_id, agent_version, status, enrolled_at, last_seen_at " +
+      "FROM nodes WHERE status != 'revoked' LIMIT 500"
+    ).all();
+  } catch (error) {
+    console.error("Public Hub nodes query failed", error);
+    throw new ApiError(503, publicHubQueryErrorCode(error));
+  }
+  const rows = (query.results || []).sort((left, right) => {
+    const a = String(left?.enrolled_at || "") + "\n" + String(left?.node_id || "");
+    const b = String(right?.enrolled_at || "") + "\n" + String(right?.node_id || "");
+    return a.localeCompare(b);
+  });
   return json({
     ok: true,
     refreshed_at: new Date().toISOString(),
-    nodes: (query.results || []).map((node) => ({
-      node_number: node.node_number,
-      display_name: `CITADEL Node ${node.node_number}`,
-      agent_version: node.agent_version,
-      status: node.status,
-      enrolled_at: node.enrolled_at,
-      last_seen_at: node.last_seen_at
+    nodes: rows.map((node, index) => ({
+      node_number: index + 1,
+      display_name: `CITADEL Node ${index + 1}`,
+      agent_version: typeof node.agent_version === "string" ? node.agent_version : null,
+      status: typeof node.status === "string" ? node.status : "unknown",
+      enrolled_at: typeof node.enrolled_at === "string" ? node.enrolled_at : null,
+      last_seen_at: typeof node.last_seen_at === "string" ? node.last_seen_at : null
     }))
+  }, 200, {
+    "cache-control": "public, max-age=60, stale-while-revalidate=120"
   });
 }
 
 async function architectRelease(request, env) {
   await authenticateArchitect(request, env);
-  return json({ ok: true, release: LATEST_NODE_RELEASE, lmstudio: LMSTUDIO_INTEGRATION });
+  const quality = openRouterQualityConfig(env);
+  return json({
+    ok: true,
+    release: LATEST_NODE_RELEASE,
+    lmstudio: LMSTUDIO_INTEGRATION,
+    openrouter: {
+      configured: quality.configured,
+      key_status: quality.keyStatus,
+      model: quality.model,
+      fusion_preset: quality.fusionPreset,
+      timeout_ms: quality.timeoutMs
+    }
+  });
 }
 
 async function architectCreateCommand(request, env, nodeId) {
   const actor = await authenticateArchitect(request, env);
-  await ensureCommandStorage(env);
   const bodyText = await readBodyText(request, 8 * 1024);
   const body = parseJsonObject(bodyText);
   const commandType = requireString(body.command_type, "command_type", 32);
+  // Bootstrap storage before any query touches the commands table. A partially
+  // initialized D1 must be able to create its first LM Studio command directly.
+  try {
+    await ensureCommandStorage(env);
+    await expireStaleNodeCommands(env, nodeId);
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    console.error("Command storage preflight failed", { node_id: nodeId, command_type: commandType, error: String(error) });
+    throw new ApiError(503, commandType.startsWith("lmstudio_")
+      ? "lmstudio_command_storage_unavailable"
+      : "command_storage_unavailable");
+  }
   if (!ALLOWED_ARCHITECT_COMMAND_TYPES.has(commandType)) {
     throw new ApiError(400, "command_type_not_allowed");
   }
   if (
-    ["uninstall", "system_reboot", "system_shutdown"].includes(commandType) &&
+    ["uninstall", "system_reboot", "system_shutdown", "lmstudio_uninstall"].includes(commandType) &&
     !roleHasPermission(actor.role, "admin")
   ) {
     throw new ApiError(403, "architect_admin_required");
   }
-  const requiredPowerConfirmation = POWER_COMMAND_CONFIRMATIONS[commandType];
-  if (requiredPowerConfirmation) {
+  const requiredConfirmation = COMMAND_CONFIRMATIONS[commandType];
+  if (requiredConfirmation) {
     const confirmation = typeof body.confirmation === "string" ? body.confirmation.trim() : "";
-    if (confirmation !== requiredPowerConfirmation) {
-      throw new ApiError(400, "power_confirmation_required");
+    if (confirmation !== requiredConfirmation) {
+      throw new ApiError(
+        400,
+        commandType === "lmstudio_uninstall"
+          ? "command_confirmation_required"
+          : "power_confirmation_required"
+      );
     }
   }
 
@@ -4211,7 +5776,7 @@ async function architectCreateCommand(request, env, nodeId) {
   if (commandType === "stop" && node.agent_version !== LATEST_NODE_RELEASE.version) {
     throw new ApiError(409, "agent_update_required");
   }
-  if ((commandType.startsWith("lmstudio_") || commandType === "hybrid_query") && node.agent_version !== LATEST_NODE_RELEASE.version) {
+  if ((commandType.startsWith("lmstudio_") || commandType === "hybrid_query") && !agentVersionAtLeast(node.agent_version, "0.3.19")) {
     throw new ApiError(409, "agent_update_required");
   }
   if (commandType === "pause" && node.status === "paused") {
@@ -4235,6 +5800,8 @@ async function architectCreateCommand(request, env, nodeId) {
     payload = LATEST_NODE_RELEASE;
   } else if (commandType === "lmstudio_install") {
     payload = { asset: lmstudioInstallAssetForNode(node) };
+  } else if (commandType === "lmstudio_uninstall") {
+    payload = { purge_data: body.purge_data === true };
   } else if (commandType === "lmstudio_probe") {
     payload = {};
   } else if (commandType === "lmstudio_model_get" || commandType === "lmstudio_model_load") {
@@ -4254,13 +5821,15 @@ async function architectCreateCommand(request, env, nodeId) {
       settings: normalizeLmLoadSettings(body.settings)
     };
   } else if (commandType === "hybrid_query") {
-    await ensureNodeAiStorage(env);
-    const ai = await nodeAiStateResponse(env, nodeId);
-    if (body.mode !== "python" && (Number(ai.installed || 0) !== 1 || Number(ai.server_running || 0) !== 1 || !ai.loaded_model)) {
-      throw new ApiError(409, "lmstudio_model_not_ready");
-    }
     const mode = requireString(body.mode, "hybrid_mode", 16);
     if (!["python","lmstudio","both"].includes(mode)) throw new ApiError(400, "invalid_hybrid_mode");
+    if (mode !== "python") {
+      await ensureNodeAiStorage(env);
+      const ai = await nodeAiStateResponse(env, nodeId);
+      if (Number(ai.installed || 0) !== 1 || Number(ai.server_running || 0) !== 1 || !ai.loaded_model) {
+        throw new ApiError(409, "lmstudio_model_not_ready");
+      }
+    }
     const prompt = requireString(body.prompt, "hybrid_prompt", 8000);
     payload = {
       request_id: "query_" + crypto.randomUUID().replaceAll("-", ""),
@@ -4299,7 +5868,10 @@ async function architectCreateCommand(request, env, nodeId) {
     if (String(error).includes("idx_commands_one_active_per_node") || String(error).includes("UNIQUE")) {
       throw new ApiError(409, "command_already_pending");
     }
-    throw error;
+    console.error("Command persistence failed", { node_id: nodeId, command_type: commandType, error: String(error) });
+    throw new ApiError(503, commandType.startsWith("lmstudio_")
+      ? "lmstudio_command_storage_unavailable"
+      : "command_storage_unavailable");
   }
 
   return json({
@@ -4331,14 +5903,148 @@ async function architectNodeAiState(request, env, nodeId) {
   return json({ ok: true, node, ai: await nodeAiStateResponse(env, nodeId) });
 }
 
-async function architectSearchModels(request, env, url) {
+async function architectNodeDetails(request, env, nodeId) {
   await authenticateArchitect(request, env);
-  const query = requireString(url.searchParams.get("q"), "model_search", 80);
+  await Promise.all([ensureNodeNetworkStorage(env), ensureNodeAiStorage(env), ensureNodeHardwareStorage(env)]);
+  const row = await env.DB.prepare(`
+    SELECT n.node_id, n.hostname, n.os_name, n.os_version, n.architecture,
+      n.agent_version, n.status, n.cpu_percent, n.memory_percent, n.last_seen_at, n.capabilities_json,
+      net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json,
+      net.updated_at AS network_updated_at,
+      hw.memory_total_bytes, hw.cpu_logical_count, hw.gpus_json,
+      hw.updated_at AS hardware_updated_at
+    FROM nodes AS n
+    LEFT JOIN node_network_state AS net ON net.node_id = n.node_id
+    LEFT JOIN node_hardware_state AS hw ON hw.node_id = n.node_id
+    WHERE n.node_id = ? AND n.status != 'revoked'
+  `).bind(nodeId).first();
+  if (!row) throw new ApiError(404, "node_not_found");
+
+  const macAddresses = safeJson(row.mac_addresses_json, []);
+  const gpus = safeJson(row.gpus_json, []);
+  const ai = await nodeAiStateResponse(env, nodeId);
+  const agentCapability = buildAgentCapabilityContract({
+    node_id: row.node_id,
+    agent_version: row.agent_version,
+    status: row.status,
+    last_seen_at: row.last_seen_at,
+    capabilities: safeJson(row.capabilities_json, []),
+    installed: ai?.installed ? 1 : 0,
+    server_running: ai?.server_running ? 1 : 0,
+    loaded_model: ai?.loaded_model || null,
+    cpu_percent: row.cpu_percent,
+    memory_percent: row.memory_percent,
+    memory_total_bytes: Number(row.memory_total_bytes || 0) || null,
+    cpu_logical_count: Number(row.cpu_logical_count || 0) || null,
+    gpus: Array.isArray(gpus) ? gpus : []
+  });
+  return json({
+    ok: true,
+    node: {
+      node_id: row.node_id,
+      hostname: row.hostname,
+      os_name: row.os_name,
+      os_version: row.os_version,
+      architecture: row.architecture,
+      agent_version: row.agent_version,
+      latest_agent_version: LATEST_NODE_RELEASE.version,
+      update_required: row.agent_version !== LATEST_NODE_RELEASE.version,
+      capabilities: safeJson(row.capabilities_json, []),
+      status: row.status,
+      cpu_percent: row.cpu_percent,
+      memory_percent: row.memory_percent,
+      last_seen_at: row.last_seen_at
+    },
+    network: {
+      lan_ipv4: row.lan_ipv4 || null,
+      tailscale_ipv4: row.tailscale_ipv4 || null,
+      mac_addresses: Array.isArray(macAddresses) ? macAddresses : [],
+      updated_at: row.network_updated_at || null
+    },
+    hardware: {
+      memory_total_bytes: Number(row.memory_total_bytes || 0) || null,
+      cpu_logical_count: Number(row.cpu_logical_count || 0) || null,
+      gpus: Array.isArray(gpus) ? gpus : [],
+      updated_at: row.hardware_updated_at || null
+    },
+    agent_capability: agentCapability,
+    model_recommendation: modelRecommendationProfile({
+      memory_total_bytes: Number(row.memory_total_bytes || 0) || null,
+      gpus: safeJson(row.gpus_json, [])
+    }),
+    ai
+  });
+}
+
+function modelRecommendationProfile(hardware) {
+  const ramGiB = Number(hardware?.memory_total_bytes || 0) / (1024 ** 3);
+  const gpus = Array.isArray(hardware?.gpus) ? hardware.gpus : [];
+  const maxVramGiB = gpus.reduce((best, gpu) =>
+    Math.max(best, Number(gpu?.vram_total_bytes || 0) / (1024 ** 3)), 0);
+
+  if (maxVramGiB >= 20 || ramGiB >= 48) {
+    return {
+      tier: "large",
+      target_parameters_b: "12-24B",
+      quantization: "Q4_K_M",
+      context_length: 32768,
+      search_query: "GGUF instruct 14B",
+      reason: `RAM ${ramGiB.toFixed(1)} GiB · VRAM ${maxVramGiB.toFixed(1)} GiB`
+    };
+  }
+  if (maxVramGiB >= 10 || ramGiB >= 24) {
+    return {
+      tier: "medium",
+      target_parameters_b: "7-12B",
+      quantization: "Q4_K_M",
+      context_length: 16384,
+      search_query: "GGUF instruct 8B",
+      reason: `RAM ${ramGiB.toFixed(1)} GiB · VRAM ${maxVramGiB.toFixed(1)} GiB`
+    };
+  }
+  if (maxVramGiB >= 6 || ramGiB >= 16) {
+    return {
+      tier: "compact",
+      target_parameters_b: "3-7B",
+      quantization: "Q4_K_M",
+      context_length: 8192,
+      search_query: "GGUF instruct 4B",
+      reason: `RAM ${ramGiB.toFixed(1)} GiB · VRAM ${maxVramGiB.toFixed(1)} GiB`
+    };
+  }
+  return {
+    tier: "micro",
+    target_parameters_b: "0.5-3B",
+    quantization: "Q4_K_M",
+    context_length: 4096,
+    search_query: "GGUF instruct 1B",
+    reason: ramGiB > 0
+      ? `RAM ${ramGiB.toFixed(1)} GiB · dedicated VRAM not confirmed`
+      : "Hardware profile is incomplete; conservative model tier selected"
+  };
+}
+
+function mapHuggingFaceModels(rows, limit = 16) {
+  return (Array.isArray(rows) ? rows : [])
+    .filter((item) => item && typeof item.id === "string")
+    .map((item) => ({
+      id: item.id,
+      downloads: Number(item.downloads || 0),
+      likes: Number(item.likes || 0),
+      pipeline_tag: typeof item.pipeline_tag === "string" ? item.pipeline_tag : null,
+      gguf: Array.isArray(item.tags) && item.tags.some((tag) => String(tag).toLowerCase() === "gguf"),
+      last_modified: item.lastModified || item.last_modified || null
+    }))
+    .sort((a,b) => Number(b.gguf) - Number(a.gguf) || b.downloads - a.downloads)
+    .slice(0, limit);
+}
+
+async function fetchHuggingFaceModels(query, limit = 30) {
   const hfUrl = new URL("https://huggingface.co/api/models");
-  hfUrl.searchParams.set("search", query);
+  if (query) hfUrl.searchParams.set("search", query);
   hfUrl.searchParams.set("sort", "downloads");
   hfUrl.searchParams.set("direction", "-1");
-  hfUrl.searchParams.set("limit", "30");
+  hfUrl.searchParams.set("limit", String(Math.max(1, Math.min(100, limit))));
   hfUrl.searchParams.set("full", "true");
   let response;
   try {
@@ -4358,19 +6064,224 @@ async function architectSearchModels(request, env, url) {
     throw new ApiError(502, "huggingface_invalid_response");
   }
   if (!Array.isArray(rows)) throw new ApiError(502, "huggingface_invalid_response");
-  const models = rows
-    .filter((item) => item && typeof item.id === "string")
-    .map((item) => ({
-      id: item.id,
-      downloads: Number(item.downloads || 0),
-      likes: Number(item.likes || 0),
-      pipeline_tag: typeof item.pipeline_tag === "string" ? item.pipeline_tag : null,
-      gguf: Array.isArray(item.tags) && item.tags.some((tag) => String(tag).toLowerCase() === "gguf"),
-      last_modified: item.lastModified || item.last_modified || null
-    }))
-    .sort((a,b) => Number(b.gguf) - Number(a.gguf) || b.downloads - a.downloads)
-    .slice(0, 16);
-  return json({ ok: true, query, models });
+  return rows;
+}
+
+function inferModelParametersB(modelId, tags = []) {
+  const haystack = [modelId, ...(Array.isArray(tags) ? tags : [])].join(" ");
+  const matches = [...haystack.matchAll(/(?:^|[^0-9])(\d+(?:\.\d+)?)\s*[bB](?:[^A-Za-z0-9]|$)/g)]
+    .map((match) => Number(match[1]))
+    .filter((value) => Number.isFinite(value) && value > 0 && value <= 1000);
+  return matches.length ? Math.min(...matches) : null;
+}
+
+function huggingFaceFamilyQuery(modelId) {
+  const name = String(modelId || "").split("/").pop() || "";
+  const stripped = name
+    .replace(/[-_.](?:gguf|instruct|chat|base|it)$/i, "")
+    .replace(/[-_.]\d+(?:\.\d+)?[bB](?:[-_.].*)?$/i, "")
+    .replace(/[-_.](?:q\d(?:_[A-Za-z0-9]+)?|fp16|bf16|f16)(?:[-_.].*)?$/i, "");
+  return (stripped || name).slice(0, 80);
+}
+
+async function fetchHuggingFaceModelDetail(modelId) {
+  const encoded = String(modelId).split("/").map(encodeURIComponent).join("/");
+  let response;
+  try {
+    response = await fetch("https://huggingface.co/api/models/" + encoded, {
+      headers: { "accept": "application/json", "user-agent": "CITADEL-EWS/1.0" }
+    });
+  } catch {
+    throw new ApiError(502, "huggingface_unavailable");
+  }
+  if (response.status === 404) throw new ApiError(404, "huggingface_model_not_found");
+  if (!response.ok) throw new ApiError(response.status === 429 ? 429 : 502, "huggingface_search_failed");
+  try {
+    return await response.json();
+  } catch {
+    throw new ApiError(502, "huggingface_invalid_response");
+  }
+}
+
+function modelNodeCompatibility(modelId, detail, hardware) {
+  const tags = Array.isArray(detail?.tags) ? detail.tags.map(String) : [];
+  const siblings = Array.isArray(detail?.siblings) ? detail.siblings : [];
+  const ggufFiles = siblings
+    .map((item) => typeof item?.rfilename === "string" ? item.rfilename : "")
+    .filter((name) => /\.gguf$/i.test(name));
+  const q4Files = ggufFiles.filter((name) => /(?:^|[-_.])Q4(?:[_A-Za-z0-9.-]*)(?:\.gguf)$/i.test(name));
+  const gguf = tags.some((tag) => tag.toLowerCase() === "gguf") || ggufFiles.length > 0;
+  const parametersB = inferModelParametersB(modelId, tags);
+  const ramGiB = Number(hardware?.memory_total_bytes || 0) / (1024 ** 3);
+  const gpus = Array.isArray(hardware?.gpus) ? hardware.gpus : [];
+  const maxVramGiB = gpus.reduce((best, gpu) =>
+    Math.max(best, Number(gpu?.vram_total_bytes || 0) / (1024 ** 3)), 0);
+  const estimatedQ4GiB = parametersB ? Math.max(1.2, parametersB * 0.68 + 0.8) : null;
+
+  let status = "unknown";
+  if (!gguf) status = "format_unknown";
+  else if (q4Files.length === 0) status = "unknown";
+  else if (estimatedQ4GiB && (maxVramGiB >= estimatedQ4GiB * 0.9 || ramGiB >= estimatedQ4GiB * 1.35)) status = "recommended";
+  else if (estimatedQ4GiB && ramGiB >= estimatedQ4GiB * 1.05) status = "possible";
+  else if (estimatedQ4GiB && ramGiB > 0) status = "not_recommended";
+  else status = "unknown";
+
+  return {
+    status,
+    gguf,
+    q4_artifact: q4Files.length > 0,
+    q4_files: q4Files.slice(0, 24),
+    parameters_b: parametersB,
+    estimated_q4_memory_gib: q4Files.length && estimatedQ4GiB ? Number(estimatedQ4GiB.toFixed(1)) : null,
+    ram_gib: ramGiB ? Number(ramGiB.toFixed(1)) : null,
+    max_vram_gib: maxVramGiB ? Number(maxVramGiB.toFixed(1)) : null,
+    gguf_files: ggufFiles.slice(0, 24)
+  };
+}
+
+async function architectSearchModels(request, env, url) {
+  await authenticateArchitect(request, env);
+  const raw = String(url.searchParams.get("q") || "").trim();
+  const query = raw ? requireString(raw, "model_search", 80) : "GGUF instruct";
+  const requested = Number(url.searchParams.get("limit") || 60);
+  const limit = Number.isInteger(requested) ? Math.max(1, Math.min(80, requested)) : 60;
+  const rows = await fetchHuggingFaceModels(query, limit);
+  return json({ ok: true, query, source: "huggingface", models: mapHuggingFaceModels(rows, limit) });
+}
+
+async function architectModelDetails(request, env, url) {
+  await authenticateArchitect(request, env);
+  const modelId = normalizeLmModelId(url.searchParams.get("id"));
+  const nodeId = String(url.searchParams.get("node_id") || "").trim();
+  const detail = await fetchHuggingFaceModelDetail(modelId);
+  let hardware = null;
+  let recommendation = null;
+  if (nodeId) {
+    await ensureNodeHardwareStorage(env);
+    const row = await env.DB.prepare(
+      "SELECT memory_total_bytes, cpu_logical_count, gpus_json, updated_at FROM node_hardware_state WHERE node_id = ?"
+    ).bind(nodeId).first();
+    if (row) {
+      hardware = {
+        memory_total_bytes: Number(row.memory_total_bytes || 0) || null,
+        cpu_logical_count: Number(row.cpu_logical_count || 0) || null,
+        gpus: safeJson(row.gpus_json, []),
+        updated_at: row.updated_at || null
+      };
+      recommendation = modelRecommendationProfile(hardware);
+    }
+  }
+
+  const familyQuery = huggingFaceFamilyQuery(modelId);
+  let alternatives = [];
+  if (familyQuery) {
+    try {
+      alternatives = mapHuggingFaceModels(await fetchHuggingFaceModels(familyQuery, 30), 16)
+        .filter((item) => item.id !== modelId);
+    } catch {
+      alternatives = [];
+    }
+  }
+
+  const siblings = Array.isArray(detail?.siblings) ? detail.siblings : [];
+  return json({
+    ok: true,
+    model: {
+      id: modelId,
+      downloads: Number(detail?.downloads || 0),
+      likes: Number(detail?.likes || 0),
+      pipeline_tag: typeof detail?.pipeline_tag === "string" ? detail.pipeline_tag : null,
+      last_modified: detail?.lastModified || detail?.last_modified || null,
+      tags: Array.isArray(detail?.tags) ? detail.tags.map(String).slice(0, 40) : [],
+      files: siblings
+        .map((item) => typeof item?.rfilename === "string" ? item.rfilename : "")
+        .filter(Boolean)
+        .slice(0, 60)
+    },
+    hardware,
+    recommendation,
+    compatibility: modelNodeCompatibility(modelId, detail, hardware),
+    alternatives
+  });
+}
+
+async function architectLmstudioPreflight(request, env, nodeId) {
+  await authenticateArchitect(request, env);
+  try {
+    await Promise.all([ensureCommandStorage(env), ensureNodeAiStorage(env)]);
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    console.error("LM Studio preflight storage failed", { node_id: nodeId, error: String(error) });
+    throw new ApiError(503, "lmstudio_command_storage_unavailable");
+  }
+  const node = await env.DB.prepare(
+    "SELECT node_id, hostname, status, agent_version, os_name, architecture, last_seen_at, " +
+    "CASE WHEN last_seen_at IS NOT NULL AND datetime(last_seen_at) >= datetime('now', '-5 minutes') THEN 1 ELSE 0 END AS recently_seen " +
+    "FROM nodes WHERE node_id = ? AND status != 'revoked'"
+  ).bind(nodeId).first();
+  if (!node) throw new ApiError(404, "node_not_found");
+  if (Number(node.recently_seen || 0) !== 1) throw new ApiError(409, "node_offline");
+  if (!agentVersionAtLeast(node.agent_version, "0.3.19")) throw new ApiError(409, "agent_update_required");
+  await expireStaleNodeCommands(env, nodeId);
+  const pending = await env.DB.prepare(
+    "SELECT command_id, command_type, status FROM commands WHERE node_id = ? AND status IN ('pending','accepted') LIMIT 1"
+  ).bind(nodeId).first();
+  if (pending) throw new ApiError(409, "command_already_pending");
+  // Validate the signing configuration before the user starts an installation.
+  controllerPrivateJwk(env);
+  const asset = lmstudioInstallAssetForNode(node);
+  return json({
+    ok: true,
+    node: {
+      node_id: node.node_id,
+      hostname: node.hostname,
+      agent_version: node.agent_version,
+      os_name: node.os_name,
+      architecture: node.architecture
+    },
+    ai: await nodeAiStateResponse(env, nodeId),
+    asset
+  });
+}
+
+async function architectRecommendModels(request, env, nodeId) {
+  await authenticateArchitect(request, env);
+  await ensureNodeHardwareStorage(env);
+  const node = await env.DB.prepare(`
+    SELECT n.node_id, n.hostname, n.architecture, n.status, n.last_seen_at,
+      h.memory_total_bytes, h.cpu_logical_count, h.gpus_json, h.updated_at AS hardware_updated_at
+    FROM nodes AS n
+    LEFT JOIN node_hardware_state AS h ON h.node_id = n.node_id
+    WHERE n.node_id = ? AND n.status != 'revoked'
+  `).bind(nodeId).first();
+  if (!node) throw new ApiError(404, "node_not_found");
+  const hardware = {
+    memory_total_bytes: Number(node.memory_total_bytes || 0) || null,
+    cpu_logical_count: Number(node.cpu_logical_count || 0) || null,
+    gpus: safeJson(node.gpus_json, []),
+    updated_at: node.hardware_updated_at || null
+  };
+  const profile = modelRecommendationProfile(hardware);
+  let models = [];
+  let catalogStatus = "ready";
+  try {
+    const rows = await fetchHuggingFaceModels(profile.search_query, 40);
+    models = mapHuggingFaceModels(rows, 8).filter((item) => item.gguf);
+    if (!models.length) models = mapHuggingFaceModels(rows, 8);
+  } catch {
+    catalogStatus = "unavailable";
+  }
+  if (!models.length && profile.tier === "micro") {
+    models = [{ id: "ibm/granite-4-micro", downloads: 0, likes: 0, pipeline_tag: "text-generation", gguf: false, last_modified: null }];
+  }
+  return json({
+    ok: true,
+    node: { node_id: node.node_id, hostname: node.hostname, architecture: node.architecture },
+    hardware,
+    recommendation: profile,
+    catalog_status: catalogStatus,
+    models
+  });
 }
 
 async function architectWakeNode(request, env, targetNodeId) {
@@ -4403,12 +6314,15 @@ async function architectWakeNode(request, env, targetNodeId) {
     WHERE n.node_id != ?
       AND n.status = 'online'
       AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes')
-    ORDER BY n.last_seen_at DESC
+    ORDER BY datetime(n.last_seen_at) DESC
     LIMIT 100
   `).bind(targetNodeId).all();
   const relay = (relaysQuery.results || []).find((candidate) => subnet24(candidate.lan_ipv4) === prefix);
   if (!relay) throw new ApiError(409, "wake_relay_unavailable");
 
+  // Wake is an explicit control action, so reclaim an expired command slot here
+  // instead of making every steady-state agent poll perform cleanup.
+  await expireStaleNodeCommands(env, relay.node_id);
   const pending = await env.DB.prepare(
     "SELECT command_id FROM commands WHERE node_id = ? AND status IN ('pending','accepted') LIMIT 1"
   ).bind(relay.node_id).first();
@@ -4576,7 +6490,7 @@ async function handleApi(request, env, url) {
 
     try {
       const row = await env.DB.prepare("SELECT 1 AS ok").first();
-      const [controllerSigning, reportStorage, sessionStorage] = await Promise.all([
+      const [controllerSigning, reportStorage, sessionStorage, payloadStorage] = await Promise.all([
         importControllerPrivateKey(env)
           .then(() => "ready")
           .catch(() => "unavailable"),
@@ -4585,8 +6499,71 @@ async function handleApi(request, env, url) {
           .catch(() => "unavailable"),
         ensureSessionStorage(env)
           .then(() => "ready")
+          .catch(() => "unavailable"),
+        googleDriveAccessToken(env)
+          .then(() => "ready")
           .catch(() => "unavailable")
       ]);
+
+      let projectExecution = "unavailable";
+      let projectReadinessError = null;
+      let projectOnlineNodes = 0;
+      let projectAiReadyWorkers = 0;
+      let projectPythonReadyWorkers = 0;
+      let liveProjectNodes = [];
+      try {
+        const projectNodes = await env.DB.prepare(`
+          SELECT node_id, hostname, status, last_seen_at, capabilities_json
+          FROM nodes
+          WHERE status = 'online'
+            AND datetime(last_seen_at) >= datetime('now', '-5 minutes')
+          ORDER BY last_seen_at DESC
+          LIMIT 500
+        `).all();
+        liveProjectNodes = (projectNodes.results || [])
+          .filter((node) => !isTestNodeRecord(node));
+        projectOnlineNodes = liveProjectNodes.length;
+        projectPythonReadyWorkers = liveProjectNodes
+          .filter((node) => projectNodeReady(node, "architect_python")).length;
+      } catch (error) {
+        projectReadinessError = "node_presence_query_failed";
+        console.error("Project readiness node query failed", error);
+      }
+
+      if (projectReadinessError === null && projectOnlineNodes === 0) {
+        projectExecution = "waiting_for_online_node";
+      } else if (projectReadinessError === null) {
+        try {
+          await ensureNodeAiStorage(env);
+          const aiRows = await env.DB.prepare(`
+            SELECT node_id, installed, loaded_model, server_running
+            FROM node_ai_state
+            ORDER BY updated_at DESC
+            LIMIT 500
+          `).all();
+          const aiByNode = new Map(
+            (aiRows.results || []).map((row) => [row.node_id, row])
+          );
+          projectAiReadyWorkers = liveProjectNodes
+            .map((node) => ({ ...node, ...(aiByNode.get(node.node_id) || {}) }))
+            .filter((node) => projectNodeReady(node, "architect_manual")).length;
+          projectExecution = projectAiReadyWorkers > 0
+            ? "ready"
+            : "waiting_for_ai_worker";
+        } catch (error) {
+          const detail = String(error || "").toLowerCase();
+          projectReadinessError = detail.includes("daily row read")
+            ? "d1_read_limit"
+            : detail.includes("daily row write")
+              ? "d1_write_limit"
+              : detail.includes("no such table")
+                ? "ai_state_schema_missing"
+                : "ai_state_query_failed";
+          projectExecution = "unavailable";
+          console.error("Project readiness AI query failed", error);
+        }
+      }
+
       return json({
         ok: row?.ok === 1 &&
           controllerSigning === "ready" &&
@@ -4596,7 +6573,15 @@ async function handleApi(request, env, url) {
         database: "citadel-control",
         controller_signing: controllerSigning,
         report_storage: reportStorage,
-        session_storage: sessionStorage
+        session_storage: sessionStorage,
+        payload_storage: payloadStorage,
+        payload_storage_provider: "google_drive",
+        openrouter_quality: openRouterQualityConfig(env).configured ? "configured" : "unconfigured",
+        project_execution: projectExecution,
+        project_readiness_error: projectReadinessError,
+        project_online_nodes: projectOnlineNodes,
+        project_ai_ready_workers: projectAiReadyWorkers,
+        project_python_ready_workers: projectPythonReadyWorkers
       });
     } catch {
       return json({
@@ -4664,6 +6649,19 @@ async function handleApi(request, env, url) {
       : methodNotAllowed(["GET"]);
   }
 
+  if (url.pathname === "/api/v1/status/d1-usage") {
+    if (request.method !== "GET") return methodNotAllowed(["GET"]);
+    return json(await d1UsageStatus(env), 200, {
+      "cache-control": "public, max-age=60, stale-while-revalidate=240"
+    });
+  }
+
+  if (url.pathname === "/api/v1/architect/d1-usage") {
+    if (request.method !== "GET") return methodNotAllowed(["GET"]);
+    await authenticateArchitect(request, env);
+    return json(await d1UsageOverview(env));
+  }
+
   if (url.pathname === "/api/v1/architect/enterprise") {
     return request.method === "GET"
       ? architectEnterpriseOverview(request, env)
@@ -4725,10 +6723,91 @@ async function handleApi(request, env, url) {
       : methodNotAllowed(["GET"]);
   }
 
+  if (url.pathname === "/api/v1/architect/models/details") {
+    return request.method === "GET"
+      ? architectModelDetails(request, env, url)
+      : methodNotAllowed(["GET"]);
+  }
+
   if (url.pathname === "/api/v1/architect/work-roles") {
     return request.method === "GET"
       ? architectWorkRoles(request, env)
       : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/machines") {
+    if (request.method !== "GET") return methodNotAllowed(["GET"]);
+    await authenticateArchitect(request, env);
+    await Promise.all([
+      ensureNodeAiStorage(env),
+      ensureNodeNetworkStorage(env),
+      ensureAutoEnrollmentStorage(env),
+      ensureCommandReadIndexes(env)
+    ]);
+    const [nodes, commands] = await Promise.all([
+      env.DB.prepare(`SELECT n.node_id, nn.node_number, n.hostname, n.os_name, n.os_version, n.architecture,
+        n.agent_version, n.cpu_percent, n.memory_percent, n.last_seen_at,
+        CASE WHEN n.status = 'online' AND
+        (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-2 minutes'))
+        THEN 'offline' ELSE n.status END AS status,
+        net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json,
+        COALESCE(ai.installed, 0) AS ai_installed,
+        COALESCE(ai.server_running, 0) AS ai_server_running,
+        ai.selected_model AS ai_selected_model,
+        ai.loaded_model AS ai_loaded_model,
+        ai.updated_at AS ai_updated_at,
+        air.state_json AS ai_runtime_json
+        FROM nodes AS n
+        LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id
+        LEFT JOIN node_network_state AS net ON net.node_id = n.node_id
+        LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
+        LEFT JOIN node_ai_runtime_state AS air ON air.node_id = n.node_id
+        WHERE n.status != 'revoked' ORDER BY n.node_id LIMIT 500`).all(),
+      env.DB.prepare(`SELECT command_id, node_id, command_type, status, created_at, completed_at
+        FROM commands
+        WHERE status IN ('pending','accepted')
+          OR datetime(created_at) >= datetime('now', '-30 minutes')
+        ORDER BY created_at DESC LIMIT 500`).all()
+    ]);
+    const commandRows = commands.results || [];
+    const latestCommands = new Map();
+    for (const command of commandRows) {
+      if (!latestCommands.has(command.node_id)) latestCommands.set(command.node_id, command);
+    }
+    const rawNodes = nodes.results || [];
+    const liveRelays = rawNodes.filter((node) =>
+      node.status === "online" &&
+      node.lan_ipv4 &&
+      Date.parse(String(node.last_seen_at).replace(" ", "T") + (String(node.last_seen_at).includes("T") ? "" : "Z")) >= Date.now() - 5 * 60 * 1000
+    );
+    const machineNodes = rawNodes.map((node) => {
+      const macAddresses = safeJson(node.mac_addresses_json, []);
+      const prefix = subnet24(node.lan_ipv4);
+      const relay = prefix && Array.isArray(macAddresses) && macAddresses.length
+        ? liveRelays.find((candidate) => candidate.node_id !== node.node_id && subnet24(candidate.lan_ipv4) === prefix)
+        : null;
+      const latestCommand = latestCommands.get(node.node_id);
+      return {
+        ...node,
+        mac_addresses: Array.isArray(macAddresses) ? macAddresses : [],
+        mac_addresses_json: undefined,
+        lmstudio_installed: node.ai_installed,
+        lmstudio_server_running: node.ai_server_running,
+        lmstudio_selected_model: node.ai_selected_model,
+        lmstudio_loaded_model: node.ai_loaded_model,
+        lmstudio_updated_at: node.ai_updated_at,
+        lmstudio_runtime: safeJson(node.ai_runtime_json, {}),
+        ai_runtime_json: undefined,
+        last_command_type: latestCommand?.command_type || null,
+        last_command_status: latestCommand?.status || null,
+        last_command_at: latestCommand?.completed_at || latestCommand?.created_at || null,
+        wake_available: node.status === "offline" && Boolean(relay),
+        wake_relay_node_id: relay?.node_id || null,
+        latest_agent_version: LATEST_NODE_RELEASE.version,
+        update_required: node.agent_version !== LATEST_NODE_RELEASE.version
+      };
+    });
+    return json({ok:true, nodes:machineNodes, commands:commandRows});
   }
 
   if (url.pathname === "/api/v1/architect/projects/check") {
@@ -4740,6 +6819,21 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/v1/architect/projects") {
     if (request.method === "POST") return architectCreateProject(request, env);
     if (request.method === "GET") return architectListProjects(request, env);
+    return methodNotAllowed(["GET", "POST"]);
+  }
+
+  const architectInteractiveMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/projects\/([^/]+)\/interactive\/([^/]+)$/
+  );
+  if (architectInteractiveMatch) {
+    const projectId = decodeURIComponent(architectInteractiveMatch[1]);
+    const workItemId = decodeURIComponent(architectInteractiveMatch[2]);
+    if (request.method === "GET") {
+      return architectGetInteractiveThread(request, env, projectId, workItemId);
+    }
+    if (request.method === "POST") {
+      return architectPostInteractiveMessage(request, env, projectId, workItemId);
+    }
     return methodNotAllowed(["GET", "POST"]);
   }
 
@@ -4816,12 +6910,39 @@ async function handleApi(request, env, url) {
       : methodNotAllowed(["GET"]);
   }
 
+  const architectNodeDetailsMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/nodes\/([^/]+)\/details$/
+  );
+  if (architectNodeDetailsMatch) {
+    return request.method === "GET"
+      ? architectNodeDetails(request, env, decodeURIComponent(architectNodeDetailsMatch[1]))
+      : methodNotAllowed(["GET"]);
+  }
+
+  const architectModelRecommendationsMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/nodes\/([^/]+)\/model-recommendations$/
+  );
+  if (architectModelRecommendationsMatch) {
+    return request.method === "GET"
+      ? architectRecommendModels(request, env, decodeURIComponent(architectModelRecommendationsMatch[1]))
+      : methodNotAllowed(["GET"]);
+  }
+
   const architectAiStateMatch = url.pathname.match(
     /^\/api\/v1\/architect\/nodes\/([^/]+)\/ai-state$/
   );
   if (architectAiStateMatch) {
     return request.method === "GET"
       ? architectNodeAiState(request, env, decodeURIComponent(architectAiStateMatch[1]))
+      : methodNotAllowed(["GET"]);
+  }
+
+  const architectLmstudioPreflightMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/nodes\/([^/]+)\/lmstudio-preflight$/
+  );
+  if (architectLmstudioPreflightMatch) {
+    return request.method === "GET"
+      ? architectLmstudioPreflight(request, env, decodeURIComponent(architectLmstudioPreflightMatch[1]))
       : methodNotAllowed(["GET"]);
   }
 

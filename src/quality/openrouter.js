@@ -64,12 +64,15 @@ export function buildQualityGateMessages(originalTask, draftAnswer) {
 }
 
 export function openRouterQualityConfig(env = {}) {
-  const apiKey = cleanEnvString(env.OPENROUTER_API_KEY);
+  const rawApiKey = cleanEnvString(env.OPENROUTER_API_KEY);
+  const keyValid = Boolean(rawApiKey) && /^[\x21-\x7E]{16,512}$/.test(rawApiKey);
+  const apiKey = keyValid ? rawApiKey : "";
   const model = cleanEnvString(env.OPENROUTER_QUALITY_MODEL) || DEFAULT_QUALITY_MODEL;
   const fusionPreset = cleanEnvString(env.OPENROUTER_FUSION_PRESET) || DEFAULT_FUSION_PRESET;
   const timeoutMs = boundedTimeout(env.OPENROUTER_QUALITY_TIMEOUT_MS);
   return {
     configured: Boolean(apiKey),
+    keyStatus: !rawApiKey ? "missing" : (keyValid ? "valid_format" : "invalid_format"),
     apiKey,
     model,
     fusionPreset,

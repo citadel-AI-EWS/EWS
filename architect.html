@@ -13,8 +13,10 @@
     h1{font-size:29px;line-height:1.15;margin:11px 0}h2{font-size:20px;margin:0 0 15px}p{color:#aeb9d2;line-height:1.45}
     .card{margin-top:17px;padding:19px;border:1px solid #2b3757;border-radius:18px;background:#11182a;box-shadow:0 18px 55px #0007}
     label{display:block;margin:12px 0 7px;font-weight:750}input,select,textarea{width:100%;padding:13px;border:1px solid #3a496f;border-radius:11px;background:#090e1b;color:#fff;font-size:16px}textarea{min-height:110px;resize:vertical;font-family:inherit}
-    button{width:100%;margin-top:13px;padding:14px;border:0;border-radius:11px;background:#3478f6;color:#fff;font-size:16px;font-weight:850}
-    button.secondary{background:#273451}button.danger{background:#703542}button:disabled{opacity:.55}.hidden{display:none!important}
+    button{width:auto;min-height:34px;margin-top:8px;padding:7px 11px;border:1px solid #3d65a1;border-radius:9px;background:#245fbf;color:#fff;font-size:13px;font-weight:850;cursor:pointer;transition:.16s transform,.16s border-color,.16s background,.16s box-shadow}
+    button:hover:not(:disabled){transform:translateY(-1px);border-color:#6ba0ee;box-shadow:0 8px 24px #0005}button.secondary{background:#202f4a;border-color:#334d72}button.danger{background:#542933;border-color:#7c3b49}button:disabled{opacity:.55;cursor:not-allowed}.hidden{display:none!important}
+    .section-collapsed-child{display:none!important}.section-toggle-button{width:28px!important;min-width:28px!important;height:28px!important;min-height:28px!important;margin:0!important;padding:0!important;border-radius:8px!important;background:#15233a!important;border:1px solid #36527e!important;color:#bcd3f8!important;font-size:18px!important;line-height:1!important}.section-toggle-title{display:flex;align-items:center;gap:8px}.section-collapsed{padding-bottom:12px!important}
+    .task-log-list{display:grid;gap:6px;margin-top:9px}.task-log-line{padding:7px 9px;border:1px solid #263a59;border-radius:9px;background:#091120;font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;color:#a9bfdc;overflow-wrap:anywhere}.preflight-chip{display:inline-flex;margin:4px 6px 0 0;padding:4px 7px;border:1px solid #445d85;border-radius:999px;background:#121d31;color:#bcd0ed;font-size:11px}
     .toolbar{display:flex;gap:10px;flex-wrap:wrap}.toolbar button{width:auto;flex:1}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:17px}
     .stat{padding:14px;border:1px solid #2b3757;border-radius:15px;background:#11182a}.stat b{display:block;font-size:25px}.stat span,.small{font-size:13px;color:#93a0ba}
     .item{margin-top:10px;padding:13px;border-radius:13px;background:#0b1222;border-left:4px solid #5b8fff;overflow-wrap:anywhere}.item.ok{border-left-color:#35d07f}.item.warn{border-left-color:#ffb44f}
@@ -239,6 +241,12 @@
         <p class="small">Вставьте сюда настоящее задание. Hub сначала прогонит текст через четыре обязательные проверки, после чего ваше нажатие «Создать проект» является подтверждением Architect. Затем Hub строит рабочие блоки и сам выбирает доступные Python-узлы.</p>
         <label for="projectTitle" data-i18n="projectName">Название проекта</label>
         <input id="projectTitle" maxlength="160" value="Новый проект">
+        <label for="projectExecutionMode">Режим выполнения</label>
+        <select id="projectExecutionMode">
+          <option value="ai">AI · LM Studio</option>
+          <option value="python">Python only · без ИИ</option>
+        </select>
+        <div id="projectExecutionHint" class="small">AI-режим использует локальную модель LM Studio. Python only выполняет только детерминированные операции и не вызывает LLM/OpenRouter.</div>
         <label for="projectTaskText" data-i18n="task">Задание</label>
         <textarea id="projectTaskText" maxlength="20000" placeholder="Опишите, что должен сделать проект..."></textarea>
         <div class="voice-row">
@@ -249,6 +257,7 @@
           <button id="checkProjectButton" class="secondary" type="button" data-i18n="checkText">1. Проверить текст</button>
           <button id="createProjectButton" type="button" disabled data-i18n="createProject">2. Создать проект</button>
         </div>
+        <div id="projectPreflight" class="status">Preflight текста ещё не выполнялся. Он покажет структурные/опечаточные признаки и возможные логические противоречия до запуска.</div>
         <div id="projectChecks" class="status">Ожидаю текст проекта.
 1. Source allowlisting
 2. Validation
@@ -280,6 +289,10 @@
         </div>
         <div class="section-head" style="margin-top:16px"><h3 style="margin:0">Рабочие блоки и ноды</h3><span id="projectReportProgress" class="small"></span></div>
         <div id="projectReportWorkItems" class="project-work-list"></div>
+        <details id="projectTaskLogsBox" class="project-report-box" style="margin-top:12px">
+          <summary><b>Логи этого задания</b></summary>
+          <div id="projectTaskLogs" class="task-log-list"></div>
+        </details>
         <div id="projectFinalResultBox" class="project-report-box hidden" style="margin-top:16px">
           <b>Конечный результат проекта</b>
           <pre id="projectFinalResult" class="report-body" style="margin-top:10px"></pre>
@@ -382,6 +395,7 @@
   </div>
 
   <script>
+    if(location.pathname!=="/"||location.search||location.hash)history.replaceState({citadelView:"architect"},"","/");
     const I18N = {
       ru:{home:"Главная",pageTitle:"LIVE OPERATIONS",pageLead:"Живой центр управления · показываются только реальные данные Controller.",loginTitle:"Защищённый вход",tokenLabel:"Секрет архитектора",loginButton:"Войти",loginHint:"Секрет хранится только до закрытия этой вкладки.",refresh:"Обновить",logout:"Выйти",opsSub:"Реальные heartbeat, CPU/RAM, presence и состояние Controller. Демонстрационные значения запрещены.",registeredNodes:"зарегистрировано нод",liveNow:"живых сейчас",activeMissions:"активных миссий сейчас",fullReports:"полных отчётов",unhealthy:"нездоровых / недоступных",projects:"проектов",nodes:"Ноды",nodeControl:"Управление узлом",node:"Нода",showIp:"Показать IP",healthCheck:"Проверить здоровье",pause:"Поставить на паузу",resume:"Возобновить",restartAgent:"Перезапустить агент",stopAgent:"Остановить агент",rollback:"Откатить последнее обновление",reboot:"Перезагрузить ПК",shutdown:"Выключить ПК",disconnect:"Отозвать и удалить узел",sshTitle:"SSH / Zero Trust",projectTitleHead:"Python / Создать проект",projectName:"Название проекта",task:"Задание",checkText:"1. Проверить текст",createProject:"2. Создать проект",missionTitleHead:"Создать диагностическую миссию",missionType:"Тип задачи",systemInventory:"Проверка состояния компьютера",name:"Название",whatCheck:"Что проверить",expires:"Срок действия",createMission:"Создать и назначить миссию",commands:"Команды управления",missionsResults:"Действующие миссии",reports:"Отчёты узлов",reportContent:"Содержимое диагностического отчёта",close:"Закрыть",briefTitle:"Краткая оперативная сводка",briefSub:"Только проблемы, требующие внимания прямо сейчас.",briefClose:"Закрыть и перейти в Live Operations"},
       en:{home:"Home",pageTitle:"LIVE OPERATIONS",pageLead:"Live control center · only real Controller data is shown.",loginTitle:"Secure sign-in",tokenLabel:"Architect token",loginButton:"Sign in",loginHint:"The token is kept only until this tab is closed.",refresh:"Refresh",logout:"Sign out",opsSub:"Real heartbeats, CPU/RAM, presence, and Controller state. Demo values are prohibited.",registeredNodes:"registered nodes",liveNow:"live now",activeMissions:"active missions now",fullReports:"full reports",unhealthy:"unhealthy / unavailable",projects:"projects",nodes:"Nodes",nodeControl:"Node control",node:"Node",showIp:"Show IP",healthCheck:"Health check",pause:"Pause",resume:"Resume",restartAgent:"Restart agent",stopAgent:"Stop agent",rollback:"Rollback last update",reboot:"Reboot host",shutdown:"Shut down host",disconnect:"Revoke and remove node",sshTitle:"SSH / Zero Trust",projectTitleHead:"Python / Create project",projectName:"Project name",task:"Task",checkText:"1. Check text",createProject:"2. Create project",missionTitleHead:"Create diagnostic mission",missionType:"Task type",systemInventory:"Computer system inventory",name:"Name",whatCheck:"What to check",expires:"Expires",createMission:"Create and assign mission",commands:"Control commands",missionsResults:"Active missions",reports:"Node reports",reportContent:"Diagnostic report",close:"Close",briefTitle:"Operations brief",briefSub:"Only problems that need attention right now.",briefClose:"Close and open Live Operations"},
@@ -495,9 +509,12 @@
     const shutdownButton = document.getElementById("shutdownButton");
     const disconnectButton = document.getElementById("disconnectButton");
     const projectTitle = document.getElementById("projectTitle");
+    const projectExecutionMode = document.getElementById("projectExecutionMode");
+    const projectExecutionHint = document.getElementById("projectExecutionHint");
     const projectTaskText = document.getElementById("projectTaskText");
     const checkProjectButton = document.getElementById("checkProjectButton");
     const createProjectButton = document.getElementById("createProjectButton");
+    const projectPreflight = document.getElementById("projectPreflight");
     const projectChecks = document.getElementById("projectChecks");
     const projectRolePlan = document.getElementById("projectRolePlan");
     const workRoles = document.getElementById("workRoles");
@@ -517,6 +534,8 @@
     const projectReportSpecializations = document.getElementById("projectReportSpecializations");
     const projectReportProgress = document.getElementById("projectReportProgress");
     const projectReportWorkItems = document.getElementById("projectReportWorkItems");
+    const projectTaskLogs = document.getElementById("projectTaskLogs");
+    const projectTaskLogsBox = document.getElementById("projectTaskLogsBox");
     const projectFinalResultBox = document.getElementById("projectFinalResultBox");
     const projectFinalResult = document.getElementById("projectFinalResult");
     const closeProjectReportButton = document.getElementById("closeProjectReportButton");
@@ -624,11 +643,26 @@
       return timestamp === null ? Infinity : Math.max(0, (Date.now() - timestamp) / 60000);
     }
 
+    function nodeOperationalState(node) {
+      if (!node) return "unknown";
+      if (node.operational_state) return node.operational_state;
+      if (node.status === "revoked") return "revoked";
+      const identity = `${node.hostname || ""} ${node.node_id || ""}`;
+      if (/(^|[^a-z0-9])(test|demo)([^a-z0-9]|$)/i.test(identity)) return "test";
+      const age = nodeAgeMinutes(node);
+      if (age >= 7 * 24 * 60) return "archived";
+      if (age >= 24 * 60) return "stale";
+      if (node.status === "paused") return "paused";
+      if (node.status === "online" && age <= 5) return "live";
+      return "offline";
+    }
+
+    function nodeInOperationalScope(node) {
+      return ["live", "offline", "paused"].includes(nodeOperationalState(node));
+    }
+
     function isNodeLive(node) {
-      return Boolean(node) &&
-        node.status !== "revoked" &&
-        node.status !== "offline" &&
-        nodeAgeMinutes(node) <= 5;
+      return nodeOperationalState(node) === "live";
     }
 
     function nodeHealth(node) {
@@ -798,10 +832,30 @@
     }
 
     function selectedProjectRoleIds() {
-      return [...new Set([...currentRecommendedProjectRoles, ...architectAddedProjectRoles])];
+      return projectExecutionMode.value === "python"
+        ? []
+        : [...new Set([...currentRecommendedProjectRoles, ...architectAddedProjectRoles])];
+    }
+
+    function projectSourceType() {
+      return projectExecutionMode.value === "python" ? "architect_python" : "architect_manual";
+    }
+
+    function syncProjectExecutionMode() {
+      const pythonOnly = projectExecutionMode.value === "python";
+      projectExecutionHint.textContent = pythonOnly
+        ? "Python only: никакой LLM, LM Studio или OpenRouter не вызывается. Поддерживаются расчёты, text:/json: и диагностика CPU/RAM/диска/сети."
+        : "AI: рабочие блоки выполняются локальной моделью LM Studio; после завершения действует обычный quality gate.";
+      if (pythonOnly) architectAddedProjectRoles.clear();
+      renderWorkRoles(currentWorkRoles);
+      if (!currentProjectCheck) renderRolePlanSummary();
     }
 
     function renderRolePlanSummary(rolePlan = null) {
+      if (projectExecutionMode.value === "python") {
+        projectRolePlan.textContent = "Python only: один deterministic Python worker · без LM Studio и без AI quality gate.";
+        return;
+      }
       const effective = rolePlan || {};
       const lines = [];
       for (const [role, count] of Object.entries(effective)) {
@@ -820,6 +874,10 @@
     function renderWorkRoles(roles) {
       currentWorkRoles = roles || [];
       workRoles.replaceChildren();
+      if (projectExecutionMode.value === "python") {
+        addText(workRoles, "div", "Python only · специализации LLM не используются.", "role-chip");
+        return;
+      }
       for (const role of currentWorkRoles) {
         if (role.kind === "human_gate") {
           const chip = document.createElement("div");
@@ -861,7 +919,7 @@
       operationsAlertList.replaceChildren();
       const problems = [];
       for (const node of nodes) {
-        if (node.status === "revoked") continue;
+        if (!nodeInOperationalScope(node)) continue;
         const health = nodeHealth(node);
         if (!health.live) {
           problems.push(`${nodeDisplayName(node)} · ${lt("не отвечает","not responding","לא מגיב")} · ${lt("последняя связь","last seen","קשר אחרון")}: ${node.last_seen_at || lt("нет данных","no data","אין נתונים")}`);
@@ -1108,6 +1166,17 @@
         ["deduplication", "3. Deduplication"],
         ["safety_classification", "4. Safety classification"]
       ];
+      const preflight = data?.text_preflight || {};
+      const spelling = Array.isArray(preflight.spelling_warnings) ? preflight.spelling_warnings : [];
+      const logic = Array.isArray(preflight.logic_warnings) ? preflight.logic_warnings : [];
+      projectPreflight.replaceChildren();
+      addText(projectPreflight, "b", `Preflight текста: ${Number(preflight.warning_count || 0) ? "есть предупреждения" : "OK"}`);
+      if (!spelling.length && !logic.length) {
+        addText(projectPreflight, "div", "Структурных признаков опечаток и явных логических конфликтов не найдено.", "small");
+      } else {
+        for (const warning of spelling) addText(projectPreflight, "span", "Текст · " + warning, "preflight-chip");
+        for (const warning of logic) addText(projectPreflight, "span", "Логика · " + warning, "preflight-chip");
+      }
       projectChecks.textContent = order.map(([key, label]) => {
         const item = checks[key] || {};
         const mark = item.passed ? "PASS" : "STOP";
@@ -1141,7 +1210,14 @@
         addText(item, "strong", `${project.title} — ${stage} · ${percent}%`);
         addText(item, "div", `Нод Hub: ${project.worker_count} · завершено: ${finished}/${total} · running: ${running} · assigned: ${assigned}`, "small");
         if (stage === "PLAN / WAITING") {
-          addText(item, "div", "Ожидание: откройте отчёт — Controller покажет READY-ноды и точный blocker (agent / LM Studio / model / offline).", "small");
+          addText(
+            item,
+            "div",
+            project.source_type === "architect_python"
+              ? "Ожидание: Python only · Controller покажет READY-ноды и blocker (agent / project_python / offline). LM Studio не требуется."
+              : "Ожидание: откройте отчёт — Controller покажет READY-ноды и точный blocker (agent / LM Studio / model / offline).",
+            "small"
+          );
         }
         addText(item, "div", `Project ID: ${project.project_id}`, "small");
         const open = addText(item, "button", "Перейти к отчёту", "secondary");
@@ -1212,7 +1288,7 @@
     function renderProjectStages(execution) {
       const waitingForWorker = execution?.state === "planned" && Number(execution?.ready_workers_now || 0) === 0;
       const stages = waitingForWorker
-        ? ["WAITING MODEL","ASSIGNED","RUNNING","COMPLETED","REPORT"]
+        ? [execution?.execution_mode === "python" ? "WAITING PYTHON" : "WAITING MODEL","ASSIGNED","RUNNING","COMPLETED","REPORT"]
         : ["PLAN","ASSIGNED","RUNNING","COMPLETED","REPORT"];
       const current = projectStageIndex(execution?.state, execution?.final_report_ready);
       projectStageTrack.replaceChildren();
@@ -1233,9 +1309,12 @@
           "agent מיושן: " + (worker.agent_version || "—") + " → " + (currentReleaseVersion || "current")
         ],
         project_text_missing: ["нет capability project_text","project_text capability missing","חסרה יכולת project_text"],
+        project_python_missing: ["нет capability project_python","project_python capability missing","חסרה יכולת project_python"],
+        lmstudio_state_unknown: ["состояние LM Studio ещё не подтверждено — выполните проверку","LM Studio state is not confirmed yet — run a probe","מצב LM Studio עדיין לא אומת — יש להריץ בדיקה"],
         lmstudio_not_installed: ["LM Studio не установлен","LM Studio is not installed","LM Studio אינו מותקן"],
         lmstudio_server_stopped: ["LM Studio server не запущен","LM Studio server is stopped","שרת LM Studio אינו פועל"],
-        lmstudio_model_not_loaded: ["языковая модель не загружена","no language model loaded","לא נטענה מודל שפה"]
+        lmstudio_model_not_loaded: ["языковая модель не загружена","no language model loaded","לא נטענה מודל שפה"],
+        test_node_excluded: ["тестовая нода исключена из production scheduler","test node excluded from the production scheduler","node בדיקה הוחרג מתזמון production"]
       };
       const value = map[code] || [code,code,code];
       return lang === "he" ? value[2] : lang === "en" ? value[1] : value[0];
@@ -1256,14 +1335,36 @@
           : (worker.hostname || worker.node_id);
         addText(row, "b", (worker.ready ? "✓ READY · " : "◷ WAITING · ") + name);
         if (worker.ready) {
-          addText(row, "div", `project_text · LM Studio · model: ${worker.lmstudio_loaded_model || "—"}`, "small");
+          addText(
+            row,
+            "div",
+            execution?.execution_mode === "python"
+              ? "project_python · Python only · no LLM"
+              : `project_text · LM Studio · model: ${worker.lmstudio_loaded_model || "—"}`,
+            "small"
+          );
         } else {
           addText(row, "div", (worker.blockers || []).map((code) => workerBlockerText(code, worker)).join(" · "), "small");
-          const prepare = addText(row, "button", "Подготовить ноду в Hub", "secondary");
+          const blockers = worker.blockers || [];
+          const prepareLabel = blockers.includes("agent_outdated")
+            ? "Открыть Hub: обновить агент"
+            : blockers.includes("lmstudio_state_unknown")
+              ? "Открыть Hub: проверить LM Studio"
+              : blockers.includes("lmstudio_not_installed")
+                ? "Открыть Hub: установить LM Studio"
+                : blockers.includes("lmstudio_server_stopped")
+                  ? "Открыть Hub: проверить сервер LM Studio"
+                  : blockers.includes("lmstudio_model_not_loaded")
+                    ? "Открыть Hub: загрузить модель"
+                    : blockers.includes("offline")
+                      ? "Открыть Hub: проверить связь"
+                      : "Подготовить ноду в Hub";
+          const prepare = addText(row, "button", prepareLabel, "secondary");
           prepare.type = "button";
           prepare.style.marginTop = "8px";
           prepare.addEventListener("click", () => {
-            location.href = `/hub/?lmnode=${encodeURIComponent(worker.node_id)}`;
+            sessionStorage.setItem("citadel-lmnode-request", worker.node_id);
+            location.href = "/hub/";
           });
         }
         projectWorkerReadiness.appendChild(row);
@@ -1273,7 +1374,8 @@
     function renderProjectReport(project) {
       activeProjectId = project.project_id;
       projectReportTitle.textContent = `Отчёт проекта · ${project.title}`;
-      projectReportMeta.textContent = `Project ID: ${project.project_id} · создан: ${project.created_at || "—"}`;
+      const execution = project.execution || {};
+      projectReportMeta.textContent = `Project ID: ${project.project_id} · режим: ${execution.execution_mode === "python" ? "PYTHON ONLY" : "AI / LM Studio"} · создан: ${project.created_at || "—"}`;
       projectReportTask.textContent = project.task_text || "—";
       projectReportSpecializations.replaceChildren();
       for (const role of project.specializations || []) {
@@ -1282,7 +1384,6 @@
       }
       if (!(project.specializations || []).length) addText(projectReportSpecializations, "span", "Нет данных", "small");
 
-      const execution = project.execution || {};
       const counts = execution.counts || {};
       const done = Number(execution.completed_work_items || 0);
       const total = Number(execution.total_work_items || 0);
@@ -1295,7 +1396,9 @@
         const readyNow = Number(execution.ready_workers_now || 0);
         projectReportStatus.textContent = readyNow > 0
           ? "PLAN принят. READY-нода найдена: Controller автоматически создаёт assignment. Следующая стадия — ASSIGNED/RUNNING."
-          : `WAITING FOR MODEL — проект сохранён, но сейчас нет ни одной READY-ноды. Нужны: агент ${currentReleaseVersion || "current"}, LM Studio/llmster и загруженная языковая модель. Нажмите «Подготовить ноду в Hub» ниже. После загрузки модели этот проект запустится автоматически — создавать его заново не нужно.`;
+          : execution.execution_mode === "python"
+            ? `WAITING FOR PYTHON — проект сохранён, но нет LIVE-ноды с агентом ${currentReleaseVersion || "current"} и capability project_python. LM Studio для этого режима не требуется.`
+            : `WAITING FOR MODEL — проект сохранён, но сейчас нет ни одной READY-ноды. Нужны: агент ${currentReleaseVersion || "current"}, LM Studio/llmster и загруженная языковая модель. Нажмите «Подготовить ноду в Hub» ниже. После загрузки модели этот проект запустится автоматически — создавать его заново не нужно.`;
         projectReportStatus.className = `status ${readyNow > 0 ? "good" : "bad"}`;
       } else if (execution.state === "assigned") {
         projectReportStatus.textContent = "Рабочие блоки назначены нодам и ожидают принятия агентом.";
@@ -1349,6 +1452,13 @@
         projectReportWorkItems.appendChild(box);
       }
       if (!(project.work_items || []).length) addText(projectReportWorkItems, "p", "Рабочих блоков нет.", "muted");
+      projectTaskLogs.replaceChildren();
+      for (const event of project.task_logs || []) {
+        const detail = event.details && Object.keys(event.details).length ? " · " + JSON.stringify(event.details) : "";
+        addText(projectTaskLogs, "div", `${event.created_at || "—"} · ${event.action || "event"} · ${event.target_type || "—"}${detail}`, "task-log-line");
+      }
+      if (!(project.task_logs || []).length) addText(projectTaskLogs, "div", "Для этого задания событий пока нет.", "small");
+      projectTaskLogsBox.open = false;
       projectReportCard.classList.remove("hidden");
       expandSection(projectReportCard);
     }
@@ -1383,8 +1493,16 @@
       addText(projectCreatedSummary, "div", `Hub выбрал ноды: ${nodes.join("; ") || "нет"}`, "project-created-line");
       const roles = (project.specializations || []).map((role) => roleDisplayName(role.id || role.role_name, role.label));
       addText(projectCreatedSummary, "div", `Специализации: ${roles.join(", ") || "нет"}`, "project-created-line");
+      addText(projectCreatedSummary, "div", `Режим: ${project.execution_mode === "python" ? "PYTHON ONLY · без ИИ" : "AI · LM Studio"}`, "project-created-line");
       addText(projectCreatedSummary, "div", `Hub решил: ${project.desired_workers || project.work_item_count} workers · реально готовы: ${project.worker_count} · рабочих блоков: ${project.work_item_count} · состояние: ${project.status}`, "project-created-line");
-      const note = addText(projectCreatedSummary, "div", "План создан. Когда нода с загруженной LM Studio-моделью опросит Controller, блоки автоматически перейдут в Assigned → Running → Completed, а результаты появятся в живом отчёте.", "execution-note");
+      const note = addText(
+        projectCreatedSummary,
+        "div",
+        project.execution_mode === "python"
+          ? "План создан. LIVE-нода с project_python выполнит задачу без LM Studio, LLM и OpenRouter."
+          : "План создан. Когда нода с загруженной LM Studio-моделью опросит Controller, блоки автоматически перейдут в Assigned → Running → Completed, а результаты появятся в живом отчёте.",
+        "execution-note"
+      );
       note.setAttribute("role", "status");
       projectCreatedOverlay.classList.remove("hidden");
     }
@@ -1417,16 +1535,23 @@
     }
 
     function syncUpdateAllStatus() {
-      const eligible = currentNodes.filter((node) => node.status !== "revoked");
-      const outdated = currentReleaseVersion
-        ? eligible.filter((node) => node.agent_version !== currentReleaseVersion).length
-        : 0;
-      updateAllAgentsButton.disabled = !currentReleaseVersion || outdated === 0;
-      updateAllAgentsButton.textContent = outdated
-        ? `Обновить ${outdated} агентов → ${currentReleaseVersion}`
-        : "Все агенты актуальны";
-      if (!outdated && currentReleaseVersion) {
-        updateAllStatus.textContent = `Все зарегистрированные агенты уже на версии ${currentReleaseVersion}.`;
+      const production = currentNodes.filter((node) =>
+        node.status !== "revoked" && nodeOperationalState(node) !== "test"
+      );
+      const outdatedNodes = currentReleaseVersion
+        ? production.filter((node) => node.agent_version !== currentReleaseVersion)
+        : [];
+      const updateableNow = outdatedNodes.filter((node) => nodeOperationalState(node) === "live");
+      const deferred = Math.max(0, outdatedNodes.length - updateableNow.length);
+      updateAllAgentsButton.disabled = !currentReleaseVersion || outdatedNodes.length === 0;
+      updateAllAgentsButton.textContent = outdatedNodes.length
+        ? `Обновить ${updateableNow.length} сейчас → ${currentReleaseVersion}`
+        : "Все production-агенты актуальны";
+      if (outdatedNodes.length && currentReleaseVersion) {
+        updateAllStatus.textContent = `Устаревших production-агентов: ${outdatedNodes.length}. Доступно сейчас: ${updateableNow.length}; offline/stale: ${deferred}. Тестовые ноды не участвуют.`;
+        updateAllStatus.className = "status";
+      } else if (currentReleaseVersion) {
+        updateAllStatus.textContent = `Все production-агенты уже на версии ${currentReleaseVersion}. Тестовые и исторические записи не считаются аварией.`;
         updateAllStatus.className = "status good";
       }
     }
@@ -1444,19 +1569,21 @@
 
       for (const node of currentNodes) {
         const health = nodeHealth(node);
+        const operationalState = nodeOperationalState(node);
+        const inScope = nodeInOperationalScope(node);
         if (health.live) liveCount += 1;
-        if (!health.healthy && node.status !== "revoked") unhealthyCount += 1;
+        if (inScope && !health.healthy && node.status !== "revoked") unhealthyCount += 1;
 
         const option = document.createElement("option");
         option.value = node.node_id;
-        option.textContent = `${nodeDisplayName(node)} — ${node.status}`;
-        option.disabled = node.status === "revoked";
+        option.textContent = `${nodeDisplayName(node)} — ${operationalState.toUpperCase()}`;
+        option.disabled = ["revoked", "test", "archived"].includes(operationalState);
         nodeSelect.appendChild(option);
         controlNodeSelect.appendChild(option.cloneNode(true));
 
         const presence = currentPresence.find((item) => item.node_id === node.node_id);
         const card = document.createElement("div");
-        card.className = `node-card ${health.live ? "" : "dead"} ${health.healthy ? "" : "unhealthy"}`.trim();
+        card.className = `node-card ${health.live ? "" : "dead"} ${inScope && !health.healthy ? "unhealthy" : ""}`.trim();
 
         const top = document.createElement("div");
         top.className = "node-top";
@@ -1464,7 +1591,11 @@
         addText(identity, "div", nodeDisplayName(node), "node-name");
         addText(identity, "div", `${lt("Агент","Agent","Agent")} ${agentDisplayName(node)} · v${node.agent_version || "—"} · ${lt("Роль","Role","תפקיד")}: ${node.planned_role || lt("не назначена","not assigned","לא הוקצה")}`, "node-agent");
         top.appendChild(identity);
-        const livePill = addText(top, "span", health.live ? "LIVE" : "OFFLINE", health.live ? "state-live" : "state-dead");
+        const stateLabel = {
+          live:"LIVE", offline:"OFFLINE", paused:"PAUSED", stale:"STALE",
+          archived:"HISTORY", test:"TEST", revoked:"REVOKED"
+        }[operationalState] || operationalState.toUpperCase();
+        const livePill = addText(top, "span", stateLabel, health.live ? "state-live" : "state-dead");
         livePill.style.fontWeight = "900";
         card.appendChild(top);
 
@@ -1474,7 +1605,10 @@
         addText(lines, "div", `${lt("Живой","Live","חי")}: ${health.live ? lt("ДА","YES","כן") : lt("НЕТ","NO","לא")}`, health.live ? "state-live" : "state-dead");
         const healthLine = document.createElement("div");
         healthLine.className = "health-line";
-        addText(healthLine, "span", `${lt("Здоровье","Health","בריאות")}: ${health.healthy ? lt("ЗДОРОВ","HEALTHY","תקין") : lt("НЕЗДОРОВ","UNHEALTHY","לא תקין")}`, health.healthy ? "state-live" : "state-dead");
+        const healthLabel = inScope
+          ? (health.healthy ? lt("ЗДОРОВ","HEALTHY","תקין") : lt("НЕЗДОРОВ","UNHEALTHY","לא תקין"))
+          : lt("ВНЕ ACTIVE SCOPE","OUT OF ACTIVE SCOPE","מחוץ לטווח הפעיל");
+        addText(healthLine, "span", `${lt("Здоровье","Health","בריאות")}: ${healthLabel}`, health.healthy ? "state-live" : "state-dead");
         const toggle = addText(healthLine, "button", "+", "detail-toggle");
         toggle.type = "button";
         toggle.setAttribute("aria-label", `Показать полную информацию о ${nodeDisplayName(node)}`);
@@ -1492,7 +1626,7 @@
         [
           `Hostname: ${node.hostname || "—"}`,
           `Node ID: ${node.node_id}`,
-          `${lt("Статус Controller","Controller status","מצב Controller")}: ${node.status}`,
+          `${lt("Статус Controller","Controller status","מצב Controller")}: ${node.status} · operational: ${operationalState}`,
           `OS: ${[node.os_name, node.os_version].filter(Boolean).join(" ") || "—"} · ${node.architecture || "—"}`,
           `CPU: ${health.cpu === null ? "—" : health.cpu.toFixed(1) + "%"} · RAM: ${health.memory === null ? "—" : health.memory.toFixed(1) + "%"}`,
           `Public IP: ${presence?.public_ip || "—"}`,
@@ -1501,7 +1635,11 @@
           `${lt("Версия агента","Agent version","גרסת agent")}: ${node.agent_version || "—"} · ${lt("Плановая роль","Planned role","תפקיד מתוכנן")}: ${node.planned_role || lt("не назначена","not assigned","לא הוקצה")}`,
           `LAN IP: ${node.lan_ipv4 || "—"}`,
           warningParts.length ? `Внимание: ${warningParts.join(" · ")}` : lt("Предупреждения: нет","Warnings: none","אזהרות: אין"),
-          !health.live ? offlineExplanation(node) : ""
+          operationalState === "test"
+            ? lt("Тестовая нода: исключена из production scheduler, compliance и массовых обновлений.","Test node: excluded from production scheduling, compliance, and bulk updates.","node בדיקה: הוחרג מתזמון production, compliance ועדכונים מרוכזים.")
+            : ["stale","archived"].includes(operationalState)
+              ? lt("Историческая/устаревшая запись: не считается текущей аварией.","Historical/stale record: not counted as a current incident.","רשומה היסטורית/מיושנת: אינה נספרת כאירוע נוכחי.")
+              : (!health.live ? offlineExplanation(node) : "")
         ].filter(Boolean).forEach((line) => addText(details, "div", line));
         toggle.addEventListener("click", () => {
           const open = details.classList.toggle("open");
@@ -1564,7 +1702,8 @@
       for (const command of commands) {
         const item = document.createElement("div");
         item.className = `item ${command.status === "completed" ? "ok" : "warn"}`;
-        addText(item, "strong", `${labels[command.command_type] || command.command_type} — ${command.status}`);
+        const statusLabel = command.ttl_expired ? "expired (TTL)" : command.status;
+        addText(item, "strong", `${labels[command.command_type] || command.command_type} — ${statusLabel}`);
         addText(item, "div", `Node ID: ${command.node_id}`, "small");
         addText(item, "div", command.created_at, "small");
         list.appendChild(item);
@@ -1888,13 +2027,14 @@
       const counts = data.counts || {};
       const storage = data.storage_integrity || {};
       enterpriseSummary.textContent = [
-        `Compliance: ${counts.compliant_nodes || 0}/${counts.nodes || 0}`,
+        `Compliance active: ${counts.compliant_nodes || 0}/${counts.active_nodes ?? counts.nodes ?? 0}`,
+        `Excluded stale/test/history: ${counts.excluded_nodes || 0}`,
         `Enterprise Probe: ${counts.windows_enterprise_probe_ready || 0}`,
         `Отчёты с integrity metadata: ${storage.reports_with_integrity_metadata || 0}/${storage.total_reports || 0}`,
         `Проверенных последних inventory: ${storage.verified_latest_system_inventories || 0}`
       ].join("\n");
       enterpriseSummary.className = "status " +
-        ((counts.nodes || 0) > 0 && counts.noncompliant_nodes === 0 ? "good" : "");
+        ((counts.active_nodes ?? counts.nodes ?? 0) > 0 && counts.noncompliant_nodes === 0 ? "good" : "");
 
       enterpriseServiceCatalog.replaceChildren();
       for (const [key, status] of Object.entries(data.service_catalog || {})) {
@@ -1939,16 +2079,22 @@
       enterpriseNodeCompliance.replaceChildren();
       for (const node of data.nodes || []) {
         const row = document.createElement("div");
-        row.className = "enterprise-node-row " + (node.compliance?.compliant ? "good" : "bad");
-        addText(row, "strong", `${node.hostname || node.node_id} · ${node.compliance?.compliant ? "COMPLIANT" : "ACTION NEEDED"}`);
+        const inScope = node.compliance_in_scope !== false;
+        row.className = "enterprise-node-row " + (!inScope ? "" : (node.compliance?.compliant ? "good" : "bad"));
+        const complianceLabel = !inScope
+          ? `${String(node.operational_state || "excluded").toUpperCase()} / HISTORY`
+          : (node.compliance?.compliant ? "COMPLIANT" : "ACTION NEEDED");
+        addText(row, "strong", `${node.hostname || node.node_id} · ${complianceLabel}`);
         addText(row, "div", `Site: ${node.site_name || "—"} · Group: ${node.group_name || "—"} · Agent: ${node.agent_version || "—"}`, "small");
         const failed = (node.compliance?.checks || []).filter((check) => !check.ok);
         addText(
           row,
           "div",
-          failed.length
-            ? "Нарушения: " + failed.map((check) => `${check.key}: ${check.detail}`).join(" · ")
-            : "Все активные правила Desired State выполнены.",
+          !inScope
+            ? "Исключено из active compliance: stale/test/history запись не считается текущей аварией."
+            : failed.length
+              ? "Нарушения: " + failed.map((check) => `${check.key}: ${check.detail}`).join(" · ")
+              : "Все активные правила Desired State выполнены.",
           "small"
         );
         const enterprise = node.compliance?.windows_enterprise;
@@ -2502,7 +2648,7 @@
       try {
         const data = await api("/api/v1/architect/update-all", { method: "POST" });
         const rollout = data.rollout;
-        updateAllStatus.textContent = `Rollout запущен → ${rollout.target_version}. Зарегистрировано: ${rollout.registered_nodes}; ожидают обновление: ${rollout.nodes_waiting_for_update}. Агенты получат команду автоматически при следующем poll.`;
+        updateAllStatus.textContent = `Rollout → ${rollout.target_version}. Production-нод: ${rollout.registered_nodes}; устаревших: ${rollout.nodes_waiting_for_update}; доступны сейчас: ${rollout.nodes_updateable_now ?? 0}; отложены offline/stale: ${rollout.nodes_deferred ?? 0}; тестовых исключено: ${rollout.excluded_test_nodes ?? 0}.`;
         updateAllStatus.className = "status good";
       } catch (error) {
         updateAllStatus.textContent = `Массовое обновление не запущено: ${error.message}`;
@@ -2517,6 +2663,8 @@
       currentProjectCheck = null;
       currentRecommendedProjectRoles = new Set();
       createProjectButton.disabled = true;
+      projectPreflight.textContent = "Текст изменён. Preflight будет выполнен заново перед четырьмя проверками.";
+      projectPreflight.className = "status";
       projectChecks.textContent = "Текст проекта изменён. Запустите четыре проверки снова.";
       projectChecks.className = "status";
       renderWorkRoles(currentWorkRoles);
@@ -2525,6 +2673,10 @@
 
     projectTitle.addEventListener("input", invalidateProjectCheck);
     projectTaskText.addEventListener("input", invalidateProjectCheck);
+    projectExecutionMode.addEventListener("change", () => {
+      invalidateProjectCheck();
+      syncProjectExecutionMode();
+    });
 
     function speechLanguage() {
       return lang === "he" ? "he-IL" : lang === "en" ? "en-US" : "ru-RU";
@@ -2612,8 +2764,8 @@
           body: JSON.stringify({
             title,
             task_text: taskText,
-            source_type: "architect_manual",
-            requested_roles: [...architectAddedProjectRoles]
+            source_type: projectSourceType(),
+            requested_roles: selectedProjectRoleIds()
           })
         });
         renderProjectCheckResult(data);
@@ -2644,8 +2796,8 @@
           body: JSON.stringify({
             title,
             task_text: taskText,
-            source_type: "architect_manual",
-            requested_roles: [...architectAddedProjectRoles]
+            source_type: projectSourceType(),
+            requested_roles: selectedProjectRoleIds()
           })
         });
         const p = data.project;
@@ -2654,10 +2806,13 @@
         ).join("\n");
         projectResult.textContent = [
           "Проект создан.",
-          `Hub выбрал узлов: ${p.worker_count}`,
+          `Hub выбрал READY-узлов сейчас: ${p.worker_count}`,
           `Рабочих блоков: ${p.work_item_count}`,
           assignments,
-          "Нажмите «Перейти к отчёту», чтобы увидеть живое состояние проекта."
+          p.worker_count > 0
+            ? "READY-нода найдена. Работа будет забрана ближайшим poll агента."
+            : "READY-ноды сейчас нет. Проект сохранён и ждёт: как только совместимая нода станет готова, агент заберёт работу сам.",
+          "Нажмите «Перейти к отчёту», чтобы увидеть живое состояние и точные blocker-ы."
         ].join("\n");
         projectResult.className = "status good";
         currentProjectCheck = null;
@@ -2797,13 +2952,14 @@
       if (host) window.open(`https://${host}`, "_blank", "noopener,noreferrer");
     });
     updateSshPanel();
+    syncProjectExecutionMode();
     installSectionCollapsers();
     applyLanguage(lang);
     updateSiteClock();
     setInterval(updateSiteClock, 15000);
     setInterval(() => {
       if (architectToken && !document.hidden) refreshOperationalData().catch(() => {});
-    }, 10000);
+    }, 60000);
 
     if (architectToken) {
       loadDashboard().catch(() => logout("Сохранённый сеанс недействителен. Войдите снова."));

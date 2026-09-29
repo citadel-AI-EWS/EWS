@@ -49,15 +49,87 @@ jobs:
       - name: Build immutable static site
         run: scripts/build_site.sh
 
+      - name: Normalize optional OpenRouter quality-gate secret
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          let key = String(process.env.OPENROUTER_API_KEY || "").trim();
+          if (/^OPENROUTER_API_KEY=/i.test(key)) key = key.replace(/^OPENROUTER_API_KEY=/i, "").trim();
+          if (/^Bearer\s+/i.test(key)) key = key.replace(/^Bearer\s+/i, "").trim();
+          if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
+            key = key.slice(1, -1).trim();
+          }
+          if (!/^sk-or-v1-[A-Za-z0-9_-]{20,}$/.test(key)) {
+            const embedded = key.match(/sk-or-v1-[A-Za-z0-9_-]{20,}/);
+            if (embedded) key = embedded[0];
+          }
+          if (!key) {
+            fs.writeFileSync("/tmp/openrouter-key", "", { mode: 0o600 });
+            process.exit(0);
+          }
+          if (!/^[\x21-\x7E]{16,512}$/.test(key)) {
+            console.error("OPENROUTER_API_KEY remains invalid after trimming whitespace/quotes.");
+            process.exit(2);
+          }
+          fs.writeFileSync("/tmp/openrouter-key", key, { mode: 0o600 });
+          NODE
+
       - name: Sync optional OpenRouter quality-gate secret
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          if [ -n "$OPENROUTER_API_KEY" ]; then
-            printf '%s' "$OPENROUTER_API_KEY" | npx wrangler secret put OPENROUTER_API_KEY
-          else
+          if [ ! -s /tmp/openrouter-key ]; then
             echo "OPENROUTER_API_KEY is not configured; final quality gate will remain bypassed."
+          else
+            npx wrangler secret put OPENROUTER_API_KEY < /tmp/openrouter-key
+          fi
+
+      - name: Verify configured OpenRouter API key
+        run: |
+          if [ ! -s /tmp/openrouter-key ]; then
+            echo "OPENROUTER_API_KEY is not configured; probe skipped."
+          else
+            node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          const key = fs.readFileSync("/tmp/openrouter-key", "utf8");
+          const r = await fetch("https://openrouter.ai/api/v1/key", {
+            headers: { authorization: "Bearer " + key }
+          });
+          if (!r.ok) {
+            console.error("OpenRouter key probe returned HTTP " + r.status);
+            process.exit(1);
+          }
+          console.log("OpenRouter key probe: authenticated");
+          NODE
+          fi
+
+      - name: Sync optional D1 analytics token
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          D1_ANALYTICS_TOKEN: ${{ secrets.D1_ANALYTICS_TOKEN }}
+        run: |
+          if [ -z "$D1_ANALYTICS_TOKEN" ]; then
+            echo "D1_ANALYTICS_TOKEN is not configured; D1 percentage will show no data."
+          else
+            printf '%s' "$D1_ANALYTICS_TOKEN" | npx wrangler secret put D1_ANALYTICS_TOKEN
+          fi
+
+      - name: Sync optional Google Drive payload credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GOOGLE_DRIVE_CLIENT_ID: ${{ secrets.GOOGLE_DRIVE_CLIENT_ID }}
+          GOOGLE_DRIVE_CLIENT_SECRET: ${{ secrets.GOOGLE_DRIVE_CLIENT_SECRET }}
+          GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
+        run: |
+          if [ -z "$GOOGLE_DRIVE_CLIENT_ID" ] || [ -z "$GOOGLE_DRIVE_CLIENT_SECRET" ] || [ -z "$GOOGLE_DRIVE_REFRESH_TOKEN" ]; then
+            echo "Google Drive payload credentials are not configured; payload writes will fail closed with drive_payload_storage_unavailable."
+          else
+            printf '%s' "$GOOGLE_DRIVE_CLIENT_ID" | npx wrangler secret put GOOGLE_DRIVE_CLIENT_ID
+            printf '%s' "$GOOGLE_DRIVE_CLIENT_SECRET" | npx wrangler secret put GOOGLE_DRIVE_CLIENT_SECRET
+            printf '%s' "$GOOGLE_DRIVE_REFRESH_TOKEN" | npx wrangler secret put GOOGLE_DRIVE_REFRESH_TOKEN
+            echo "Google Drive payload credentials synced."
           fi
 
       - name: Deploy TEST site and Worker

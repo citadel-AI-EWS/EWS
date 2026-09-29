@@ -25,9 +25,12 @@ function element(id) {
 let respond = async () => new Response(JSON.stringify({ ok: true, ai: {} }));
 const context = vm.createContext({
   document: { getElementById: element, querySelectorAll: () => [] },
-  sessionStorage: { getItem: () => "test-token" },
+  sessionStorage: {
+    getItem: (key) => key === "citadel-architect-token" ? "test-token" : null,
+    removeItem: () => {}
+  },
   localStorage: { getItem: () => "ru" },
-  location: { search: "" }, URLSearchParams, Headers, Response, URL,
+  location: { pathname: "/", search: "", hash: "" }, URLSearchParams, Headers, Response, URL,
   fetch: (...args) => respond(...args),
   setInterval: () => 1, clearInterval: () => {},
   confirm: () => true

@@ -13,6 +13,7 @@ import ast
 import base64
 import binascii
 import contextlib
+import concurrent.futures
 import ctypes
 import dataclasses
 import datetime as dt
@@ -47,11 +48,11 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.13"
+VERSION = "0.3.20"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}
+SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}
 CORE_UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
 UPDATE_FILE_NAMES = CORE_UPDATE_FILE_NAMES | {"windows_enterprise_probe.ps1"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -62,6 +63,8 @@ LMSTUDIO_INSTALL_FILE_NAMES = {"install_llmstudio_headless.ps1", "install_llmstu
 LMSTUDIO_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,95})?(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,31})?$")
 LMSTUDIO_QUANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
 HYBRID_MODES = {"python", "lmstudio", "both"}
+NETWORK_PRIMARY_PROFILE_RETRIES = 3
+NETWORK_PRIMARY_RETRY_DELAYS = (2, 4, 8)
 WINDOWS_DPAPI_PROTECTION = "windows-dpapi-local-machine-v1"
 CRYPTPROTECT_UI_FORBIDDEN = 0x1
 CRYPTPROTECT_LOCAL_MACHINE = 0x4
@@ -250,6 +253,18 @@ def sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def local_error_code(error: Exception) -> str:
+    """Only expose fixed diagnostic codes, never arbitrary exception text."""
+    code = str(error)
+    if re.fullmatch(r"lmstudio_[a-z_]+|lmstudio_http_[0-9]{3}", code):
+        return code
+    if isinstance(error, (TimeoutError, socket.timeout)):
+        return "lmstudio_timeout"
+    if isinstance(error, ConnectionError):
+        return "lmstudio_connection_failed"
+    return "local_execution_error"
+
+
 def atomic_write(path: Path, text: str, mode: int = 0o600) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
@@ -292,6 +307,9 @@ class AgentConfig:
     max_cpu_percent: float = 90.0
     max_memory_percent: float = 90.0
     controller_public_x: str = DEFAULT_CONTROLLER_PUBLIC_X
+    prevent_automatic_sleep: bool = True
+    network_recovery_enabled: bool = True
+    allowed_wifi_profiles: tuple[str, ...] = ()
 
     @classmethod
     def from_file(cls, path: Path) -> "AgentConfig":
@@ -302,6 +320,16 @@ class AgentConfig:
         local_test = parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
         if not (secure or local_test):
             raise ValueError("controller_url must use HTTPS; loopback HTTP is test-only")
+        raw_profiles = raw.get("allowed_wifi_profiles") or []
+        if not isinstance(raw_profiles, list):
+            raise ValueError("allowed_wifi_profiles must be a JSON array")
+        profiles: list[str] = []
+        for value in raw_profiles:
+            if not isinstance(value, str):
+                raise ValueError("allowed_wifi_profiles entries must be strings")
+            name = value.strip()
+            if name and len(name) <= 120 and name not in profiles:
+                profiles.append(name)
         return cls(
             controller_url=controller_url,
             data_dir=Path(raw.get("data_dir") or default_data_dir()).expanduser().resolve(),
@@ -311,6 +339,9 @@ class AgentConfig:
             max_cpu_percent=max(10.0, min(100.0, float(raw.get("max_cpu_percent", 90)))),
             max_memory_percent=max(10.0, min(100.0, float(raw.get("max_memory_percent", 90)))),
             controller_public_x=str(raw.get("controller_public_x") or DEFAULT_CONTROLLER_PUBLIC_X),
+            prevent_automatic_sleep=raw.get("prevent_automatic_sleep", True) is not False,
+            network_recovery_enabled=raw.get("network_recovery_enabled", True) is not False,
+            allowed_wifi_profiles=tuple(profiles[:16]),
         )
 
 
@@ -732,6 +763,85 @@ def windows_enterprise_probe() -> dict[str, Any]:
     return payload
 
 
+def gpu_inventory() -> list[dict[str, Any]]:
+    """Collect bounded GPU identity/VRAM data without installing vendor tooling."""
+    rows: list[dict[str, Any]] = []
+    nvidia_smi = shutil.which("nvidia-smi")
+    if nvidia_smi:
+        try:
+            result = subprocess.run(  # nosec B603
+                [
+                    nvidia_smi,
+                    "--query-gpu=name,memory.total",
+                    "--format=csv,noheader,nounits",
+                ],
+                timeout=10,
+                capture_output=True,
+                text=True,
+                shell=False,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines()[:8]:
+                    parts = [part.strip() for part in line.split(",", 1)]
+                    if not parts or not parts[0]:
+                        continue
+                    vram_bytes = None
+                    if len(parts) > 1:
+                        with contextlib.suppress(ValueError):
+                            vram_bytes = max(0, int(float(parts[1]) * 1024 * 1024))
+                    rows.append({"name": parts[0][:160], "vram_total_bytes": vram_bytes})
+        except (OSError, subprocess.SubprocessError):
+            pass
+    if rows or os.name != "nt":
+        return rows
+
+    powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+    if not powershell:
+        return rows
+    try:
+        result = subprocess.run(  # nosec B603
+            [
+                powershell,
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Get-CimInstance Win32_VideoController | "
+                "Select-Object Name,AdapterRAM | ConvertTo-Json -Compress",
+            ],
+            timeout=12,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return rows
+        decoded = json.loads(result.stdout)
+        devices = decoded if isinstance(decoded, list) else [decoded]
+        for item in devices[:8]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("Name") or "").strip()
+            if not name:
+                continue
+            raw_vram = item.get("AdapterRAM")
+            vram_bytes = int(raw_vram) if isinstance(raw_vram, (int, float)) and raw_vram > 0 else None
+            rows.append({"name": name[:160], "vram_total_bytes": vram_bytes})
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError, TypeError):
+        pass
+    return rows
+
+
+def hardware_snapshot() -> dict[str, Any]:
+    memory = psutil.virtual_memory()
+    return {
+        "cpu_logical_count": int(psutil.cpu_count(logical=True) or 1),
+        "memory_total_bytes": int(memory.total),
+        "gpus": gpu_inventory(),
+        "gpus": gpu_inventory(),
+    }
+
+
 def system_inventory(payload: dict[str, Any]) -> dict[str, Any]:
     disk = shutil.disk_usage(Path.home())
     memory = psutil.virtual_memory()
@@ -782,12 +892,19 @@ class Agent:
         self.network_recovery_path = config.data_dir / "network-recovery.json"
         self.last_network_recovery = 0.0
         self.last_network_remember = 0.0
+        self.last_power_guard = 0.0
+        self.power_guard_active = False
         self.last_heartbeat = 0.0
+        self.last_hardware_report = 0.0
         self.enrollment_confirmed = False
 
     @property
     def capabilities(self) -> list[str]:
-        capabilities = set(HANDLERS) | {"lmstudio_remote", "project_text"}
+        capabilities = set(HANDLERS) | {"lmstudio_remote", "project_text", "project_python"}
+        if self.config.prevent_automatic_sleep:
+            capabilities.add("always_on_guard")
+        if self.config.network_recovery_enabled:
+            capabilities.add("known_network_recovery")
         if os.name == "nt" and os.environ.get("CITADEL_SERVICE_MANAGED") == "1":
             capabilities.add("windows_core_service")
         if _windows_enterprise_probe_file_valid():
@@ -836,25 +953,37 @@ class Agent:
     def heartbeat(self) -> None:
         node_id = self.require_node_id()
         network = local_network_addresses()
+        now = time.monotonic()
+        payload: dict[str, Any] = {
+            "cpu_percent": float(psutil.cpu_percent(interval=0.05)),
+            "memory_percent": float(psutil.virtual_memory().percent),
+            "agent_version": VERSION,
+            "capabilities": self.capabilities,
+            "network": {
+                "lan_ipv4": network.get("lan_ipv4"),
+                "tailscale_ipv4": network.get("tailscale_ipv4"),
+                "mac_addresses": network.get("mac_addresses") or [],
+            },
+        }
+        if now - self.last_hardware_report >= 300:
+            payload["hardware"] = hardware_snapshot()
+            self.last_hardware_report = now
         self.api.request(
             "POST",
             f"/api/v1/nodes/{node_id}/heartbeat",
-            {
-                "cpu_percent": float(psutil.cpu_percent(interval=0.05)),
-                "memory_percent": float(psutil.virtual_memory().percent),
-                "agent_version": VERSION,
-                "capabilities": self.capabilities,
-                "network": {
-                    "lan_ipv4": network.get("lan_ipv4"),
-                    "tailscale_ipv4": network.get("tailscale_ipv4"),
-                    "mac_addresses": network.get("mac_addresses") or [],
-                },
-            },
+            payload,
         )
         self.last_heartbeat = time.monotonic()
         if time.monotonic() - self.last_network_remember >= 300:
             self.remember_network_profile()
             self.last_network_remember = time.monotonic()
+    def sync_lmstudio_readiness(self) -> None:
+        """Refresh scheduler-visible LM Studio state without blocking service HOLD readiness."""
+        try:
+            self.report_ai_state(**self.probe_lmstudio())
+        except Exception as error:
+            self.log.write("lmstudio_heartbeat_probe_failed", error=str(error)[:300])
+
 
     def resources_ok(self) -> tuple[bool, dict[str, float]]:
         cpu = float(psutil.cpu_percent(interval=0.1))
@@ -868,34 +997,23 @@ class Agent:
         node_id = self.require_node_id()
         self.api.request("POST", f"/api/v1/nodes/{node_id}/results", result)
 
-    def execute_project_text(self, payload: dict[str, Any]) -> dict[str, Any]:
-        task_text = str(payload.get("task_text") or "").strip()
-        role_name = str(payload.get("role_name") or "planner").strip()
-        project_id = str(payload.get("project_id") or "").strip()
-        work_item_id = str(payload.get("work_item_id") or "").strip()
-        if not task_text or len(task_text) > 20000:
-            raise RuntimeError("invalid project task")
-        if not role_name or len(role_name) > 64:
-            raise RuntimeError("invalid project role")
-
-        state = self.lmstudio_state()
-        model = str(state.get("loaded_model") or "").strip()
-        if not model or not LMSTUDIO_MODEL_RE.fullmatch(model):
-            raise RuntimeError("lmstudio_model_not_loaded")
-
-        system_prompt = (
-            "You are the CITADEL project worker for role: " + role_name + ". "
-            "Work only on the supplied text task. Return a useful factual result in plain text. "
-            "Do not execute commands, access credentials, modify the host, or claim actions you did not perform."
-        )
+    def _project_llm_chat(
+        self,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens: int,
+        temperature: float = 0.2,
+    ) -> tuple[str, dict[str, int] | None]:
         request_body = json_text({
             "model": model,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": task_text},
+                {"role": "user", "content": user_prompt},
             ],
-            "temperature": 0.2,
-            "max_tokens": 4096,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
         })
         connection = http.client.HTTPConnection(
             "127.0.0.1",
@@ -929,14 +1047,297 @@ class Agent:
             raise RuntimeError("lmstudio_invalid_response")
         if not isinstance(content, str) or not content.strip():
             raise RuntimeError("lmstudio_empty_response")
-        content = content.strip()
+        usage = decoded.get("usage")
+        measured = None
+        if isinstance(usage, dict):
+            prompt_tokens = usage.get("prompt_tokens")
+            completion_tokens = usage.get("completion_tokens")
+            if (type(prompt_tokens) is int and prompt_tokens >= 0
+                    and type(completion_tokens) is int and completion_tokens >= 0):
+                measured = {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                }
+        return content.strip(), measured
+
+    def ensure_lmstudio_ready_for_inference(self) -> str:
+        """Use live LM Studio state and repair daemon/server/model drift before inference."""
+        previous = self.lmstudio_state()
+        snapshot = self.probe_lmstudio()
+        if not snapshot.get("installed"):
+            self.report_ai_state(
+                last_action="project_preflight",
+                progress_phase="failed",
+                progress_detail="lmstudio_not_installed",
+            )
+            raise RuntimeError("lmstudio_not_installed")
+
+        if not snapshot.get("server_running"):
+            self.report_ai_state(
+                installed=True,
+                server_running=False,
+                last_action="project_preflight",
+                progress_phase="server_recovery",
+                progress_detail="LM Studio server is down; restarting daemon and server",
+            )
+            self.run_lms(["daemon", "up"], timeout=120)
+            self.run_lms(["server", "start", "--port", "1234"], timeout=120)
+            snapshot = self.probe_lmstudio()
+            if not snapshot.get("server_running"):
+                self.report_ai_state(
+                    installed=True,
+                    server_running=False,
+                    last_action="project_preflight",
+                    progress_phase="failed",
+                    progress_detail="lmstudio_server_not_running",
+                )
+                raise RuntimeError("lmstudio_server_not_running")
+
+        model = str(snapshot.get("loaded_model") or "").strip()
+        if not model:
+            selected = str(
+                snapshot.get("selected_model")
+                or previous.get("selected_model")
+                or ""
+            ).strip()
+            if selected and LMSTUDIO_MODEL_RE.fullmatch(selected):
+                self.report_ai_state(
+                    installed=True,
+                    server_running=True,
+                    selected_model=selected,
+                    last_action="project_preflight",
+                    progress_phase="model_recovery",
+                    progress_detail=f"Reloading selected model: {selected}",
+                )
+                try:
+                    self.load_lmstudio_model({
+                        "model": selected,
+                        "source": "catalog",
+                        "settings": {},
+                    })
+                except Exception as error:
+                    self.report_ai_state(
+                        installed=True,
+                        server_running=True,
+                        selected_model=selected,
+                        loaded_model=None,
+                        last_action="project_preflight",
+                        progress_phase="failed",
+                        progress_detail=local_error_code(error),
+                    )
+                    raise RuntimeError("lmstudio_model_not_loaded") from error
+                snapshot = self.probe_lmstudio()
+                model = str(snapshot.get("loaded_model") or "").strip()
+
+        if not model or not LMSTUDIO_MODEL_RE.fullmatch(model):
+            self.report_ai_state(
+                installed=True,
+                server_running=True,
+                last_action="project_preflight",
+                progress_phase="failed",
+                progress_detail="lmstudio_model_not_loaded",
+            )
+            raise RuntimeError("lmstudio_model_not_loaded")
+
+        self.report_ai_state(
+            installed=True,
+            server_running=True,
+            loaded_model=model,
+            last_action="project_preflight",
+            progress_phase="ready",
+            progress_detail=f"LM Studio ready: {model}",
+        )
+        return model
+
+    def execute_project_text(self, payload: dict[str, Any]) -> dict[str, Any]:
+        task_text = str(payload.get("task_text") or "").strip()
+        role_name = str(payload.get("role_name") or "planner").strip()
+        project_id = str(payload.get("project_id") or "").strip()
+        work_item_id = str(payload.get("work_item_id") or "").strip()
+        if not task_text or len(task_text) > 20000:
+            raise RuntimeError("invalid project task")
+        if not role_name or len(role_name) > 64:
+            raise RuntimeError("invalid project role")
+
+        model = self.ensure_lmstudio_ready_for_inference()
+
+        desired = 1 + int(len(task_text) > 800) + int(len(task_text) > 1800)
+        ram_gib = float(psutil.virtual_memory().total) / float(1024 ** 3)
+        capacity = 1 if ram_gib < 12 else (2 if ram_gib < 24 else 3)
+        mini_count = max(1, min(3, desired, capacity))
+        focuses = [
+            "primary analysis and direct solution",
+            "independent verification, contradictions and unsupported claims",
+            "edge cases, risks, missing assumptions and practical improvements",
+        ]
+        mini_agents: list[dict[str, Any]] = []
+        failures: list[dict[str, str]] = []
+        token_usage: dict[str, Any] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "measured_calls": 0, "unmeasured_calls": 0, "agents": {}}
+        def record_usage(agent_id: str, usage: dict[str, int] | None) -> None:
+            token_usage["agents"][agent_id] = usage
+            if usage is None:
+                token_usage["unmeasured_calls"] += 1
+            else:
+                token_usage["measured_calls"] += 1
+                for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                    token_usage[key] += usage[key]
+        base_guard = (
+            "Work only on the supplied text task. Return useful factual plain text. "
+            "Do not execute commands, access credentials, modify the host, or claim actions you did not perform. "
+        )
+        for index in range(mini_count):
+            self.report_ai_state(last_action="project_text", progress_phase="mini_agent_running",
+                                 progress_current=index, progress_total=mini_count + int(mini_count > 1),
+                                 progress_detail=f"Mini-agent {index + 1}/{mini_count} · {role_name}")
+            system_prompt = (
+                "You are CITADEL local mini-agent "
+                + str(index + 1)
+                + " for project role: "
+                + role_name
+                + ". Focus on "
+                + focuses[index]
+                + ". "
+                + base_guard
+            )
+            try:
+                answer, usage = self._project_llm_chat(
+                    model,
+                    system_prompt,
+                    task_text,
+                    max_tokens=1536,
+                    temperature=0.2 + (0.05 * index),
+                )
+            except Exception as error:
+                failures.append({"mini_agent_id": f"llm-mini-{index + 1}", "error_code": local_error_code(error)})
+                if index == 0:
+                    self.report_ai_state(progress_phase="failed", progress_detail=local_error_code(error))
+                    raise
+                continue
+            record_usage(f"llm-mini-{index + 1}", usage)
+            mini_agents.append({
+                "mini_agent_id": f"llm-mini-{index + 1}",
+                "focus": focuses[index],
+                "content": answer[:12000],
+            })
+
+        if not mini_agents:
+            raise RuntimeError("lmstudio_mini_agents_failed")
+
+        if len(mini_agents) == 1:
+            content = mini_agents[0]["content"]
+        else:
+            synthesis_parts = []
+            for item in mini_agents:
+                synthesis_parts.append(
+                    "[" + item["mini_agent_id"] + " · " + item["focus"] + "]\n" +
+                    str(item["content"])[:3500]
+                )
+            synthesis_prompt = (
+                "ORIGINAL TASK\n" + task_text[:8000] +
+                "\n\nINDEPENDENT MINI-AGENT RESULTS\n" +
+                "\n\n".join(synthesis_parts)
+            )
+            try:
+                self.report_ai_state(progress_phase="synthesis_running", progress_current=mini_count,
+                                     progress_detail="Combining mini-agent answers")
+                content, usage = self._project_llm_chat(
+                    model,
+                    (
+                        "You are the CITADEL local synthesis agent for role: " + role_name + ". "
+                        "Combine the independent results into one accurate answer. Resolve contradictions, "
+                        "remove duplication, preserve useful caveats, and do not mention the internal mini-agent process. "
+                        + base_guard
+                    ),
+                    synthesis_prompt,
+                    max_tokens=3072,
+                    temperature=0.15,
+                )
+                record_usage("synthesis", usage)
+            except Exception as error:
+                failures.append({"mini_agent_id": "synthesis", "error_code": local_error_code(error)})
+                content = "\n\n".join(str(item["content"]) for item in mini_agents)
+
         if len(content) > 180000:
             content = content[:180000] + "\n\n[truncated]"
+        token_usage["unmeasured_failed_calls"] = len(failures)
+        self.report_ai_state(progress_phase="completed_partial" if failures else "completed",
+                             progress_current=mini_count + int(mini_count > 1),
+                             progress_detail=f"Completed {len(mini_agents)}/{mini_count} mini-agents")
         return {
             "project_id": project_id or None,
             "work_item_id": work_item_id or None,
             "role_name": role_name,
+            "engine": "lmstudio",
             "model": model,
+            "mini_agent_requested_count": mini_count,
+            "mini_agent_count": len(mini_agents),
+            "mini_agents": mini_agents,
+            "mini_agent_failures": failures,
+            "token_usage": token_usage,
+            "content": content,
+            "completed_at": now_iso(),
+        }
+
+    def python_mini_agent_tasks(self, task_text: str) -> list[str]:
+        """Split a Python-only project into a bounded set of local deterministic workers."""
+        raw_parts = [
+            re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", part).strip()
+            for part in re.split(r"\r?\n|(?<=;)\s+", task_text)
+            if part.strip()
+        ]
+        supported_prefix = ("calc:", "calculate:", "посчитай:", "вычисли:", "text:", "текст:", "json:", "json ")
+        parts = [part for part in raw_parts if part]
+        if len(parts) <= 1 and task_text.lower().startswith(supported_prefix):
+            return [task_text.strip()]
+        if len(parts) <= 1:
+            return [task_text.strip()]
+        return parts[:8]
+
+    def execute_project_python(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Coordinate bounded local Python mini-workers without calling any LLM."""
+        task_text = str(payload.get("task_text") or "").strip()
+        role_name = str(payload.get("role_name") or "programmer").strip()
+        project_id = str(payload.get("project_id") or "").strip()
+        work_item_id = str(payload.get("work_item_id") or "").strip()
+        if not task_text or len(task_text) > 20000:
+            raise RuntimeError("invalid project task")
+        if not role_name or len(role_name) > 64:
+            raise RuntimeError("invalid project role")
+        tasks = self.python_mini_agent_tasks(task_text)
+        max_workers = min(4, len(tasks))
+        def run_worker(index_and_task: tuple[int, str]) -> dict[str, Any]:
+            index, subtask = index_and_task
+            answer = self.python_mode_answer(subtask)
+            return {
+                "mini_agent_id": f"py-mini-{index + 1}",
+                "task": subtask,
+                "status": "completed",
+                "content": answer,
+            }
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix="citadel-python-mini",
+        ) as pool:
+            mini_agents = list(pool.map(run_worker, enumerate(tasks)))
+        content = "\n\n".join(
+            f"[{worker['mini_agent_id']}]\n{worker['content']}"
+            for worker in mini_agents
+        )
+        self.log.write(
+            "python_mini_agents_completed",
+            project_id=project_id or None,
+            work_item_id=work_item_id or None,
+            mini_agent_count=len(mini_agents),
+        )
+        return {
+            "project_id": project_id or None,
+            "work_item_id": work_item_id or None,
+            "role_name": role_name,
+            "engine": "python",
+            "model": None,
+            "mini_agent_count": len(mini_agents),
+            "mini_agents": mini_agents,
             "content": content,
             "completed_at": now_iso(),
         }
@@ -947,7 +1348,8 @@ class Agent:
         mission_type = str(assignment.get("mission_type") or "")
         handler = HANDLERS.get(mission_type)
         is_project_text = mission_type == "project_text"
-        if not assignment_id or (handler is None and not is_project_text):
+        is_project_python = mission_type == "project_python"
+        if not assignment_id or (handler is None and not is_project_text and not is_project_python):
             self.log.write(
                 "assignment_rejected_local",
                 assignment_id=assignment_id,
@@ -966,11 +1368,12 @@ class Agent:
         )
         started = time.monotonic()
         try:
-            report = (
-                self.execute_project_text(assignment.get("payload") or {})
-                if is_project_text
-                else handler(assignment.get("payload") or {})
-            )
+            if is_project_python:
+                report = self.execute_project_python(assignment.get("payload") or {})
+            elif is_project_text:
+                report = self.execute_project_text(assignment.get("payload") or {})
+            else:
+                report = handler(assignment.get("payload") or {})
             result = {
                 "assignment_id": assignment_id,
                 "outcome": "success",
@@ -994,7 +1397,7 @@ class Agent:
                 },
                 "report_type": mission_type,
                 "sensitivity": "internal",
-                "report": {"error_type": type(error).__name__},
+                "report": {"error_type": type(error).__name__, "error_code": local_error_code(error)},
             }
         try:
             self.submit_result(result)
@@ -1040,6 +1443,9 @@ class Agent:
                 return False
         elif command_type == "lmstudio_install":
             if not self.validate_lmstudio_install_payload(payload):
+                return False
+        elif command_type == "lmstudio_uninstall":
+            if not self.validate_lmstudio_uninstall_payload(payload):
                 return False
         elif command_type in {"lmstudio_model_get", "lmstudio_model_load"}:
             if not self.validate_lmstudio_model_payload(payload):
@@ -1179,18 +1585,33 @@ class Agent:
 
     def find_lms(self) -> str | None:
         candidates: list[str | None] = [shutil.which("lms")]
-        home = Path.home()
-        if os.name == "nt":
-            candidates.extend([
-                str(home / ".lmstudio" / "bin" / "lms.exe"),
-                str(home / ".lmstudio" / "bin" / "lms.cmd"),
-            ])
-        else:
-            candidates.append(str(home / ".lmstudio" / "bin" / "lms"))
+        for root in self.lmstudio_managed_roots():
+            if os.name == "nt":
+                candidates.extend([
+                    str(root / "bin" / "lms.exe"),
+                    str(root / "bin" / "lms.cmd"),
+                    str(root / "bin" / "lms"),
+                ])
+            else:
+                candidates.append(str(root / "bin" / "lms"))
         for candidate in candidates:
             if candidate and Path(candidate).is_file():
                 return str(Path(candidate))
         return None
+
+    def lmstudio_runtime_home(self) -> Path:
+        """Return the stable CITADEL-managed HOME used by llmster."""
+        home = (self.config.data_dir / "lmstudio-runtime-home").resolve()
+        home.mkdir(parents=True, exist_ok=True)
+        return home
+
+    def lmstudio_process_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        runtime_home = str(self.lmstudio_runtime_home())
+        env["CITADEL_LMSTUDIO_HOME"] = runtime_home
+        env["HOME"] = runtime_home
+        env["LMS_NO_MODIFY_PATH"] = "1"
+        return env
 
     def run_lms(self, args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
         executable = self.find_lms()
@@ -1202,6 +1623,7 @@ class Agent:
             capture_output=True,
             text=True,
             shell=False,
+            env=self.lmstudio_process_env(),
         )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "lms command failed").strip()
@@ -1272,7 +1694,12 @@ class Agent:
                             loaded_models.append(name)
                 except Exception:
                     loaded_models = []
-        loaded_model = loaded_models[0] if loaded_models else None
+        selected_model = str(state.get("selected_model") or "").strip()
+        loaded_model = (
+            selected_model
+            if selected_model and selected_model in loaded_models
+            else loaded_models[0] if loaded_models else None
+        )
         snapshot = {
             "installed": installed,
             "selected_model": state.get("selected_model"),
@@ -1324,6 +1751,14 @@ class Agent:
             return False
         expected = "install_llmstudio_headless.ps1" if os.name == "nt" else "install_llmstudio_headless.sh"
         return name == expected
+
+    @staticmethod
+    def validate_lmstudio_uninstall_payload(payload: dict[str, Any]) -> bool:
+        return (
+            isinstance(payload, dict)
+            and set(payload).issubset({"purge_data"})
+            and isinstance(payload.get("purge_data", False), bool)
+        )
 
     @staticmethod
     def validate_lmstudio_model_payload(payload: dict[str, Any]) -> bool:
@@ -1435,6 +1870,7 @@ class Agent:
                 capture_output=True,
                 text=True,
                 shell=False,
+                env=self.lmstudio_process_env(),
             )
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout or "LM Studio installation failed").strip()
@@ -1460,6 +1896,107 @@ class Agent:
         finally:
             with contextlib.suppress(FileNotFoundError):
                 helper.unlink()
+
+    def lmstudio_managed_roots(self) -> list[Path]:
+        """Return only allowlisted LM Studio roots under CITADEL or the legacy user home."""
+        legacy_home = Path.home().resolve()
+        runtime_home = self.lmstudio_runtime_home()
+        candidates: list[Path] = [
+            (runtime_home / ".lmstudio").resolve(),
+            (runtime_home / ".cache" / "lm-studio").resolve(),
+            (legacy_home / ".lmstudio").resolve(),
+            (legacy_home / ".cache" / "lm-studio").resolve(),
+        ]
+        for home in (runtime_home, legacy_home):
+            pointer = home / ".lmstudio-home-pointer"
+            if pointer.is_file():
+                try:
+                    value = pointer.read_text(encoding="utf-8").strip()
+                    if value:
+                        candidates.append(Path(value).expanduser().resolve())
+                except OSError:
+                    pass
+        allowed_names = {".lmstudio", "lm-studio"}
+        safe: list[Path] = []
+        for path in candidates:
+            allowed_parent = None
+            for parent in (runtime_home, legacy_home):
+                try:
+                    path.relative_to(parent)
+                    allowed_parent = parent
+                    break
+                except ValueError:
+                    continue
+            if allowed_parent is None or path == allowed_parent or path.name not in allowed_names:
+                continue
+            if path not in safe:
+                safe.append(path)
+        return safe
+
+    def uninstall_lmstudio(self, payload: dict[str, Any]) -> None:
+        """Remove the CITADEL-managed LM Studio runtime without touching the agent."""
+        if not self.validate_lmstudio_uninstall_payload(payload):
+            raise RuntimeError("invalid lmstudio uninstall payload")
+        purge_data = bool(payload.get("purge_data", False))
+        self.report_ai_state(
+            last_action="uninstalling",
+            progress_phase="runtime_uninstall",
+            progress_current=0,
+            progress_total=3,
+            progress_detail="Stopping LM Studio runtime",
+        )
+        if self.find_lms():
+            for args in (["unload", "--all"], ["server", "stop"], ["daemon", "down"]):
+                try:
+                    self.run_lms(args, timeout=120)
+                except Exception as error:
+                    self.log.write(
+                        "lmstudio_uninstall_stop_warning",
+                        argv=args[:2],
+                        error=str(error)[:200],
+                    )
+        roots = self.lmstudio_managed_roots()
+        self.report_ai_state(
+            progress_phase="runtime_remove",
+            progress_current=1,
+            progress_total=3,
+            progress_detail="Removing CITADEL-managed LM Studio runtime files",
+        )
+        removed: list[str] = []
+        for root in roots:
+            target = root if purge_data else root / "bin"
+            if not target.exists():
+                continue
+            shutil.rmtree(target)
+            removed.append(str(target))
+        if purge_data:
+            for pointer_home in (self.lmstudio_runtime_home(), Path.home().resolve()):
+                pointer = pointer_home / ".lmstudio-home-pointer"
+                with contextlib.suppress(FileNotFoundError):
+                    pointer.unlink()
+        if self.find_lms():
+            raise RuntimeError("lmstudio_runtime_still_detected")
+        self.report_ai_state(
+            installed=False,
+            selected_model=None,
+            loaded_model=None,
+            server_running=False,
+            last_action="uninstalled",
+            progress_phase="complete",
+            progress_current=3,
+            progress_total=3,
+            progress_detail=(
+                "LM Studio runtime and managed data removed"
+                if purge_data else
+                "LM Studio runtime removed; models/data preserved"
+            ),
+            load_config=None,
+        )
+        self.log.write(
+            "lmstudio_uninstalled",
+            purge_data=purge_data,
+            removed=removed[:4],
+        )
 
     def resolve_lmstudio_model_key(self, model: str, quantization: str | None = None) -> str:
         try:
@@ -1570,8 +2107,14 @@ class Agent:
         self.log.write("lmstudio_model_loaded", model=loaded_model)
 
     def python_mode_answer(self, prompt: str) -> str:
+        """Answer only operations Python can determine without inference or an LLM."""
         stripped = prompt.strip()
-        expression = stripped[5:].strip() if stripped.lower().startswith("calc:") else stripped
+        lowered = stripped.lower()
+        expression = stripped
+        for prefix in ("calc:", "calculate:", "посчитай:", "вычисли:"):
+            if lowered.startswith(prefix):
+                expression = stripped[len(prefix):].strip()
+                break
         if re.fullmatch(r"[0-9eE+\-*/%().\s]{1,300}", expression):
             try:
                 tree = ast.parse(expression, mode="eval")
@@ -1603,16 +2146,66 @@ class Agent:
                 return "Python calculation: " + str(calc(tree))
             except Exception as error:
                 self.log.write("python_mode_calculation_fallback", error=str(error)[:300])
-        inv = system_inventory({"task_text": prompt})
+
+        text_prefix = next((p for p in ("text:", "текст:") if lowered.startswith(p)), None)
+        if text_prefix:
+            source = stripped[len(text_prefix):].strip()
+            words = re.findall(r"[\w'-]+", source, flags=re.UNICODE)
+            lines = source.splitlines() or ([source] if source else [])
+            frequencies: dict[str, int] = {}
+            for word in words:
+                key = word.casefold()
+                frequencies[key] = frequencies.get(key, 0) + 1
+            common = sorted(frequencies.items(), key=lambda item: (-item[1], item[0]))[:10]
+            return (
+                "Python text analysis (no AI/LLM):\n"
+                f"characters={len(source)}\n"
+                f"words={len(words)}\n"
+                f"lines={len(lines)}\n"
+                f"sha256={hashlib.sha256(source.encode('utf-8')).hexdigest()}\n"
+                "top_words=" + json.dumps(common, ensure_ascii=False)
+            )
+
+        json_prefix = next((p for p in ("json:", "json ") if lowered.startswith(p)), None)
+        if json_prefix:
+            source = stripped[len(json_prefix):].strip()
+            try:
+                value = json.loads(source)
+            except json.JSONDecodeError as error:
+                return f"Python JSON validation: invalid JSON at line {error.lineno}, column {error.colno}."
+            if isinstance(value, dict):
+                shape = f"object keys={len(value)} names={list(value)[:30]}"
+            elif isinstance(value, list):
+                shape = f"array items={len(value)}"
+            else:
+                shape = f"type={type(value).__name__}"
+            preview = json.dumps(value, ensure_ascii=False, indent=2)
+            if len(preview) > 12000:
+                preview = preview[:12000] + "\n[truncated]"
+            return "Python JSON analysis (no AI/LLM):\n" + shape + "\n" + preview
+
+        system_terms = (
+            "system", "computer", "cpu", "ram", "memory", "disk", "network",
+            "система", "компьютер", "процессор", "памят", "диск", "сеть",
+        )
+        if any(term in lowered for term in system_terms):
+            inv = system_inventory({"task_text": prompt})
+            return (
+                "Python agent deterministic node context (no AI/LLM):\n"
+                f"hostname={inv['hostname']}\n"
+                f"platform={inv['platform']} {inv['platform_release']}\n"
+                f"architecture={inv['architecture']}\n"
+                f"cpu_logical_count={inv['cpu_logical_count']}\n"
+                f"memory_total_bytes={inv['memory_total_bytes']}\n"
+                f"disk_free_bytes={inv['disk_home_free_bytes']}\n"
+                f"network={json_text(inv['network'])}"
+            )
+
         return (
-            "Python agent deterministic node context:\n"
-            f"hostname={inv['hostname']}\n"
-            f"platform={inv['platform']} {inv['platform_release']}\n"
-            f"architecture={inv['architecture']}\n"
-            f"cpu_logical_count={inv['cpu_logical_count']}\n"
-            f"memory_total_bytes={inv['memory_total_bytes']}\n"
-            f"disk_free_bytes={inv['disk_home_free_bytes']}\n"
-            f"network={json_text(inv['network'])}"
+            "Python-only mode: no AI/LLM was called. "
+            "This prompt does not contain a deterministic operation Python can safely derive by itself. "
+            "Supported forms: calc:/вычисли:, text:/текст:, json:, or a system/CPU/RAM/disk/network diagnostic question. "
+            "For a free-form knowledge answer, use LM Studio/AI or provide structured data for Python to analyze."
         )
 
     def stream_lmstudio_answer(
@@ -1772,11 +2365,21 @@ class Agent:
         replaced: list[str] = []
         existed_before: dict[str, bool] = {}
         try:
+            changed_items: list[dict[str, Any]] = []
             for item in payload["files"]:
+                current = install_root / item["path"]
+                if current.is_file():
+                    current_hash = hashlib.sha256(current.read_bytes()).hexdigest()
+                    if current_hash == item["sha256"]:
+                        continue
                 data = self.download_update_file(item["url"])
                 if hashlib.sha256(data).hexdigest() != item["sha256"]:
                     raise RuntimeError(f"update hash mismatch: {item['path']}")
                 (staging / item["path"]).write_bytes(data)
+                changed_items.append(item)
+            if not changed_items:
+                self.log.write("agent_update_noop", version=payload["version"], files=[])
+                return
             entrypoint = staging / "citadel_node_v2.py"
             if entrypoint.exists():
                 # The argv is fixed and the shell remains disabled.
@@ -1791,11 +2394,15 @@ class Agent:
                 if result.returncode != 0:
                     raise RuntimeError("updated agent self-test failed")
             backup.mkdir(parents=True, exist_ok=True)
-            for item in payload["files"]:
+            for core_name in sorted(CORE_UPDATE_FILE_NAMES):
+                current_core = install_root / core_name
+                if current_core.is_file():
+                    shutil.copy2(current_core, backup / core_name)
+            for item in changed_items:
                 name = item["path"]
                 current = install_root / name
                 existed_before[name] = current.exists()
-                if current.exists():
+                if current.exists() and name not in CORE_UPDATE_FILE_NAMES:
                     shutil.copy2(current, backup / name)
                 os.replace(staging / name, current)
                 replaced.append(name)
@@ -1987,6 +2594,8 @@ class Agent:
                     self.send_wake_packet(command.get("payload") or {})
                 elif command_type == "lmstudio_install":
                     self.install_lmstudio(command.get("payload") or {})
+                elif command_type == "lmstudio_uninstall":
+                    self.uninstall_lmstudio(command.get("payload") or {})
                 elif command_type == "lmstudio_probe":
                     snapshot = self.probe_lmstudio()
                     self.report_ai_state(**{key: value for key, value in snapshot.items() if key != "loaded_models"})
@@ -2038,6 +2647,43 @@ class Agent:
     def is_network_error(error: Exception) -> bool:
         return isinstance(error, (OSError, TimeoutError, ConnectionError, http.client.HTTPException))
 
+    def controller_reachable(self, timeout: float = 5.0) -> bool:
+        parsed = urllib.parse.urlsplit(self.config.controller_url)
+        host = parsed.hostname
+        if not host:
+            return False
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except OSError:
+            return False
+
+    def enforce_power_guard(self) -> bool:
+        if not self.config.prevent_automatic_sleep or os.name != "nt":
+            return False
+        if time.monotonic() - self.last_power_guard < 60 and self.power_guard_active:
+            return True
+        self.last_power_guard = time.monotonic()
+        es_continuous = 0x80000000
+        es_system_required = 0x00000001
+        result = ctypes.windll.kernel32.SetThreadExecutionState(
+            es_continuous | es_system_required
+        )
+        self.power_guard_active = bool(result)
+        self.log.write(
+            "windows_sleep_hibernate_inhibit",
+            enabled=self.power_guard_active,
+            mode="automatic_sleep_guard",
+        )
+        return self.power_guard_active
+
+    def clear_power_guard(self) -> None:
+        if os.name == "nt" and self.power_guard_active:
+            with contextlib.suppress(Exception):
+                ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+        self.power_guard_active = False
+
     def remember_network_profile(self) -> None:
         state = load_json(self.network_recovery_path, {}) or {}
         try:
@@ -2045,9 +2691,19 @@ class Agent:
                 powershell = shutil.which("powershell.exe") or shutil.which("powershell")
                 if powershell:
                     script = (
-                        "Get-NetConnectionProfile | "
+                        "$profiles = Get-NetConnectionProfile | "
                         "Where-Object {$_.IPv4Connectivity -ne 'Disconnected'} | "
-                        "Select-Object Name,InterfaceAlias,IPv4Connectivity | ConvertTo-Json -Compress"
+                        "ForEach-Object { "
+                        "$adapter = Get-NetAdapter -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue; "
+                        "$wireless = $false; "
+                        "if ($adapter) { "
+                        "$wireless = ($adapter.NdisPhysicalMedium -eq 9) -or "
+                        "([string]$adapter.PhysicalMediaType -match '802\\.11|Wireless'); "
+                        "}; "
+                        "[PSCustomObject]@{Name=$_.Name;InterfaceAlias=$_.InterfaceAlias;"
+                        "IPv4Connectivity=$_.IPv4Connectivity;IsWireless=$wireless} "
+                        "}; "
+                        "$profiles | ConvertTo-Json -Compress"
                     )
                     result = subprocess.run(  # nosec B603
                         [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
@@ -2058,8 +2714,24 @@ class Agent:
                         rows = decoded if isinstance(decoded, list) else [decoded]
                         names = [str(item.get("Name") or "").strip() for item in rows if isinstance(item, dict)]
                         names = [name for name in names if name]
-                        if names:
-                            state["windows_profiles"] = names[:8]
+                        active_wifi = next(
+                            (
+                                str(item.get("Name") or "").strip()
+                                for item in rows
+                                if isinstance(item, dict)
+                                and item.get("IsWireless") is True
+                                and str(item.get("Name") or "").strip()
+                            ),
+                            None,
+                        )
+                        remembered = list(state.get("windows_profiles") or [])
+                        for name in [*names, *self.config.allowed_wifi_profiles]:
+                            if name and name not in remembered:
+                                remembered.append(name)
+                        if remembered:
+                            state["windows_profiles"] = remembered[:16]
+                        if active_wifi:
+                            state["last_windows_wifi_profile"] = active_wifi[:120]
             elif os.name == "posix":
                 nmcli = shutil.which("nmcli")
                 if nmcli:
@@ -2077,53 +2749,156 @@ class Agent:
                                 profiles.append({"name": name[:120], "type": kind})
                         if profiles:
                             state["linux_profiles"] = profiles[:8]
+                            state["last_linux_profile"] = profiles[0]["name"]
             state["remembered_at"] = now_iso()
             atomic_write(self.network_recovery_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
         except Exception as error:
             self.log.write("network_profile_remember_failed", error=str(error)[:300])
 
+    def _recover_windows_network(self, state: dict[str, Any], attempts: list[str]) -> bool:
+        """Recover Controller connectivity by preferring the last active Windows Wi-Fi profile."""
+        ipconfig = shutil.which("ipconfig.exe") or shutil.which("ipconfig")
+        netsh = shutil.which("netsh.exe") or shutil.which("netsh")
+        profiles: list[str] = []
+        preferred = state.get("last_windows_wifi_profile")
+        if isinstance(preferred, str):
+            preferred = preferred.strip()
+            if not preferred or len(preferred) > 120:
+                preferred = None
+        else:
+            preferred = None
+        for profile in [
+            preferred,
+            *(state.get("windows_profiles") or []),
+            *self.config.allowed_wifi_profiles,
+        ]:
+            if isinstance(profile, str):
+                name = profile.strip()
+                if name and len(name) <= 120 and name not in profiles:
+                    profiles.append(name)
+
+        if netsh and preferred:
+            for retry_index in range(NETWORK_PRIMARY_PROFILE_RETRIES):
+                result = subprocess.run(  # nosec B603
+                    [netsh, "wlan", "connect", f"name={preferred}"],
+                    timeout=30, capture_output=True, text=True, shell=False,
+                )
+                attempts.append(
+                    f"wifi_primary_retry:{retry_index + 1}:" + preferred[:64]
+                )
+                if result.returncode == 0:
+                    if ipconfig and retry_index == 0:
+                        subprocess.run(  # nosec B603
+                            [ipconfig, "/renew"],
+                            timeout=60, capture_output=True, text=True, shell=False,
+                        )
+                        attempts.append("dhcp_renew")
+                    time.sleep(NETWORK_PRIMARY_RETRY_DELAYS[retry_index])
+                    if self.controller_reachable():
+                        state["last_windows_wifi_profile"] = preferred
+                        return True
+
+        if ipconfig and not preferred:
+            subprocess.run(  # nosec B603
+                [ipconfig, "/renew"], timeout=60, capture_output=True, text=True, shell=False,
+            )
+            attempts.append("dhcp_renew")
+            if self.controller_reachable():
+                return True
+
+        if netsh:
+            for profile in profiles[:16]:
+                if profile == preferred:
+                    continue
+                result = subprocess.run(  # nosec B603
+                    [netsh, "wlan", "connect", f"name={profile}"],
+                    timeout=30, capture_output=True, text=True, shell=False,
+                )
+                attempts.append("wifi_fallback_profile:" + profile[:64])
+                if result.returncode == 0:
+                    time.sleep(3)
+                    if self.controller_reachable():
+                        state["last_windows_wifi_profile"] = profile
+                        return True
+        return False
+
     def recover_network(self) -> None:
+        if not self.config.network_recovery_enabled:
+            return
         now = time.monotonic()
         if now - self.last_network_recovery < 60:
             return
         self.last_network_recovery = now
+        if self.controller_reachable():
+            self.log.write("network_recovery_not_needed", reachable=True)
+            return
         state = load_json(self.network_recovery_path, {}) or {}
         attempts: list[str] = []
+        recovered = False
         try:
             if os.name == "nt":
-                ipconfig = shutil.which("ipconfig.exe") or shutil.which("ipconfig")
-                if ipconfig:
-                    subprocess.run(  # nosec B603
-                        [ipconfig, "/renew"], timeout=60, capture_output=True, text=True, shell=False,
-                    )
-                    attempts.append("dhcp_renew")
-                netsh = shutil.which("netsh.exe") or shutil.which("netsh")
-                if netsh:
-                    for profile in state.get("windows_profiles") or []:
-                        if not isinstance(profile, str) or not profile or len(profile) > 120:
-                            continue
-                        subprocess.run(  # nosec B603
-                            [netsh, "wlan", "connect", f"name={profile}"],
-                            timeout=30, capture_output=True, text=True, shell=False,
-                        )
-                        attempts.append("wifi_saved_profile")
-                        break
+                recovered = self._recover_windows_network(state, attempts)
             elif os.name == "posix":
                 nmcli = shutil.which("nmcli")
                 if nmcli:
                     subprocess.run(  # nosec B603
                         [nmcli, "networking", "on"], timeout=20, capture_output=True, text=True, shell=False,
                     )
+                    linux_profiles: list[str] = []
+                    preferred = state.get("last_linux_profile")
+                    if isinstance(preferred, str):
+                        preferred = preferred.strip()
+                        if not preferred or len(preferred) > 120:
+                            preferred = None
+                    else:
+                        preferred = None
                     for item in state.get("linux_profiles") or []:
                         name = item.get("name") if isinstance(item, dict) else None
-                        if isinstance(name, str) and name and len(name) <= 120:
-                            subprocess.run(  # nosec B603
+                        if isinstance(name, str):
+                            name = name.strip()
+                            if name and len(name) <= 120 and name not in linux_profiles:
+                                linux_profiles.append(name)
+                    if preferred and preferred not in linux_profiles:
+                        linux_profiles.insert(0, preferred)
+
+                    if preferred:
+                        for retry_index in range(NETWORK_PRIMARY_PROFILE_RETRIES):
+                            result = subprocess.run(  # nosec B603
+                                [nmcli, "connection", "up", preferred],
+                                timeout=60, capture_output=True, text=True, shell=False,
+                            )
+                            attempts.append(
+                                f"linux_primary_retry:{retry_index + 1}:" + preferred[:64]
+                            )
+                            if result.returncode == 0:
+                                time.sleep(NETWORK_PRIMARY_RETRY_DELAYS[retry_index])
+                                if self.controller_reachable():
+                                    recovered = True
+                                    state["last_linux_profile"] = preferred
+                                    break
+
+                    if not recovered:
+                        for name in linux_profiles[:8]:
+                            if name == preferred:
+                                continue
+                            result = subprocess.run(  # nosec B603
                                 [nmcli, "connection", "up", name],
                                 timeout=60, capture_output=True, text=True, shell=False,
                             )
-                            attempts.append("saved_connection")
-                            break
-            self.log.write("network_recovery_attempted", attempts=attempts)
+                            attempts.append("saved_connection:" + name[:64])
+                            if result.returncode == 0:
+                                time.sleep(3)
+                                if self.controller_reachable():
+                                    recovered = True
+                                    state["last_linux_profile"] = name
+                                    break
+            if recovered:
+                atomic_write(
+                    self.network_recovery_path,
+                    json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+                )
+                self.remember_network_profile()
+            self.log.write("network_recovery_attempted", attempts=attempts, recovered=recovered)
         except Exception as error:
             self.log.write("network_recovery_failed", error=str(error)[:300])
 
@@ -2153,7 +2928,7 @@ class Agent:
     def interruptible_sleep(self, seconds: float) -> None:
         deadline = time.monotonic() + max(0.0, seconds)
         while True:
-            if self.lifecycle_stop_requested():
+            if self.lifecycle_stop_requested() or self.stop_path.exists():
                 raise SystemExit(0)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -2161,9 +2936,10 @@ class Agent:
             time.sleep(min(0.5, remaining))
 
     def cycle(self) -> None:
-        self.enroll()
         if self.lifecycle_stop_requested() or self.stop_path.exists():
             raise SystemExit(0)
+        self.enforce_power_guard()
+        self.enroll()
         if self.service_hold_requested():
             if time.monotonic() - self.last_heartbeat >= self.config.heartbeat_seconds:
                 self.heartbeat()
@@ -2172,6 +2948,7 @@ class Agent:
         self.handle_commands()
         if time.monotonic() - self.last_heartbeat >= self.config.heartbeat_seconds:
             self.heartbeat()
+            self.sync_lmstudio_readiness()
         sent = self.results.flush(self.submit_result)
         if sent:
             self.log.write("queued_results_flushed", count=sent)
@@ -2184,18 +2961,8 @@ class Agent:
 
     def run(self, once: bool = False) -> int:
         self.log.write("agent_start", version=VERSION, once=once)
-        keep_awake = False
-        if os.name == "nt" and not once:
-            import ctypes
-
-            es_continuous = 0x80000000
-            es_system_required = 0x00000001
-            keep_awake = bool(
-                ctypes.windll.kernel32.SetThreadExecutionState(
-                    es_continuous | es_system_required
-                )
-            )
-            self.log.write("windows_sleep_hibernate_inhibit", enabled=keep_awake)
+        if not once:
+            self.enforce_power_guard()
         backoff = 2
         try:
             while True:
@@ -2228,10 +2995,7 @@ class Agent:
                     self.interruptible_sleep(backoff)
                     backoff = min(60, backoff * 2)
         finally:
-            if os.name == "nt" and keep_awake:
-                import ctypes
-
-                ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+            self.clear_power_guard()
 
 
 def doctor(config: AgentConfig) -> int:
@@ -2381,7 +3145,7 @@ def self_test() -> int:
             "unapproved command accepted",
         )
         require_test(
-            {"system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}.issubset(SUPPORTED_COMMANDS),
+            {"system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}.issubset(SUPPORTED_COMMANDS),
             "restricted power/wake/LM Studio commands missing",
         )
         require_test(
@@ -2393,8 +3157,39 @@ def self_test() -> int:
             "unexpected handler registered",
         )
         require_test(
-            "project_text" in agent.capabilities,
-            "project text capability missing",
+            "project_text" in agent.capabilities and "project_python" in agent.capabilities,
+            "project execution capabilities missing",
+        )
+        require_test(
+            agent.validate_lmstudio_uninstall_payload({"purge_data": False})
+            and agent.validate_lmstudio_uninstall_payload({"purge_data": True})
+            and not agent.validate_lmstudio_uninstall_payload({"purge_data": "yes"}),
+            "LM Studio uninstall payload validation failed",
+        )
+        require_test(
+            agent.python_mode_answer("calc: 2 + 3 * 4") == "Python calculation: 14",
+            "Python-only deterministic calculation failed",
+        )
+        require_test(
+            "no AI/LLM was called" in agent.python_mode_answer("Who wrote Hamlet?"),
+            "Python-only unsupported prompt did not fail closed",
+        )
+        mini_report = agent.execute_project_python({
+            "project_id": "project_test",
+            "work_item_id": "work_test",
+            "role_name": "programmer",
+            "task_text": "calc: 2 + 2\ncalc: 5 * 6",
+        })
+        require_test(
+            mini_report.get("mini_agent_count") == 2
+            and len(mini_report.get("mini_agents") or []) == 2
+            and "Python calculation: 4" in mini_report.get("content", "")
+            and "Python calculation: 30" in mini_report.get("content", ""),
+            "Python mini-agent coordinator failed deterministic subtask execution",
+        )
+        require_test(
+            str(agent.lmstudio_runtime_home()).startswith(str(root.resolve())),
+            "LM Studio managed HOME escaped the agent data directory",
         )
         require_test(
             agent.validate_lmstudio_model_payload({"model": "openai/gpt-oss-20b"}),

@@ -1,5 +1,55 @@
 # CITADEL/EWS Python Node v1
 
+## v0.3.20 — live-preflight и самовосстановление LM Studio
+
+- Перед каждым AI project assignment агент проверяет LM Studio вживую и больше не доверяет устаревшему локальному `loaded_model`.
+- Если llmster установлен, но API server остановлен, агент автоматически поднимает daemon и localhost:1234 и повторно проверяет состояние.
+- Если server работает, но ранее выбранная локальная модель выгружена из памяти, агент автоматически пытается загрузить её снова.
+- Если восстановление невозможно, проект получает конкретный `lmstudio_not_installed`, `lmstudio_server_not_running` или `lmstudio_model_not_loaded`, вместо ложной READY-ноды и неясного внутреннего сбоя.
+- Regression-test специально хранит ложный stale model и доказывает, что реальный prompt использует модель из live probe.
+
+## v0.3.18 — always-on и приоритетное восстановление сети
+
+- Сохраняет возможности 0.3.17, включая измеренный token usage LM Studio.
+- Windows always-on guard продолжает удерживать `ES_SYSTEM_REQUIRED`, чтобы автоматический sleep/hibernate не останавливал долгую работу агента.
+- Windows Core Service остаётся `Automatic (Delayed Start)` и использует SCM recovery-перезапуски после сбоя.
+- Агент запоминает последнюю реально активную Wi-Fi сеть и при потере Controller сначала делает до 3 ограниченных попыток вернуть именно её.
+- После первой успешной попытки подключения выполняется DHCP renew; после каждой попытки проверяется доступность Controller.
+- Только после исчерпания попыток основной сети агент пробует ранее известные или явно разрешённые резервные профили.
+- Неизвестные/случайные открытые Wi-Fi сети автоматически не используются.
+- Аналогичный приоритет последнего профиля применяется к Linux через `nmcli`.
+- Добавлен regression-test, доказывающий порядок primary retries → fallback и отсутствие fallback, если основная сеть восстановилась.
+
+## v0.3.16 — hardware-aware модели, Hugging Face и OpenRouter readiness
+
+- Нода раз в 5 минут сообщает bounded hardware-профиль: RAM, logical CPU и GPU/VRAM, если они доступны.
+- Architect использует этот профиль для рекомендуемого размера модели, quantization и context length.
+- Основной operations console умеет искать модели Hugging Face и передавать выбранный ID в LM Studio для скачивания/загрузки.
+- AI-проект на одной ноде запускает 1–3 bounded LLM mini-agents по сложности задачи и доступной RAM, затем локально синтезирует их результат.
+- Python mini-workers и распределение проектных ролей между нодами сохраняются.
+- OpenRouter остаётся финальным quality gate после сборки ответа; deploy теперь нормализует и проверяет ключ до публикации.
+
+## v0.3.15 — mini-workers, delta update и стабильный llmster HOME
+
+- Python-only проект координирует до 8 локальных mini-workers (до 4 одновременно) и не вызывает LLM.
+- Mini-workers выполняют только bounded/deterministic операции существующего Python-only режима; произвольный remote Python/exec по-прежнему запрещён.
+- Обновление агента сравнивает локальный SHA-256 с release manifest и скачивает/заменяет только изменившиеся файлы.
+- Перед delta-update сохраняется полный core backup для health-check/rollback.
+- LM Studio/llmster получает стабильный CITADEL-managed HOME в state-каталоге, поэтому Windows LocalService и последующие команды видят один и тот же runtime/models.
+- Официальный llmster installer по-прежнему проверяется CITADEL helper hash и запускается без shell.
+- Windows always-on guard повторно заявляет `ES_SYSTEM_REQUIRED`, поэтому автоматический sleep/hibernate не должен срабатывать, пока long-running Agent активен. Явный shutdown/hibernate пользователя не перехватывается.
+- При потере сети агент проверяет доступность Controller, выполняет DHCP renew и перебирает только ранее использованные или явно разрешённые Wi‑Fi профили; после каждого подключения проверяется достижимость Controller.
+- Произвольные открытые/неизвестные Wi‑Fi сети автоматически не подключаются. Их можно добавить в `allowed_wifi_profiles` только после явного решения администратора.
+
+## v0.3.14 — Python-only execution и управление LM Studio
+
+- Architect и Hub могут отправлять задачи в режим `Python only`: агент выполняет только детерминированные операции и не вызывает LM Studio, LLM или OpenRouter.
+- Для проектов добавлена capability `project_python`; Python-only проект не требует установленной или загруженной языковой модели.
+- Python-only executor поддерживает ограниченные вычисления, анализ `text:`, проверку/разбор `json:` и диагностику CPU/RAM/диска/сети. Свободный вопрос, который Python не может достоверно вывести, завершается явным сообщением вместо скрытого перехода к ИИ.
+- Добавлена подписанная команда `lmstudio_uninstall` с отдельным подтверждением Architect. По умолчанию удаляется только runtime; модели и данные сохраняются.
+- Полное удаление CITADEL-managed LM Studio data/model storage доступно только по отдельному `purge_data` и тому же явному подтверждению.
+- Удаление LM Studio не удаляет CITADEL Agent, node identity или Controller enrollment.
+
 ## v0.3.13 — Windows Enterprise Services
 
 - Агент включает hash-pinned read-only probe `windows_enterprise_probe.ps1`; он запускается только из локального allowlist-кода Agent с `shell=False`.

@@ -1,66 +1,120 @@
-# EWS — Expert Workspace System
+# CITADEL EWS
 
-EWS (Expert Workspace System) is an experimental architecture and interactive prototype for a distributed, multi-agent cloud workspace. The project explores how client tasks can move from intake through structured planning, isolated execution, verification, reporting, and operational oversight.
+CITADEL EWS is an experimental distributed AI workspace for coordinating physical nodes, local AI runtimes, bounded mini-agents, and multi-node task execution from a central Hub.
 
-> **Project status:** active prototype / architecture simulation. The current repository contains an interactive browser simulation and project documentation. It is not yet a production deployment.
+> **Status:** active public prototype. This repository is not production-ready and should be tested only on machines and data you can safely use for experimentation.
 
-## What EWS explores
+## We need testers
 
-- Architect-only operational interface; the former client workflow is consolidated into the Architect workspace
-- Dynamic multi-stage task pipelines rather than a fixed number of stages
-- Local AI, Python workers, and hybrid execution modes
-- Isolated sandbox execution with outbound networking disabled by default
-- Multi-region compute orchestration and elastic worker allocation
-- Versioned project uploads, Client Vault concepts, logs, analytics, and export
-- Security Center, incident handling, audit trails, and controlled recovery flows
-- Controller firmware/update lifecycle with staging, verification, rollback, and health checks
-- Temporary, audited Architect SSH access rather than permanent exposed credentials
-- Live cost visibility, project status, and client-facing progress controls
+We are actively looking for testers with Windows PCs, especially people who use local AI, LM Studio/llmster, homelab machines, or more than one computer.
 
-## Run the prototype
+The highest-value tests right now are:
 
-No build step is required.
+- clean Windows agent installation and enrollment;
+- reboot / restart / recovery behavior;
+- loss and restoration of network connectivity;
+- LM Studio/llmster install, probe, model download/load, and local prompt execution;
+- one-node and multi-node prompt dispatch;
+- mini-agent behavior and result aggregation;
+- uninstall / repair / update paths;
+- behavior on different hardware profiles.
 
-1. Clone or download the repository.
-2. Open `index.html` in a modern browser.
-3. Sign in to the Architect workspace to explore project intake, five-stage pricing, execution, files, sandboxing, operations, and Controller controls.
+You do **not** need to be a developer to help.
 
-Some buttons intentionally simulate production workflows. Authentication, cloud infrastructure, billing, WebAuthn, SSH certificates, sandboxing, and real backend actions are represented as UI/architecture concepts unless explicitly implemented.
+Start here: **[TESTING.md](TESTING.md)**
+
+If something fails, open a **Bug report**. If a test succeeds or partially succeeds, use the **Test result** issue form so we can compare machines and environments.
+
+## What the project contains
+
+The current codebase includes:
+
+- a Cloudflare Worker control plane and Hub UI;
+- node enrollment, telemetry, status, and command paths;
+- a Windows node agent and installer tooling;
+- local LM Studio/llmster integration helpers;
+- hardware-aware model recommendations and model search paths;
+- bounded local mini-agent execution;
+- multi-node scheduling/fan-out logic;
+- Python-only task execution paths;
+- update, recovery, rollback, and observability work;
+- automated regression and validation tests.
+
+The presence of a feature in the repository does **not** mean every real-world path is already reliable. Public testing is intended to find those gaps.
+
+## Current versions
+
+- Worker / control-plane version: **0.4.0**
+- Latest packaged Windows test agent in this repository: **0.3.20**
+
+See the checked-in test packages under [releases/](releases/).
+
+## Quick test path
+
+1. Read [TESTING.md](TESTING.md).
+2. Use a disposable or non-critical Windows test machine.
+3. Download the latest test package from [releases/](releases/).
+4. Verify its SHA-256 file before running it.
+5. Run only the included documented installer.
+6. Record whether the node installs, starts, survives reboot, reconnects, and appears correctly in the test environment available to you.
+7. If testing local AI, exercise LM Studio/llmster probe, model handling, and a prompt.
+8. Report the result through GitHub Issues.
+
+Do not post controller tokens, API keys, private logs, client data, passwords, machine secrets, or other credentials.
+
+## Architecture areas under active test
+
+### Windows node lifecycle
+
+The Windows path is designed around a persistent service-style agent, automatic recovery, preserved node identity, update/rollback logic, and sleep/network resilience. Real-machine behavior across Windows versions and hardware is a priority test area.
+
+### Local AI
+
+The node code contains LM Studio/llmster install/probe/model-control paths and local prompt execution. We specifically want reports from machines where LM Studio is already installed and from clean machines where CITADEL performs the setup.
+
+### Multi-node execution
+
+The control plane contains scheduling and fan-out logic for distributing work across physical nodes. We want evidence from real fleets of 2, 3, and more machines, including partial availability and node failures.
+
+### Mini-agents
+
+Local AI tasks can use bounded mini-agents for primary work, verification, and edge-case analysis before synthesis. We want to verify that this behaves consistently on different RAM/CPU/GPU configurations.
 
 ## Repository layout
 
 ```text
 .
-├── index.html                    # Current interactive EWS prototype
-├── docs/
-│   ├── ARCHITECTURE.md
-│   └── ROADMAP.md
-├── .github/                     # CI, Dependabot, and contribution templates
-├── scripts/                     # Reproducible package and validation commands
-├── OPERATIONS.md                # Test deployment schedule and segment gates
-├── CLOUDFLARE_DEPLOYMENT.md     # Protected TEST-site deployment runbook
-├── wrangler.jsonc               # Canonical Cloudflare Worker/static-assets config
+├── agent/                       # Node agent, Windows/Linux setup and local-AI helpers
+├── src/                         # Cloudflare Worker / controller logic
+├── tests/                       # Regression tests
+├── releases/                    # Checked-in test agent packages and hashes
+├── hub.html                     # Hub UI
+├── operations.html              # Operations UI
+├── TESTING.md                   # Public testing guide
 ├── CONTRIBUTING.md
-├── CODE_OF_CONDUCT.md
 ├── SECURITY.md
-└── LICENSE
+└── VERSION
 ```
 
 ## Contributing
 
-Contributions are welcome. You can:
+You can help by:
 
-- open an Issue with a bug, design concern, or feature proposal;
-- discuss architecture and UX improvements;
-- submit a Pull Request with code or documentation changes;
-- review proposed changes and add reactions/comments.
+- testing on real hardware;
+- filing reproducible bugs;
+- posting successful/partial test results;
+- reviewing Issues and Pull Requests;
+- improving installation documentation;
+- submitting focused Pull Requests.
 
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a Pull Request.
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting code.
 
 ## Security
 
-Do not publish credentials, private keys, recovery material, access tokens, client data, or real infrastructure secrets in Issues, Discussions, commits, or Pull Requests. See [SECURITY.md](SECURITY.md).
+Do not publish credentials, private keys, recovery material, access tokens, client data, or real infrastructure secrets in Issues, Discussions, commits, screenshots, logs, or Pull Requests.
+
+See [SECURITY.md](SECURITY.md).
 
 ## License
 
-Licensed under the Apache License 2.0. See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE).

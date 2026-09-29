@@ -11,7 +11,10 @@ async function getJson(path, attempt) {
     headers: { accept: "application/json" },
     cache: "no-store"
   });
-  if (!response.ok) throw new Error(`${path} HTTP ${response.status}`);
+  if (!response.ok) {
+    const body = (await response.text()).slice(0, 500);
+    throw new Error(`${path} HTTP ${response.status} · ${body}`);
+  }
   return response.json();
 }
 
@@ -33,6 +36,20 @@ function assertReady(health, hub, api, root) {
     "presence_storage"
   ];
   if (health.ok !== true) throw new Error("health.ok is not true");
+  for (const field of ["project_online_nodes", "project_ai_ready_workers", "project_python_ready_workers"]) {
+    if (!Number.isInteger(health[field]) || health[field] < 0) {
+      throw new Error(`health.${field} is invalid`);
+    }
+  }
+  if (!["ready", "waiting_for_ai_worker", "waiting_for_online_node", "unavailable"].includes(health.project_execution)) {
+    throw new Error("health.project_execution is invalid");
+  }
+  if (health.project_readiness_error !== null && typeof health.project_readiness_error !== "string") {
+    throw new Error("health.project_readiness_error is invalid");
+  }
+  if (!["configured", "unconfigured"].includes(health.openrouter_quality)) {
+    throw new Error("health.openrouter_quality is invalid");
+  }
   for (const field of requiredReady) {
     if (health[field] !== "ready") throw new Error(`${field} is not ready`);
   }
@@ -48,13 +65,36 @@ function assertReady(health, hub, api, root) {
   if (!Array.isArray(api.command_types) || !api.command_types.includes("update")) {
     throw new Error("signed update command is unavailable");
   }
-  if (!root.includes("נתונים אמיתיים בלבד")) throw new Error("real-data landing marker missing");
+  if (!['id="machines"', 'id="logs"', 'id="taskForm"'].every(marker => root.includes(marker))) throw new Error("operations console markers missing");
   if (root.includes("ews-demo-has-project")) throw new Error("demo state leaked into live root");
+}
+
+function validateD1UsageStatus(d1Usage) {
+  if (!d1Usage || d1Usage.ok !== true || d1Usage.source !== "cloudflare_analytics") {
+    throw new Error("D1 usage status endpoint is invalid");
+  }
+  if (!["ready", "unconfigured", "unavailable"].includes(d1Usage.status)) {
+    throw new Error("D1 usage status is invalid");
+  }
+  if (d1Usage.status === "ready") {
+    const percent = Number(d1Usage.usage_percent);
+    if (!Number.isFinite(percent) || percent < 0) {
+      throw new Error("D1 usage percentage is invalid");
+    }
+    console.log(`D1 usage meter: ${percent.toFixed(1)}% · reset ${d1Usage.reset_at || "unknown"}`);
+    return percent;
+  }
+  const reason = typeof d1Usage.availability_error === "string" ? d1Usage.availability_error : d1Usage.status;
+  console.warn(`D1 usage meter unavailable: ${reason}; continuing core deployment smoke checks.`);
+  return null;
 }
 
 let lastError;
 for (let attempt = 1; attempt <= attempts; attempt += 1) {
   try {
+    const d1Usage = await getJson("/api/v1/status/d1-usage", attempt);
+    const d1UsagePercent = validateD1UsageStatus(d1Usage);
+
     const [health, hub, api, root] = await Promise.all([
       getJson("/api/health", attempt),
       getJson("/api/v1/hub/nodes", attempt),
@@ -67,12 +107,23 @@ for (let attempt = 1; attempt <= attempts; attempt += 1) {
       base_url: baseUrl,
       deploy_sha: deploySha,
       registered_nodes: hub.nodes.length,
+      project_execution: health.project_execution,
+      d1_usage_percent: d1UsagePercent,
+      openrouter_quality: health.openrouter_quality,
+      project_readiness_error: health.project_readiness_error,
+      project_online_nodes: health.project_online_nodes,
+      project_ai_ready_workers: health.project_ai_ready_workers,
+      project_python_ready_workers: health.project_python_ready_workers,
       checked_at: new Date().toISOString()
     }));
     process.exit(0);
   } catch (error) {
     lastError = error;
     console.error(`smoke attempt ${attempt}/${attempts} failed: ${error.message}`);
+    if (String(error?.message || "").includes("hub_d1_daily_read_limit_exceeded")) {
+      console.error("D1 daily read quota is exhausted; retries cannot recover before the quota reset.");
+      break;
+    }
     if (attempt < attempts) await sleep(delayMs);
   }
 }

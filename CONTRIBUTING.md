@@ -4,6 +4,8 @@ Thank you for helping improve EWS.
 
 ## Ways to contribute
 
+- Test CITADEL EWS on real non-critical hardware using [TESTING.md](TESTING.md).
+- Submit a **Test result** Issue even when a test succeeds or only partially succeeds.
 - Report reproducible bugs.
 - Suggest architecture, security, UX, observability, or cost-control improvements.
 - Improve documentation and translations.

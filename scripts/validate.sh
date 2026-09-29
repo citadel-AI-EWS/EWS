@@ -4,8 +4,9 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 python -m unittest -v controller_tests.py
-python -m py_compile controller_app.py controller_tests.py agent/citadel_node_v1.py agent/citadel_node_v2.py
+python -m py_compile controller_app.py controller_tests.py agent/citadel_node_v1.py agent/citadel_node_v2.py tests/network-recovery-priority.py
 python agent/citadel_node_v2.py self-test
+python tests/network-recovery-priority.py
 
 python - <<'PY'
 from pathlib import Path
@@ -18,6 +19,7 @@ for source, target in (
     ("architect-logs.html", "/tmp/ews-architect-logs.js"),
     ("node-test.html", "/tmp/ews-node-test.js"),
     ("hub.html", "/tmp/ews-hub.js"),
+    ("operations.html", "/tmp/ews-operations.js"),
 ):
     html = Path(source).read_text(encoding="utf-8")
     match = re.search(r"<script>(.*)</script>", html, re.S)
@@ -35,7 +37,7 @@ for source, target in (
 hub = Path("hub.html").read_text(encoding="utf-8")
 for required in (
     "/api/v1/hub/nodes",
-    "/api/v1/architect/overview",
+    "/api/v1/architect/machines",
     "/api/v1/architect/presence",
     "/api/v1/architect/release",
     "/api/v1/architect/missions",
@@ -84,6 +86,14 @@ for forbidden in (
 
 if "SSH target configured locally; tunnel reachability is not yet verified" not in hub:
     raise SystemExit("Hub must not claim SSH reachability before Tunnel verification")
+
+secure_refresh_start = hub.find("async function refreshSecure")
+secure_refresh_end = hub.find("async function refresh(){", secure_refresh_start)
+secure_refresh = hub[secure_refresh_start:secure_refresh_end] if secure_refresh_start >= 0 and secure_refresh_end > secure_refresh_start else ""
+if "/api/v1/architect/overview" in secure_refresh:
+    raise SystemExit("Hub secure polling must not use heavyweight Architect overview")
+if "document.hidden" not in hub or "visibilitychange" not in hub:
+    raise SystemExit("Hub hidden-tab D1 polling guard missing")
 
 architect = Path("architect.html").read_text(encoding="utf-8")
 worker = Path("src/index.js").read_text(encoding="utf-8")
@@ -156,6 +166,7 @@ for required in ('data-lang="ru"', 'data-lang="en"', 'data-lang="he"', "missionN
 
 logs = Path("architect-logs.html").read_text(encoding="utf-8")
 home = Path("live-index.html").read_text(encoding="utf-8")
+operations = Path("operations.html").read_text(encoding="utf-8")
 for page_name, page in (("home", home), ("hub", hub), ("architect", architect), ("logs", logs)):
     if 'id="siteClock"' not in page:
         raise SystemExit(f"{page_name} missing current date/time clock")
@@ -167,7 +178,7 @@ for forbidden in ("Command feed", "Audit feed", "commandTimeline", "auditTimelin
     if forbidden in hub:
         raise SystemExit(f"obsolete Hub feed surfaced again: {forbidden}")
 
-for page_name, page in (("hub", hub), ("architect", architect)):
+for page_name, page in (("hub", hub), ("architect", architect), ("operations", operations)):
     for forbidden in ("Tailscale", "tailscale_ipv4"):
         if forbidden in page:
             raise SystemExit(f"{page_name} must not expose Tailscale-specific UI: {forbidden}")
@@ -287,6 +298,7 @@ node --check /tmp/ews-architect.js
 node --check /tmp/ews-architect-logs.js
 node --check /tmp/ews-node-test.js
 node --check /tmp/ews-hub.js
+node --check /tmp/ews-operations.js
 node --check src/index.js
 node --check src/quality/openrouter.js
 node --check src/worker.js
@@ -311,9 +323,15 @@ node tests/review-backlog-guards.mjs
 node tests/legacy-experience.mjs
 node tests/experience-registry.mjs
 node tests/architect-ux-guards.mjs
+node tests/lmstudio-command-storage.mjs
 node tests/enterprise-policy.mjs
 node tests/lmstudio-hub.mjs
 node tests/hub-five-questions.mjs
+node tests/d1-usage.mjs
+node tests/flow-a-fanout-races.mjs
+node tests/ten-prompt-routing.mjs
+python tests/lmstudio-local-protocol.py
+python tests/mini-agents.py
 node tests/openrouter-quality-gate.mjs
 
 python - <<'PY'
@@ -360,7 +378,7 @@ cfn-lint controller_template.yaml project_stack.yaml
 
 artifact="$(mktemp --suffix=.zip)"
 cleanup_validation_files() {
-  for path in "$artifact" /tmp/ews-site.js /tmp/ews-live-site.js /tmp/ews-architect.js /tmp/ews-architect-logs.js /tmp/ews-node-test.js /tmp/ews-hub.js; do
+  for path in "$artifact" /tmp/ews-site.js /tmp/ews-live-site.js /tmp/ews-architect.js /tmp/ews-architect-logs.js /tmp/ews-node-test.js /tmp/ews-hub.js /tmp/ews-operations.js; do
     if [[ -e "$path" ]]; then
       unlink "$path"
     fi

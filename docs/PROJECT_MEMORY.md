@@ -547,3 +547,43 @@ Decision and implementation:
 - A persistent STOP marker from signed uninstall is respected across reboot; local administrator repair clears it explicitly.
 - LM Studio remains the reviewed headless/llmster integration. Under the Core Service it is service-profile scoped and does not depend on an interactive desktop session.
 - No arbitrary shell, WinRM, credential collection, hidden persistence or inbound management port was added.
+
+## 2026-09-28 — Daily engineering control: retention and AEGIS UI
+
+- Baseline: `main` at `b0fbf0804aad7074ef1afd4d6d1187c003f287ae`; checked-in agent release 0.3.19. Main CI, Cloudflare TEST deployment and synthetic checks are green. The verified live smoke reports nine registered nodes, four online nodes, four Python-ready workers and zero AI-ready workers; AI execution is correctly reported as waiting for an AI worker rather than simulated READY.
+- CodeRabbit PR #133 finding remains valid on current main: age-based telemetry deletion was still triggered by a node-controlled `event_id` suffix. The correction removes that trigger and runs the existing indexed seven-day prune from an hourly Cloudflare scheduled handler.
+- AEGIS regression remains valid on current main: `operations.html` exposed a Tailscale-specific IP row even though PR #83 requires no Tailscale UI. The row is removed and the source/build guard now covers Operations as well as Hub and Architect. Agent-side network collection and signed Controller data remain unchanged.
+- Verification: full `scripts/validate.sh`, seven npm integration/regression suites, static site build, pinned Wrangler dry-run, Windows and Linux 0.3.19 package builders, npm high-severity audit, pip-audit, Bandit, cfn-lint and `git diff --check` passed locally.
+- Rollback: revert the scoped telemetry cron/ingestion/test changes and the Operations UI row removal. No database migration, agent binary, release metadata, command protocol or stored Controller record is changed.
+- Release status at branch creation: pending PR CI, merge, post-merge deployment and live smoke. Related CodeRabbit email remains in Inbox until those gates finish.
+
+
+## 2026-09-29 — Agent engineering contracts v1
+
+Architect requested that current books and engineering literature on AI agents be turned into concrete CITADEL EWS improvements rather than kept as reading notes.
+
+Implemented on the reviewed feature branch:
+
+- add a canonical `citadel.agent-capability.v1` view derived from real node capabilities, LM Studio state and hardware/health telemetry;
+- add backward-compatible `citadel.task-envelope.v1` metadata inside existing project assignment payloads while preserving legacy top-level fields for agent 0.3.20;
+- add `citadel.result-envelope.v1` server-side metadata for project results;
+- run a bounded structural verifier over project result metadata and record its accepted/rejected reason codes in the immutable audit trail;
+- expose the canonical agent capability contract from Architect node details;
+- add contract/verifier regression coverage to the normal npm test chain.
+
+Safety/compatibility decision:
+
+- no agent binary/version change in this increment;
+- no D1 migration and no signed Controller↔node command change;
+- structural verification is observability/contract validation only in v1 and does not yet requeue work or override the existing project terminal-state semantics;
+- bounded retry and an independent verifier worker remain the next orchestration increment, because deterministic assignment IDs/result uniqueness must be made attempt-aware before automatic retry is safe.
+
+Verification completed before PR creation:
+
+- transformed-module syntax compilation passed for `src/index.js` and `src/agent-contracts.js`;
+- capability/task/result contract smoke checks passed;
+- a valid AI result is accepted by `structural_v1`, while mismatch/empty-content cases are covered by the new regression test.
+
+Next step:
+
+- run hosted CI/CodeRabbit on the contract PR, then implement attempt-aware assignment leases plus `verifying → retry_wait → reassigned` without allowing duplicate execution.

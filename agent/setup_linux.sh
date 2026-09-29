@@ -6,8 +6,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_ROOT="${CITADEL_INSTALL_ROOT:-$HOME/.local/share/citadel-node}"
 STATE_ROOT="${CITADEL_STATE_ROOT:-$HOME/.local/state/citadel-node}"
 SERVICE_NAME="citadel-node.service"
-EXPECTED_V1_SHA256="4461906dc1c1c4cd47c60a22c0fd2904ed1c6f8303ac0e88fdd9f9578701eb5a"
-EXPECTED_V2_SHA256="43d6d8492d43e3434c7ce90c946804c7cc1c05344ae3aaf27c7ed8220d34e803"
+EXPECTED_V1_SHA256="9f2722f58b1a831d87b414172c057adf72942c3fcb1025c637f5fb7d0eb5e999"
+EXPECTED_V2_SHA256="f34cbdf57c86651f428e2ff495e3a89e7364293b29562a3e726197f9d2ad4f38"
 EXPECTED_ENTERPRISE_PROBE_SHA256="0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
 CONTROLLER_PUBLIC_X="erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 
@@ -75,6 +75,9 @@ payload = {
     "request_timeout_seconds": 30,
     "max_cpu_percent": 90,
     "max_memory_percent": 90,
+    "prevent_automatic_sleep": True,
+    "network_recovery_enabled": True,
+    "allowed_wifi_profiles": [],
     "controller_public_x": public_x,
 }
 pathlib.Path(path).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -155,7 +158,7 @@ path, node_id, controller = sys.argv[1:]
 payload = {
     "node_id": node_id,
     "controller_url": controller.rstrip("/"),
-    "agent_version": "0.3.13",
+    "agent_version": "0.3.20",
     "platform": "linux",
     "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
 }
