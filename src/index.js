@@ -78,6 +78,7 @@ let reportSchemaPromise;
 let legacyReportBackfillPromise;
 let sessionSchemaPromise;
 let commandIndexPromise;
+let commandReadIndexPromise;
 let nodeNetworkSchemaPromise;
 let nodeHardwareSchemaPromise;
 let rolloutSchemaPromise;
@@ -709,6 +710,29 @@ async function ensureSessionStorage(env) {
     });
   }
   await sessionSchemaPromise;
+}
+
+async function ensureCommandReadIndexes(env) {
+  if (!commandReadIndexPromise) {
+    commandReadIndexPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_commands_status_created
+        ON commands(status, created_at DESC, command_id DESC)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_commands_created_time
+        ON commands(datetime(created_at) DESC, command_id DESC)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_audit_events_target_action
+        ON audit_events(target_type, target_id, action, event_id DESC)
+      `)
+    ]).catch((error) => {
+      commandReadIndexPromise = undefined;
+      throw error;
+    });
+  }
+  await commandReadIndexPromise;
 }
 
 async function ensureCommandStorage(env) {
@@ -5446,7 +5470,8 @@ async function architectOverview(request, env) {
     ensureAutoEnrollmentStorage(env),
     ensureProjectStorage(env),
     ensureNodeNetworkStorage(env),
-    ensureNodeAiStorage(env)
+    ensureNodeAiStorage(env),
+    ensureCommandReadIndexes(env)
   ]);
   // Overview is a read path. Do not run command-retention housekeeping on every
   // browser refresh; write/control paths expire stale commands before they need
@@ -6669,7 +6694,12 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/v1/architect/machines") {
     if (request.method !== "GET") return methodNotAllowed(["GET"]);
     await authenticateArchitect(request, env);
-    await Promise.all([ensureNodeAiStorage(env), ensureNodeNetworkStorage(env), ensureAutoEnrollmentStorage(env)]);
+    await Promise.all([
+      ensureNodeAiStorage(env),
+      ensureNodeNetworkStorage(env),
+      ensureAutoEnrollmentStorage(env),
+      ensureCommandReadIndexes(env)
+    ]);
     const [nodes, commands] = await Promise.all([
       env.DB.prepare(`SELECT n.node_id, nn.node_number, n.hostname, n.os_name, n.os_version, n.architecture,
         n.agent_version, n.cpu_percent, n.memory_percent, n.last_seen_at,
