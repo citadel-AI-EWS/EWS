@@ -3235,7 +3235,7 @@ async function enrollNode(request, env) {
 
 async function heartbeat(request, env, nodeId, url) {
   const { bytes: bodyBytes, text: bodyText } = await readBody(request, MAX_NODE_BODY_BYTES);
-  await authenticateNode(request, env, nodeId, url, bodyBytes);
+  const node = await authenticateNode(request, env, nodeId, url, bodyBytes);
   const body = parseJsonObject(bodyText);
 
   const cpuPercent = optionalPercent(body.cpu_percent, "cpu_percent");
@@ -6245,12 +6245,15 @@ async function architectWakeNode(request, env, targetNodeId) {
     WHERE n.node_id != ?
       AND n.status = 'online'
       AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes')
-    ORDER BY n.last_seen_at DESC
+    ORDER BY datetime(n.last_seen_at) DESC
     LIMIT 100
   `).bind(targetNodeId).all();
   const relay = (relaysQuery.results || []).find((candidate) => subnet24(candidate.lan_ipv4) === prefix);
   if (!relay) throw new ApiError(409, "wake_relay_unavailable");
 
+  // Wake is an explicit control action, so reclaim an expired command slot here
+  // instead of making every steady-state agent poll perform cleanup.
+  await expireStaleNodeCommands(env, relay.node_id);
   const pending = await env.DB.prepare(
     "SELECT command_id FROM commands WHERE node_id = ? AND status IN ('pending','accepted') LIMIT 1"
   ).bind(relay.node_id).first();
