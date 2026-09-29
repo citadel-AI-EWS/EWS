@@ -5436,7 +5436,10 @@ async function architectOverview(request, env) {
     ensureNodeNetworkStorage(env),
     ensureNodeAiStorage(env)
   ]);
-  await expireStaleCommands(env);
+  // Overview is a read path. Do not run command-retention housekeeping on every
+  // browser refresh; write/control paths expire stale commands before they need
+  // the active-command slot. Filter stale active rows in the read query instead.
+  const activeCommandCutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
 
   const [counts, nodesQuery, missionsQuery, commandsQuery] = await Promise.all([
     env.DB.prepare(
@@ -5507,12 +5510,13 @@ async function architectOverview(request, env) {
       "CASE WHEN EXISTS (SELECT 1 FROM audit_events AS ae " +
       "WHERE ae.target_type = 'command' AND ae.target_id = c.command_id " +
       "AND ae.action = 'command.expired') THEN 1 ELSE 0 END AS ttl_expired " +
-      "FROM commands AS c WHERE c.status IN ('pending', 'accepted') " +
+      "FROM commands AS c WHERE (c.status IN ('pending', 'accepted') " +
+      "AND datetime(c.created_at) >= datetime(?)) " +
       "OR c.command_id IN (" +
       "SELECT command_id FROM commands WHERE status NOT IN ('pending', 'accepted') " +
       "ORDER BY created_at DESC LIMIT 50" +
       ") ORDER BY c.created_at DESC"
-    ).all()
+    ).bind(activeCommandCutoff).all()
   ]);
 
   const missions = (missionsQuery.results || []).map((row) => {
