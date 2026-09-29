@@ -124,40 +124,47 @@ jobs:
           Path("review-context.txt").write_text(context, encoding="utf-8")
           PY
 
-      - name: Select Grok provider
+      - name: Select Grok provider order
         id: provider
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
-            echo "provider=openrouter" >> "$GITHUB_OUTPUT"
-            echo "model=${OPENROUTER_GROK_MODEL:-x-ai/grok-4.7}" >> "$GITHUB_OUTPUT"
-          elif [[ -n "${XAI_API_KEY:-}" ]]; then
-            echo "provider=xai" >> "$GITHUB_OUTPUT"
-            echo "model=${XAI_MODEL:-grok-4.7}" >> "$GITHUB_OUTPUT"
-          else
-            echo "provider=none" >> "$GITHUB_OUTPUT"
-            echo "model=none" >> "$GITHUB_OUTPUT"
+
+          primary="none"
+          secondary="none"
+
+          # Prefer direct xAI when present because the user explicitly configured
+          # that provider. Keep OpenRouter as an automatic fallback.
+          if [[ -n "${XAI_API_KEY:-}" ]]; then
+            primary="xai"
+            if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
+              secondary="openrouter"
+            fi
+          elif [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
+            primary="openrouter"
           fi
+
+          echo "primary=$primary" >> "$GITHUB_OUTPUT"
+          echo "secondary=$secondary" >> "$GITHUB_OUTPUT"
 
       - name: Ask Grok
         id: grok
         shell: bash
         env:
-          PROVIDER: ${{ steps.provider.outputs.provider }}
-          MODEL: ${{ steps.provider.outputs.model }}
+          PRIMARY_PROVIDER: ${{ steps.provider.outputs.primary }}
+          SECONDARY_PROVIDER: ${{ steps.provider.outputs.secondary }}
         run: |
           set -euo pipefail
 
-          if [[ "$PROVIDER" == "none" ]]; then
+          if [[ "$PRIMARY_PROVIDER" == "none" ]]; then
             cat > result.md <<'EOF'
           ### Grok bridge needs one secret
 
           The GitHub workflow is installed, but no inference credential is available to GitHub Actions.
 
-          Add **one** repository Actions secret:
-          - `XAI_API_KEY` for direct xAI access (preferred), or
-          - `OPENROUTER_API_KEY` to use the existing OpenRouter fallback.
+          Add at least one GitHub Actions secret:
+          - `XAI_API_KEY` for direct xAI access, or
+          - `OPENROUTER_API_KEY` for OpenRouter → Grok.
 
           No key should ever be pasted into an Issue, Pull Request, source file, or ChatGPT message.
           EOF
@@ -165,7 +172,7 @@ jobs:
             exit 0
           fi
 
-          python - "$MODEL" <<'PY'
+          cat > build_request.py <<'PY'
           import json
           import sys
           from pathlib import Path
@@ -190,51 +197,93 @@ jobs:
           Path("request.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
           PY
 
-          if [[ "$PROVIDER" == "xai" ]]; then
-            endpoint="https://api.x.ai/v1/chat/completions"
-            api_key="$XAI_API_KEY"
-            extra_headers=()
-          else
-            endpoint="https://openrouter.ai/api/v1/chat/completions"
-            api_key="$OPENROUTER_API_KEY"
-            extra_headers=(
-              -H "HTTP-Referer: https://github.com/$GITHUB_REPOSITORY"
-              -H "X-Title: CITADEL EWS Grok Review Bridge"
-            )
+          : > attempts.log
+
+          call_provider() {
+            provider="$1"
+            response_file="response-${provider}.json"
+
+            if [[ "$provider" == "xai" ]]; then
+              model="${XAI_MODEL:-grok-4.7}"
+              endpoint="https://api.x.ai/v1/chat/completions"
+              api_key="$XAI_API_KEY"
+              extra_headers=()
+              label="xAI"
+            elif [[ "$provider" == "openrouter" ]]; then
+              model="${OPENROUTER_GROK_MODEL:-x-ai/grok-4.7}"
+              endpoint="https://openrouter.ai/api/v1/chat/completions"
+              api_key="$OPENROUTER_API_KEY"
+              extra_headers=(
+                -H "HTTP-Referer: https://github.com/$GITHUB_REPOSITORY"
+                -H "X-Title: CITADEL EWS Grok Review Bridge"
+              )
+              label="OpenRouter → xAI"
+            else
+              return 1
+            fi
+
+            python build_request.py "$model"
+
+            set +e
+            http_code="$(
+              curl --silent --show-error --max-time 780                 -o "$response_file"                 -w '%{http_code}'                 -X POST "$endpoint"                 -H "Authorization: Bearer $api_key"                 -H "Content-Type: application/json"                 "${extra_headers[@]}"                 --data-binary @request.json
+            )"
+            curl_status=$?
+            set -e
+
+            if [[ "$curl_status" -ne 0 ]]; then
+              printf '%s|transport_error|curl_%s\n' "$provider" "$curl_status" >> attempts.log
+              return 1
+            fi
+
+            if [[ ! "$http_code" =~ ^2[0-9][0-9]$ ]]; then
+              printf '%s|http_error|%s\n' "$provider" "$http_code" >> attempts.log
+              return 1
+            fi
+
+            cp "$response_file" response.json
+            printf '%s' "$provider" > chosen-provider.txt
+            printf '%s' "$model" > chosen-model.txt
+            printf '%s' "$label" > chosen-label.txt
+            printf '%s|ok|%s\n' "$provider" "$http_code" >> attempts.log
+            return 0
+          }
+
+          success=0
+          if call_provider "$PRIMARY_PROVIDER"; then
+            success=1
+          elif [[ "$SECONDARY_PROVIDER" != "none" ]] && call_provider "$SECONDARY_PROVIDER"; then
+            success=1
           fi
 
-          set +e
-          http_code="$(
-            curl --silent --show-error --max-time 780 \
-              -o response.json \
-              -w '%{http_code}' \
-              -X POST "$endpoint" \
-              -H "Authorization: Bearer $api_key" \
-              -H "Content-Type: application/json" \
-              "${extra_headers[@]}" \
-              --data-binary @request.json
-          )"
-          curl_status=$?
-          set -e
-
-          if [[ "$curl_status" -ne 0 ]]; then
-            printf '### Grok review failed\n\nThe provider request failed before an HTTP response was received. No secret values were logged.\n' > result.md
-            echo "status=transport_error" >> "$GITHUB_OUTPUT"
+          if [[ "$success" -ne 1 ]]; then
+            {
+              echo "### Grok review failed"
+              echo
+              echo "Every configured Grok provider was attempted. Response bodies are intentionally not posted."
+              echo
+              while IFS='|' read -r provider kind code; do
+                [[ -z "$provider" ]] && continue
+                if [[ "$kind" == "http_error" ]]; then
+                  printf -- '- %s: HTTP `%s`\n' "$provider" "$code"
+                else
+                  printf -- '- %s: transport error `%s`\n' "$provider" "$code"
+                fi
+              done < attempts.log
+              echo
+              echo "Check provider billing/credits and model access; no secret values were logged."
+            } > result.md
+            echo "status=providers_failed" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if [[ ! "$http_code" =~ ^2[0-9][0-9]$ ]]; then
-            printf '### Grok review failed\n\nThe provider returned HTTP `%s`. The response body is intentionally not posted to avoid leaking provider diagnostics.\n' "$http_code" > result.md
-            echo "status=http_error" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          python - "$PROVIDER" "$MODEL" <<'PY'
+          python - <<'PY'
           import json
-          import sys
           from pathlib import Path
 
-          provider, model = sys.argv[1], sys.argv[2]
+          provider = Path("chosen-provider.txt").read_text(encoding="utf-8")
+          model = Path("chosen-model.txt").read_text(encoding="utf-8")
+          label = Path("chosen-label.txt").read_text(encoding="utf-8")
           try:
               data = json.loads(Path("response.json").read_text(encoding="utf-8"))
               content = data["choices"][0]["message"]["content"]
@@ -259,7 +308,6 @@ jobs:
           text = content.strip()
           if len(text) > max_chars:
               text = text[:max_chars] + "\n\n[RESPONSE TRUNCATED BY GROK BRIDGE]"
-          label = "xAI" if provider == "xai" else "OpenRouter → xAI"
           result = (
               "### 🤖 Grok independent review\n\n"
               f"_Provider: {label} · Model: `{model}` · Triggered by repository owner_\n\n"
