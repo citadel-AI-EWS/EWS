@@ -43,6 +43,7 @@ DEPENDENCY_OVERLAY_ENV = "CITADEL_DEPENDENCY_OVERLAY"
 DEPENDENCY_OVERLAY_MARKER = ".citadel-overlay.json"
 DEPENDENCY_STATE_FILE = "dependency-maintenance.json"
 DEPENDENCY_OVERLAY_DIR = "dependency-overlays"
+DEPENDENCY_FOLLOWUP_SECONDS = 15 * 60
 DEPENDENCY_OVERLAY_NAME_RE = re.compile(r"^overlay-[A-Za-z0-9._-]{1,180}$")
 DEPENDENCY_REQUIREMENT_RE = re.compile(
     r"^([A-Za-z0-9][A-Za-z0-9_.-]{0,79})==([0-9][A-Za-z0-9_.+-]{0,79})$"
@@ -1453,7 +1454,14 @@ class Agent:
                     "activated_at": now_iso(),
                 },
                 "last_error_code": None,
-                "next_check_unix": int(time.time()) + self.config.dependency_check_seconds,
+                # After one successful package update, re-check soon so the
+                # next outdated direct dependency is handled sequentially after
+                # a clean restart. Once no update remains, the normal daily
+                # schedule is restored by maybe_maintain_dependencies().
+                "next_check_unix": int(time.time()) + min(
+                    DEPENDENCY_FOLLOWUP_SECONDS,
+                    self.config.dependency_check_seconds,
+                ),
             })
             self._save_dependency_state(state)
             keep = {final_name}
