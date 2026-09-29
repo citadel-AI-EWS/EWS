@@ -1037,10 +1037,18 @@ async function startUpdateAllRollout(request, env) {
 
 async function ensureRolloutCommandForNode(env, nodeId) {
   await Promise.all([ensureRolloutStorage(env), ensureCommandStorage(env)]);
-  const [rollout, node, pending, recentCompletedUpdate] = await Promise.all([
-    env.DB.prepare(
-      "SELECT rollout_id, target_version, release_json FROM agent_rollouts WHERE status = 'active' ORDER BY created_at DESC LIMIT 1"
-    ).first(),
+  // Rollouts are exceptional. On the steady-state polling path, do one indexed
+  // lookup and return before touching node/command history.
+  const rollout = await env.DB.prepare(
+    "SELECT rollout_id, target_version, release_json FROM agent_rollouts WHERE status = 'active' ORDER BY created_at DESC LIMIT 1"
+  ).first();
+  if (!rollout) return;
+
+  // Stale active commands only need cleanup when a rollout actually needs the
+  // single-active-command slot. Normal agent polling must not scan for stale
+  // commands every 30 seconds.
+  await expireStaleNodeCommands(env, nodeId);
+  const [node, pending, recentCompletedUpdate] = await Promise.all([
     env.DB.prepare(
       "SELECT node_id, hostname, status, agent_version, last_seen_at FROM nodes WHERE node_id = ?"
     ).bind(nodeId).first(),
@@ -1055,7 +1063,6 @@ async function ensureRolloutCommandForNode(env, nodeId) {
     ).bind(nodeId).first()
   ]);
   if (
-    !rollout ||
     !node ||
     pending ||
     node.status === "revoked" ||
@@ -1765,6 +1772,18 @@ function projectNodeReady(node, sourceType) {
  */
 async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
   await Promise.all([ensureProjectStorage(env), ensureNodeAiStorage(env), ensurePayloadStorage(env)]);
+  // Most assignment polls happen with no queued project work. Use the
+  // status-first index to prove that cheaply before loading node AI state and
+  // the fleet-wide readiness set.
+  const plannedWork = projectId
+    ? await env.DB.prepare(
+        "SELECT work_item_id FROM project_work_items WHERE status = 'planned' AND project_id = ? LIMIT 1"
+      ).bind(projectId).first()
+    : await env.DB.prepare(
+        "SELECT work_item_id FROM project_work_items WHERE status = 'planned' LIMIT 1"
+      ).first();
+  if (!plannedWork) return 0;
+
   const node = await env.DB.prepare(`
     SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
       ai.installed, ai.loaded_model, ai.server_running
@@ -4490,16 +4509,18 @@ async function expireStaleNodeCommands(env, nodeId) {
 
 async function listCommands(request, env, nodeId, url) {
   const node = await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
-  await expireStaleNodeCommands(env, nodeId);
   await ensureRolloutCommandForNode(env, nodeId);
 
+  const cutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
   const query = await env.DB.prepare(`
     SELECT command_id, command_type, payload_json, signature, status, created_at
     FROM commands
-    WHERE node_id = ? AND status IN ('pending', 'accepted')
+    WHERE node_id = ?
+      AND status IN ('pending', 'accepted')
+      AND datetime(created_at) >= datetime(?)
     ORDER BY created_at ASC
     LIMIT 20
-  `).bind(nodeId).all();
+  `).bind(nodeId, cutoff).all();
 
   const commands = (query.results || []).map((row) => ({
     ...row,
