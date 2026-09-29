@@ -218,7 +218,7 @@ need(index.includes("nodeUpdateSshState"), "signed node SSH-state endpoint missi
 need(index.includes("ssh_readiness_probe"), "SSH probe capability gate missing");
 need(agentV1.includes('"ssh_readiness_probe"'), "agent SSH readiness capability missing");
 need(agentV1.includes("def probe_ssh_readiness"), "read-only SSH readiness probe missing");
-need(agentV1.includes('("127.0.0.1", port)'), "SSH probe must check localhost rather than exposing a listener");
+need(agentV1.includes('for host in ("127.0.0.1", "::1")') && agentV1.includes('socket.create_connection((host, port)'), "SSH probe must stay loopback-only while covering IPv4 and IPv6");
 need(index.includes("SSH_ACCESS_HOSTS_JSON"), "Controller-owned SSH host mapping missing");
 need(index.includes("access_hostname: null"), "node must not set terminal hostname");
 need(!agentV1.includes('command_type == "shell"'), "arbitrary remote shell command must not be added to signed command channel");
