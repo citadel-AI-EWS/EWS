@@ -18,6 +18,7 @@ import ctypes
 import dataclasses
 import datetime as dt
 import hashlib
+import importlib.metadata
 import ipaddress
 import http.client
 import json
@@ -37,6 +38,77 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+DEPENDENCY_OVERLAY_ENV = "CITADEL_DEPENDENCY_OVERLAY"
+DEPENDENCY_OVERLAY_MARKER = ".citadel-overlay.json"
+DEPENDENCY_STATE_FILE = "dependency-maintenance.json"
+DEPENDENCY_OVERLAY_DIR = "dependency-overlays"
+DEPENDENCY_OVERLAY_NAME_RE = re.compile(r"^overlay-[A-Za-z0-9._-]{1,180}$")
+DEPENDENCY_REQUIREMENT_RE = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9_.-]{0,79})==([0-9][A-Za-z0-9_.+-]{0,79})$"
+)
+
+
+def _bootstrap_dependency_overlay() -> tuple[Path | None, bool]:
+    """Resolve a reviewed dependency overlay before importing third-party modules."""
+    explicit = os.environ.get(DEPENDENCY_OVERLAY_ENV, "").strip()
+    if explicit:
+        try:
+            candidate = Path(explicit).expanduser().resolve()
+            if candidate.is_dir() and (candidate / DEPENDENCY_OVERLAY_MARKER).is_file():
+                return candidate, True
+        except OSError:
+            pass
+        return None, True
+
+    config_path: Path | None = None
+    argv = sys.argv[1:]
+    for index, value in enumerate(argv):
+        if value == "--config" and index + 1 < len(argv):
+            config_path = Path(argv[index + 1]).expanduser()
+            break
+    if config_path is None:
+        default_config = Path("agent/config.json")
+        if default_config.is_file():
+            config_path = default_config
+    if config_path is None:
+        return None, False
+
+    try:
+        raw = json.loads(config_path.resolve().read_text(encoding="utf-8-sig"))
+        data_dir = Path(raw.get("data_dir") or "").expanduser().resolve()
+        state_path = data_dir / DEPENDENCY_STATE_FILE
+        if not state_path.is_file():
+            return None, False
+        state = json.loads(state_path.read_text(encoding="utf-8-sig"))
+        overlay_name = str(state.get("active_overlay") or "").strip()
+        if not DEPENDENCY_OVERLAY_NAME_RE.fullmatch(overlay_name):
+            return None, False
+        overlay_root = (data_dir / DEPENDENCY_OVERLAY_DIR).resolve()
+        candidate = (overlay_root / overlay_name).resolve()
+        try:
+            candidate.relative_to(overlay_root)
+        except ValueError:
+            return None, False
+        if candidate.is_dir() and (candidate / DEPENDENCY_OVERLAY_MARKER).is_file():
+            return candidate, False
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None, False
+    return None, False
+
+
+_DEPENDENCY_BOOTSTRAP_OVERLAY, _DEPENDENCY_BOOTSTRAP_EXPLICIT = _bootstrap_dependency_overlay()
+_DEPENDENCY_BOOTSTRAP_FAILED_OVERLAY: str | None = None
+if _DEPENDENCY_BOOTSTRAP_OVERLAY is not None:
+    sys.path.insert(0, str(_DEPENDENCY_BOOTSTRAP_OVERLAY))
+
+
+def _purge_dependency_modules() -> None:
+    prefixes = ("psutil", "cryptography", "cffi", "_cffi_backend")
+    for module_name in list(sys.modules):
+        if module_name in prefixes or any(module_name.startswith(prefix + ".") for prefix in prefixes):
+            sys.modules.pop(module_name, None)
+
+
 try:
     import psutil
     from cryptography.hazmat.primitives import serialization
@@ -44,10 +116,26 @@ try:
         Ed25519PrivateKey,
         Ed25519PublicKey,
     )
-except ImportError as exc:
-    raise SystemExit(
-        "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
-    ) from exc
+except Exception as exc:
+    if _DEPENDENCY_BOOTSTRAP_OVERLAY is None or _DEPENDENCY_BOOTSTRAP_EXPLICIT:
+        raise SystemExit(
+            "Missing or broken dependencies. Run: python -m pip install -r agent/requirements.txt"
+        ) from exc
+    _DEPENDENCY_BOOTSTRAP_FAILED_OVERLAY = str(_DEPENDENCY_BOOTSTRAP_OVERLAY)
+    with contextlib.suppress(ValueError):
+        sys.path.remove(str(_DEPENDENCY_BOOTSTRAP_OVERLAY))
+    _purge_dependency_modules()
+    try:
+        import psutil
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PrivateKey,
+            Ed25519PublicKey,
+        )
+    except Exception as fallback_exc:
+        raise SystemExit(
+            "Dependency overlay and base dependencies are both unusable"
+        ) from fallback_exc
 
 VERSION = "0.3.21"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
@@ -311,6 +399,8 @@ class AgentConfig:
     prevent_automatic_sleep: bool = True
     network_recovery_enabled: bool = True
     allowed_wifi_profiles: tuple[str, ...] = ()
+    dependency_maintenance_enabled: bool = True
+    dependency_check_seconds: int = 24 * 60 * 60
 
     @classmethod
     def from_file(cls, path: Path) -> "AgentConfig":
@@ -343,6 +433,11 @@ class AgentConfig:
             prevent_automatic_sleep=raw.get("prevent_automatic_sleep", True) is not False,
             network_recovery_enabled=raw.get("network_recovery_enabled", True) is not False,
             allowed_wifi_profiles=tuple(profiles[:16]),
+            dependency_maintenance_enabled=raw.get("dependency_maintenance_enabled", True) is not False,
+            dependency_check_seconds=max(
+                60 * 60,
+                min(7 * 24 * 60 * 60, int(raw.get("dependency_check_seconds", 24 * 60 * 60))),
+            ),
         )
 
 
@@ -897,6 +992,9 @@ class Agent:
         self.paused_path = config.data_dir / "PAUSED"
         self.lmstudio_state_path = config.data_dir / "lmstudio-state.json"
         self.network_recovery_path = config.data_dir / "network-recovery.json"
+        self.dependency_state_path = config.data_dir / DEPENDENCY_STATE_FILE
+        self.dependency_overlay_root = config.data_dir / DEPENDENCY_OVERLAY_DIR
+        self.run_once = False
         self.last_network_recovery = 0.0
         self.last_network_remember = 0.0
         self.last_power_guard = 0.0
@@ -904,6 +1002,7 @@ class Agent:
         self.last_heartbeat = 0.0
         self.last_hardware_report = 0.0
         self.enrollment_confirmed = False
+        self._handle_dependency_bootstrap_fallback()
 
     @property
     def capabilities(self) -> list[str]:
@@ -912,6 +1011,8 @@ class Agent:
             capabilities.add("always_on_guard")
         if self.config.network_recovery_enabled:
             capabilities.add("known_network_recovery")
+        if self.config.dependency_maintenance_enabled:
+            capabilities.add("dependency_self_maintenance")
         if os.name == "nt" and os.environ.get("CITADEL_SERVICE_MANAGED") == "1":
             capabilities.add("windows_core_service")
         if _windows_enterprise_probe_file_valid():
@@ -992,6 +1093,446 @@ class Agent:
         except Exception as error:
             self.log.write("lmstudio_heartbeat_probe_failed", error=str(error)[:300])
 
+
+
+    @staticmethod
+    def _canonical_dependency_name(value: str) -> str:
+        return re.sub(r"[-_.]+", "-", value.strip()).lower()
+
+    @staticmethod
+    def _dependency_version_tuple(value: str) -> tuple[int, int, int, int] | None:
+        match = re.fullmatch(r"(\d+)\.(\d+)(?:\.(\d+))?(?:\.(\d+))?", value.strip())
+        if not match:
+            return None
+        parts = [int(item or 0) for item in match.groups()]
+        return (parts[0], parts[1], parts[2], parts[3])
+
+    @classmethod
+    def _select_same_major_dependency_version(
+        cls,
+        current: str,
+        available: list[str],
+    ) -> str | None:
+        current_tuple = cls._dependency_version_tuple(current)
+        if current_tuple is None:
+            return None
+        candidates: list[tuple[tuple[int, int, int, int], str]] = []
+        for value in available:
+            parsed = cls._dependency_version_tuple(value)
+            if parsed is None or parsed[0] != current_tuple[0] or parsed <= current_tuple:
+                continue
+            candidates.append((parsed, value))
+        return max(candidates, default=(None, None))[1]
+
+    def _dependency_state(self) -> dict[str, Any]:
+        raw = load_json(self.dependency_state_path, {}) or {}
+        return raw if isinstance(raw, dict) else {}
+
+    def _save_dependency_state(self, state: dict[str, Any]) -> None:
+        state["schema"] = 1
+        atomic_write(
+            self.dependency_state_path,
+            json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        )
+
+    def _handle_dependency_bootstrap_fallback(self) -> None:
+        failed = _DEPENDENCY_BOOTSTRAP_FAILED_OVERLAY
+        if not failed:
+            return
+        state = self._dependency_state()
+        active_name = str(state.get("active_overlay") or "").strip()
+        if not DEPENDENCY_OVERLAY_NAME_RE.fullmatch(active_name):
+            return
+        try:
+            active_path = (self.dependency_overlay_root / active_name).resolve()
+        except OSError:
+            return
+        if str(active_path) != failed:
+            return
+        previous = str(state.get("previous_overlay") or "").strip()
+        state["failed_overlay"] = active_name
+        state["active_overlay"] = (
+            previous if DEPENDENCY_OVERLAY_NAME_RE.fullmatch(previous) else None
+        )
+        state["previous_overlay"] = None
+        state["last_result"] = "boot_import_rollback"
+        state["last_error_code"] = "dependency_overlay_import_failed"
+        state["last_check_at"] = now_iso()
+        self._save_dependency_state(state)
+        self.log.write(
+            "dependency_overlay_rolled_back",
+            failed_overlay=active_name,
+            restored_overlay=state.get("active_overlay"),
+            reason="import_failed",
+        )
+
+    def _dependency_requirements(self) -> dict[str, str]:
+        requirements_path = Path(__file__).resolve().with_name("requirements.txt")
+        if not requirements_path.is_file():
+            raise RuntimeError("dependency_requirements_missing")
+        requirements: dict[str, str] = {}
+        for raw_line in requirements_path.read_text(encoding="utf-8-sig").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            match = DEPENDENCY_REQUIREMENT_RE.fullmatch(line)
+            if not match:
+                raise RuntimeError("dependency_requirements_not_strict")
+            name = self._canonical_dependency_name(match.group(1))
+            requirements[name] = match.group(2)
+        if not requirements:
+            raise RuntimeError("dependency_requirements_empty")
+        return requirements
+
+    def _installed_dependency_versions(
+        self,
+        requirements: dict[str, str],
+    ) -> dict[str, str]:
+        installed: dict[str, str] = {}
+        for package in requirements:
+            try:
+                version = importlib.metadata.version(package)
+            except importlib.metadata.PackageNotFoundError as exc:
+                raise RuntimeError("dependency_missing:" + package) from exc
+            if self._dependency_version_tuple(version) is None:
+                raise RuntimeError("dependency_version_unsupported:" + package)
+            installed[package] = version
+        return installed
+
+    @staticmethod
+    def _dependency_pip_env() -> dict[str, str]:
+        env = os.environ.copy()
+        env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+        env["PIP_NO_INPUT"] = "1"
+        env["PYTHONNOUSERSITE"] = "1"
+        env.pop(DEPENDENCY_OVERLAY_ENV, None)
+        return env
+
+    def _dependency_index_versions(self, package: str) -> list[str]:
+        base = [
+            sys.executable,
+            "-m",
+            "pip",
+            "index",
+            "versions",
+            package,
+            "--json",
+            "--only-binary",
+            ":all:",
+        ]
+        commands = [
+            base + ["--only-final", ":all:"],
+            base,
+        ]
+        last_error = ""
+        for argv in commands:
+            result = subprocess.run(  # nosec B603
+                argv,
+                timeout=120,
+                capture_output=True,
+                text=True,
+                shell=False,
+                env=self._dependency_pip_env(),
+            )
+            if result.returncode != 0:
+                last_error = (result.stderr or result.stdout or "")[:240]
+                continue
+            try:
+                payload = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                last_error = "invalid_json"
+                continue
+            values: list[str] = []
+            for key in ("latest", "latest_version"):
+                value = payload.get(key) if isinstance(payload, dict) else None
+                if isinstance(value, str) and value not in values:
+                    values.append(value)
+            versions = payload.get("versions") if isinstance(payload, dict) else None
+            if isinstance(versions, list):
+                for value in versions:
+                    if isinstance(value, str) and value not in values:
+                        values.append(value)
+            if values:
+                return values[:200]
+            last_error = "empty_versions"
+        raise RuntimeError("dependency_index_failed:" + package + ":" + last_error)
+
+    def _select_dependency_update(
+        self,
+    ) -> tuple[dict[str, str] | None, list[dict[str, str]]]:
+        requirements = self._dependency_requirements()
+        installed = self._installed_dependency_versions(requirements)
+        deferred_major: list[dict[str, str]] = []
+        for package in sorted(requirements):
+            current = installed[package]
+            versions = self._dependency_index_versions(package)
+            candidate = self._select_same_major_dependency_version(current, versions)
+            if candidate:
+                return {
+                    "package": package,
+                    "current": current,
+                    "candidate": candidate,
+                }, deferred_major
+            current_tuple = self._dependency_version_tuple(current)
+            remote_tuples = [
+                (self._dependency_version_tuple(value), value)
+                for value in versions
+            ]
+            newer_majors = [
+                (parsed, value)
+                for parsed, value in remote_tuples
+                if parsed is not None
+                and current_tuple is not None
+                and parsed[0] > current_tuple[0]
+            ]
+            if newer_majors:
+                latest_major = max(newer_majors, key=lambda item: item[0])
+                deferred_major.append({
+                    "package": package,
+                    "current": current,
+                    "available": latest_major[1],
+                })
+        return None, deferred_major
+
+    def _cleanup_dependency_overlays(self, keep: set[str]) -> None:
+        if not self.dependency_overlay_root.is_dir():
+            return
+        for child in self.dependency_overlay_root.iterdir():
+            if child.name in keep:
+                continue
+            if child.is_dir() and (
+                child.name.startswith(".staging-")
+                or DEPENDENCY_OVERLAY_NAME_RE.fullmatch(child.name)
+            ):
+                shutil.rmtree(child, ignore_errors=True)
+
+    def _activate_dependency_overlay(
+        self,
+        update: dict[str, str],
+    ) -> str:
+        requirements = self._dependency_requirements()
+        installed = self._installed_dependency_versions(requirements)
+        package = update["package"]
+        candidate = update["candidate"]
+        if package not in installed:
+            raise RuntimeError("dependency_update_package_not_installed")
+        if self._select_same_major_dependency_version(installed[package], [candidate]) != candidate:
+            raise RuntimeError("dependency_update_policy_rejected")
+
+        self.dependency_overlay_root.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(OSError):
+            os.chmod(self.dependency_overlay_root, 0o700)
+        staging = Path(
+            tempfile.mkdtemp(prefix=".staging-", dir=self.dependency_overlay_root)
+        )
+        with contextlib.suppress(OSError):
+            os.chmod(staging, 0o700)
+        try:
+            specs = []
+            for name in sorted(installed):
+                version = candidate if name == package else installed[name]
+                specs.append(f"{name}=={version}")
+            result = subprocess.run(  # nosec B603
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--disable-pip-version-check",
+                    "--no-input",
+                    "--only-binary",
+                    ":all:",
+                    "--ignore-installed",
+                    "--target",
+                    str(staging),
+                    *specs,
+                ],
+                timeout=10 * 60,
+                capture_output=True,
+                text=True,
+                shell=False,
+                env=self._dependency_pip_env(),
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "")[:300]
+                raise RuntimeError("dependency_overlay_install_failed:" + detail)
+
+            marker = {
+                "schema": 1,
+                "created_at": now_iso(),
+                "agent_version": VERSION,
+                "updated_package": package,
+                "from_version": installed[package],
+                "to_version": candidate,
+                "direct_dependencies": {
+                    name: (candidate if name == package else installed[name])
+                    for name in sorted(installed)
+                },
+            }
+            (staging / DEPENDENCY_OVERLAY_MARKER).write_text(
+                json.dumps(marker, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            entrypoint = Path(__file__).resolve().with_name("citadel_node_v2.py")
+            if not entrypoint.is_file():
+                entrypoint = Path(__file__).resolve()
+            test_env = self._dependency_pip_env()
+            test_env[DEPENDENCY_OVERLAY_ENV] = str(staging)
+            tests = [
+                [sys.executable, str(entrypoint), "self-test"],
+            ]
+            if entrypoint.name == "citadel_node_v2.py":
+                tests.append([
+                    sys.executable,
+                    str(entrypoint),
+                    "startup-check",
+                    "--config",
+                    str(self.config_path),
+                ])
+            for argv in tests:
+                check = subprocess.run(  # nosec B603
+                    argv,
+                    cwd=entrypoint.parent,
+                    timeout=180,
+                    capture_output=True,
+                    text=True,
+                    shell=False,
+                    env=test_env,
+                )
+                if check.returncode != 0:
+                    detail = (check.stderr or check.stdout or "")[:300]
+                    raise RuntimeError("dependency_overlay_self_test_failed:" + detail)
+
+            suffix = (
+                str(int(time.time()))
+                + "-"
+                + package.replace("-", "_")[:50]
+                + "-"
+                + candidate.replace("+", "_")[:40]
+                + "-"
+                + uuid.uuid4().hex[:8]
+            )
+            final_name = "overlay-" + suffix
+            if not DEPENDENCY_OVERLAY_NAME_RE.fullmatch(final_name):
+                raise RuntimeError("dependency_overlay_name_invalid")
+            final_path = self.dependency_overlay_root / final_name
+            os.replace(staging, final_path)
+
+            state = self._dependency_state()
+            previous = str(state.get("active_overlay") or "").strip()
+            state.update({
+                "active_overlay": final_name,
+                "previous_overlay": (
+                    previous if DEPENDENCY_OVERLAY_NAME_RE.fullmatch(previous) else None
+                ),
+                "last_result": "updated",
+                "last_update": {
+                    "package": package,
+                    "from": installed[package],
+                    "to": candidate,
+                    "activated_at": now_iso(),
+                },
+                "last_error_code": None,
+                "next_check_unix": int(time.time()) + self.config.dependency_check_seconds,
+            })
+            self._save_dependency_state(state)
+            keep = {final_name}
+            if state.get("previous_overlay"):
+                keep.add(str(state["previous_overlay"]))
+            self._cleanup_dependency_overlays(keep)
+            self.log.write(
+                "dependency_overlay_activated",
+                package=package,
+                from_version=installed[package],
+                to_version=candidate,
+                overlay=final_name,
+            )
+            return final_name
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+
+    def _restart_after_dependency_activation(self) -> None:
+        if os.environ.get("CITADEL_SERVICE_MANAGED") == "1":
+            raise SystemExit(SERVICE_RESTART_EXIT_CODE)
+        entrypoint = Path(__file__).resolve().with_name("citadel_node_v2.py")
+        if not entrypoint.is_file():
+            entrypoint = Path(__file__).resolve()
+        subprocess.Popen(  # nosec B603
+            [sys.executable, str(entrypoint), "run", "--config", str(self.config_path)],
+            cwd=entrypoint.parent,
+            shell=False,
+            creationflags=(0x08000000 if os.name == "nt" else 0),
+        )
+        raise SystemExit(0)
+
+    def maybe_maintain_dependencies(self) -> None:
+        if (
+            not self.config.dependency_maintenance_enabled
+            or self.run_once
+            or os.environ.get(DEPENDENCY_OVERLAY_ENV)
+        ):
+            return
+        state = self._dependency_state()
+        now_unix = int(time.time())
+        try:
+            next_check = int(state.get("next_check_unix") or 0)
+        except (TypeError, ValueError):
+            next_check = 0
+
+        if next_check <= 0:
+            seed = (self.identity.node_id or socket.gethostname() or "citadel").encode("utf-8")
+            spread = max(60, min(60 * 60, self.config.dependency_check_seconds // 4))
+            jitter = int(hashlib.sha256(seed).hexdigest()[:8], 16) % spread
+            state["next_check_unix"] = now_unix + jitter
+            state["last_result"] = "scheduled"
+            self._save_dependency_state(state)
+            self.log.write(
+                "dependency_check_scheduled",
+                next_check_unix=state["next_check_unix"],
+            )
+            return
+        if now_unix < next_check:
+            return
+
+        resources_ok, resources = self.resources_ok()
+        if not resources_ok:
+            state["next_check_unix"] = now_unix + 30 * 60
+            state["last_result"] = "deferred_resources"
+            self._save_dependency_state(state)
+            self.log.write("dependency_maintenance_deferred", **resources)
+            return
+
+        state["last_check_at"] = now_iso()
+        state["next_check_unix"] = now_unix + self.config.dependency_check_seconds
+        try:
+            update, deferred_major = self._select_dependency_update()
+            if update is None:
+                state["last_result"] = "up_to_date"
+                state["deferred_major"] = deferred_major[:20]
+                state["last_error_code"] = None
+                self._save_dependency_state(state)
+                self.log.write(
+                    "dependency_maintenance_checked",
+                    status="up_to_date",
+                    deferred_major=deferred_major[:20],
+                )
+                return
+            self._activate_dependency_overlay(update)
+        except Exception as error:
+            state = self._dependency_state()
+            state["last_check_at"] = now_iso()
+            state["next_check_unix"] = now_unix + 60 * 60
+            state["last_result"] = "failed"
+            state["last_error_code"] = type(error).__name__
+            self._save_dependency_state(state)
+            self.log.write(
+                "dependency_maintenance_failed",
+                error=str(error)[:300],
+            )
+            return
+        self._restart_after_dependency_activation()
 
     def resources_ok(self) -> tuple[bool, dict[str, float]]:
         cpu = float(psutil.cpu_percent(interval=0.1))
@@ -2991,8 +3532,10 @@ class Agent:
         response = self.api.request("GET", f"/api/v1/nodes/{node_id}/assignments")
         for assignment in response.get("assignments") or []:
             self.execute_assignment(assignment)
+        self.maybe_maintain_dependencies()
 
     def run(self, once: bool = False) -> int:
+        self.run_once = once
         self.log.write("agent_start", version=VERSION, once=once)
         if not once:
             self.enforce_power_guard()
@@ -3192,6 +3735,25 @@ def self_test() -> int:
         require_test(
             "project_text" in agent.capabilities and "project_python" in agent.capabilities,
             "project execution capabilities missing",
+        )
+        require_test(
+            "dependency_self_maintenance" in agent.capabilities,
+            "dependency self-maintenance capability missing",
+        )
+        require_test(
+            agent._dependency_version_tuple("50.0.1") == (50, 0, 1, 0)
+            and agent._select_same_major_dependency_version(
+                "7.2.2", ["8.0.0", "7.3.0", "7.2.3", "7.2.2rc1"]
+            ) == "7.3.0"
+            and agent._select_same_major_dependency_version(
+                "7.2.2", ["8.0.0", "7.2.2"]
+            ) is None,
+            "dependency same-major update policy failed",
+        )
+        dependency_requirements = agent._dependency_requirements()
+        require_test(
+            {"cryptography", "psutil"} <= set(dependency_requirements),
+            "strict direct dependency allowlist missing",
         )
         require_test(
             agent.validate_lmstudio_uninstall_payload({"purge_data": False})
