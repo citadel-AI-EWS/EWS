@@ -50,6 +50,8 @@ assert.match(index, /idx_audit_events_target_action/,
   );
   assert.doesNotMatch(overview, /await expireStaleCommands\(env\)/,
     "read-only overview must not run stale-command housekeeping");
+  assert.match(overview, /ensureCommandReadIndexes\(env\)/,
+    "overview must bootstrap bounded command/audit read indexes");
   assert.match(overview, /activeCommandCutoff/,
     "overview must filter stale active commands without cleanup scans");
 }
@@ -92,6 +94,8 @@ assert.match(index, /idx_audit_events_target_action/,
     index.indexOf('if (url.pathname === "/api/v1/architect/machines")'),
     index.indexOf('if (url.pathname === "/api/v1/architect/projects/check")')
   );
+  assert.match(machines, /ensureCommandReadIndexes\(env\)/,
+    "fleet snapshot must bootstrap read indexes without a manual migration step");
   assert.match(machines, /LIMIT 500/, "fleet snapshot must stay bounded");
   assert.match(machines, /idx_commands_status_created|status IN \('pending','accepted'\)/,
     "fleet command snapshot must remain status-bounded");
