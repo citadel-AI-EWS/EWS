@@ -30,6 +30,7 @@ ERROR_EVENTS = {
     "cycle_error",
     "command_failed",
     "command_failure_ack_failed",
+    "ssh_state_report_failed",
 }
 ALLOWED_EVENTS = {
     "agent_start",
@@ -65,6 +66,8 @@ ALLOWED_EVENTS = {
     "windows_sleep_hibernate_inhibit",
     "hybrid_query_completed",
     "lmstudio_state_report_failed",
+    "ssh_readiness_reported",
+    "ssh_state_report_failed",
     "lmstudio_heartbeat_probe_failed",
     "python_mode_calculation_fallback",
     "lmstudio_model_key_resolution_fallback",

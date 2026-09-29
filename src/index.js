@@ -41,12 +41,12 @@ const LATEST_NODE_RELEASE = Object.freeze({
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "e2cd3fc781553ad96e5ef1b2e5d4aeb51b1f15c157015ef8b85a9e0a77968e2b"
+      sha256: "d8a1c84500adbb64c5d1e7896da755f6ed9f66140b89ed7f9ea123adb0a35338"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "6ef1291c73d7447e161989f121635bc1f9233ee92453e0221d4d8481400b12ef"
+      sha256: "04e1a64b11c170d82fc476e2070156323f40cc0c814575b656ffad879ccacd7c"
     }
   ]
 });
@@ -1126,7 +1126,9 @@ async function nodeSshStateResponse(env, nodeId) {
     checked_at: null,
     updated_at: null
   };
-  const checkedMs = Date.parse(state.checked_at || "");
+  // D1 receipt time is Controller-owned; the node clock may differ by minutes.
+  const receipt = String(state.updated_at || "");
+  const checkedMs = Date.parse(receipt.includes(" ") ? receipt.replace(" ", "T") + "Z" : receipt);
   const fresh = Number.isFinite(checkedMs) && Date.now() - checkedMs >= 0 && Date.now() - checkedMs <= 5 * 60 * 1000;
   let access = { hostname: null, mode: "none" };
   let accessConfigError = null;

@@ -1656,7 +1656,8 @@ class Agent:
                 lines = path.read_text(encoding="utf-8").splitlines()
                 inside = False
                 hostname = None
-                for line in lines:
+                for raw_line in lines:
+                    line = raw_line.split(" #", 1)[0].rstrip()
                     if line.strip() == "ingress:":
                         inside = True
                         continue

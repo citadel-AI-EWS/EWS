@@ -16,7 +16,7 @@ const env = {
  SSH_ACCESS_HOSTS_JSON:'{',
  DB: {
   batch: async()=>[],
-  prepare: sql=>({bind:()=>({first:async()=>({node_id:node,ssh_server_running:1,local_port_open:1,cloudflared_running:1,tunnel_configured:1,checked_at:new Date().toISOString()})})})
+  prepare: sql=>({bind:()=>({first:async()=>({node_id:node,ssh_server_running:1,local_port_open:1,cloudflared_running:1,tunnel_configured:1,checked_at:new Date().toISOString(),updated_at:new Date().toISOString()})})})
  }
 };
 const snapshot = await nodeSshStateResponse(env,node);
@@ -24,11 +24,15 @@ assert.equal(snapshot.ready,false);
 assert.equal(snapshot.access_hostname,null);
 assert.equal(snapshot.access_config_error,'ssh_access_config_invalid');
 
-const tunnelRow = {node_id:node,ssh_server_running:1,local_port_open:1,cloudflared_running:1,tunnel_configured:1,access_hostname:'unrelated.example.com',checked_at:new Date().toISOString()};
+const tunnelRow = {node_id:node,ssh_server_running:1,local_port_open:1,cloudflared_running:1,tunnel_configured:1,access_hostname:'unrelated.example.com',checked_at:new Date().toISOString(),updated_at:new Date().toISOString()};
 const tunnelEnv = {
  SSH_ACCESS_HOSTS_JSON:JSON.stringify({[node]:{hostname:'terminal.example.com',mode:'browser'}}),
  DB:{prepare:()=>({bind:()=>({first:async()=>tunnelRow})})}
 };
 assert.equal((await nodeSshStateResponse(tunnelEnv,node)).ready,false);
 tunnelRow.access_hostname='terminal.example.com';
+assert.equal((await nodeSshStateResponse(tunnelEnv,node)).ready,true);
+
+// A signed node may have an offset clock; Controller receipt time governs freshness.
+tunnelRow.checked_at=new Date(Date.now()-120000).toISOString();
 assert.equal((await nodeSshStateResponse(tunnelEnv,node)).ready,true);

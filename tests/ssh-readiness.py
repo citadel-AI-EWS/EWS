@@ -39,7 +39,7 @@ class SshReadinessProbeTests(unittest.TestCase):
     def test_active_tunnel_must_have_matching_ssh_ingress(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config.yml"
-            config.write_text("ingress:\n  - hostname: terminal.example.com\n    service: ssh://localhost:22\n  - service: http_status:404\n")
+            config.write_text("ingress: # active tunnel\n  - hostname: terminal.example.com # mapped host\n    service: ssh://localhost:22 # browser SSH\n  - service: http_status:404\n")
             process = mock.Mock(info={"name": "cloudflared", "cmdline": ["cloudflared", "--config", str(config), "tunnel", "run"]})
             with mock.patch.object(agent_mod.psutil, "process_iter", return_value=[process]):
                 self.assertEqual(self.agent._active_ssh_tunnel_hostname(), "terminal.example.com")
