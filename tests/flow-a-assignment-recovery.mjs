@@ -134,7 +134,10 @@ assert.match(
   /UPDATE project_work_items[\s\S]*SET node_id = NULL, status = 'planned'[\s\S]*AND EXISTS \([\s\S]*SELECT 1 FROM assignments[\s\S]*AND status = 'failed'/
 );
 assert.match(index, /UPDATE missions[\s\S]*status = 'assigned'[\s\S]*expires_at = \?/);
-assert.match(index, /UPDATE assignments[\s\S]*status IN \('failed','assigned'\)[\s\S]*started_at = NULL[\s\S]*completed_at = NULL/);
+assert.match(
+  index,
+  /UPDATE assignments[\s\S]*SET mission_id = \?[\s\S]*status = 'assigned'[\s\S]*started_at = NULL[\s\S]*completed_at = NULL[\s\S]*WHERE assignment_id = \?[\s\S]*status IN \('failed','assigned'\)/
+);
 assert.match(index, /UPDATE project_work_items[\s\S]*SET status = 'running'[\s\S]*assignments\.status = 'running'/);
 
 console.log("FLOW A lease recovery + heartbeat guards: PASS");
