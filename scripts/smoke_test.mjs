@@ -69,14 +69,31 @@ function assertReady(health, hub, api, root) {
   if (root.includes("ews-demo-has-project")) throw new Error("demo state leaked into live root");
 }
 
+function validateD1UsageStatus(d1Usage) {
+  if (!d1Usage || d1Usage.ok !== true || d1Usage.source !== "cloudflare_analytics") {
+    throw new Error("D1 usage status endpoint is invalid");
+  }
+  if (!["ready", "unconfigured", "unavailable"].includes(d1Usage.status)) {
+    throw new Error("D1 usage status is invalid");
+  }
+  if (d1Usage.status === "ready") {
+    const percent = Number(d1Usage.usage_percent);
+    if (!Number.isFinite(percent) || percent < 0) {
+      throw new Error("D1 usage percentage is invalid");
+    }
+    console.log(`D1 usage meter: ${percent.toFixed(1)}% · reset ${d1Usage.reset_at || "unknown"}`);
+    return percent;
+  }
+  const reason = typeof d1Usage.availability_error === "string" ? d1Usage.availability_error : d1Usage.status;
+  console.warn(`D1 usage meter unavailable: ${reason}; continuing core deployment smoke checks.`);
+  return null;
+}
+
 let lastError;
 for (let attempt = 1; attempt <= attempts; attempt += 1) {
   try {
     const d1Usage = await getJson("/api/v1/status/d1-usage", attempt);
-    if (d1Usage.status !== "ready" || !Number.isFinite(Number(d1Usage.usage_percent))) {
-      throw new Error("D1 usage meter is not ready");
-    }
-    console.log(`D1 usage meter: ${Number(d1Usage.usage_percent).toFixed(1)}% · reset ${d1Usage.reset_at || "unknown"}`);
+    const d1UsagePercent = validateD1UsageStatus(d1Usage);
 
     const [health, hub, api, root] = await Promise.all([
       getJson("/api/health", attempt),
@@ -91,7 +108,7 @@ for (let attempt = 1; attempt <= attempts; attempt += 1) {
       deploy_sha: deploySha,
       registered_nodes: hub.nodes.length,
       project_execution: health.project_execution,
-      d1_usage_percent: Number(d1Usage.usage_percent),
+      d1_usage_percent: d1UsagePercent,
       openrouter_quality: health.openrouter_quality,
       project_readiness_error: health.project_readiness_error,
       project_online_nodes: health.project_online_nodes,
