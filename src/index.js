@@ -752,6 +752,10 @@ async function ensureCommandStorage(env) {
           ON commands(status, created_at DESC, command_id DESC)
         `),
         env.DB.prepare(`
+          CREATE INDEX IF NOT EXISTS idx_commands_created_time
+          ON commands(datetime(created_at) DESC, command_id DESC)
+        `),
+        env.DB.prepare(`
           CREATE INDEX IF NOT EXISTS idx_audit_events_created
           ON audit_events(event_id DESC)
         `),
@@ -6685,7 +6689,7 @@ async function handleApi(request, env, url) {
       env.DB.prepare(`SELECT command_id, node_id, command_type, status, created_at, completed_at
         FROM commands
         WHERE status IN ('pending','accepted')
-          OR created_at >= datetime('now', '-30 minutes')
+          OR datetime(created_at) >= datetime('now', '-30 minutes')
         ORDER BY created_at DESC LIMIT 500`).all()
     ]);
     const commandRows = commands.results || [];
