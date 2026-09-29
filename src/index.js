@@ -748,8 +748,16 @@ async function ensureCommandStorage(env) {
           ON commands(node_id, status, created_at)
         `),
         env.DB.prepare(`
+          CREATE INDEX IF NOT EXISTS idx_commands_status_created
+          ON commands(status, created_at DESC, command_id DESC)
+        `),
+        env.DB.prepare(`
           CREATE INDEX IF NOT EXISTS idx_audit_events_created
           ON audit_events(event_id DESC)
+        `),
+        env.DB.prepare(`
+          CREATE INDEX IF NOT EXISTS idx_audit_events_target_action
+          ON audit_events(target_type, target_id, action, event_id DESC)
         `)
       ]);
 
