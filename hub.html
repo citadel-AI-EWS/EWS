@@ -576,11 +576,13 @@
     }
     async function refreshSecure(){
       const needRelease=!releaseVersion||Date.now()-releaseFetchedAt>=600000;
-      const [overview,presenceData,release]=await Promise.all([
-        api("/api/v1/architect/overview"),
+      const [fleet,presenceData,release]=await Promise.all([
+        api("/api/v1/architect/machines"),
         api("/api/v1/architect/presence"),
         needRelease?api("/api/v1/architect/release"):Promise.resolve(null)
       ]);
+      const fleetNodes=fleet.nodes||[];
+      const overview={...fleet,counts:{nodes:fleetNodes.length,online_nodes:fleetNodes.filter(n=>freshness(n)==="online").length}};
       lastOverview=overview;lastPresence=presenceData.presence||[];
       if(release){releaseVersion=release.release?.version||"";lmstudioConfig=release.lmstudio||null;releaseFetchedAt=Date.now()}
       const modelOptions=$("lmstudioModelOptions");modelOptions.replaceChildren();
