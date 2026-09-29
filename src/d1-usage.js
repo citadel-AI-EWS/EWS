@@ -18,7 +18,9 @@ const SAFE_ANALYTICS_ERRORS = new Set([
   'cloudflare_api_error',
   'analytics_account_unavailable',
   'invalid_analytics_response',
-  'analytics_unavailable'
+  'analytics_unavailable',
+  'analytics_fetch_failed',
+  'invalid_cloudflare_json'
 ]);
 function safeAnalyticsError(error) {
   const message = String(error?.message || '');
@@ -34,10 +36,20 @@ function totals(rows) {
   return sum;
 }
 async function cfJson(url, token, options = {}) {
-  const response = await fetch(url, {...options, redirect: 'error', signal: AbortSignal.timeout(12000),
-    headers: {'authorization': 'Bearer ' + token, 'content-type': 'application/json'}});
+  let response;
+  try {
+    response = await fetch(url, {...options, redirect: 'error', signal: AbortSignal.timeout(12000),
+      headers: {'authorization': 'Bearer ' + token, 'content-type': 'application/json'}});
+  } catch {
+    throw Error('analytics_fetch_failed');
+  }
   if (!response.ok) throw Error('cloudflare_http_' + response.status);
-  const body = await response.json();
+  let body;
+  try {
+    body = await response.json();
+  } catch {
+    throw Error('invalid_cloudflare_json');
+  }
   if (body.success === false || body.errors?.length) throw Error('cloudflare_api_error');
   return body;
 }
