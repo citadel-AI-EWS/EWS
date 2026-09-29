@@ -43,9 +43,37 @@ class SshReadinessProbeTests(unittest.TestCase):
             process = mock.Mock(info={"name": "cloudflared", "cmdline": ["cloudflared", "--config", str(config), "tunnel", "run"]})
             with mock.patch.object(agent_mod.psutil, "process_iter", return_value=[process]):
                 self.assertEqual(self.agent._active_ssh_tunnel_hostname(), "terminal.example.com")
+            config.write_text("ingress:\n  - service: ssh://localhost:22\n    hostname: terminal.example.com\n  - service: http_status:404\n")
+            with mock.patch.object(agent_mod.psutil, "process_iter", return_value=[process]):
+                self.assertEqual(self.agent._active_ssh_tunnel_hostname(), "terminal.example.com")
             config.write_text("ingress:\n  - hostname: terminal.example.com\n    service: http://localhost:8080\n")
             with mock.patch.object(agent_mod.psutil, "process_iter", return_value=[process]):
                 self.assertIsNone(self.agent._active_ssh_tunnel_hostname())
+
+    def test_loopback_probes_fall_back_to_ipv6(self):
+        live_connection = mock.MagicMock()
+        live_connection.__enter__.return_value = live_connection
+        with mock.patch.object(
+            agent_mod.socket,
+            "create_connection",
+            side_effect=[OSError("ipv4 unavailable"), live_connection],
+        ) as connect:
+            self.assertTrue(self.agent._local_port_open(22))
+        self.assertEqual(
+            [call.args[0][0] for call in connect.call_args_list],
+            ["127.0.0.1", "::1"],
+        )
+
+        with mock.patch.object(
+            agent_mod.Agent,
+            "_ssh_protocol_banner_at",
+            side_effect=[False, True],
+        ) as banner:
+            self.assertTrue(self.agent._ssh_protocol_banner())
+        self.assertEqual(
+            [call.args[0] for call in banner.call_args_list],
+            ["127.0.0.1", "::1"],
+        )
 
     def test_banner_accepts_fifty_preidentification_lines(self):
         data = (b"notice\r\n" * 50) + b"SSH-2.0-OpenSSH_9.0\r\n"
