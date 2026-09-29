@@ -37,8 +37,18 @@ try {
   const paid=await d1UsageOverview({...env,D1_USAGE_PLAN:'paid'},now);
   assert.equal(paid.account.rows_read.percent,null,'daily usage cannot be compared with paid monthly allowance');
   globalThis.fetch=async()=>Response.json({errors:[{message:'secret-like detail'}]});
-  const failed=await d1UsageOverview(env,new Date(+now+360000));
+  const failedAt=new Date(+now+360000);
+  const failed=await d1UsageOverview(env,failedAt);
   assert.equal(failed.status,'unavailable'); assert.equal(failed.account.rows_read.used,null);
   assert.ok(!JSON.stringify(failed).includes('secret-like'));
-  console.log('D1 overview: analytics-only account scope, exact arithmetic, caching, paid plan and errors PASS');
+  const failedPublic=await d1UsageStatus(env,failedAt);
+  assert.equal(failedPublic.status,'unavailable');
+  assert.equal(failedPublic.usage_percent,null);
+  assert.equal(failedPublic.availability_error,'analytics_unavailable');
+  assert.ok(!JSON.stringify(failedPublic).includes('secret-like'));
+  globalThis.fetch=async()=>new Response('',{status:403});
+  const deniedPublic=await d1UsageStatus(env,new Date(+now+400000));
+  assert.equal(deniedPublic.status,'unavailable');
+  assert.equal(deniedPublic.availability_error,'cloudflare_http_403');
+  console.log('D1 overview: analytics-only account scope, exact arithmetic, caching, paid plan and safe errors PASS');
 } finally {globalThis.fetch=saved;}

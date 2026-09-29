@@ -73,6 +73,10 @@ export function publicD1UsageStatus(value) {
     value?.account?.rows_read?.percent,
     value?.account?.rows_written?.percent
   ].filter((item) => typeof item === 'number' && Number.isFinite(item) && item >= 0);
+  const rawError = typeof value?.error === 'string' ? value.error : null;
+  const availabilityError = rawError === 'analytics_unavailable' || /^cloudflare_http_\d+$/.test(rawError)
+    ? rawError
+    : null;
   return {
     ok: value?.ok !== false,
     status: typeof value?.status === 'string' ? value.status : 'unavailable',
@@ -80,6 +84,7 @@ export function publicD1UsageStatus(value) {
     usage_percent: candidates.length ? Math.max(...candidates) : null,
     reset_at: typeof value?.reset_at === 'string' ? value.reset_at : null,
     updated_at: typeof value?.updated_at === 'string' ? value.updated_at : null,
+    availability_error: availabilityError,
     source: 'cloudflare_analytics'
   };
 }
