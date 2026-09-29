@@ -4511,7 +4511,11 @@ async function expireStaleNodeCommands(env, nodeId) {
 
 async function listCommands(request, env, nodeId, url) {
   const node = await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
-  await ensureRolloutCommandForNode(env, nodeId);
+  // Current-version nodes cannot benefit from rollout discovery. Skipping the
+  // lookup removes one D1 read from every steady-state command poll.
+  if (node.agent_version !== LATEST_NODE_RELEASE.version) {
+    await ensureRolloutCommandForNode(env, nodeId);
+  }
 
   const cutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
   const query = await env.DB.prepare(`
