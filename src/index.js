@@ -1128,14 +1128,21 @@ async function nodeSshStateResponse(env, nodeId) {
   };
   const checkedMs = Date.parse(state.checked_at || "");
   const fresh = Number.isFinite(checkedMs) && Date.now() - checkedMs >= 0 && Date.now() - checkedMs <= 5 * 60 * 1000;
-  const access = controllerSshAccess(env, nodeId);
+  let access = { hostname: null, mode: "none" };
+  let accessConfigError = null;
+  try {
+    access = controllerSshAccess(env, nodeId);
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.code !== "ssh_access_config_invalid") throw error;
+    accessConfigError = error.code;
+  }
   const ready = fresh &&
     Number(state.ssh_server_running) === 1 &&
     Number(state.local_port_open) === 1 &&
     Number(state.cloudflared_running) === 1 &&
     Number(state.tunnel_configured) === 1 &&
     typeof access.hostname === "string" && access.mode !== "none";
-  return { ...state, access_hostname: access.hostname, access_mode: access.mode, fresh, ready };
+  return { ...state, access_hostname: access.hostname, access_mode: access.mode, access_config_error: accessConfigError, fresh, ready };
 }
 
 function lmstudioInstallAssetForNode(node) {
@@ -7097,7 +7104,8 @@ export {
   projectWorkerProfile,
   planProjectWork,
   projectFinalText,
-  controllerSshAccess
+  controllerSshAccess,
+  nodeSshStateResponse
 };
 
 export default {

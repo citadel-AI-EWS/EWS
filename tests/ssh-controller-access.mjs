@@ -9,3 +9,17 @@ for (const hostname of ['attacker.example/path','localhost','127.0.0.1','10.0.0.
 }
 assert.throws(()=>controllerSshAccess({SSH_ACCESS_HOSTS_JSON:'{'},node),/ssh_access_config_invalid/);
 console.log('Controller-owned SSH access mapping: OK');
+
+// Invalid SSH configuration must disable SSH without breaking unrelated node details.
+const { nodeSshStateResponse } = await import('../src/index.js');
+const env = {
+ SSH_ACCESS_HOSTS_JSON:'{',
+ DB: {
+  batch: async()=>[],
+  prepare: sql=>({bind:()=>({first:async()=>({node_id:node,ssh_server_running:1,local_port_open:1,cloudflared_running:1,tunnel_configured:1,checked_at:new Date().toISOString()})})})
+ }
+};
+const snapshot = await nodeSshStateResponse(env,node);
+assert.equal(snapshot.ready,false);
+assert.equal(snapshot.access_hostname,null);
+assert.equal(snapshot.access_config_error,'ssh_access_config_invalid');
