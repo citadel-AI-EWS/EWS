@@ -81,3 +81,9 @@ Use `mode: "infrastructure"` for a non-browser SSH endpoint. The Controller
 validates DNS hostnames and never uses a node-supplied navigation target. This
 configuration contains no SSH credentials. The operator must initiate a fresh
 signed probe in the open Hub dialog before browser handoff is enabled.
+The SSH probe confirms a running `cloudflared` process with an explicit
+`--config` file containing an ingress rule from the mapped hostname to
+`ssh://localhost:22` (or `ssh://127.0.0.1:22`). Token-only tunnels without a
+locally inspectable ingress rule remain unverified. A local config match does
+not prove Cloudflare Access policy or public reachability; verify those
+separately on the physical node.

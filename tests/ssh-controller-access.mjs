@@ -23,3 +23,12 @@ const snapshot = await nodeSshStateResponse(env,node);
 assert.equal(snapshot.ready,false);
 assert.equal(snapshot.access_hostname,null);
 assert.equal(snapshot.access_config_error,'ssh_access_config_invalid');
+
+const tunnelRow = {node_id:node,ssh_server_running:1,local_port_open:1,cloudflared_running:1,tunnel_configured:1,access_hostname:'unrelated.example.com',checked_at:new Date().toISOString()};
+const tunnelEnv = {
+ SSH_ACCESS_HOSTS_JSON:JSON.stringify({[node]:{hostname:'terminal.example.com',mode:'browser'}}),
+ DB:{prepare:()=>({bind:()=>({first:async()=>tunnelRow})})}
+};
+assert.equal((await nodeSshStateResponse(tunnelEnv,node)).ready,false);
+tunnelRow.access_hostname='terminal.example.com';
+assert.equal((await nodeSshStateResponse(tunnelEnv,node)).ready,true);

@@ -1611,7 +1611,7 @@ class Agent:
             with socket.create_connection(("127.0.0.1", 22), timeout=1.5) as connection:
                 deadline = time.monotonic() + 2.0
                 banner = b""
-                for _ in range(4):  # RFC 4253 permits a few pre-identification lines.
+                for _ in range(51):  # RFC 4253 requires accepting at least 50 preliminary lines.
                     line = b""
                     while len(line) < 256:
                         remaining = deadline - time.monotonic()
@@ -1627,11 +1627,55 @@ class Agent:
                     if line.startswith(b"SSH-2.0-") or line.startswith(b"SSH-1.99-"):
                         return True
                     banner += line
-                    if len(banner) >= 1024:
+                    if len(banner) >= 12800:
                         break
         except (OSError, TimeoutError):
             pass
         return False
+
+    @staticmethod
+    def _active_ssh_tunnel_hostname() -> str | None:
+        """Read the active cloudflared ingress config; token-only tunnels fail closed."""
+        try:
+            processes = psutil.process_iter(["name", "cmdline"])
+            for process in processes:
+                if str(process.info.get("name") or "").lower() not in {"cloudflared", "cloudflared.exe"}:
+                    continue
+                argv = process.info.get("cmdline") or []
+                config_path = None
+                for i, arg in enumerate(argv):
+                    if arg == "--config" and i + 1 < len(argv):
+                        config_path = argv[i + 1]
+                    elif arg.startswith("--config="):
+                        config_path = arg.split("=", 1)[1]
+                if not config_path:
+                    continue
+                path = Path(config_path)
+                if not path.is_file() or path.stat().st_size > 32768:
+                    continue
+                lines = path.read_text(encoding="utf-8").splitlines()
+                inside = False
+                hostname = None
+                for line in lines:
+                    if line.strip() == "ingress:":
+                        inside = True
+                        continue
+                    if not inside:
+                        continue
+                    if line and not line[0].isspace():
+                        break
+                    entry = re.match(r"^\s+-\s+hostname:\s*['\"]?([a-zA-Z0-9.-]+)['\"]?\s*$", line)
+                    if entry:
+                        hostname = entry.group(1).lower()
+                        continue
+                    if re.match(r"^\s+-\s+", line):
+                        hostname = None
+                    service = re.match(r"^\s+service:\s*['\"]?ssh://(?:localhost|127\.0\.0\.1):22['\"]?\s*$", line)
+                    if service and hostname and re.fullmatch(r"[a-z0-9]+(?:[a-z0-9.-]*[a-z0-9])?", hostname) and "." in hostname and ".." not in hostname:
+                        return hostname
+        except (psutil.Error, OSError, UnicodeError):
+            return None
+        return None
 
     def probe_ssh_readiness(self) -> dict[str, Any]:
         """Read-only SSH/Cloudflare readiness probe; never opens ports or changes sshd."""
@@ -1655,7 +1699,8 @@ class Agent:
         port_open = self._local_port_open(22)
         ssh_running = bool(sshd and port_open and self._process_running({"sshd", "sshd.exe"}) and self._ssh_protocol_banner())
         cloudflared_running = self._process_running({"cloudflared", "cloudflared.exe"})
-        tunnel_configured = bool(cloudflared_running)
+        tunnel_hostname = self._active_ssh_tunnel_hostname() if cloudflared_running else None
+        tunnel_configured = bool(cloudflared_running and tunnel_hostname)
         return {
             "ssh_server_installed": bool(sshd),
             "ssh_server_running": bool(ssh_running),
@@ -1663,6 +1708,7 @@ class Agent:
             "cloudflared_installed": bool(cloudflared),
             "cloudflared_running": bool(cloudflared_running),
             "tunnel_configured": tunnel_configured,
+            "access_hostname": tunnel_hostname,
             "checked_at": now_iso(),
         }
 

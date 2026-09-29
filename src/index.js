@@ -41,7 +41,7 @@ const LATEST_NODE_RELEASE = Object.freeze({
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "168d0f813c04d26390455ae6d4f022a25aa9d99834bf27dba5a398f616eee5b7"
+      sha256: "e2cd3fc781553ad96e5ef1b2e5d4aeb51b1f15c157015ef8b85a9e0a77968e2b"
     },
     {
       path: "citadel_node_v2.py",
@@ -1141,6 +1141,7 @@ async function nodeSshStateResponse(env, nodeId) {
     Number(state.local_port_open) === 1 &&
     Number(state.cloudflared_running) === 1 &&
     Number(state.tunnel_configured) === 1 &&
+    state.access_hostname === access.hostname &&
     typeof access.hostname === "string" && access.mode !== "none";
   return { ...state, access_hostname: access.hostname, access_mode: access.mode, access_config_error: accessConfigError, fresh, ready };
 }
@@ -3113,6 +3114,12 @@ function normalizeSshState(value) {
   const checkedAt = requireString(value.checked_at, "ssh_checked_at", 64);
   if (!Number.isFinite(Date.parse(checkedAt))) throw new ApiError(400, "invalid_ssh_checked_at");
   const tunnelConfigured = flag("tunnel_configured");
+  const tunnelHostname = value.access_hostname == null ? null : requireString(value.access_hostname, "ssh_tunnel_hostname", 253).toLowerCase();
+  if (tunnelHostname && (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(tunnelHostname) ||
+      !tunnelHostname.includes(".") || tunnelHostname.includes("..") || /^\d+(?:\.\d+){3}$/.test(tunnelHostname))) {
+    throw new ApiError(400, "invalid_ssh_tunnel_hostname");
+  }
+  if (tunnelConfigured && !tunnelHostname) throw new ApiError(400, "invalid_ssh_tunnel_state");
   return {
     ssh_server_installed: flag("ssh_server_installed"),
     ssh_server_running: flag("ssh_server_running"),
@@ -3120,7 +3127,7 @@ function normalizeSshState(value) {
     cloudflared_installed: flag("cloudflared_installed"),
     cloudflared_running: flag("cloudflared_running"),
     tunnel_configured: tunnelConfigured,
-    access_hostname: null,
+    access_hostname: tunnelHostname,
     access_mode: "none",
     checked_at: new Date(checkedAt).toISOString()
   };
