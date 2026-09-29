@@ -1,5 +1,5 @@
 import { getProjectExperienceRegistry } from "./experience/registry.js";
-import { d1UsageOverview } from "./d1-usage.js";
+import { d1UsageOverview, d1UsageStatus } from "./d1-usage.js";
 import { openRouterQualityConfig, reviewWithOpenRouter } from "./quality/openrouter.js";
 import { ARCHITECT_ROLE_PERMISSIONS, DEFAULT_ENTERPRISE_POLICY, evaluateEnterpriseNode, normalizeEnterprisePolicy, requiredArchitectPermission, roleHasPermission } from "./enterprise/policy.js";
 import { buildAgentCapabilityContract, buildTaskEnvelope, buildResultEnvelope, verifyProjectResultEnvelope } from "./agent-contracts.js";
@@ -6532,6 +6532,13 @@ async function handleApi(request, env, url) {
     return request.method === "GET"
       ? architectOverview(request, env)
       : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/status/d1-usage") {
+    if (request.method !== "GET") return methodNotAllowed(["GET"]);
+    return json(await d1UsageStatus(env), 200, {
+      "cache-control": "public, max-age=60, stale-while-revalidate=240"
+    });
   }
 
   if (url.pathname === "/api/v1/architect/d1-usage") {
