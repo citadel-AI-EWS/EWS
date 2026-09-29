@@ -1840,9 +1840,7 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
         EXISTS (
           SELECT 1 FROM interactive_messages AS im
           WHERE im.response_work_item_id = w.work_item_id
-        ) AS interactive_followup,
-        (SELECT COUNT(*) FROM project_work_items AS owned
-          WHERE owned.project_id = w.project_id AND owned.node_id = ?) AS node_project_work_count
+        ) AS interactive_followup
       FROM project_work_items AS w
       JOIN architect_projects AS p ON p.project_id = w.project_id
       WHERE w.status = 'planned'
@@ -1855,7 +1853,7 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
       ORDER BY CASE WHEN w.node_id = ? THEN 0 WHEN w.node_id IS NULL THEN 1 ELSE 2 END,
         datetime(p.created_at) ASC, w.sequence_no ASC
       LIMIT 32
-    `).bind(nodeId, projectId, projectId, canRunPython ? 1 : 0, canRunAi ? 1 : 0, nodeId).all(),
+    `).bind(projectId, projectId, canRunPython ? 1 : 0, canRunAi ? 1 : 0, nodeId).all(),
     env.DB.prepare(`
       SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
         ai.installed, ai.loaded_model, ai.server_running
@@ -1875,10 +1873,11 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
     }
     const scheduling = schedulingFromChecks(work.checks_json);
     if (scheduling.target_mode !== "auto" && scheduling.desired_workers) {
-      // Explicit fanout starts with the ready hosts that exist now. Remaining
-      // planned work stays queued for later hosts instead of blocking the whole
-      // project until every requested worker is simultaneously ready.
-      if (Number(work.node_project_work_count || 0) > 0 && work.preferred_node_id !== nodeId) return false;
+      // Explicit fanout starts with whichever distinct physical hosts are ready
+      // now. A preferred node only affects ordering; it must not pin a work item
+      // to a duplicate enrollment of a physical host that already participated.
+      // The winning UPDATE below owns the one-host/desired-host invariants.
+      return true;
     }
     const preferred = work.preferred_node_id ? readyNodes.get(work.preferred_node_id) : null;
     return !work.preferred_node_id || work.preferred_node_id === nodeId || !projectNodeReady(preferred, work.source_type);
