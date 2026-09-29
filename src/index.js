@@ -1749,12 +1749,14 @@ async function recoverStaleProjectAssignments(env) {
       a.assigned_at,
       a.started_at,
       w.work_item_id,
-      w.project_id
+      w.project_id,
+      w.status AS work_status
     FROM assignments AS a
     JOIN project_work_items AS w
       ON a.assignment_id = ('assignment_' || w.work_item_id)
     LEFT JOIN nodes AS n ON n.node_id = a.node_id
-    WHERE NOT EXISTS (
+    WHERE w.status IN ('assigned','running')
+      AND NOT EXISTS (
       SELECT 1 FROM results AS r WHERE r.assignment_id = a.assignment_id
     )
       AND (
@@ -1813,7 +1815,7 @@ async function recoverStaleProjectAssignments(env) {
         row.work_item_id,
         row.project_id,
         row.node_id,
-        row.assignment_status
+        row.work_status
       ),
       env.DB.prepare(`
         UPDATE project_work_items
@@ -1823,7 +1825,7 @@ async function recoverStaleProjectAssignments(env) {
           AND node_id = ?
           AND status = ?
           AND changes() = 1
-      `).bind(row.work_item_id, row.project_id, row.node_id, row.assignment_status),
+      `).bind(row.work_item_id, row.project_id, row.node_id, row.work_status),
       env.DB.prepare(`
         INSERT INTO audit_events (
           actor_type, actor_id, action, target_type, target_id, details_json
