@@ -38,6 +38,8 @@ assert.match(index, /SELECT work_item_id FROM project_work_items WHERE status = 
   "planned-work fast probe missing");
 assert.match(index, /idx_commands_status_created/,
   "status-first command polling index missing");
+assert.match(index, /idx_commands_created_time/,
+  "normalized recent-command time index missing");
 assert.match(index, /idx_audit_events_target_action/,
   "bounded command-expiry audit lookup index missing");
 
