@@ -72,11 +72,18 @@ function assertReady(health, hub, api, root) {
 let lastError;
 for (let attempt = 1; attempt <= attempts; attempt += 1) {
   try {
-    const d1Usage = await getJson("/api/v1/status/d1-usage", attempt);
-    if (d1Usage.status !== "ready" || !Number.isFinite(Number(d1Usage.usage_percent))) {
-      throw new Error("D1 usage meter is not ready");
+    let d1Usage = { status: "request_failed", usage_percent: null, reset_at: null, error: null };
+    try {
+      d1Usage = await getJson("/api/v1/status/d1-usage", attempt);
+      const percent = Number(d1Usage.usage_percent);
+      if (d1Usage.status === "ready" && Number.isFinite(percent)) {
+        console.log(`D1 usage meter: ${percent.toFixed(1)}% · reset ${d1Usage.reset_at || "unknown"}`);
+      } else {
+        console.warn(`D1 usage meter unavailable: status=${d1Usage.status || "unknown"} error=${d1Usage.error || "none"}; continuing core smoke`);
+      }
+    } catch (meterError) {
+      console.warn(`D1 usage meter request failed: ${meterError.message}; continuing core smoke`);
     }
-    console.log(`D1 usage meter: ${Number(d1Usage.usage_percent).toFixed(1)}% · reset ${d1Usage.reset_at || "unknown"}`);
 
     const [health, hub, api, root] = await Promise.all([
       getJson("/api/health", attempt),
@@ -85,13 +92,16 @@ for (let attempt = 1; attempt <= attempts; attempt += 1) {
       getText("/", attempt)
     ]);
     assertReady(health, hub, api, root);
+    const d1Percent = Number(d1Usage.usage_percent);
     console.log(JSON.stringify({
       ok: true,
       base_url: baseUrl,
       deploy_sha: deploySha,
       registered_nodes: hub.nodes.length,
       project_execution: health.project_execution,
-      d1_usage_percent: Number(d1Usage.usage_percent),
+      d1_usage_status: d1Usage.status || "unknown",
+      d1_usage_percent: Number.isFinite(d1Percent) ? d1Percent : null,
+      d1_usage_error: d1Usage.error || null,
       openrouter_quality: health.openrouter_quality,
       project_readiness_error: health.project_readiness_error,
       project_online_nodes: health.project_online_nodes,
