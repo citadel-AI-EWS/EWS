@@ -1875,8 +1875,9 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
     }
     const scheduling = schedulingFromChecks(work.checks_json);
     if (scheduling.target_mode !== "auto" && scheduling.desired_workers) {
-      const readyDistinct = [...readyNodes.values()].filter((candidate) => projectNodeReady(candidate, work.source_type)).length;
-      if (readyDistinct < scheduling.desired_workers) return false;
+      // Explicit fanout starts with the ready hosts that exist now. Remaining
+      // planned work stays queued for later hosts instead of blocking the whole
+      // project until every requested worker is simultaneously ready.
       if (Number(work.node_project_work_count || 0) > 0 && work.preferred_node_id !== nodeId) return false;
     }
     const preferred = work.preferred_node_id ? readyNodes.get(work.preferred_node_id) : null;
@@ -1889,6 +1890,11 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
   for (const work of candidates) {
     const missionId = projectMissionId(work.work_item_id);
     const assignmentId = projectAssignmentId(work.work_item_id);
+    const scheduling = schedulingFromChecks(work.checks_json);
+    const enforceDistinctHost = Number(work.interactive_followup || 0) !== 1 &&
+      scheduling.target_mode !== "auto" &&
+      Number.isInteger(scheduling.desired_workers);
+    const hostKey = String(node.hostname || "").trim().toLowerCase() || nodeId;
     const executionMode = projectExecutionMode(work.source_type);
     const missionType = executionMode === "python" ? "project_python" : "project_text";
     const taskPayloadId = drivePointerId(work.task_text);
@@ -1922,8 +1928,46 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
       env.DB.prepare(`
         UPDATE project_work_items
         SET node_id = ?, status = 'assigned', updated_at = CURRENT_TIMESTAMP
-        WHERE work_item_id = ? AND status = 'planned'
-      `).bind(nodeId, work.work_item_id),
+        WHERE work_item_id = ?
+          AND status = 'planned'
+          AND (
+            ? = 0
+            OR (
+              NOT EXISTS (
+                SELECT 1
+                FROM project_work_items AS same_host
+                JOIN nodes AS same_node ON same_node.node_id = same_host.node_id
+                WHERE same_host.project_id = project_work_items.project_id
+                  AND same_host.work_item_id != project_work_items.work_item_id
+                  AND same_host.status IN ('assigned','running','completed')
+                  AND (
+                    CASE
+                      WHEN trim(same_node.hostname) = '' THEN same_node.node_id
+                      ELSE lower(trim(same_node.hostname))
+                    END
+                  ) = ?
+              )
+              AND (
+                SELECT COUNT(DISTINCT (
+                  CASE
+                    WHEN trim(active_node.hostname) = '' THEN active_node.node_id
+                    ELSE lower(trim(active_node.hostname))
+                  END
+                ))
+                FROM project_work_items AS active
+                JOIN nodes AS active_node ON active_node.node_id = active.node_id
+                WHERE active.project_id = project_work_items.project_id
+                  AND active.status IN ('assigned','running','completed')
+              ) < ?
+            )
+          )
+      `).bind(
+        nodeId,
+        work.work_item_id,
+        enforceDistinctHost ? 1 : 0,
+        hostKey,
+        scheduling.desired_workers || 50
+      ),
       env.DB.prepare(`
         INSERT OR IGNORE INTO missions (
           mission_id, title, role_name, mission_type, payload_json,
