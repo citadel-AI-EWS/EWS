@@ -54,5 +54,13 @@ try {
   const missingAccount=await d1UsageStatus(env,new Date(+now+450000));
   assert.equal(missingAccount.status,'unavailable');
   assert.equal(missingAccount.availability_error,'analytics_account_unavailable');
+  globalThis.fetch=async()=>{ throw new TypeError('network'); };
+  const fetchFailed=await d1UsageStatus(env,new Date(+now+500000));
+  assert.equal(fetchFailed.status,'unavailable');
+  assert.equal(fetchFailed.availability_error,'analytics_fetch_failed');
+  globalThis.fetch=async()=>new Response('<html>not-json</html>',{status:200,headers:{'content-type':'text/html'}});
+  const invalidJson=await d1UsageStatus(env,new Date(+now+550000));
+  assert.equal(invalidJson.status,'unavailable');
+  assert.equal(invalidJson.availability_error,'invalid_cloudflare_json');
   console.log('D1 overview: analytics-only account scope, exact arithmetic, caching, paid plan and safe errors PASS');
 } finally {globalThis.fetch=saved;}
