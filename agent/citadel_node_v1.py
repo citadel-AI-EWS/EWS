@@ -30,6 +30,7 @@ import socket
 import subprocess  # nosec B404
 import sys
 import tempfile
+import threading
 import time
 import urllib.parse
 import uuid
@@ -48,7 +49,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.20"
+VERSION = "0.3.21"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -453,6 +454,8 @@ class ApiClient:
         path: str,
         body: Any = None,
         signed: bool = True,
+        *,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         method = method.upper()
         if not path.startswith("/"):
@@ -478,7 +481,11 @@ class ApiClient:
         connection = self.connection_type(
             self.host,
             self.port,
-            timeout=self.config.request_timeout_seconds,
+            timeout=(
+                self.config.request_timeout_seconds
+                if timeout_seconds is None
+                else max(1.0, float(timeout_seconds))
+            ),
         )
         try:
             connection.request(
@@ -950,7 +957,7 @@ class Agent:
         )
         return node_id
 
-    def heartbeat(self) -> None:
+    def heartbeat(self, *, timeout_seconds: float | None = None) -> None:
         node_id = self.require_node_id()
         network = local_network_addresses()
         now = time.monotonic()
@@ -972,6 +979,7 @@ class Agent:
             "POST",
             f"/api/v1/nodes/{node_id}/heartbeat",
             payload,
+            timeout_seconds=timeout_seconds,
         )
         self.last_heartbeat = time.monotonic()
         if time.monotonic() - self.last_network_remember >= 300:
@@ -1342,6 +1350,20 @@ class Agent:
             "completed_at": now_iso(),
         }
 
+    def _keep_assignment_live(self, stop_event: threading.Event) -> None:
+        """Keep node liveness fresh while a long local assignment is executing."""
+        interval = max(5.0, min(float(self.config.heartbeat_seconds), 30.0))
+        while not stop_event.wait(interval):
+            try:
+                # A liveness heartbeat must never block assignment shutdown for
+                # the normal controller request timeout (up to 120s).
+                self.heartbeat(timeout_seconds=5.0)
+            except Exception as error:
+                self.log.write(
+                    "assignment_heartbeat_failed",
+                    error=str(error)[:300],
+                )
+
     def execute_assignment(self, assignment: dict[str, Any]) -> None:
         node_id = self.require_node_id()
         assignment_id = str(assignment.get("assignment_id") or "")
@@ -1366,6 +1388,14 @@ class Agent:
             f"/api/v1/nodes/{node_id}/assignments/{quoted}/accept",
             {},
         )
+        heartbeat_stop = threading.Event()
+        heartbeat_thread = threading.Thread(
+            target=self._keep_assignment_live,
+            args=(heartbeat_stop,),
+            name="citadel-assignment-heartbeat",
+            daemon=True,
+        )
+        heartbeat_thread.start()
         started = time.monotonic()
         try:
             if is_project_python:
@@ -1399,6 +1429,9 @@ class Agent:
                 "sensitivity": "internal",
                 "report": {"error_type": type(error).__name__, "error_code": local_error_code(error)},
             }
+        finally:
+            heartbeat_stop.set()
+            heartbeat_thread.join(timeout=6.0)
         try:
             self.submit_result(result)
             self.log.write(
