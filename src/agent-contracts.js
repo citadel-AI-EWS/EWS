@@ -57,6 +57,7 @@ export function buildTaskEnvelope({
   workItemId,
   roleName,
   taskText,
+  taskPayloadId = null,
   executionMode,
   attempt = 1,
   nodeId = null,
@@ -68,7 +69,8 @@ export function buildTaskEnvelope({
     project_id: String(projectId || ""),
     work_item_id: String(workItemId || ""),
     role_name: String(roleName || "planner"),
-    goal: String(taskText || ""),
+    goal: typeof taskText === "string" && taskText ? taskText : null,
+    goal_payload_id: typeof taskPayloadId === "string" && taskPayloadId ? taskPayloadId : null,
     execution_mode: executionMode === "python" ? "python" : "ai",
     attempt: Math.max(1, Number.parseInt(String(attempt || 1), 10) || 1),
     routing: {
