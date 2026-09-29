@@ -129,7 +129,10 @@ assert.deepEqual(
 );
 
 assert.match(recoverySource, /UPDATE assignments[\s\S]*SET status = 'failed'[\s\S]*NOT EXISTS \([\s\S]*results\.assignment_id = assignments\.assignment_id/);
-assert.match(recoverySource, /UPDATE project_work_items[\s\S]*SET node_id = NULL, status = 'planned'[\s\S]*assignments\.status = 'failed'/);
+assert.match(
+  recoverySource,
+  /UPDATE project_work_items[\s\S]*SET node_id = NULL, status = 'planned'[\s\S]*AND EXISTS \([\s\S]*SELECT 1 FROM assignments[\s\S]*AND status = 'failed'/
+);
 assert.match(index, /UPDATE missions[\s\S]*status = 'assigned'[\s\S]*expires_at = \?/);
 assert.match(index, /UPDATE assignments[\s\S]*status IN \('failed','assigned'\)[\s\S]*started_at = NULL[\s\S]*completed_at = NULL/);
 assert.match(index, /UPDATE project_work_items[\s\S]*SET status = 'running'[\s\S]*assignments\.status = 'running'/);
