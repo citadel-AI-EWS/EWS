@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {d1UsageOverview} from '../src/d1-usage.js';
+import {d1UsageOverview, d1UsageStatus} from '../src/d1-usage.js';
 const now = new Date('2026-09-26T15:00:00Z');
 const env = {D1_ANALYTICS_ACCOUNT_ID: 'a'.repeat(32), D1_ANALYTICS_DATABASE_ID: '8e7855f0-905d-4ca4-96e7-4df015ada1c7', D1_ANALYTICS_TOKEN: 'test-secret', D1_USAGE_PLAN: 'free'};
 let requests = 0;
@@ -22,6 +22,13 @@ try {
   assert.deepEqual(a,b);
   assert.equal(a.account.rows_read.percent,90);
   assert.equal(a.account.rows_written.remaining,50000);
+  const publicStatus=await d1UsageStatus(env,now);
+  assert.equal(publicStatus.status,'ready');
+  assert.equal(publicStatus.usage_percent,90);
+  assert.equal(publicStatus.reset_at,'2026-09-27T00:00:00.000Z');
+  assert.equal(requests,1,'public status must reuse cached analytics');
+  assert.ok(!('account' in publicStatus),'public D1 meter must not expose account details');
+  assert.ok(!('database' in publicStatus),'public D1 meter must not expose database details');
   assert.equal(a.database.rows_read,5000,'database usage is separate from account quota');
   assert.equal(a.database.storage.percent,null,'storage is intentionally not fetched for percentage-only UI');
   assert.equal(a.reset_at,'2026-09-27T00:00:00.000Z');
