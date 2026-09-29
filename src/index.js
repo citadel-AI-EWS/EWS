@@ -3464,11 +3464,43 @@ async function submitResult(request, env, nodeId, url) {
   const reportPointer = drivePointer(reportPayload.payload_id);
   const effectiveArtifactKey = artifactKey || ("gdrive:" + reportPayload.drive_file_id);
   const assignmentStatus = outcome === "failed" ? "failed" : "completed";
-  const detailsJson = JSON.stringify({ result_id: resultId, outcome });
 
   const isProjectAssignment = assignmentId.startsWith("assignment_work_");
   if (isProjectAssignment) await ensureProjectStorage(env);
   const workItemId = isProjectAssignment ? assignmentId.slice("assignment_".length) : null;
+  const workContext = workItemId
+    ? await env.DB.prepare(`
+        SELECT w.project_id, w.role_name, p.source_type
+        FROM project_work_items AS w
+        JOIN architect_projects AS p ON p.project_id = w.project_id
+        WHERE w.work_item_id = ?
+        LIMIT 1
+      `).bind(workItemId).first()
+    : null;
+  const resultEnvelope = workContext
+    ? buildResultEnvelope({
+        projectId: workContext.project_id,
+        workItemId,
+        assignmentId,
+        nodeId,
+        roleName: workContext.role_name,
+        executionMode: projectExecutionMode(workContext.source_type),
+        outcome,
+        report: reportValue,
+        reportSha256,
+        reportSizeBytes
+      })
+    : null;
+  const structuralVerification = resultEnvelope
+    ? verifyProjectResultEnvelope(resultEnvelope, reportValue)
+    : null;
+  const detailsJson = JSON.stringify({
+    result_id: resultId,
+    outcome,
+    result_envelope: resultEnvelope,
+    structural_verification: structuralVerification
+  });
+
   const interactiveLink = workItemId
     ? await env.DB.prepare(`
         SELECT im.thread_id, t.message_count
@@ -3594,6 +3626,27 @@ async function submitResult(request, env, nodeId, url) {
     );
   }
 
+  if (resultEnvelope && structuralVerification) {
+    resultStatements.push(
+      env.DB.prepare(`
+        INSERT INTO audit_events (
+          actor_type, actor_id, action, target_type, target_id, details_json
+        )
+        SELECT 'controller', 'structural-verifier-v1', 'project.result.structural_verification',
+          'project_work_item', ?, ?
+        WHERE EXISTS (SELECT 1 FROM results WHERE result_id = ?)
+      `).bind(
+        workItemId,
+        JSON.stringify({
+          result_id: resultId,
+          envelope: resultEnvelope,
+          verification: structuralVerification
+        }),
+        resultId
+      )
+    );
+  }
+
   resultStatements.push(
     env.DB.prepare(`
       UPDATE missions
@@ -3642,7 +3695,9 @@ async function submitResult(request, env, nodeId, url) {
       report_id: reportId,
       report_payload_id: reportPayload.payload_id,
       assignment_id: assignmentId,
-      outcome
+      outcome,
+      contract: resultEnvelope,
+      structural_verification: structuralVerification
     }
   }, 201);
 }
