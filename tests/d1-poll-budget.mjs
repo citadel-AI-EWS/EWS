@@ -79,7 +79,7 @@ assert.match(index, /idx_audit_events_target_action/,
 {
   const wake = index.slice(
     index.indexOf("async function architectWakeNode"),
-    index.indexOf("async function architectStorageUsage")
+    index.indexOf("async function architectCreateMission")
   );
   assert.match(wake, /await expireStaleNodeCommands\(env, relay\.node_id\)/,
     "explicit Wake control must reclaim stale relay command slots");
