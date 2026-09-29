@@ -29,7 +29,7 @@ assert.match(agent, /heartbeat_thread\.join\(timeout=6\.0\)/);
 assert.match(agent, /timeout_seconds: float \| None = None/);
 
 function extract(pattern, label) {
-  const match = index.match(pattern);
+  const match = recoverySource.match(pattern);
   assert.ok(match, label);
   return match[1].replace(/^ {6,10}/gm, "");
 }
@@ -39,11 +39,11 @@ const gateSql = extract(
   "recovery gate SQL missing"
 );
 const assignedScanSql = extract(
-  /env\.DB\.prepare\(\`\n\s*(SELECT[\s\S]*?WHERE a\.status = 'assigned'[\s\S]*?LIMIT 50)\n\s*\`\)/,
+  /env\.DB\.prepare\(\`\n\s*(SELECT[^\`]*?WHERE a\.status = 'assigned'[^\`]*?LIMIT 50)\n\s*\`\)/,
   "assigned stale scan missing"
 );
 const runningScanSql = extract(
-  /env\.DB\.prepare\(\`\n\s*(SELECT[\s\S]*?WHERE a\.status = 'running'[\s\S]*?LIMIT 50)\n\s*\`\)/,
+  /env\.DB\.prepare\(\`\n\s*(SELECT[^\`]*?WHERE a\.status = 'running'[^\`]*?LIMIT 50)\n\s*\`\)/,
   "running stale scan missing"
 );
 
@@ -82,21 +82,24 @@ db.exec(`
   INSERT INTO nodes VALUES
     ('nodeA', 'online', datetime('now')),
     ('nodeB', 'offline', datetime('now', '-30 minutes')),
-    ('nodeC', 'online', datetime('now'));
+    ('nodeC', 'online', datetime('now')),
+    ('nodeD', 'online', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 minutes'));
 
   INSERT INTO assignments VALUES
     ('assignment_w1','nodeA','assigned',datetime('now','-20 minutes'),NULL,NULL),
     ('assignment_w2','nodeA','assigned',datetime('now','-2 minutes'),NULL,NULL),
     ('assignment_w3','nodeB','running',datetime('now','-2 hours'),datetime('now','-60 minutes'),NULL),
     ('assignment_w4','nodeC','running',datetime('now','-2 hours'),datetime('now','-60 minutes'),NULL),
-    ('assignment_w5','nodeB','assigned',datetime('now','-20 minutes'),NULL,NULL);
+    ('assignment_w5','nodeB','assigned',datetime('now','-20 minutes'),NULL,NULL),
+    ('assignment_w6','nodeD','running',datetime('now','-2 hours'),datetime('now','-60 minutes'),NULL);
 
   INSERT INTO project_work_items VALUES
     ('w1','p1','nodeA','assigned'),
     ('w2','p1','nodeA','assigned'),
     ('w3','p1','nodeB','running'),
     ('w4','p1','nodeC','running'),
-    ('w5','p1','nodeB','assigned');
+    ('w5','p1','nodeB','assigned'),
+    ('w6','p1','nodeD','running');
 
   INSERT INTO results VALUES ('result_w5','assignment_w5');
 `);
@@ -109,8 +112,13 @@ assert.equal(Number(secondGate.changes), 0, "second poll inside one minute must 
 const assigned = db.prepare(assignedScanSql).all().map((row) => row.assignment_id);
 assert.deepEqual(assigned, ["assignment_w1"], "assigned scan must select only stale, result-less leases");
 
-const running = db.prepare(runningScanSql).all().map((row) => row.assignment_id);
-assert.deepEqual(running, ["assignment_w3"], "running scan must require both age and lost node liveness");
+const nodeLivenessCutoff = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+const running = db.prepare(runningScanSql).all(nodeLivenessCutoff).map((row) => row.assignment_id);
+assert.deepEqual(
+  running,
+  ["assignment_w3", "assignment_w6"],
+  "running scan must require both age and lost node liveness, including ISO heartbeat timestamps"
+);
 
 assert.match(index, /UPDATE assignments[\s\S]*SET status = 'failed'[\s\S]*NOT EXISTS \([\s\S]*results\.assignment_id = assignments\.assignment_id/);
 assert.match(index, /UPDATE project_work_items[\s\S]*SET node_id = NULL, status = 'planned'[\s\S]*assignments\.status = 'failed'/);
