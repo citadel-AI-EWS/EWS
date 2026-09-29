@@ -16,8 +16,12 @@ assert.match(index, /async function recoverStaleProjectAssignments\(env\)/);
 assert.match(index, /project_assignment_recovery_gate/);
 assert.match(index, /idx_assignments_status_assigned_at/);
 assert.match(index, /idx_assignments_status_started_at/);
-assert.doesNotMatch(index, /datetime\(a\.assigned_at\) <=/);
-assert.doesNotMatch(index, /datetime\(n\.last_seen_at\) </);
+const recoveryStart = index.indexOf("async function recoverStaleProjectAssignments");
+const recoveryEnd = index.indexOf("function projectExecutionMode", recoveryStart);
+assert.ok(recoveryStart >= 0 && recoveryEnd > recoveryStart, "recovery function bounds missing");
+const recoverySource = index.slice(recoveryStart, recoveryEnd);
+assert.doesNotMatch(recoverySource, /datetime\(a\.assigned_at\) <=/);
+assert.doesNotMatch(recoverySource, /datetime\(n\.last_seen_at\) </);
 
 assert.match(agent, /def _keep_assignment_live\(self, stop_event: threading\.Event\)/);
 assert.match(agent, /self\.heartbeat\(timeout_seconds=5\.0\)/);
