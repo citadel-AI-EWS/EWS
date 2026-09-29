@@ -66,3 +66,24 @@ export async function d1UsageOverview(env, now = new Date()) {
   inFlight = current;
   try {return await promise;} finally {if (inFlight === current) inFlight = null;}
 }
+
+
+export function publicD1UsageStatus(value) {
+  const candidates = [
+    value?.account?.rows_read?.percent,
+    value?.account?.rows_written?.percent
+  ].filter((item) => typeof item === 'number' && Number.isFinite(item) && item >= 0);
+  return {
+    ok: value?.ok !== false,
+    status: typeof value?.status === 'string' ? value.status : 'unavailable',
+    plan: typeof value?.plan === 'string' ? value.plan : 'unknown',
+    usage_percent: candidates.length ? Math.max(...candidates) : null,
+    reset_at: typeof value?.reset_at === 'string' ? value.reset_at : null,
+    updated_at: typeof value?.updated_at === 'string' ? value.updated_at : null,
+    source: 'cloudflare_analytics'
+  };
+}
+
+export async function d1UsageStatus(env, now = new Date()) {
+  return publicD1UsageStatus(await d1UsageOverview(env, now));
+}
