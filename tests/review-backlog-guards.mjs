@@ -115,7 +115,21 @@ need(!telemetryIngest.includes("datetime(received_at) < datetime('now', '-7 days
 need(telemetrySchema.includes("received_at < datetime('now', '-7 days')"), "telemetry prune helper must use the received_at index");
 need(worker.includes("async scheduled(_controller, env)") && worker.includes("await pruneExpiredTelemetry(env)"), "scheduled telemetry retention missing");
 need(wrangler.includes('"crons": ["17 * * * *"]'), "telemetry retention cron missing");
-need(index.includes("await expireStaleNodeCommands(env, nodeId);\n  await ensureRolloutCommandForNode(env, nodeId);"), "stale command expiry must run before rollout scheduling");
+{
+  const rolloutStart = index.indexOf("async function ensureRolloutCommandForNode");
+  const rolloutEnd = index.indexOf("const WORK_ROLE_REGISTRY", rolloutStart);
+  const rolloutBlock = rolloutStart >= 0 && rolloutEnd > rolloutStart ? index.slice(rolloutStart, rolloutEnd) : "";
+  const noRolloutReturn = rolloutBlock.indexOf("if (!rollout) return;");
+  const staleCleanup = rolloutBlock.indexOf("await expireStaleNodeCommands(env, nodeId);");
+  need(noRolloutReturn >= 0 && staleCleanup > noRolloutReturn, "steady-state command polling must skip stale cleanup when no rollout is active");
+}
+{
+  const listStart = index.indexOf("async function listCommands");
+  const listEnd = index.indexOf("async function acknowledgeCommand", listStart);
+  const listBlock = listStart >= 0 && listEnd > listStart ? index.slice(listStart, listEnd) : "";
+  need(!listBlock.includes("expireStaleNodeCommands"), "normal command polling must not scan stale commands every cycle");
+  need(listBlock.includes("datetime(created_at) >= datetime(?)"), "normal command polling must hide expired commands without cleanup scans");
+}
 need(index.includes("do {") && index.includes("expiredBatchSize = await expireStaleCommands(env);") && index.includes("while (expiredBatchSize === 250);"), "command storage must drain every full stale-command batch before creating the active-command unique index");
 need(index.includes('throw new ApiError(409, "command_already_pending")'), "command storage UNIQUE conflicts must not surface as internal_error");
 {
