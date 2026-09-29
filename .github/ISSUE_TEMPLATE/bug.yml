@@ -1,23 +1,98 @@
 name: Bug report
-description: Report a reproducible EWS defect
+description: Report a reproducible CITADEL EWS defect
 title: "[Bug]: "
 labels: [bug]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping test CITADEL EWS. Do not include passwords, tokens, API keys, private client data, or unsanitized secrets.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Windows installation / service
+        - Enrollment / heartbeat
+        - Reboot / recovery / network
+        - LM Studio / llmster
+        - Model search / download / load
+        - Single-node prompt
+        - Multi-node scheduling / fan-out
+        - Mini-agents / synthesis
+        - Update / rollback / uninstall
+        - Hub / UI
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: CITADEL version / package
+      description: Example: Worker 0.4.0, Windows agent 0.3.20
+      placeholder: "Agent 0.3.20"
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Test environment
+      description: Windows version, CPU, RAM, GPU if relevant, and number of physical nodes.
+      placeholder: "Windows 11 x64, 16 GB RAM, RTX 3060, 2 physical nodes"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: lmstudio
+    attributes:
+      label: LM Studio / llmster state
+      options:
+        - Not involved
+        - Already installed before test
+        - Installed by CITADEL path
+        - Installation failed
+        - Installed but probe/load/prompt failed
+    validations:
+      required: true
+
   - type: textarea
     id: description
     attributes:
-      label: Description
-      description: Describe expected and actual behavior without including credentials or client data.
+      label: What happened?
+      description: Describe expected behavior and actual behavior.
     validations:
       required: true
+
   - type: textarea
     id: reproduce
     attributes:
       label: Reproduction steps
+      description: Number the shortest sequence that reproduces the problem.
+      placeholder: |
+        1. Install package ...
+        2. Reboot ...
+        3. Open Hub ...
+        4. Observe ...
     validations:
       required: true
+
   - type: textarea
-    id: checks
+    id: evidence
     attributes:
-      label: Validation output
-      description: Include relevant sanitized output from scripts/validate.sh.
+      label: Sanitized evidence
+      description: Paste only relevant sanitized errors/log excerpts or attach redacted screenshots.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed passwords, tokens, API keys, private client data, and other secrets.
+          required: true
+        - label: I can reproduce this on a test/non-critical machine or environment.
+          required: true

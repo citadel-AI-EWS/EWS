@@ -1,0 +1,116 @@
+name: Test result
+description: Report a successful, partial, or exploratory CITADEL EWS test
+title: "[Test]: "
+labels: [testing]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for testing on real hardware. Successful results are useful too. Do not include secrets, tokens, credentials, client data, or private logs.
+
+  - type: dropdown
+    id: test
+    attributes:
+      label: Test performed
+      options:
+        - Clean Windows installation
+        - Reboot / persistence
+        - Network recovery
+        - LM Studio / llmster
+        - Single-node prompt
+        - Multi-node prompt
+        - Mini-agents
+        - Repair / update / rollback
+        - Uninstall
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: Outcome
+      options:
+        - Pass
+        - Partial pass
+        - Fail
+        - Blocked / could not complete
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: CITADEL version / package
+      placeholder: "Agent 0.3.20"
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Operating system
+      placeholder: "Windows 11 24H2 x64"
+    validations:
+      required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: Hardware
+      description: CPU, RAM, GPU/VRAM if relevant.
+      placeholder: "Ryzen 5, 16 GB RAM, RTX 3060 12 GB"
+    validations:
+      required: true
+
+  - type: input
+    id: nodes
+    attributes:
+      label: Physical node count
+      placeholder: "1, 2, 3..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: lmstudio
+    attributes:
+      label: LM Studio / llmster
+      options:
+        - Not involved
+        - Preinstalled
+        - Installed by CITADEL
+        - Install attempted but failed
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: What did you test?
+      description: Give the key steps and what you observed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: result
+    attributes:
+      label: Result
+      description: Include what worked, what did not, and whether the result reproduced.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Optional sanitized log excerpt, screenshot, timings, or model name.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed passwords, tokens, API keys, private data, and other secrets.
+          required: true
