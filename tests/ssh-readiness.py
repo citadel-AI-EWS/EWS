@@ -24,7 +24,7 @@ class SshReadinessProbeTests(unittest.TestCase):
             "CITADEL_SSH_ACCESS_HOSTNAME": "node-1.example.com",
             "CITADEL_SSH_ACCESS_MODE": "browser",
         }
-        with mock.patch.object(agent_mod.shutil, "which", side_effect=which),              mock.patch.object(agent_mod.Agent, "_local_port_open", return_value=True),              mock.patch.object(agent_mod.Agent, "_process_running", side_effect=lambda names: "cloudflared" in names or "sshd" in names),              mock.patch.dict(os.environ, env, clear=False):
+        with mock.patch.object(agent_mod.shutil, "which", side_effect=which),              mock.patch.object(agent_mod.Agent, "_local_port_open", return_value=True), mock.patch.object(agent_mod.Agent, "_ssh_protocol_banner", return_value=True),              mock.patch.object(agent_mod.Agent, "_process_running", side_effect=lambda names: "cloudflared" in names or "sshd" in names),              mock.patch.dict(os.environ, env, clear=False):
             state = self.agent.probe_ssh_readiness()
 
         self.assertTrue(state["ssh_server_installed"])
@@ -33,17 +33,13 @@ class SshReadinessProbeTests(unittest.TestCase):
         self.assertTrue(state["cloudflared_installed"])
         self.assertTrue(state["cloudflared_running"])
         self.assertTrue(state["tunnel_configured"])
-        self.assertEqual(state["access_hostname"], "node-1.example.com")
-        self.assertEqual(state["access_mode"], "browser")
+        self.assertNotIn("access_hostname", state)
 
-    def test_local_and_ip_access_targets_are_rejected(self):
-        for hostname in ("localhost", "127.0.0.1", "10.0.0.5"):
-            with self.subTest(hostname=hostname), mock.patch.dict(
-                os.environ,
-                {"CITADEL_SSH_ACCESS_HOSTNAME": hostname, "CITADEL_SSH_ACCESS_MODE": "browser"},
-                clear=False,
-            ):
-                self.assertIsNone(self.agent._ssh_access_hostname())
+    def test_non_ssh_listener_does_not_confirm_server(self):
+        with mock.patch.object(agent_mod.shutil, "which", return_value="/usr/sbin/sshd"), mock.patch.object(agent_mod.Agent, "_local_port_open", return_value=True), mock.patch.object(agent_mod.Agent, "_process_running", return_value=True), mock.patch.object(agent_mod.Agent, "_ssh_protocol_banner", return_value=False):
+            state = self.agent.probe_ssh_readiness()
+        self.assertTrue(state["local_port_open"])
+        self.assertFalse(state["ssh_server_running"])
 
     def test_hostname_is_bounded_and_probe_does_not_invent_tunnel(self):
         def which(name):
@@ -62,8 +58,7 @@ class SshReadinessProbeTests(unittest.TestCase):
         self.assertFalse(state["cloudflared_installed"])
         self.assertFalse(state["cloudflared_running"])
         self.assertFalse(state["tunnel_configured"])
-        self.assertIsNone(state["access_hostname"])
-        self.assertEqual(state["access_mode"], "browser")
+        self.assertNotIn("access_hostname", state)
 
 
 if __name__ == "__main__":

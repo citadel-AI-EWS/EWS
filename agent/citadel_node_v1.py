@@ -48,7 +48,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.20"
+VERSION = "0.3.21"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -1605,23 +1605,33 @@ class Agent:
             return False
 
     @staticmethod
-    def _ssh_access_hostname() -> str | None:
-        value = os.environ.get("CITADEL_SSH_ACCESS_HOSTNAME", "").strip().lower()
-        if not value or len(value) > 253 or ".." in value:
-            return None
-        if (
-            not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", value)
-            or "." not in value
-            or value == "localhost"
-            or re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", value)
-        ):
-            return None
-        return value
-
-    @staticmethod
-    def _ssh_access_mode() -> str:
-        value = os.environ.get("CITADEL_SSH_ACCESS_MODE", "none").strip().lower()
-        return value if value in {"none", "browser", "infrastructure"} else "none"
+    def _ssh_protocol_banner() -> bool:
+        """Read only, bounded SSH identification exchange; no authentication or shell."""
+        try:
+            with socket.create_connection(("127.0.0.1", 22), timeout=1.5) as connection:
+                deadline = time.monotonic() + 2.0
+                banner = b""
+                for _ in range(4):  # RFC 4253 permits a few pre-identification lines.
+                    line = b""
+                    while len(line) < 256:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            return False
+                        connection.settimeout(remaining)
+                        char = connection.recv(1)
+                        if not char:
+                            return False
+                        line += char
+                        if char == b"\n":
+                            break
+                    if line.startswith(b"SSH-2.0-") or line.startswith(b"SSH-1.99-"):
+                        return True
+                    banner += line
+                    if len(banner) >= 1024:
+                        break
+        except (OSError, TimeoutError):
+            pass
+        return False
 
     def probe_ssh_readiness(self) -> dict[str, Any]:
         """Read-only SSH/Cloudflare readiness probe; never opens ports or changes sshd."""
@@ -1643,11 +1653,9 @@ class Agent:
                     break
 
         port_open = self._local_port_open(22)
-        ssh_running = port_open or self._process_running({"sshd", "sshd.exe"})
+        ssh_running = bool(sshd and port_open and self._process_running({"sshd", "sshd.exe"}) and self._ssh_protocol_banner())
         cloudflared_running = self._process_running({"cloudflared", "cloudflared.exe"})
-        access_hostname = self._ssh_access_hostname()
-        access_mode = self._ssh_access_mode()
-        tunnel_configured = bool(cloudflared_running and access_hostname and access_mode != "none")
+        tunnel_configured = bool(cloudflared_running)
         return {
             "ssh_server_installed": bool(sshd),
             "ssh_server_running": bool(ssh_running),
@@ -1655,8 +1663,6 @@ class Agent:
             "cloudflared_installed": bool(cloudflared),
             "cloudflared_running": bool(cloudflared_running),
             "tunnel_configured": tunnel_configured,
-            "access_hostname": access_hostname,
-            "access_mode": access_mode,
             "checked_at": now_iso(),
         }
 

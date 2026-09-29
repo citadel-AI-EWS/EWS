@@ -36,17 +36,17 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe"]);
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.20",
+  version: "0.3.21",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "925dbf84a28fcc50bac75cec03926d983b7178c014ba9345492fd07f19ed4582"
+      sha256: "168d0f813c04d26390455ae6d4f022a25aa9d99834bf27dba5a398f616eee5b7"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "f34cbdf57c86651f428e2ff495e3a89e7364293b29562a3e726197f9d2ad4f38"
+      sha256: "6ef1291c73d7447e161989f121635bc1f9233ee92453e0221d4d8481400b12ef"
     }
   ]
 });
@@ -1082,6 +1082,26 @@ async function upsertNodeSshState(env, nodeId, state) {
   ).run();
 }
 
+function controllerSshAccess(env, nodeId) {
+  let mapping;
+  try { mapping = JSON.parse(env.SSH_ACCESS_HOSTS_JSON || "{}"); }
+  catch { throw new ApiError(503, "ssh_access_config_invalid"); }
+  if (!mapping || typeof mapping !== "object" || Array.isArray(mapping)) throw new ApiError(503, "ssh_access_config_invalid");
+  const entry = Object.hasOwn(mapping, nodeId) ? mapping[nodeId] : null;
+  if (entry == null) return { hostname: null, mode: "none" };
+  if (!entry || typeof entry !== "object" || Array.isArray(entry) ||
+      !["browser", "infrastructure"].includes(entry.mode) || typeof entry.hostname !== "string") {
+    throw new ApiError(503, "ssh_access_config_invalid");
+  }
+  const host = entry.hostname;
+  const labels = host.split(".");
+  if (host.length > 253 || labels.length < 2 || labels.some(label =>
+      label.length < 1 || label.length > 63 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)) ||
+      host === "localhost" || /^\d+(?:\.\d+){3}$/.test(host) ||
+      host.endsWith(".localhost") || host.endsWith(".local")) throw new ApiError(503, "ssh_access_config_invalid");
+  return { hostname: host, mode: entry.mode };
+}
+
 async function nodeSshStateResponse(env, nodeId) {
   await ensureNodeSshStorage(env);
   const row = await env.DB.prepare(`
@@ -1106,14 +1126,14 @@ async function nodeSshStateResponse(env, nodeId) {
   };
   const checkedMs = Date.parse(state.checked_at || "");
   const fresh = Number.isFinite(checkedMs) && Date.now() - checkedMs >= 0 && Date.now() - checkedMs <= 5 * 60 * 1000;
+  const access = controllerSshAccess(env, nodeId);
   const ready = fresh &&
     Number(state.ssh_server_running) === 1 &&
     Number(state.local_port_open) === 1 &&
     Number(state.cloudflared_running) === 1 &&
     Number(state.tunnel_configured) === 1 &&
-    typeof state.access_hostname === "string" &&
-    ["browser", "infrastructure"].includes(state.access_mode);
-  return { ...state, fresh, ready };
+    typeof access.hostname === "string" && access.mode !== "none";
+  return { ...state, access_hostname: access.hostname, access_mode: access.mode, fresh, ready };
 }
 
 function lmstudioInstallAssetForNode(node) {
@@ -3080,31 +3100,10 @@ function normalizeSshState(value) {
     if (raw === false || raw === 0 || raw === undefined || raw === null) return 0;
     throw new ApiError(400, "invalid_ssh_state");
   };
-  const accessMode = value.access_mode === undefined || value.access_mode === null
-    ? "none"
-    : requireString(value.access_mode, "ssh_access_mode", 24).toLowerCase();
-  if (!["none", "browser", "infrastructure"].includes(accessMode)) {
-    throw new ApiError(400, "invalid_ssh_access_mode");
-  }
-  let accessHostname = null;
-  if (value.access_hostname !== undefined && value.access_hostname !== null && value.access_hostname !== "") {
-    accessHostname = requireString(value.access_hostname, "ssh_access_hostname", 253).toLowerCase();
-    if (
-      !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(accessHostname) ||
-      accessHostname.includes("..") ||
-      !accessHostname.includes(".") ||
-      accessHostname === "localhost" ||
-      /^\d{1,3}(?:\.\d{1,3}){3}$/.test(accessHostname)
-    ) {
-      throw new ApiError(400, "invalid_ssh_access_hostname");
-    }
-  }
+  // Enrolled nodes only report local facts. Navigation targets are controller-owned.
   const checkedAt = requireString(value.checked_at, "ssh_checked_at", 64);
   if (!Number.isFinite(Date.parse(checkedAt))) throw new ApiError(400, "invalid_ssh_checked_at");
   const tunnelConfigured = flag("tunnel_configured");
-  if (tunnelConfigured && (!accessHostname || accessMode === "none")) {
-    throw new ApiError(400, "invalid_ssh_tunnel_state");
-  }
   return {
     ssh_server_installed: flag("ssh_server_installed"),
     ssh_server_running: flag("ssh_server_running"),
@@ -3112,8 +3111,8 @@ function normalizeSshState(value) {
     cloudflared_installed: flag("cloudflared_installed"),
     cloudflared_running: flag("cloudflared_running"),
     tunnel_configured: tunnelConfigured,
-    access_hostname: accessHostname,
-    access_mode: accessMode,
+    access_hostname: null,
+    access_mode: "none",
     checked_at: new Date(checkedAt).toISOString()
   };
 }
@@ -7095,7 +7094,8 @@ export {
   classifyWorkRole,
   projectWorkerProfile,
   planProjectWork,
-  projectFinalText
+  projectFinalText,
+  controllerSshAccess
 };
 
 export default {

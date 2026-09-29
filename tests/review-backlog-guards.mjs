@@ -31,8 +31,8 @@ need(index.includes("LEFT JOIN node_numbers AS nn"), "Architect node number join
 need(!readme.includes("-EnrollmentToken"), "README still documents EnrollmentToken");
 need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_token");
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
-need(agentV1.includes('VERSION = "0.3.20"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.20"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.21"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.21"'), "v2 release not bumped");
 need(agentV1.includes("hardware_snapshot"), "node hardware snapshot missing");
 need(agentV1.includes("gpu_inventory"), "GPU/VRAM discovery missing");
 need(agentV1.includes('"hardware"'), "hardware heartbeat payload missing");
@@ -184,7 +184,7 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.20"'), "Controller release not bumped");
+need(index.includes('version: "0.3.21"'), "Controller release not bumped");
 need(index.includes('from "./google_drive_payload_crypto.js"'), "Drive payload crypto import missing");
 need(index.includes("await encryptDrivePayload(env, jsonText)"), "Drive payload encryption before upload missing");
 need(index.includes("await decryptDrivePayload(env, storedText)"), "Drive payload decryption before integrity check missing");
@@ -219,7 +219,8 @@ need(index.includes("ssh_readiness_probe"), "SSH probe capability gate missing")
 need(agentV1.includes('"ssh_readiness_probe"'), "agent SSH readiness capability missing");
 need(agentV1.includes("def probe_ssh_readiness"), "read-only SSH readiness probe missing");
 need(agentV1.includes('("127.0.0.1", port)'), "SSH probe must check localhost rather than exposing a listener");
-need(agentV1.includes('"CITADEL_SSH_ACCESS_HOSTNAME"'), "SSH Access hostname configuration missing");
+need(index.includes("SSH_ACCESS_HOSTS_JSON"), "Controller-owned SSH host mapping missing");
+need(index.includes("access_hostname: null"), "node must not set terminal hostname");
 need(!agentV1.includes('command_type == "shell"'), "arbitrary remote shell command must not be added to signed command channel");
 need(operations.includes("function probeSsh"), "Hub SSH probe action missing");
 need(operations.includes("function openBrowserSsh"), "Hub browser SSH handoff missing");

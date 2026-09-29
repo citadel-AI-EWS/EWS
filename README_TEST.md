@@ -72,3 +72,12 @@ The Architect pricing stage can call authenticated `POST /pricing/estimate`. The
 bounded labor, worker, runtime, storage, and reserve inputs and returns the labor/AWS breakdown using
 the packaged pricing snapshot. The response explicitly sets `is_final_invoice` to `false`: it is a
 reproducible TEST estimate, not the AWS bill or a customer invoice.
+
+### SSH browser handoff (PR #194)
+
+Set the Worker secret `SSH_ACCESS_HOSTS_JSON` to a JSON object keyed by enrolled
+node ID, for example `{"node_123":{"hostname":"terminal.example.com","mode":"browser"}}`.
+Use `mode: "infrastructure"` for a non-browser SSH endpoint. The Controller
+validates DNS hostnames and never uses a node-supplied navigation target. This
+configuration contains no SSH credentials. The operator must initiate a fresh
+signed probe in the open Hub dialog before browser handoff is enabled.
