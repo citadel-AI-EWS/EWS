@@ -14,6 +14,18 @@ function metric(used, limit) {
     remaining: used === null || limit === null ? null : Math.max(0, limit - used)};
 }
 const number = v => typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
+const SAFE_ANALYTICS_ERRORS = new Set([
+  'cloudflare_api_error',
+  'analytics_account_unavailable',
+  'invalid_analytics_response',
+  'analytics_unavailable'
+]);
+function safeAnalyticsError(error) {
+  const message = String(error?.message || '');
+  if (/^cloudflare_http_\d{3}$/.test(message)) return message;
+  if (SAFE_ANALYTICS_ERRORS.has(message)) return message;
+  return 'analytics_unavailable';
+}
 function totals(rows) {
   if (!Array.isArray(rows)) throw Error('invalid_analytics_response');
   if (!rows.length) return {rowsRead: 0, rowsWritten: 0};
@@ -57,7 +69,7 @@ export async function d1UsageOverview(env, now = new Date()) {
         account: {rows_read: metric(all.rowsRead, base.account.rows_read.limit), rows_written: metric(all.rowsWritten, base.account.rows_written.limit)},
         database: {rows_read: db.rowsRead, rows_written: db.rowsWritten, storage: base.database.storage}};
     } catch (error) {
-      result = {...base, status: 'unavailable', error: /^cloudflare_http_\d+$/.test(error.message) ? error.message : 'analytics_unavailable'};
+      result = {...base, status: 'unavailable', error: safeAnalyticsError(error)};
     }
     cached = {key, expires: now.getTime() + (result.status === 'unavailable' ? 30000 : TTL_MS), value: result};
     return result;
@@ -74,7 +86,7 @@ export function publicD1UsageStatus(value) {
     value?.account?.rows_written?.percent
   ].filter((item) => typeof item === 'number' && Number.isFinite(item) && item >= 0);
   const rawError = typeof value?.error === 'string' ? value.error : null;
-  const availabilityError = rawError === 'analytics_unavailable' || /^cloudflare_http_\d+$/.test(rawError)
+  const availabilityError = rawError && (SAFE_ANALYTICS_ERRORS.has(rawError) || /^cloudflare_http_\d{3}$/.test(rawError))
     ? rawError
     : null;
   return {
