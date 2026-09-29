@@ -226,5 +226,15 @@ need(operations.includes("function probeSsh"), "Hub SSH probe action missing");
 need(operations.includes("function openBrowserSsh"), "Hub browser SSH handoff missing");
 need(operations.includes("sshReady"), "Hub SSH readiness gate missing");
 need(operations.includes("cloudflared") && operations.includes("localhost:22"), "Hub SSH readiness facts missing");
+const machinesRouteStart = index.indexOf('if (url.pathname === "/api/v1/architect/machines")');
+const machinesRouteEnd = index.indexOf('if (url.pathname === "/api/v1/architect/projects/check")', machinesRouteStart);
+const machinesRoute = index.slice(machinesRouteStart, machinesRouteEnd);
+need(machinesRouteStart >= 0 && machinesRouteEnd > machinesRouteStart, "Architect machines route missing");
+need(machinesRoute.includes("await expireStaleCommands(env);"), "Architect machines route must expire stale commands server-side");
+need(index.includes("SELECT 'architect', ?, 'command.created'"), "command audit must bind the authenticated Architect actor");
+need(index.includes("actor.actor_id, commandId, detailsJson, commandId"), "command audit does not persist authenticated actor_id");
+need(!operations.includes("Date.now()-checked"), "SSH readiness must not depend on workstation wall clock");
+need(!operations.includes("existing?{command:existing}"), "SSH dialog must not reuse another actor's active probe");
+need(operations.includes("performance.now()>deadline"), "SSH probe timeout must use monotonic browser elapsed time");
 
 
