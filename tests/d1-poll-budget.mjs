@@ -70,8 +70,21 @@ assert.match(index, /idx_audit_events_target_action/,
     index.indexOf("async function heartbeat"),
     index.indexOf("async function listAssignments")
   );
+  assert.match(heartbeat, /const node = await authenticateNode\(/,
+    "heartbeat must retain the authenticated node used to derive response status");
   assert.doesNotMatch(heartbeat, /SELECT status, last_seen_at FROM nodes/,
     "heartbeat must not re-read the node after a successful update");
+}
+
+{
+  const wake = index.slice(
+    index.indexOf("async function architectWakeNode"),
+    index.indexOf("async function architectStorageUsage")
+  );
+  assert.match(wake, /await expireStaleNodeCommands\(env, relay\.node_id\)/,
+    "explicit Wake control must reclaim stale relay command slots");
+  assert.match(wake, /ORDER BY datetime\(n\.last_seen_at\) DESC/,
+    "Wake relay freshness ordering must normalize mixed timestamp formats");
 }
 
 {
