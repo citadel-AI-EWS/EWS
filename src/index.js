@@ -3236,6 +3236,7 @@ async function heartbeat(request, env, nodeId, url) {
   const hardware = normalizeNodeHardware(body.hardware);
   if (network) await ensureNodeNetworkStorage(env);
   if (hardware) await ensureNodeHardwareStorage(env);
+  const heartbeatAt = new Date().toISOString();
   const heartbeatStatements = [
     env.DB.prepare(`
       UPDATE nodes
@@ -3244,9 +3245,9 @@ async function heartbeat(request, env, nodeId, url) {
           agent_version = COALESCE(?, agent_version),
           capabilities_json = COALESCE(?, capabilities_json),
           status = CASE WHEN status = 'paused' THEN 'paused' ELSE 'online' END,
-          last_seen_at = CURRENT_TIMESTAMP
+          last_seen_at = ?
       WHERE node_id = ? AND status != 'revoked'
-    `).bind(cpuPercent, memoryPercent, agentVersion, capabilitiesJson, nodeId)
+    `).bind(cpuPercent, memoryPercent, agentVersion, capabilitiesJson, heartbeatAt, nodeId)
   ];
   if (network) {
     heartbeatStatements.push(env.DB.prepare(`
@@ -3291,10 +3292,11 @@ async function heartbeat(request, env, nodeId, url) {
     throw new ApiError(404, "node_not_found");
   }
 
-  const node = await env.DB.prepare(
-    "SELECT status, last_seen_at FROM nodes WHERE node_id = ?"
-  ).bind(nodeId).first();
-  return json({ ok: true, node_id: nodeId, ...node });
+  // authenticateNode already loaded the current status. The UPDATE above can
+  // only preserve paused or move a non-revoked node to online, so a second
+  // point SELECT just to echo the heartbeat would double-read this hot path.
+  const status = node.status === "paused" ? "paused" : "online";
+  return json({ ok: true, node_id: nodeId, status, last_seen_at: heartbeatAt });
 }
 
 async function listAssignments(request, env, nodeId, url) {
