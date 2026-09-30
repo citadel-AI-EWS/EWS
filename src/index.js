@@ -1,5 +1,6 @@
 import { getProjectExperienceRegistry } from "./experience/registry.js";
 import { d1UsageOverview, d1UsageStatus } from "./d1-usage.js";
+import { readD1GuardianStatus, runD1Guardian } from "./d1-guardian.js";
 import { openRouterQualityConfig, reviewWithOpenRouter } from "./quality/openrouter.js";
 import { ARCHITECT_ROLE_PERMISSIONS, DEFAULT_ENTERPRISE_POLICY, evaluateEnterpriseNode, normalizeEnterprisePolicy, requiredArchitectPermission, roleHasPermission } from "./enterprise/policy.js";
 import { buildAgentCapabilityContract, buildTaskEnvelope, buildResultEnvelope, verifyProjectResultEnvelope } from "./agent-contracts.js";
@@ -1801,7 +1802,7 @@ function projectAssignmentId(workItemId) {
   return "assignment_" + workItemId;
 }
 
-async function recoverStaleProjectAssignments(env) {
+export async function recoverStaleProjectAssignments(env) {
   await ensureProjectStorage(env);
 
   const active = await env.DB.prepare(
@@ -4714,7 +4715,7 @@ function operationalNodeState(node, now = Date.now()) {
   return "offline";
 }
 
-async function expireStaleCommands(env, nodeId = null) {
+export async function expireStaleCommands(env, nodeId = null) {
   await ensureNodeAiStorage(env);
   const cutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
   const stale = nodeId
@@ -6862,6 +6863,22 @@ async function handleApi(request, env, url) {
     if (request.method !== "GET") return methodNotAllowed(["GET"]);
     await authenticateArchitect(request, env);
     return json(await d1UsageOverview(env));
+  }
+
+  if (url.pathname === "/api/v1/architect/d1-guardian") {
+    if (request.method !== "GET") return methodNotAllowed(["GET"]);
+    await authenticateArchitect(request, env);
+    return json(await readD1GuardianStatus(env));
+  }
+
+  if (url.pathname === "/api/v1/architect/d1-guardian/run") {
+    if (request.method !== "POST") return methodNotAllowed(["POST"]);
+    await authenticateArchitect(request, env);
+    const result = await runD1Guardian(env, {
+      expireStaleCommands,
+      recoverStaleProjectAssignments
+    });
+    return json(result);
   }
 
   if (url.pathname === "/api/v1/architect/enterprise") {
