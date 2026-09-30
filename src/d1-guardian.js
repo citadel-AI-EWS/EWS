@@ -149,7 +149,7 @@ async function reconcileCompletedProjects(env) {
           SELECT 1
           FROM project_work_items AS w
           WHERE w.project_id = p.project_id
-            AND w.status NOT IN ('completed','failed','cancelled')
+            AND w.status NOT IN ('completed','cancelled')
         )
       ORDER BY p.updated_at ASC
       LIMIT ?
@@ -227,17 +227,26 @@ async function deepConsistencyWarnings(env) {
   return warnings;
 }
 
-export async function runD1Guardian(env, hooks = {}) {
-  await ensureD1GuardianStorage(env);
-
-  const claim = await env.DB.prepare(`
+async function claimGuardianRun(env, force) {
+  return env.DB.prepare(`
     UPDATE d1_guardian_state
     SET status = 'checking',
         next_run_at = datetime('now', '+5 minutes'),
         updated_at = CURRENT_TIMESTAMP
     WHERE guardian_id = 1
       AND (? = 1 OR next_run_at <= CURRENT_TIMESTAMP)
-  `).bind(hooks.force === true ? 1 : 0).run();
+  `).bind(force ? 1 : 0).run();
+}
+
+export async function runD1Guardian(env, hooks = {}) {
+  let claim;
+  try {
+    claim = await claimGuardianRun(env, hooks.force === true);
+  } catch (error) {
+    if (!missingOptionalTable(error)) throw error;
+    await ensureD1GuardianStorage(env);
+    claim = await claimGuardianRun(env, hooks.force === true);
+  }
   if (changes(claim) !== 1) {
     return { ok: true, skipped: true, reason: "guardian_not_due" };
   }
@@ -367,8 +376,7 @@ export async function runD1Guardian(env, hooks = {}) {
   };
 }
 
-export async function readD1GuardianStatus(env) {
-  await ensureD1GuardianStorage(env);
+async function guardianStatusRows(env) {
   const [state, actions] = await Promise.all([
     env.DB.prepare(`
       SELECT status, next_run_at, next_deep_check_at, last_run_at, last_ok_at,
@@ -384,6 +392,19 @@ export async function readD1GuardianStatus(env) {
       LIMIT 12
     `).all()
   ]);
+  return { state, actions };
+}
+
+export async function readD1GuardianStatus(env) {
+  let rows;
+  try {
+    rows = await guardianStatusRows(env);
+  } catch (error) {
+    if (!missingOptionalTable(error)) throw error;
+    await ensureD1GuardianStorage(env);
+    rows = await guardianStatusRows(env);
+  }
+  const { state, actions } = rows;
 
   let summary = {};
   try {
