@@ -1331,6 +1331,24 @@ async function ensureProjectStorage(env) {
       env.DB.prepare(`
         CREATE INDEX IF NOT EXISTS idx_project_specializations_project
         ON project_specializations(project_id, created_at)
+      `),
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS project_assignment_recovery_gate (
+          gate_id INTEGER PRIMARY KEY CHECK (gate_id = 1),
+          next_run_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `),
+      env.DB.prepare(`
+        INSERT OR IGNORE INTO project_assignment_recovery_gate (gate_id, next_run_at)
+        VALUES (1, CURRENT_TIMESTAMP)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_assignments_status_assigned_at
+        ON assignments(status, assigned_at)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_assignments_status_started_at
+        ON assignments(status, started_at)
       `)
     ]).catch((error) => {
       projectSchemaPromise = undefined;
@@ -1781,6 +1799,158 @@ function projectMissionId(workItemId) {
 
 function projectAssignmentId(workItemId) {
   return "assignment_" + workItemId;
+}
+
+async function recoverStaleProjectAssignments(env) {
+  await ensureProjectStorage(env);
+
+  const active = await env.DB.prepare(
+    "SELECT work_item_id FROM project_work_items WHERE status IN ('assigned','running') LIMIT 1"
+  ).first();
+  if (!active) return 0;
+
+  const gate = await env.DB.prepare(`
+    UPDATE project_assignment_recovery_gate
+    SET next_run_at = datetime('now', '+60 seconds')
+    WHERE gate_id = 1
+      AND next_run_at <= CURRENT_TIMESTAMP
+  `).run();
+  if ((gate?.meta?.changes || 0) !== 1) return 0;
+
+  const nodeLivenessCutoffIso = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const nodeLivenessCutoffSqlite = nodeLivenessCutoffIso
+    .replace("T", " ")
+    .replace(/\.\d{3}Z$/, "");
+  const livenessClause = `
+        AND (
+          n.node_id IS NULL
+          OR n.status != 'online'
+          OR (instr(n.last_seen_at, 'T') > 0 AND n.last_seen_at < ?)
+          OR (instr(n.last_seen_at, 'T') = 0 AND n.last_seen_at < ?)
+        )`;
+  const scans = await env.DB.batch([
+    env.DB.prepare(`
+      SELECT a.assignment_id, a.node_id, a.status AS assignment_status,
+        a.assigned_at, a.started_at, w.work_item_id, w.project_id,
+        w.status AS work_status
+      FROM assignments AS a
+      JOIN project_work_items AS w
+        ON a.assignment_id = ('assignment_' || w.work_item_id)
+      WHERE a.status = 'assigned'
+        AND a.assigned_at <= datetime('now', '-10 minutes')
+        AND w.status IN ('assigned','running')
+        AND NOT EXISTS (
+          SELECT 1 FROM results AS r WHERE r.assignment_id = a.assignment_id
+        )
+      ORDER BY a.assigned_at ASC
+      LIMIT 50
+    `),
+    env.DB.prepare(`
+      SELECT a.assignment_id, a.node_id, a.status AS assignment_status,
+        a.assigned_at, a.started_at, w.work_item_id, w.project_id,
+        w.status AS work_status
+      FROM assignments AS a
+      JOIN project_work_items AS w
+        ON a.assignment_id = ('assignment_' || w.work_item_id)
+      LEFT JOIN nodes AS n ON n.node_id = a.node_id
+      WHERE a.status = 'running'
+        AND a.started_at IS NOT NULL
+        AND a.started_at <= datetime('now', '-45 minutes')
+        AND w.status IN ('assigned','running')
+        AND NOT EXISTS (
+          SELECT 1 FROM results AS r WHERE r.assignment_id = a.assignment_id
+        )
+        ${livenessClause}
+      ORDER BY a.started_at ASC
+      LIMIT 50
+    `).bind(nodeLivenessCutoffIso, nodeLivenessCutoffSqlite),
+    env.DB.prepare(`
+      SELECT a.assignment_id, a.node_id, a.status AS assignment_status,
+        a.assigned_at, a.started_at, w.work_item_id, w.project_id,
+        w.status AS work_status
+      FROM assignments AS a
+      JOIN project_work_items AS w
+        ON a.assignment_id = ('assignment_' || w.work_item_id)
+      LEFT JOIN nodes AS n ON n.node_id = a.node_id
+      WHERE a.status = 'running'
+        AND a.started_at IS NULL
+        AND a.assigned_at <= datetime('now', '-45 minutes')
+        AND w.status IN ('assigned','running')
+        AND NOT EXISTS (
+          SELECT 1 FROM results AS r WHERE r.assignment_id = a.assignment_id
+        )
+        ${livenessClause}
+      ORDER BY a.assigned_at ASC
+      LIMIT 50
+    `).bind(nodeLivenessCutoffIso, nodeLivenessCutoffSqlite)
+  ]);
+
+  const stale = [
+    ...(scans[0]?.results || []),
+    ...(scans[1]?.results || []),
+    ...(scans[2]?.results || [])
+  ];
+  let recovered = 0;
+  for (const row of stale) {
+    const reason = row.assignment_status === "running"
+      ? "running_node_heartbeat_lost"
+      : "assigned_accept_lease_expired";
+    const detailsJson = JSON.stringify({
+      project_id: row.project_id,
+      previous_node_id: row.node_id,
+      previous_assignment_status: row.assignment_status,
+      previous_work_status: row.work_status,
+      reason
+    });
+    const requeue = await env.DB.batch([
+      env.DB.prepare(`
+        UPDATE assignments
+        SET status = 'failed', completed_at = CURRENT_TIMESTAMP
+        WHERE assignment_id = ?
+          AND node_id = ?
+          AND status = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM results WHERE results.assignment_id = assignments.assignment_id
+          )
+      `).bind(row.assignment_id, row.node_id, row.assignment_status),
+      env.DB.prepare(`
+        UPDATE project_work_items
+        SET node_id = NULL, status = 'planned', updated_at = CURRENT_TIMESTAMP
+        WHERE work_item_id = ?
+          AND project_id = ?
+          AND node_id = ?
+          AND status = ?
+          AND EXISTS (
+            SELECT 1 FROM assignments
+            WHERE assignment_id = ?
+              AND node_id = ?
+              AND status = 'failed'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM results WHERE assignment_id = ?
+          )
+      `).bind(
+        row.work_item_id, row.project_id, row.node_id, row.work_status,
+        row.assignment_id, row.node_id, row.assignment_id
+      ),
+      env.DB.prepare(`
+        INSERT INTO audit_events (
+          actor_type, actor_id, action, target_type, target_id, details_json
+        )
+        SELECT 'controller', 'assignment-reaper', 'project.work.requeued_stale',
+          'project_work_item', ?, ?
+        WHERE EXISTS (
+          SELECT 1 FROM project_work_items
+          WHERE work_item_id = ?
+            AND project_id = ?
+            AND status = 'planned'
+            AND node_id IS NULL
+        )
+      `).bind(row.work_item_id, detailsJson, row.work_item_id, row.project_id)
+    ]);
+    if ((requeue[1]?.meta?.changes || 0) === 1) recovered += 1;
+  }
+  return recovered;
 }
 
 function projectExecutionMode(sourceType) {
@@ -3386,6 +3556,7 @@ async function listAssignments(request, env, nodeId, url) {
     return json({ ok: true, node_status: "paused", assignments: [] });
   }
 
+  await recoverStaleProjectAssignments(env);
   await materializeProjectWorkForNode(env, nodeId);
 
   const query = await env.DB.prepare(`
