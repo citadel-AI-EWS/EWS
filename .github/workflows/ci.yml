@@ -246,10 +246,34 @@ jobs:
           }
           Write-Host "Windows installer AST + real SCM round-trip: OK"
 
+  operations-browser:
+    name: Operations Controller error regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm install --no-save --package-lock=false @playwright/test@1.63.0
+      - run: npx playwright install --with-deps chromium
+      - name: Browser against actual local Worker and SQLite
+        env:
+          OPERATIONS_EVIDENCE_DIR: operations-error-evidence
+        run: node tests/operations-controller-errors.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: operations-controller-errors
+          path: operations-error-evidence/
+          if-no-files-found: warn
+
   gate:
     name: CI gate
     if: always()
-    needs: [validate-linux, agent-package, windows-agent]
+    needs: [validate-linux, agent-package, windows-agent, operations-browser]
     runs-on: ubuntu-latest
     steps:
       - name: Require every CI job to pass
@@ -257,4 +281,5 @@ jobs:
           test "${{ needs.validate-linux.result }}" = "success"
           test "${{ needs.agent-package.result }}" = "success"
           test "${{ needs.windows-agent.result }}" = "success"
+          test "${{ needs.operations-browser.result }}" = "success"
           echo "All CI gates passed."
