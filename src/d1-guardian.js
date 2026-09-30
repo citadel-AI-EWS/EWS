@@ -287,11 +287,11 @@ export async function runD1Guardian(env, hooks = {}) {
 
   await repairRule("stale_nodes_offline", () => markStaleNodesOffline(env));
   if (typeof hooks.expireStaleCommands === "function") {
-    await repairRule("stale_commands_expired", () => hooks.expireStaleCommands(env));
+    await repairRule("stale_commands_expired", () => hooks.expireStaleCommands(env, null, GUARDIAN_BATCH_LIMIT));
   }
   if (typeof hooks.recoverStaleProjectAssignments === "function") {
     await repairRule("stale_project_assignments_requeued", () =>
-      hooks.recoverStaleProjectAssignments(env)
+      hooks.recoverStaleProjectAssignments(env, GUARDIAN_BATCH_LIMIT)
     );
   }
   await repairRule("projects_marked_running", () => reconcileRunningProjects(env));
