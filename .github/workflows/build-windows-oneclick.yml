@@ -96,6 +96,79 @@ jobs:
           ./scripts/build_windows_oneclick.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Portable CMD fallback smoke test
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -LiteralPath dist -Filter "CITADEL_EWS_Portable_Fallback_*_x64.zip" | Select-Object -First 1
+          if (-not $zip) { throw "Portable fallback artifact not found." }
+
+          $root = Join-Path $env:RUNNER_TEMP "citadel-portable-fallback"
+          Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $root -Force
+
+          $runtime = Join-Path $root "runtime"
+          $python = Join-Path $runtime "python.exe"
+          $helper = Join-Path $root "portable_fallback.py"
+          if (-not (Test-Path -LiteralPath $python)) { throw "Portable bundled Python missing." }
+          if (-not (Test-Path -LiteralPath $helper)) { throw "Portable fallback helper missing." }
+          if (-not (Test-Path -LiteralPath (Join-Path $root "CITADEL_PORTABLE_FALLBACK.cmd"))) {
+            throw "Portable CMD entrypoint missing."
+          }
+
+          $oldHome = $env:PYTHONHOME
+          try {
+            $env:PYTHONHOME = $runtime
+            & $python $helper install --source $root --controller https://127.0.0.1:9
+            if ($LASTEXITCODE -ne 0) { throw "Portable fallback install failed." }
+
+            $agentRoot = Join-Path $env:LOCALAPPDATA "CitadelEWS\agent"
+            $stateRoot = Join-Path $env:LOCALAPPDATA "CitadelEWS\state"
+            $startup = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup\CITADEL EWS Portable.cmd"
+            if (-not (Test-Path -LiteralPath (Join-Path $agentRoot "runtime\python.exe"))) {
+              throw "Portable installed runtime missing."
+            }
+            if (-not (Test-Path -LiteralPath $startup)) {
+              throw "Portable Startup entry missing."
+            }
+            if ((Get-Content -LiteralPath (Join-Path $stateRoot "install-mode.txt") -Raw).Trim() -ne "windows_user_portable") {
+              throw "Portable install mode was not recorded."
+            }
+            $cfg = Get-Content -LiteralPath (Join-Path $stateRoot "config.json") -Raw | ConvertFrom-Json
+            if ($cfg.controller_url -ne "https://127.0.0.1:9") {
+              throw "Portable Controller URL was not written."
+            }
+
+            Start-Sleep -Seconds 3
+            $supervisor = Get-CimInstance Win32_Process | Where-Object {
+              $_.CommandLine -and $_.CommandLine -like "*portable_fallback.py*supervise*"
+            } | Select-Object -First 1
+            if (-not $supervisor) { throw "Portable supervisor did not start." }
+
+            $agent = Get-CimInstance Win32_Process | Where-Object {
+              $_.CommandLine -and $_.CommandLine -like "*citadel_node_v2.py*run*--config*"
+            } | Select-Object -First 1
+            if (-not $agent) { throw "Portable agent child did not start." }
+
+            & $python $helper uninstall
+            if ($LASTEXITCODE -ne 0) { throw "Portable fallback uninstall failed." }
+            Start-Sleep -Seconds 1
+
+            if (Test-Path -LiteralPath $startup) { throw "Portable Startup entry remained after uninstall." }
+            if (Test-Path -LiteralPath $agentRoot) { throw "Portable agent tree remained after uninstall." }
+            $leftover = Get-CimInstance Win32_Process | Where-Object {
+              $_.CommandLine -and (
+                $_.CommandLine -like "*portable_fallback.py*supervise*" -or
+                $_.CommandLine -like "*citadel_node_v2.py*run*--config*"
+              )
+            } | Select-Object -First 1
+            if ($leftover) { throw "Portable uninstall left a CITADEL process running." }
+
+            Remove-Item -LiteralPath $stateRoot -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "Windows portable CMD fallback install/start/uninstall: PASS"
+          } finally {
+            $env:PYTHONHOME = $oldHome
+          }
+
       - name: Silent install smoke test
         shell: pwsh
         run: |
@@ -526,5 +599,7 @@ jobs:
           path: |
             dist/CITADEL_EWS_Node_Setup_*_x64.exe
             dist/CITADEL_EWS_Node_Setup_*_x64.exe.sha256
+            dist/CITADEL_EWS_Portable_Fallback_*_x64.zip
+            dist/CITADEL_EWS_Portable_Fallback_*_x64.zip.sha256
           if-no-files-found: error
           retention-days: 14
