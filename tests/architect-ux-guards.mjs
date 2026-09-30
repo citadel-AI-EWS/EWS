@@ -695,6 +695,8 @@ assert.match(operations, /Официальный установщик LM Studio 
 assert.ok(operations.includes("Date.now()-lastProjectsAt>300000"), "idle project polling must be throttled");
 assert.ok(operations.includes("needProjects?api('/projects'"), "active project polling must remain live");
 assert.ok(operations.includes("сохраняются, пока не появится подходящий исполнитель"), "project retention copy must match durable queue behavior");
+assert.ok(operations.includes("aiLive=aiRunning&&['online','paused'].includes(n.status)"), "AI LIVE badge must require a live/paused node");
+assert.ok(operations.includes("✦ AI · последнее состояние"), "offline nodes must label stale AI state explicitly");
 
 assert.ok(operations.includes("Promise.allSettled([api('/machines'"), "partial refresh must use allSettled");
 assert.ok(operations.includes("Часть данных не обновлена"), "partial refresh warning missing");
