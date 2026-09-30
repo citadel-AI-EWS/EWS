@@ -432,6 +432,13 @@ class Identity:
         return b64url(self.require_key().sign(value))
 
 
+class ControllerApiError(RuntimeError):
+    def __init__(self, status: int, code: str) -> None:
+        self.status = int(status)
+        self.code = str(code)
+        super().__init__(f"controller HTTP {self.status}: {self.code}")
+
+
 class ApiClient:
     def __init__(self, config: AgentConfig, identity: Identity) -> None:
         self.config = config
@@ -454,6 +461,8 @@ class ApiClient:
         path: str,
         body: Any = None,
         signed: bool = True,
+        *,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         method = method.upper()
         if not path.startswith("/"):
@@ -479,7 +488,11 @@ class ApiClient:
         connection = self.connection_type(
             self.host,
             self.port,
-            timeout=self.config.request_timeout_seconds,
+            timeout=(
+                self.config.request_timeout_seconds
+                if timeout_seconds is None
+                else max(1.0, float(timeout_seconds))
+            ),
         )
         try:
             connection.request(
@@ -499,7 +512,7 @@ class ApiClient:
                 raise RuntimeError("controller returned invalid JSON") from exc
             if not 200 <= response.status < 300:
                 error = value.get("error") if isinstance(value, dict) else decoded
-                raise RuntimeError(f"controller HTTP {response.status}: {error}")
+                raise ControllerApiError(response.status, str(error))
             if not isinstance(value, dict):
                 raise RuntimeError("controller response must be a JSON object")
             return value
@@ -526,6 +539,14 @@ class ResultQueue:
             try:
                 submit(item)
                 sent += 1
+            except ControllerApiError as error:
+                if error.status == 409 and error.code in {
+                    "assignment_not_active",
+                    "result_already_exists",
+                }:
+                    continue
+                remaining.extend(items[index:])
+                break
             except Exception:
                 remaining.extend(items[index:])
                 break
@@ -954,7 +975,7 @@ class Agent:
         )
         return node_id
 
-    def heartbeat(self) -> None:
+    def heartbeat(self, *, timeout_seconds: float | None = None) -> None:
         node_id = self.require_node_id()
         network = local_network_addresses()
         now = time.monotonic()
@@ -976,6 +997,7 @@ class Agent:
             "POST",
             f"/api/v1/nodes/{node_id}/heartbeat",
             payload,
+            timeout_seconds=timeout_seconds,
         )
         self.last_heartbeat = time.monotonic()
         if time.monotonic() - self.last_network_remember >= 300:
@@ -1350,6 +1372,18 @@ class Agent:
             "completed_at": now_iso(),
         }
 
+    def _keep_assignment_live(self, stop_event: threading.Event) -> None:
+        """Keep node liveness fresh while a long local assignment is executing."""
+        interval = max(5.0, min(float(self.config.heartbeat_seconds), 30.0))
+        while not stop_event.wait(interval):
+            try:
+                self.heartbeat(timeout_seconds=5.0)
+            except Exception as error:
+                self.log.write(
+                    "assignment_heartbeat_failed",
+                    error=str(error)[:300],
+                )
+
     def execute_assignment(self, assignment: dict[str, Any]) -> None:
         node_id = self.require_node_id()
         assignment_id = str(assignment.get("assignment_id") or "")
@@ -1374,6 +1408,14 @@ class Agent:
             f"/api/v1/nodes/{node_id}/assignments/{quoted}/accept",
             {},
         )
+        heartbeat_stop = threading.Event()
+        heartbeat_thread = threading.Thread(
+            target=self._keep_assignment_live,
+            args=(heartbeat_stop,),
+            name="citadel-assignment-heartbeat",
+            daemon=True,
+        )
+        heartbeat_thread.start()
         started = time.monotonic()
         try:
             if is_project_python:
@@ -1407,6 +1449,9 @@ class Agent:
                 "sensitivity": "internal",
                 "report": {"error_type": type(error).__name__, "error_code": local_error_code(error)},
             }
+        finally:
+            heartbeat_stop.set()
+            heartbeat_thread.join(timeout=6.0)
         try:
             self.submit_result(result)
             self.log.write(
