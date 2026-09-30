@@ -9,7 +9,9 @@
     "D1_USAGE_PLAN": "free"
   },
   "triggers": {
-    "crons": ["17 * * * *"]
+    // Telemetry retention keeps its legacy schedule: "crons": ["17 * * * *"].
+    // D1 Guardian adds the separate five-minute trigger below.
+    "crons": ["*/5 * * * *", "17 * * * *"]
   },
   "assets": {
     "directory": "./public",

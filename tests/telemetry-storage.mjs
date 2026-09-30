@@ -343,7 +343,7 @@ state.logs.push({
   received_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString()
 });
 
-await worker.scheduled({}, env);
+await worker.scheduled({ cron: "17 * * * *" }, env);
 assert.equal(state.logs.some((item) => item.event_id === "expired_event"), false);
 
 const architectHeaders = { authorization: `Bearer ${architectToken}` };

@@ -1,5 +1,6 @@
 import { getProjectExperienceRegistry } from "./experience/registry.js";
 import { d1UsageOverview, d1UsageStatus } from "./d1-usage.js";
+import { readD1GuardianStatus, runD1Guardian } from "./d1-guardian.js";
 import { openRouterQualityConfig, reviewWithOpenRouter } from "./quality/openrouter.js";
 import { ARCHITECT_ROLE_PERMISSIONS, DEFAULT_ENTERPRISE_POLICY, evaluateEnterpriseNode, normalizeEnterprisePolicy, requiredArchitectPermission, roleHasPermission } from "./enterprise/policy.js";
 import { buildAgentCapabilityContract, buildTaskEnvelope, buildResultEnvelope, verifyProjectResultEnvelope } from "./agent-contracts.js";
@@ -1801,7 +1802,8 @@ function projectAssignmentId(workItemId) {
   return "assignment_" + workItemId;
 }
 
-async function recoverStaleProjectAssignments(env) {
+export async function recoverStaleProjectAssignments(env) {
+  const maxRows = arguments.length > 1 ? arguments[1] : 150;
   await ensureProjectStorage(env);
 
   const active = await env.DB.prepare(
@@ -1885,11 +1887,12 @@ async function recoverStaleProjectAssignments(env) {
     `).bind(nodeLivenessCutoffIso, nodeLivenessCutoffSqlite)
   ]);
 
+  const recoveryLimit = Math.max(1, Math.min(150, Number(maxRows) || 150));
   const stale = [
     ...(scans[0]?.results || []),
     ...(scans[1]?.results || []),
     ...(scans[2]?.results || [])
-  ];
+  ].slice(0, recoveryLimit);
   let recovered = 0;
   for (const row of stale) {
     const reason = row.assignment_status === "running"
@@ -4714,7 +4717,8 @@ function operationalNodeState(node, now = Date.now()) {
   return "offline";
 }
 
-async function expireStaleCommands(env, nodeId = null) {
+export async function expireStaleCommands(env, nodeId = null) {
+  const maxRows = arguments.length > 2 ? arguments[2] : 250;
   await ensureNodeAiStorage(env);
   const cutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
   const stale = nodeId
@@ -4750,7 +4754,8 @@ async function expireStaleCommands(env, nodeId = null) {
         LIMIT 250
       `).bind(cutoff).all();
 
-  const rows = stale.results || [];
+  const commandLimit = Math.max(1, Math.min(nodeId ? 50 : 250, Number(maxRows) || (nodeId ? 50 : 250)));
+  const rows = (stale.results || []).slice(0, commandLimit);
   for (const row of rows) {
     const update = await env.DB.prepare(`
       UPDATE commands
@@ -6862,6 +6867,23 @@ async function handleApi(request, env, url) {
     if (request.method !== "GET") return methodNotAllowed(["GET"]);
     await authenticateArchitect(request, env);
     return json(await d1UsageOverview(env));
+  }
+
+  if (url.pathname === "/api/v1/architect/d1-guardian") {
+    if (request.method !== "GET") return methodNotAllowed(["GET"]);
+    await authenticateArchitect(request, env);
+    return json(await readD1GuardianStatus(env));
+  }
+
+  if (url.pathname === "/api/v1/architect/d1-guardian/run") {
+    if (request.method !== "POST") return methodNotAllowed(["POST"]);
+    await authenticateArchitect(request, env);
+    const result = await runD1Guardian(env, {
+      expireStaleCommands,
+      recoverStaleProjectAssignments,
+      force: true
+    });
+    return json(result);
   }
 
   if (url.pathname === "/api/v1/architect/enterprise") {
