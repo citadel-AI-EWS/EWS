@@ -40,5 +40,10 @@ assert.match(operations, /id="guardianState"/);
 assert.match(operations, /id="guardianRun"/);
 assert.match(operations, /Автоконтроль запускается каждые 5 минут/);
 assert.match(operations, /loadGuardian\(\)/);
+assert.match(guardian, /d1_write_quota_unavailable/);
+assert.match(guardian, /guardian_storage_bootstrap_failed/);
+assert.match(guardian, /storage_ready: false/);
+assert.match(operations, /Ждёт доступ к записи D1/);
+assert.match(operations, /Cloudflare D1 сейчас не принимает записи/);
 
 console.log("D1 Guardian bounded non-destructive automation guards: OK");

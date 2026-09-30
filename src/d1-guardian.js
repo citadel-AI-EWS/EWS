@@ -17,6 +17,41 @@ function errorCode(error) {
     .slice(0, 160);
 }
 
+function d1WriteUnavailable(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  return message.includes("d1") && (
+    message.includes("write") && (
+      message.includes("limit") ||
+      message.includes("quota") ||
+      message.includes("exceed") ||
+      message.includes("too many")
+    )
+  );
+}
+
+function guardianStorageFallback(error) {
+  const quotaBlocked = d1WriteUnavailable(error);
+  return {
+    ok: true,
+    guardian: {
+      status: quotaBlocked ? "blocked" : "error",
+      reason: quotaBlocked
+        ? "d1_write_quota_unavailable"
+        : "guardian_storage_bootstrap_failed",
+      storage_ready: false,
+      checked_rules: 0,
+      detected_issues: 0,
+      repaired_rows: 0,
+      warning_count: 1,
+      last_run_at: null,
+      last_ok_at: null,
+      diagnostic_code: errorCode(error),
+      summary: {}
+    },
+    recent_actions: []
+  };
+}
+
 export async function ensureD1GuardianStorage(env) {
   if (!guardianSchemaPromise) {
     guardianSchemaPromise = env.DB.batch([
@@ -223,8 +258,19 @@ export async function runD1Guardian(env, hooks = {}) {
     claim = await claimGuardianRun(env, hooks.force === true);
   } catch (error) {
     if (!missingOptionalTable(error)) throw error;
-    await ensureD1GuardianStorage(env);
-    claim = await claimGuardianRun(env, hooks.force === true);
+    try {
+      await ensureD1GuardianStorage(env);
+      claim = await claimGuardianRun(env, hooks.force === true);
+    } catch (bootstrapError) {
+      const fallback = guardianStorageFallback(bootstrapError);
+      return {
+        ok: false,
+        skipped: true,
+        status: fallback.guardian.status,
+        reason: fallback.guardian.reason,
+        diagnostic_code: fallback.guardian.diagnostic_code
+      };
+    }
   }
   if (changes(claim) !== 1) {
     return { ok: true, skipped: true, reason: "guardian_not_due" };
@@ -396,8 +442,12 @@ export async function readD1GuardianStatus(env) {
     rows = await guardianStatusRows(env);
   } catch (error) {
     if (!missingOptionalTable(error)) throw error;
-    await ensureD1GuardianStorage(env);
-    rows = await guardianStatusRows(env);
+    try {
+      await ensureD1GuardianStorage(env);
+      rows = await guardianStatusRows(env);
+    } catch (bootstrapError) {
+      return guardianStorageFallback(bootstrapError);
+    }
   }
   const { state, actions } = rows;
 
@@ -418,6 +468,7 @@ export async function readD1GuardianStatus(env) {
         repaired_rows: 0,
         warning_count: 0
       }),
+      storage_ready: true,
       summary,
       summary_json: undefined
     },
