@@ -54,9 +54,15 @@ function parseTime(value){if(!value)return NaN;const raw=String(value).replace("
 function nodeCard(node){const el=document.createElement("article");const live=node.status==="online"&&Date.now()-parseTime(node.last_seen_at)<=300000;el.className=`node ${live?"online":""}`;const title=document.createElement("strong");title.textContent=node.display_name||node.node_id;const pill=document.createElement("span");pill.className="pill";pill.textContent=live?"LIVE":"OFFLINE";pill.style.marginInlineStart="8px";const meta=document.createElement("div");meta.className="meta";meta.textContent=`${tr("agent")}: ${node.agent_version||"—"}\n${tr("last")}: ${node.last_seen_at||"—"}`;el.append(title,pill,meta);return el}
 async function loadJson(path){const r=await fetch(path,{cache:"default"});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||`HTTP ${r.status}`);return d}
 function nextUtcReset(){const now=new Date();return Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()+1,0,0,5)}
-function scheduleRefresh(delay=60000){if(refreshTimer)clearTimeout(refreshTimer);refreshTimer=setTimeout(refresh,Math.max(1000,delay))}
+const PUBLIC_HUB_REFRESH_MS=300000;
+function scheduleRefresh(delay=PUBLIC_HUB_REFRESH_MS){if(refreshTimer)clearTimeout(refreshTimer);refreshTimer=setTimeout(refresh,Math.max(1000,delay))}
 async function refreshHealth(){if(!healthState||Date.now()-healthFetchedAt>=300000){healthState=await loadJson("/api/health");healthFetchedAt=Date.now()}return healthState}
 async function refresh(){
+  if(document.hidden){
+    if(refreshTimer)clearTimeout(refreshTimer);
+    refreshTimer=null;
+    return;
+  }
   if(refreshInFlight)return refreshInFlight;
   if(Date.now()<d1BlockedUntil){scheduleRefresh(d1BlockedUntil-Date.now()+1000);return}
   refreshInFlight=(async()=>{
@@ -78,13 +84,21 @@ async function refresh(){
       setStatus(false,`${tr("noLink")}: ${e.message}`);
     }finally{
       refreshInFlight=null;
-      const delay=d1BlockedUntil>Date.now()?d1BlockedUntil-Date.now()+1000:60000;
-      scheduleRefresh(delay);
+      const delay=d1BlockedUntil>Date.now()?d1BlockedUntil-Date.now()+1000:PUBLIC_HUB_REFRESH_MS;
+      if(!document.hidden)scheduleRefresh(delay);
     }
   })();
   return refreshInFlight;
 }
 function updateSiteClock(){const locale=lang==="he"?"he-IL":lang==="en"?"en-GB":"ru-RU";document.getElementById("siteClock").textContent=new Intl.DateTimeFormat(locale,{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}).format(new Date())}
+document.addEventListener("visibilitychange",()=>{
+  if(document.hidden){
+    if(refreshTimer)clearTimeout(refreshTimer);
+    refreshTimer=null;
+  }else{
+    refresh();
+  }
+});
 applyLanguage(lang);updateSiteClock();setInterval(updateSiteClock,15000);
 </script>
 </body>
