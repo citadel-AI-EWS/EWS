@@ -19,6 +19,10 @@ assert.match(guardian, /LIMIT \?/, "repair queries must use explicit limits");
 assert.match(guardian, /stale_nodes_offline/, "stale node repair missing");
 assert.match(guardian, /stale_commands_expired/, "stale command repair missing");
 assert.match(guardian, /stale_project_assignments_requeued/, "stale assignment recovery missing");
+assert.match(guardian, /expireStaleCommands\(env, null, GUARDIAN_BATCH_LIMIT\)/,
+  "Guardian command expiry must use the 50-row repair cap");
+assert.match(guardian, /recoverStaleProjectAssignments\(env, GUARDIAN_BATCH_LIMIT\)/,
+  "Guardian assignment recovery must use the 50-row repair cap");
 assert.match(guardian, /projects_marked_running/, "project running reconciliation missing");
 assert.match(guardian, /projects_marked_completed/, "project completion reconciliation missing");
 assert.match(guardian, /expired_request_nonces_pruned/, "nonce retention missing");
