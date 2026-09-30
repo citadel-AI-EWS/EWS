@@ -30,6 +30,7 @@ import socket
 import subprocess  # nosec B404
 import sys
 import tempfile
+import threading
 import time
 import urllib.parse
 import uuid
@@ -48,7 +49,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.20"
+VERSION = "0.3.23"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -870,6 +871,9 @@ HANDLERS: dict[str, MissionHandler] = {"system_inventory": system_inventory}
 class Agent:
     def __init__(self, config: AgentConfig, config_path: Path | None = None) -> None:
         self.config = config
+        self._state_lock = threading.RLock()
+        self._operation_depth = 0
+        self._active_lm_connection = None
         self.config_path = (config_path or Path("config.json")).resolve()
         if os.name == "nt":
             _ensure_windows_enterprise_probe_file()
@@ -1151,6 +1155,10 @@ class Agent:
         return model
 
     def execute_project_text(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self.long_operation():
+            return self._execute_project_text(payload)
+
+    def _execute_project_text(self, payload: dict[str, Any]) -> dict[str, Any]:
         task_text = str(payload.get("task_text") or "").strip()
         role_name = str(payload.get("role_name") or "planner").strip()
         project_id = str(payload.get("project_id") or "").strip()
@@ -1556,10 +1564,65 @@ class Agent:
         return state if isinstance(state, dict) else {}
 
     def save_lmstudio_state(self, **updates: Any) -> None:
-        state = self.lmstudio_state()
-        state.update(updates)
-        state["updated_at"] = now_iso()
-        atomic_write(self.lmstudio_state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+        with self._state_lock:
+            state = self.lmstudio_state()
+            state.update(updates)
+            state["updated_at"] = now_iso()
+            atomic_write(self.lmstudio_state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+
+    def raise_if_stopping(self) -> None:
+        if self.lifecycle_stop_requested() or self.stop_path.exists():
+            raise SystemExit(0)
+
+    @contextlib.contextmanager
+    def long_operation(self, command_id: str | None = None):
+        """Maintain node liveness while the single executor performs blocking work."""
+        if self._operation_depth:
+            yield
+            return
+        self.raise_if_stopping()
+        self._operation_depth += 1
+        finished = threading.Event()
+        if command_id:
+            self.report_ai_state(operation_id=command_id, progress_current=0, progress_total=None,
+                                 progress_bytes=None, progress_total_bytes=None,
+                                 progress_phase="waiting_agent",
+                                 progress_detail="Command accepted by the agent")
+
+        def keepalive():
+            while not finished.is_set():
+                try:
+                    if self.lifecycle_stop_requested() or self.stop_path.exists():
+                        connection = self._active_lm_connection
+                        if connection and connection.sock:
+                            with contextlib.suppress(OSError):
+                                connection.sock.shutdown(socket.SHUT_RDWR)
+                        return
+                    self.heartbeat()
+                    if command_id:
+                        self.report_ai_state()
+                except Exception as error:
+                    self.log.write("operation_heartbeat_failed", error=local_error_code(error))
+                finished.wait(self.config.heartbeat_seconds)
+
+        thread = None
+        if self.identity.node_id:
+            thread = threading.Thread(target=keepalive, name="citadel-operation-heartbeat", daemon=True)
+            thread.start()
+        try:
+            yield
+        except SystemExit:
+            self.report_ai_state(progress_phase="cancelled",
+                                 progress_detail="Operation stopped locally")
+            raise
+        except Exception as error:
+            self.report_ai_state(progress_phase="failed", progress_detail=local_error_code(error))
+            raise
+        finally:
+            finished.set()
+            if thread:
+                thread.join(timeout=self.config.request_timeout_seconds + 1)
+            self._operation_depth -= 1
 
     def report_ai_state(self, **updates: Any) -> None:
         self.save_lmstudio_state(**updates)
@@ -1571,7 +1634,7 @@ class Agent:
             "progress_phase", "progress_current", "progress_total", "progress_bytes",
             "progress_total_bytes", "progress_detail", "download_job_id",
             "query_id", "query_mode", "query_status", "query_prompt", "query_answer",
-            "load_config",
+            "load_config", "operation_id",
         }
         body = {key: state.get(key) for key in allowed if key in state}
         try:
@@ -1945,7 +2008,18 @@ class Agent:
             progress_total=3,
             progress_detail="Stopping LM Studio runtime",
         )
-        if self.find_lms():
+        managed_home = self.lmstudio_runtime_home()
+        roots = []
+        for root in self.lmstudio_managed_roots():
+            try:
+                root.relative_to(managed_home)
+                roots.append(root)
+            except ValueError:
+                continue
+        executable = self.find_lms()
+        if executable and not any(Path(executable).resolve().is_relative_to(root) for root in roots):
+            raise RuntimeError("lmstudio_external_runtime_not_managed")
+        if executable:
             for args in (["unload", "--all"], ["server", "stop"], ["daemon", "down"]):
                 try:
                     self.run_lms(args, timeout=120)
@@ -1955,7 +2029,6 @@ class Agent:
                         argv=args[:2],
                         error=str(error)[:200],
                     )
-        roots = self.lmstudio_managed_roots()
         self.report_ai_state(
             progress_phase="runtime_remove",
             progress_current=1,
@@ -1970,7 +2043,7 @@ class Agent:
             shutil.rmtree(target)
             removed.append(str(target))
         if purge_data:
-            for pointer_home in (self.lmstudio_runtime_home(), Path.home().resolve()):
+            for pointer_home in (self.lmstudio_runtime_home(),):
                 pointer = pointer_home / ".lmstudio-home-pointer"
                 with contextlib.suppress(FileNotFoundError):
                     pointer.unlink()
@@ -2047,7 +2120,11 @@ class Agent:
         if status not in {"already_downloaded", "completed"}:
             if not isinstance(job_id, str) or not job_id:
                 raise RuntimeError("lmstudio_download_job_missing")
+            deadline = time.monotonic() + 3600
             while True:
+                self.raise_if_stopping()
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("lmstudio_download_timeout")
                 current = self.lmstudio_http_json(
                     "GET",
                     "/api/v1/models/download/status/" + urllib.parse.quote(job_id, safe=""),
@@ -2067,7 +2144,7 @@ class Agent:
                     break
                 if status == "failed":
                     raise RuntimeError("lmstudio_model_download_failed")
-                time.sleep(2)
+                self.interruptible_sleep(2)
         model_key = self.resolve_lmstudio_model_key(model, quantization)
         self.report_ai_state(
             installed=True, server_running=True, selected_model=model_key,
@@ -2215,10 +2292,7 @@ class Agent:
         request_id: str,
         python_context: str | None = None,
     ) -> str:
-        state = self.probe_lmstudio()
-        model = str(state.get("loaded_model") or state.get("selected_model") or "").strip()
-        if not model:
-            raise RuntimeError("lmstudio_model_not_loaded")
+        model = self.ensure_lmstudio_ready_for_inference()
         body: dict[str, Any] = {
             "model": model,
             "input": prompt,
@@ -2232,6 +2306,8 @@ class Agent:
             )
         connection = http.client.HTTPConnection("127.0.0.1", 1234, timeout=1800)
         answer = ""
+        completed = False
+        self._active_lm_connection = connection
         last_report = 0.0
         try:
             connection.request(
@@ -2246,7 +2322,10 @@ class Agent:
                 raise RuntimeError(f"lmstudio_http_{response.status}:{raw[:300]}")
             event_type = ""
             while True:
-                raw_line = response.readline()
+                self.raise_if_stopping()
+                raw_line = response.readline(262145)
+                if len(raw_line) > 262144:
+                    raise RuntimeError("lmstudio_event_too_large")
                 if not raw_line:
                     break
                 line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
@@ -2259,14 +2338,15 @@ class Agent:
                     event = json.loads(line[5:].strip())
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(event, dict):
+                    raise RuntimeError("lmstudio_invalid_event")
                 kind = str(event.get("type") or event_type)
                 if kind == "message.delta":
                     content = event.get("content")
                     if isinstance(content, str):
                         answer += content
                         if len(answer) > 64000:
-                            answer = answer[:64000] + "\n[truncated]"
-                            break
+                            raise RuntimeError("lmstudio_response_too_large")
                         now = time.monotonic()
                         if now - last_report >= 0.8:
                             self.report_ai_state(
@@ -2274,11 +2354,18 @@ class Agent:
                                 query_answer=answer, last_action="hybrid_query",
                             )
                             last_report = now
+                elif kind == "chat.end":
+                    completed = True
+                    break
                 elif kind == "error":
                     error = event.get("error")
                     raise RuntimeError("lmstudio_chat_error:" + str(error)[:300])
         finally:
+            self._active_lm_connection = None
             connection.close()
+        self.raise_if_stopping()
+        if not completed:
+            raise RuntimeError("lmstudio_stream_incomplete")
         if not answer.strip():
             raise RuntimeError("lmstudio_empty_response")
         return answer.strip()
@@ -2295,14 +2382,22 @@ class Agent:
             query_prompt=prompt, query_answer="", last_action="hybrid_query",
             progress_phase="query_running", progress_detail=f"Hybrid query: {mode}",
         )
-        python_answer = self.python_mode_answer(prompt) if mode in {"python", "both"} else None
-        if mode == "python":
-            answer = python_answer or ""
-        else:
-            answer = self.stream_lmstudio_answer(
-                prompt, settings, request_id,
-                python_context=python_answer if mode == "both" else None,
+        try:
+            python_answer = self.python_mode_answer(prompt) if mode in {"python", "both"} else None
+            if mode == "python":
+                answer = python_answer or ""
+            else:
+                answer = self.stream_lmstudio_answer(
+                    prompt, settings, request_id,
+                    python_context=python_answer if mode == "both" else None,
+                )
+        except (Exception, SystemExit) as error:
+            self.report_ai_state(
+                query_id=request_id, query_status="cancelled" if isinstance(error, SystemExit) else "failed",
+                progress_phase="cancelled" if isinstance(error, SystemExit) else "failed",
+                progress_detail="Operation stopped locally" if isinstance(error, SystemExit) else local_error_code(error),
             )
+            raise
         self.report_ai_state(
             query_id=request_id, query_mode=mode, query_status="completed",
             query_prompt=prompt, query_answer=answer, last_action="hybrid_query_completed",
@@ -2380,6 +2475,10 @@ class Agent:
             if not changed_items:
                 self.log.write("agent_update_noop", version=payload["version"], files=[])
                 return
+            for name in CORE_UPDATE_FILE_NAMES:
+                companion = staging / name
+                if not companion.exists() and (install_root / name).is_file():
+                    shutil.copy2(install_root / name, companion)
             entrypoint = staging / "citadel_node_v2.py"
             if entrypoint.exists():
                 # The argv is fixed and the shell remains disabled.
@@ -2406,7 +2505,7 @@ class Agent:
                     shutil.copy2(current, backup / name)
                 os.replace(staging / name, current)
                 replaced.append(name)
-            if "citadel_node_v2.py" in replaced:
+            if CORE_UPDATE_FILE_NAMES.intersection(replaced):
                 installed_entrypoint = install_root / "citadel_node_v2.py"
                 result = subprocess.run(  # nosec B603
                     [
@@ -2593,18 +2692,23 @@ class Agent:
                 elif command_type == "wake_peer":
                     self.send_wake_packet(command.get("payload") or {})
                 elif command_type == "lmstudio_install":
-                    self.install_lmstudio(command.get("payload") or {})
+                    with self.long_operation(command_id):
+                        self.install_lmstudio(command.get("payload") or {})
                 elif command_type == "lmstudio_uninstall":
-                    self.uninstall_lmstudio(command.get("payload") or {})
+                    with self.long_operation(command_id):
+                        self.uninstall_lmstudio(command.get("payload") or {})
                 elif command_type == "lmstudio_probe":
                     snapshot = self.probe_lmstudio()
                     self.report_ai_state(**{key: value for key, value in snapshot.items() if key != "loaded_models"})
                 elif command_type == "lmstudio_model_get":
-                    self.download_lmstudio_model(command.get("payload") or {})
+                    with self.long_operation(command_id):
+                        self.download_lmstudio_model(command.get("payload") or {})
                 elif command_type == "lmstudio_model_load":
-                    self.load_lmstudio_model(command.get("payload") or {})
+                    with self.long_operation(command_id):
+                        self.load_lmstudio_model(command.get("payload") or {})
                 elif command_type == "hybrid_query":
-                    self.run_hybrid_query(command.get("payload") or {})
+                    with self.long_operation(command_id):
+                        self.run_hybrid_query(command.get("payload") or {})
                 self.ack_command(command_id, "completed")
                 self.log.write(
                     "command_completed",

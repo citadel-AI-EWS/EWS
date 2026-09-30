@@ -33,6 +33,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 'data: {"type":"message.delta","content":"LM "}\n\n'
                 'event: message.delta\n'
                 'data: {"type":"message.delta","content":"OK"}\n\n'
+                'event: chat.end\ndata: {"type":"chat.end"}\n\n'
             ).encode("utf-8")
             content_type = "text/event-stream"
         elif self.path == "/v1/chat/completions":

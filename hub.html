@@ -50,7 +50,8 @@
     .hidden,[hidden]{display:none!important}.lm-float{position:fixed;right:18px;bottom:58px;z-index:1200;width:min(460px,calc(100vw - 24px));padding:16px;border:1px solid #3a5684;border-radius:18px;background:linear-gradient(155deg,#111d32,#08111f);box-shadow:0 24px 70px #000b}.lm-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.lm-head button{width:34px!important;height:34px;margin:0!important;padding:0!important;border-radius:9px}.lm-status{margin-top:10px;padding:10px;border-radius:10px;background:#0a1425;font-size:12px;color:#a9bbd6;line-height:1.5;white-space:pre-wrap}.lm-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}.lm-row button{margin-top:9px}.lm-float input,.lm-float select,.lm-float textarea{width:100%;margin-top:7px;border:1px solid #263c5c;border-radius:10px;background:#07101d;color:#d7e6ed;padding:9px}.lm-float textarea{min-height:110px;resize:vertical}.lm-link{display:inline-block;margin-top:8px;color:#8ebdff;font-size:12px}.lm-node{font-weight:850;margin-top:5px}.lm-progress{margin-top:10px}.lm-progress-track{height:8px;background:#07101d;border:1px solid #1e3550;border-radius:999px;overflow:hidden}.lm-progress-track i{display:block;height:100%;width:0;background:linear-gradient(90deg,#36d399,#5fa8ff);transition:width .3s}.lm-progress-text{margin-top:5px;color:#8ea5c5;font-size:11px;white-space:pre-wrap}.hybrid-float{right:496px}.hybrid-modes{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}.hybrid-modes button.active{outline:2px solid #5aa7ff}.hybrid-answer{max-height:280px;overflow:auto;white-space:pre-wrap}.lm-loaded{color:#65e4a1}.lm-pending{color:#ffc56a}@media(max-width:980px){.hybrid-float{right:18px;bottom:590px}}@media(max-width:560px){.lm-float{right:12px;bottom:52px}.hybrid-float{right:12px;bottom:52px}.lm-row{grid-template-columns:1fr}}
     .site-clock{position:fixed;right:12px;bottom:10px;z-index:45;padding:7px 10px;border:1px solid var(--line2);border-radius:10px;background:#07141bea;color:#a9c3cc;font:12px/1.2 ui-monospace,SFMono-Regular,monospace;box-shadow:var(--shadow)}[dir="rtl"] .site-clock{right:auto;left:12px}.footer{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:20px;color:#5f7b86;font-size:11px}.footer a{color:#83dfff;text-decoration:none}.toast{position:fixed;right:22px;bottom:22px;z-index:50;min-width:260px;max-width:420px;border:1px solid var(--line2);background:#07141bea;border-radius:14px;padding:12px 14px;box-shadow:var(--shadow);transform:translateY(20px);opacity:0;pointer-events:none;transition:.2s ease}.toast.show{transform:none;opacity:1}.toast.ok{border-color:#27634c}.toast.bad{border-color:#6b3038}.toast strong{display:block;font-size:12px}.toast span{display:block;font-size:11px;color:var(--muted);margin-top:4px}
     @media(max-width:1100px){.metrics{grid-template-columns:repeat(3,1fr)}.layout,.hero{grid-template-columns:1fr}.topbar{position:relative;top:0}}@media(max-width:720px){.shell{width:min(100% - 18px,1480px);padding-top:9px}.topbar{grid-template-columns:1fr}.toptools{justify-content:flex-start}.heroCard{padding:20px}.metrics{grid-template-columns:1fr 1fr}.toolbar{grid-template-columns:1fr}.actionsTop{justify-content:flex-start}.grid{grid-template-columns:1fr}.sshGrid{grid-template-columns:1fr}.sshGrid .field:first-child{grid-column:auto}.nodeMeta{grid-template-columns:86px 1fr}.footer{align-items:flex-start;flex-direction:column}}
-  </style>
+  .operation-view{margin:12px 0;padding:14px;border:1px solid #365978;border-radius:14px;background:linear-gradient(135deg,#0d1b29,#11283a);overflow:hidden;color:#e8f1fb}.operation-heading{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.operation-heading strong{flex:1;min-width:120px}.operation-time{font-variant-numeric:tabular-nums;color:#80e7d1}.operation-track{height:10px;border-radius:999px;background:#23364a;overflow:hidden;margin:12px 0 6px;position:relative}.operation-fill{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#68e6cf,#70a9ff);transition:width .35s ease}.operation-track.indeterminate .operation-fill{width:35%;animation:operationSlide 1.5s ease-in-out infinite}.operation-view[data-state=running] .operation-fill,.operation-view[data-state=receiving] .operation-fill{background-image:repeating-linear-gradient(110deg,#68e6cf 0 12px,#70a9ff 12px 24px);background-size:60px 100%;animation:operationStripes 1s linear infinite}.operation-track.indeterminate .operation-fill{animation:operationSlide 1.5s ease-in-out infinite!important}.operation-view[data-state=failed]{border-color:#8b3e4a}.operation-view[data-state=failed] .operation-icon{color:#ff9a9a}.operation-view[data-state=completed]{border-color:#347058}.operation-view[data-state=completed] .operation-icon{color:#9bf2c4}.operation-detail{font-size:13px;line-height:1.5;color:#a9bed2;margin:7px 0 0;overflow-wrap:anywhere}.operation-caption{font-variant-numeric:tabular-nums;color:#b8cce0}.operation-steps{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.operation-steps span{padding:4px 8px;border:1px solid #34475c;border-radius:999px;font-size:12px;color:#8fa5ba}.operation-steps .current{color:#c6fff0;border-color:#68e6cf;background:#14342d}.operation-steps .done{color:#9bf2c4}.operation-view .spin{flex:0 0 15px}@keyframes operationSlide{0%{transform:translateX(-100%)}100%{transform:translateX(390%)}}@keyframes operationStripes{to{background-position:60px 0}}@media(prefers-reduced-motion:reduce){.operation-track .operation-fill{animation:none!important;transition:none}.operation-track.indeterminate .operation-fill{width:100%;opacity:.4;transform:none}}
+#lmstudioProgress{display:none}</style>
 </head>
 <body>
   <div class="scanline"></div>
@@ -162,7 +163,7 @@
       <input id="lmstudioQuant" placeholder="quantization, напр. Q4_K_M">
     </div>
     <input id="lmstudioContext" inputmode="numeric" placeholder="context length, напр. 8192">
-    <div id="lmstudioProgress" class="lm-progress">
+    <div id="lmstudioOperation" hidden></div><div id="lmstudioProgress" class="lm-progress">
       <div class="lm-progress-track"><i id="lmstudioProgressBar"></i></div>
       <div id="lmstudioProgressText" class="lm-progress-text">Прогресс пока не получен.</div>
     </div>
@@ -184,16 +185,39 @@
       <input id="hybridMaxTokens" inputmode="numeric" value="2048" aria-label="Maximum output tokens">
     </div>
     <button id="hybridSend" class="btn good" type="button" style="margin-top:9px;width:100%">Выполнить</button>
-    <div id="hybridStatus" class="lm-status">Готово к запросу.</div>
+    <div id="hybridOperation" hidden></div><div id="hybridStatus" class="lm-status">Готово к запросу.</div>
     <pre id="hybridAnswer" class="lm-status hybrid-answer"></pre>
   </div>
   <div id="siteClock" class="site-clock" aria-label="Current date and time">—</div>
   <div id="toast" class="toast"><strong id="toastTitle"></strong><span id="toastText"></span></div>
 
   <script>
+const progressPhases={waiting_agent:'Ожидаю подтверждение агента',helper_download:'Скачивание установщика',helper_verified:'Установщик проверен',upstream_installer:'Официальный установщик LM Studio сейчас работает',runtime_verified:'Проверка установки',daemon_running:'Запуск движка модели',runtime_uninstall:'Остановка LM Studio',runtime_remove:'Удаление LM Studio',model_download:'Скачивание языковой модели',model_load:'Загрузка модели в память',server_recovery:'Восстановление сервера модели',model_recovery:'Восстановление модели',mini_agent_running:'Агент готовит ответ',synthesis_running:'Подготовка итогового ответа',download_complete:'Модель скачана',load_complete:'Модель загружена',complete:'Установка завершена',completed:'Готово',completed_partial:'Готово с замечаниями',query_complete:'Ответ получен',query_running:'Ожидаю ответ агента',failed:'Ошибка',cancelled:'Операция остановлена'};
+const operationTitles={lmstudio_install:'Установка LM Studio',lmstudio_model_get:'Скачивание модели',lmstudio_model_load:'Загрузка модели в память',lmstudio_uninstall:'Удаление LM Studio',hybrid_query:'Запрос к агенту'};
+function progressElement(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e}
+function progressBytes(value){return (Number(value)/1048576).toLocaleString('ru-RU',{maximumFractionDigits:1})+' МБ'}
+function operationFinished(type,ai){if(['failed','cancelled'].includes(ai.progress_phase))return ai.progress_phase;if(type==='hybrid_query')return ['completed','failed','cancelled'].includes(ai.query_status)?ai.query_status:null;return (type==='lmstudio_model_get'&&ai.progress_phase==='download_complete')||(type==='lmstudio_model_load'&&ai.progress_phase==='load_complete')||(['lmstudio_install','lmstudio_uninstall'].includes(type)&&ai.progress_phase==='complete')?'completed':null}
+function operationSnapshotMatches(op,ai){if(!op)return true;if(op.type==='hybrid_query'&&op.queryId)return ai.query_id===op.queryId;if(op.commandId&&ai.operation_id)return ai.operation_id===op.commandId;const stamp=Date.parse(ai.runtime_updated_at||ai.updated_at||'');return Number.isFinite(stamp)&&stamp>=op.startedAt}
+function operationView(root,{title,detail='',status='running',ai={},startedAt=0,query=false}={}){
+  root.hidden=false;root.replaceChildren();root.classList.add('operation-view');root.dataset.state=status;root.setAttribute('role','status');root.setAttribute('aria-live','polite');
+  const terminal=['completed','failed','cancelled'].includes(status),active=!terminal,head=progressElement('div',undefined,'operation-heading');
+  head.append(progressElement('span',status==='completed'?'✓':status==='failed'?'×':status==='cancelled'?'◷':'',active?'spin':'operation-icon'),progressElement('strong',title));
+  if(startedAt){const seconds=Math.max(0,Math.floor((Date.now()-startedAt)/1000));head.append(progressElement('small',Math.floor(seconds/60)+'м '+String(seconds%60).padStart(2,'0')+'с','operation-time'))}
+  root.append(head);
+  if(query){const steps=progressElement('div',undefined,'operation-steps');const labels=['Отправка','Ожидание агента','Подготовка ответа','Ответ'];const index={sending:0,queued:1,running:2,receiving:2,completed:3}[status];labels.forEach((label,i)=>{const e=progressElement('span',label,i===index?'current':i<index?'done':'');if(i===index)e.setAttribute('aria-current','step');steps.append(e)});root.append(steps)}
+  let percent=null,caption='';const total=Number(ai.progress_total_bytes),bytes=Number(ai.progress_bytes);
+  if(!query&&Number.isFinite(total)&&total>0&&Number.isFinite(bytes)&&bytes>=0){percent=Math.max(0,Math.min(100,bytes/total*100));caption=Math.floor(percent)+'% · '+progressBytes(bytes)+' из '+progressBytes(total)}
+  else if(!query&&Number(ai.progress_total)>0&&Number.isFinite(Number(ai.progress_current))){percent=Math.max(0,Math.min(100,Number(ai.progress_current)/Number(ai.progress_total)*100));caption='Шаг '+Number(ai.progress_current)+' из '+Number(ai.progress_total)}
+  else if(!query&&Number.isFinite(bytes)&&bytes>0)caption='Скачано '+progressBytes(bytes)+' · общий размер пока неизвестен';
+  const track=progressElement('div',undefined,'operation-track'+(percent===null&&active?' indeterminate':''));track.setAttribute('role','progressbar');track.setAttribute('aria-label',title);track.setAttribute('aria-valuemin','0');track.setAttribute('aria-valuemax','100');
+  if(percent!==null||status==='completed'){const value=status==='completed'?100:percent;track.setAttribute('aria-valuenow',String(Math.floor(value)));const fill=progressElement('span',undefined,'operation-fill');fill.style.width=value+'%';track.append(fill)}else if(active)track.append(progressElement('span',undefined,'operation-fill'));
+  root.append(track);if(caption)root.append(progressElement('small',caption,'operation-caption'));if(detail)root.append(progressElement('p',detail,'operation-detail'));
+}
+
     const $ = (id) => document.getElementById(id);
     const nodesEl = $("nodes"), tokenInput = $("architectToken"), loginButton = $("loginButton"), logoutButton = $("logoutButton");
     const searchInput = $("nodeSearch"), nodePicker = $("nodePicker"), updateAllButton = $("updateAllButton"), pauseAllButton = $("pauseAllButton"), exportButton = $("exportButton");
+    let legacyLmOperation=null,legacyQueryOperation=null;
     let architectToken = sessionStorage.getItem("citadel-architect-token") || "", releaseVersion = "", releaseFetchedAt = 0, lmstudioConfig = null, lmstudioNodeId = "", hybridNodeId = "", hybridMode = "both", lmstudioPollTimer = null, hybridPollTimer = null, requestedLmNodeId = new URLSearchParams(location.search).get("lmnode") || sessionStorage.getItem("citadel-lmnode-request") || "", lastOverview = null, lastPresence = [], lastPublic = [], refreshBusy = false, lang = localStorage.getItem("citadelHubLang") || "ru";
     if(requestedLmNodeId)sessionStorage.removeItem("citadel-lmnode-request");
     if(location.pathname!=="/"||location.search||location.hash)history.replaceState({citadelView:"hub"},"","/");
@@ -358,7 +382,7 @@
       if(!node||panel.classList.contains("hidden"))return;
       $("lmstudioNode").textContent=(node.node_number?"CITADEL Node "+node.node_number:(node.hostname||node.node_id))+" · "+(node.hostname||"—");
       if(lmstudioConfig?.github_url)$("lmstudioGithub").href=lmstudioConfig.github_url;
-      const pending=lmstudioPending(node.node_id),runtime=node.lmstudio_runtime||{};
+      const localBusy=legacyLmOperation?.nodeId===node.node_id&&!['completed','failed','cancelled'].includes(legacyLmOperation.status),pending=lmstudioPending(node.node_id)||localBusy,runtime=node.lmstudio_runtime||{};
       const installed=Number(node.lmstudio_installed||0)===1;
       const currentAgent=Boolean(releaseVersion&&node.agent_version===releaseVersion);
       const selected=node.lmstudio_selected_model||"",loaded=node.lmstudio_loaded_model||"";
@@ -367,6 +391,9 @@
       let percent=0;
       if(Number(runtime.progress_total_bytes)>0)percent=Math.round(100*Number(runtime.progress_bytes||0)/Number(runtime.progress_total_bytes));
       else if(Number(runtime.progress_total)>0)percent=Math.round(100*Number(runtime.progress_current||0)/Number(runtime.progress_total));
+      const op=legacyLmOperation?.nodeId===node.node_id?legacyLmOperation:null;
+      if(op&&!['sending','completed','failed','cancelled'].includes(op.status)&&operationSnapshotMatches(op,runtime)){op.ai=runtime;op.error='';op.status=operationFinished(op.type,runtime)||'running'}
+      if(op||phase){operationView($("lmstudioOperation"),{title:op?.status==='sending'?'Отправляю команду':op?.status==='queued'?'Ожидаю подтверждение агента':op?.status==='failed'?'Операция завершилась ошибкой':progressPhases[op?.ai?.progress_phase||phase]||op?.title||'Операция LM Studio',detail:op?(op.error||op.ai?.progress_detail||op.title):detail,status:op?.status||(['complete','download_complete','load_complete'].includes(phase)?'completed':phase==='failed'?'failed':'running'),ai:op?(op.ai||{}):runtime,startedAt:op?.startedAt})}
       $("lmstudioProgressBar").style.width=Math.max(0,Math.min(100,percent))+"%";
       $("lmstudioProgressText").textContent=(phase?phase+" · ":"")+(detail||"Прогресс пока не получен.")+(percent?" · "+percent+"%":"");
       $("lmstudioStatus").textContent=installed
@@ -427,7 +454,9 @@
       const labels={lmstudio_install:"install",lmstudio_uninstall:"uninstall",lmstudio_probe:"probe",lmstudio_model_get:"download model",lmstudio_model_load:"load model"};
       const label=labels[type]||type;
       if(type!=="lmstudio_probe"&&type!=="lmstudio_uninstall"&&!confirm("LM Studio "+label+" → "+(node.hostname||node.node_id)+"?"))return;
-      await api("/api/v1/architect/nodes/"+encodeURIComponent(node.node_id)+"/commands",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+      const op={nodeId:node.node_id,type,startedAt:Date.now(),status:'sending',title:operationTitles[type]||'Операция LM Studio'};legacyLmOperation=op;syncLmstudioPanel();
+      try{const d=await api("/api/v1/architect/nodes/"+encodeURIComponent(node.node_id)+"/commands",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});op.commandId=d.command?.command_id;op.status='queued'}catch(error){op.status='failed';op.error=error.message;operationView($("lmstudioOperation"),{title:'Команда не отправлена',detail:error.message,status:'failed'});throw error}
+
       toast("LM Studio",label+" queued → "+(node.hostname||node.node_id));
       await refresh();syncLmstudioPanel();
     }
@@ -448,29 +477,25 @@
       hybridNodeId=node.node_id;$("hybridNode").textContent=node.hostname||node.node_id;$("hybridPanel").classList.remove("hidden");
       $("hybridAnswer").textContent=(node.lmstudio_runtime||{}).query_answer||"";
       $("hybridStatus").textContent=(node.lmstudio_runtime||{}).query_status||"Готово к запросу.";
-      syncHybridModes(node);
+      syncHybridModes(node);if(legacyQueryOperation?.nodeId===node.node_id){showLegacyQuery(legacyQueryOperation);if(!["completed","failed","cancelled"].includes(legacyQueryOperation.status))watchLegacyQuery(legacyQueryOperation)}else{$("hybridOperation").hidden=true;$("hybridSend").disabled=false}
     }
-    function closeHybrid(){clearInterval(hybridPollTimer);hybridPollTimer=null;hybridNodeId="";$("hybridPanel").classList.add("hidden")}
+    function closeHybrid(){clearTimeout(hybridPollTimer);hybridPollTimer=null;hybridNodeId="";$("hybridPanel").classList.add("hidden")}
+
+    function showLegacyQuery(op){operationView($('hybridOperation'),{title:{sending:'Отправляю промпт',queued:'Промпт отправлен · ожидаю агента',running:'Ожидаю ответ агента',receiving:'Получаю ответ агента',completed:'Ответ получен',failed:'Запрос завершился ошибкой',cancelled:'Запрос остановлен',disconnected:'Связь прервана · проверяю состояние'}[op.status],detail:op.error||'',status:op.status,startedAt:op.startedAt,query:true});$('hybridSend').disabled=!['completed','failed','cancelled'].includes(op.status)}
+    function watchLegacyQuery(op){
+      clearTimeout(hybridPollTimer);
+      const poll=async()=>{hybridPollTimer=null;if(document.hidden||!architectToken||hybridNodeId!==op.nodeId)return;
+        try{const ai=await pollAiState(op.nodeId);if(legacyQueryOperation!==op||hybridNodeId!==op.nodeId)return;
+          if(ai&&operationSnapshotMatches(op,ai)){op.status=operationFinished('hybrid_query',ai)||(ai.query_answer?'receiving':'running');op.error='';$('hybridAnswer').textContent=ai.query_answer||''}
+        }catch(error){if(legacyQueryOperation!==op)return;op.status='disconnected';op.error='Статус временно недоступен. Повторяю проверку.'}
+        showLegacyQuery(op);if(!['completed','failed','cancelled'].includes(op.status))hybridPollTimer=setTimeout(poll,2000);
+      };hybridPollTimer=setTimeout(poll,1200);
+    }
     async function sendHybrid(){
-      const node=hybridNode();if(!node)return;
-      const prompt=$("hybridPrompt").value.trim();if(!prompt)return toast("Hybrid","Введите вопрос или задачу","bad");
-      const temperature=Number($("hybridTemperature").value),maxTokens=Number($("hybridMaxTokens").value);
-      const settings={};
-      if(hybridMode!=="python"){
-        if(Number.isFinite(temperature)&&temperature>=0&&temperature<=1)settings.temperature=temperature;
-        if(Number.isInteger(maxTokens)&&maxTokens>=1&&maxTokens<=32768)settings.max_output_tokens=maxTokens;
-      }
-      $("hybridSend").disabled=true;$("hybridStatus").textContent=hybridMode==="python"?"Python выполняет задачу без AI/LLM…":"Запрос поставлен в очередь…";$("hybridAnswer").textContent="";
-      try{
-        await api("/api/v1/architect/nodes/"+encodeURIComponent(node.node_id)+"/commands",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({command_type:"hybrid_query",mode:hybridMode,prompt,settings})});
-        clearInterval(hybridPollTimer);
-        hybridPollTimer=setInterval(async()=>{
-          try{
-            const ai=await pollAiState(node.node_id);$("hybridStatus").textContent=ai?.query_status||"running";$("hybridAnswer").textContent=ai?.query_answer||"";
-            if(["completed","failed"].includes(ai?.query_status)){clearInterval(hybridPollTimer);hybridPollTimer=null;$("hybridSend").disabled=false;await refresh()}
-          }catch{}
-        },1200);
-      }catch(e){$("hybridSend").disabled=false;$("hybridStatus").textContent=e.message;toast("Hybrid",e.message,"bad")}
+      const node=hybridNode();if(!node||$('hybridSend').disabled)return;const prompt=$('hybridPrompt').value.trim();if(!prompt)return toast('Hybrid','Введите вопрос или задачу','bad');
+      const settings={};if(hybridMode!=='python'){const temperature=Number($('hybridTemperature').value),maxTokens=Number($('hybridMaxTokens').value);if(Number.isFinite(temperature)&&temperature>=0&&temperature<=1)settings.temperature=temperature;if(Number.isInteger(maxTokens)&&maxTokens>=1&&maxTokens<=32768)settings.max_output_tokens=maxTokens}
+      const op={nodeId:node.node_id,type:'hybrid_query',startedAt:Date.now(),status:'sending'};legacyQueryOperation=op;showLegacyQuery(op);$('hybridAnswer').textContent='';
+      try{const d=await api('/api/v1/architect/nodes/'+encodeURIComponent(node.node_id)+'/commands',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({command_type:'hybrid_query',mode:hybridMode,prompt,settings})});op.commandId=d.command?.command_id;op.queryId=d.command?.query_id;op.status='queued';showLegacyQuery(op);watchLegacyQuery(op)}catch(error){op.status='failed';op.error=error.message;showLegacyQuery(op);toast('Hybrid',error.message,'bad')}
     }
 
     function secureCard(node,presence,commands){
@@ -665,7 +690,7 @@
       tokenInput.value="";
       await refresh();
     });
-    logoutButton.addEventListener("click",async()=>{architectToken="";sessionStorage.removeItem("citadel-architect-token");releaseVersion="";releaseFetchedAt=0;lastOverview=null;lastPresence=[];tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;await refreshPublic()});
+    logoutButton.addEventListener("click",async()=>{clearInterval(lmstudioPollTimer);clearTimeout(hybridPollTimer);legacyLmOperation=null;legacyQueryOperation=null;lmstudioNodeId="";hybridNodeId="";$("lmstudioPanel").classList.add("hidden");$("hybridPanel").classList.add("hidden");architectToken="";sessionStorage.removeItem("citadel-architect-token");releaseVersion="";releaseFetchedAt=0;lastOverview=null;lastPresence=[];tokenInput.disabled=false;loginButton.hidden=false;logoutButton.hidden=true;updateAllButton.disabled=true;pauseAllButton.disabled=true;exportButton.disabled=true;await refreshPublic()});
     $("refreshButton").addEventListener("click",refresh);
     searchInput.addEventListener("input",()=>{nodePicker.value="";renderCurrent()});
     nodePicker.addEventListener("change",()=>{searchInput.value=nodePicker.value;renderCurrent()});
@@ -682,7 +707,7 @@
       $("clock").textContent=now.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",hour12:false});
       updateSiteClock();
     }
-    document.addEventListener("visibilitychange",()=>{if(!document.hidden)refresh()});
+    document.addEventListener("visibilitychange",()=>{if(document.hidden)clearTimeout(hybridPollTimer);else{if(legacyQueryOperation?.nodeId===hybridNodeId&&!['completed','failed','cancelled'].includes(legacyQueryOperation.status))watchLegacyQuery(legacyQueryOperation);refresh()}});
     installHubCollapsers();updateClocks();setInterval(updateClocks,15000);applyLanguage(lang);updateSsh();refresh();setInterval(refresh,60000);
   </script>
 </body>
