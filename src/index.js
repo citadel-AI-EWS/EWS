@@ -36,17 +36,17 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.20",
+  version: "0.3.23",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "9f2722f58b1a831d87b414172c057adf72942c3fcb1025c637f5fb7d0eb5e999"
+      sha256: "c926d169ab481c7f780d3475b85a9b580144431fe972bb9653e391f36ff48bb8"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "f34cbdf57c86651f428e2ff495e3a89e7364293b29562a3e726197f9d2ad4f38"
+      sha256: "1511a67da2e52fcadb060612f369b2cccc232b52097783fa8debe33dc2ecdc17"
     }
   ]
 });
@@ -2977,7 +2977,7 @@ function normalizeAiState(value) {
   const strings = [
     ["selected_model", 192], ["loaded_model", 192], ["last_action", 96],
     ["progress_phase", 96], ["progress_detail", 512], ["download_job_id", 160],
-    ["query_id", 160], ["query_mode", 32], ["query_status", 32],
+    ["query_id", 160], ["query_mode", 32], ["query_status", 32], ["operation_id", 160],
     ["query_prompt", 8000], ["query_answer", 65536], ["live_checked_at", 64]
   ];
   const out = {
@@ -4535,6 +4535,7 @@ function operationalNodeState(node, now = Date.now()) {
 }
 
 async function expireStaleCommands(env, nodeId = null) {
+  await ensureNodeAiStorage(env);
   const cutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
   const stale = nodeId
     ? await env.DB.prepare(`
@@ -4543,6 +4544,13 @@ async function expireStaleCommands(env, nodeId = null) {
         WHERE node_id = ?
           AND status IN ('pending', 'accepted')
           AND datetime(created_at) < datetime(?)
+          AND NOT (status = 'accepted'
+            AND (command_type LIKE 'lmstudio_%' OR command_type = 'hybrid_query')
+            AND datetime(created_at) >= datetime('now', '-2 hours')
+            AND EXISTS (SELECT 1 FROM node_ai_runtime_state AS runtime
+              WHERE runtime.node_id = commands.node_id
+                AND json_extract(runtime.state_json, '$.operation_id') = commands.command_id
+                AND datetime(runtime.updated_at) >= datetime('now', '-2 minutes')))
         ORDER BY created_at ASC
         LIMIT 50
       `).bind(nodeId, cutoff).all()
@@ -4551,6 +4559,13 @@ async function expireStaleCommands(env, nodeId = null) {
         FROM commands
         WHERE status IN ('pending', 'accepted')
           AND datetime(created_at) < datetime(?)
+          AND NOT (status = 'accepted'
+            AND (command_type LIKE 'lmstudio_%' OR command_type = 'hybrid_query')
+            AND datetime(created_at) >= datetime('now', '-2 hours')
+            AND EXISTS (SELECT 1 FROM node_ai_runtime_state AS runtime
+              WHERE runtime.node_id = commands.node_id
+                AND json_extract(runtime.state_json, '$.operation_id') = commands.command_id
+                AND datetime(runtime.updated_at) >= datetime('now', '-2 minutes')))
         ORDER BY created_at ASC
         LIMIT 250
       `).bind(cutoff).all();
@@ -4563,6 +4578,13 @@ async function expireStaleCommands(env, nodeId = null) {
       WHERE command_id = ?
         AND status IN ('pending', 'accepted')
         AND datetime(created_at) < datetime(?)
+          AND NOT (status = 'accepted'
+            AND (command_type LIKE 'lmstudio_%' OR command_type = 'hybrid_query')
+            AND datetime(created_at) >= datetime('now', '-2 hours')
+            AND EXISTS (SELECT 1 FROM node_ai_runtime_state AS runtime
+              WHERE runtime.node_id = commands.node_id
+                AND json_extract(runtime.state_json, '$.operation_id') = commands.command_id
+                AND datetime(runtime.updated_at) >= datetime('now', '-2 minutes')))
     `).bind(row.command_id, cutoff).run();
     if ((update?.meta?.changes || 0) === 1) {
       await env.DB.prepare(`
@@ -5879,6 +5901,7 @@ async function architectCreateCommand(request, env, nodeId) {
       command_id: commandId,
       node_id: nodeId,
       command_type: commandType,
+      query_id: payload.request_id || null,
       status: "pending",
       created_at: createdAt
     }

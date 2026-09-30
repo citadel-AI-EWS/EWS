@@ -331,6 +331,7 @@ node tests/flow-a-fanout-races.mjs
 node tests/ten-prompt-routing.mjs
 python tests/lmstudio-local-protocol.py
 python tests/mini-agents.py
+python tests/lmstudio-progress.py
 node tests/openrouter-quality-gate.mjs
 
 python - <<'PY'
