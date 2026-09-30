@@ -6876,7 +6876,8 @@ async function handleApi(request, env, url) {
     await authenticateArchitect(request, env);
     const result = await runD1Guardian(env, {
       expireStaleCommands,
-      recoverStaleProjectAssignments
+      recoverStaleProjectAssignments,
+      force: true
     });
     return json(result);
   }
