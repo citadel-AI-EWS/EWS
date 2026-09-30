@@ -24,6 +24,9 @@ assert.match(guardian, /projects_marked_completed/, "project completion reconcil
 assert.match(guardian, /expired_request_nonces_pruned/, "nonce retention missing");
 assert.match(guardian, /old_rate_windows_pruned/, "rate-limit retention missing");
 assert.match(guardian, /deepConsistencyWarnings/, "deep consistency scan missing");
+assert.match(guardian, /status != 'checking'/, "Guardian must prevent overlapping repair runs");
+assert.match(guardian, /w\.status NOT IN \('completed','cancelled'\)/,
+  "projects with failed work must not be silently marked completed");
 
 assert.doesNotMatch(guardian, /DROP\s+TABLE/i, "Guardian must never drop tables");
 assert.doesNotMatch(guardian, /DELETE\s+FROM\s+(nodes|architect_projects|project_work_items|assignments|results|agent_reports)\b/i,
