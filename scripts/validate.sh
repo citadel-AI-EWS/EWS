@@ -215,6 +215,10 @@ for required in (
     "expectedenterpriseprobesha256",
     "windows_enterprise_probe.ps1",
     "-uninstall",
+    "repair-wingetpackagemanager",
+    "microsoft.winget.client",
+    "microsoft.desktopappinstaller_8wekyb3d8bbwe",
+    "get-psrepository -name psgallery",
 ):
     if required not in setup:
         raise SystemExit(f"Windows Core Service capability missing: {required}")
