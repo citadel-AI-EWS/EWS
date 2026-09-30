@@ -2529,57 +2529,65 @@ async function architectCreateProject(request, env) {
   }, 201);
 }
 
-async function expireStalePlannedProjects(env) {
-  // Never-started planned projects must not occupy Operations forever.
-  await env.DB.batch([
-    env.DB.prepare(`
-      UPDATE project_work_items
-      SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
-      WHERE status = 'planned'
-        AND project_id IN (
-          SELECT p.project_id
-          FROM architect_projects AS p
-          WHERE p.status = 'planned'
-            AND datetime(p.updated_at) <= datetime('now', '-24 hours')
-            AND NOT EXISTS (
-              SELECT 1 FROM project_work_items AS w2
-              WHERE w2.project_id = p.project_id
-                AND w2.status IN ('assigned','running','completed','failed')
-            )
-        )
-    `),
-    env.DB.prepare(`
-      UPDATE architect_projects
-      SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
-      WHERE status = 'planned'
-        AND datetime(updated_at) <= datetime('now', '-24 hours')
-        AND NOT EXISTS (
-          SELECT 1 FROM project_work_items AS w
-          WHERE w.project_id = architect_projects.project_id
-            AND w.status IN ('assigned','running','completed','failed')
-        )
-    `)
-  ]);
+function projectListStorageMissing(error) {
+  const message = String(error?.message || error || "");
+  return /no such table:\s*(architect_projects|project_work_items)/i.test(message);
+}
+
+async function architectProjectListRows(env) {
+  return env.DB.prepare(`
+    WITH recent_projects AS (
+      SELECT
+        project_id, title, source_type, status, worker_count, created_at, updated_at,
+        COALESCE(
+          CAST(json_extract(checks_json, '$.scheduling.desired_workers') AS INTEGER),
+          worker_count
+        ) AS desired_workers,
+        COALESCE(
+          json_extract(checks_json, '$.scheduling.target_mode'),
+          'auto'
+        ) AS worker_target_mode
+      FROM architect_projects
+      WHERE NOT (
+        status = 'cancelled'
+        AND datetime(updated_at) < datetime('now', '-24 hours')
+      )
+      ORDER BY created_at DESC
+      LIMIT 50
+    )
+    SELECT
+      p.project_id, p.title, p.source_type, p.status, p.worker_count,
+      p.created_at, p.updated_at, p.desired_workers, p.worker_target_mode,
+      COUNT(w.work_item_id) AS work_item_count,
+      SUM(CASE WHEN w.status = 'completed' THEN 1 ELSE 0 END) AS completed_work_items,
+      SUM(CASE WHEN w.status = 'failed' THEN 1 ELSE 0 END) AS failed_work_items,
+      SUM(CASE WHEN w.status = 'assigned' THEN 1 ELSE 0 END) AS assigned_work_items,
+      SUM(CASE WHEN w.status = 'running' THEN 1 ELSE 0 END) AS running_work_items,
+      SUM(CASE WHEN w.status IN ('completed','failed','cancelled') THEN 1 ELSE 0 END) AS finished_work_items
+    FROM recent_projects AS p
+    LEFT JOIN project_work_items AS w ON w.project_id = p.project_id
+    GROUP BY
+      p.project_id, p.title, p.source_type, p.status, p.worker_count,
+      p.created_at, p.updated_at, p.desired_workers, p.worker_target_mode
+    ORDER BY p.created_at DESC
+  `).all();
 }
 
 async function architectListProjects(request, env) {
   await authenticateArchitect(request, env);
-  await ensureProjectStorage(env);
-  await expireStalePlannedProjects(env);
-  const rows = await env.DB.prepare(
-    "SELECT p.project_id, p.title, p.source_type, p.status, p.worker_count, p.created_at, p.updated_at, " +
-    "COALESCE(CAST(json_extract(p.checks_json, '$.scheduling.desired_workers') AS INTEGER), p.worker_count) AS desired_workers, " +
-    "COALESCE(json_extract(p.checks_json, '$.scheduling.target_mode'), 'auto') AS worker_target_mode, " +
-    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id) AS work_item_count, " +
-    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'completed') AS completed_work_items, " +
-    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'failed') AS failed_work_items, " +
-    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'assigned') AS assigned_work_items, " +
-    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status = 'running') AS running_work_items, " +
-    "(SELECT COUNT(*) FROM project_work_items AS w WHERE w.project_id = p.project_id AND w.status IN ('completed','failed','cancelled')) AS finished_work_items " +
-    "FROM architect_projects AS p " +
-    "WHERE NOT (p.status = 'cancelled' AND datetime(p.updated_at) < datetime('now', '-24 hours')) " +
-    "ORDER BY p.created_at DESC LIMIT 50"
-  ).all();
+
+  // This is a GET/read path. Do not make it depend on schema DDL, cleanup
+  // UPDATEs, or any other D1 write. When the project tables already exist,
+  // listing projects must keep working even if the daily D1 write quota is
+  // exhausted. A fresh database still gets the legacy runtime bootstrap once.
+  let rows;
+  try {
+    rows = await architectProjectListRows(env);
+  } catch (error) {
+    if (!projectListStorageMissing(error)) throw error;
+    await ensureProjectStorage(env);
+    rows = await architectProjectListRows(env);
+  }
   return json({ ok: true, projects: rows.results || [] });
 }
 

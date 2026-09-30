@@ -673,10 +673,30 @@ assert.match(operations, /waiting_agent/);
 assert.match(operations, /active\?5000:60000/);
 assert.match(operations, /Официальный установщик LM Studio сейчас работает/);
 
-assert.ok(index.includes("async function expireStalePlannedProjects"), "stale planned project sweeper missing");
-assert.ok(index.includes("datetime(p.updated_at) <= datetime('now', '-24 hours')"), "stale planned project TTL missing");
-assert.ok(index.includes("w2.status IN ('assigned','running','completed','failed')"), "stale sweeper must preserve started work");
-assert.ok(operations.includes("автоматически закрываются через 24 часа"), "stale project retention copy missing");
+{
+  const listStart = index.indexOf("async function architectListProjects");
+  const listEnd = index.indexOf("async function architectGetProject", listStart);
+  assert.ok(listStart >= 0 && listEnd > listStart, "architect project list function missing");
+  const listBlock = index.slice(listStart, listEnd);
+  assert.ok(listBlock.includes("architectProjectListRows(env)"), "project list must read before bootstrap");
+  assert.ok(!listBlock.includes("expireStalePlannedProjects"), "project GET must not run cleanup writes");
+  assert.ok(
+    listBlock.indexOf("architectProjectListRows(env)") < listBlock.indexOf("ensureProjectStorage(env)"),
+    "project GET may bootstrap only after a missing-table read failure"
+  );
+
+  const rowsStart = index.indexOf("async function architectProjectListRows");
+  const rowsEnd = index.indexOf("async function architectListProjects", rowsStart);
+  const rowsBlock = index.slice(rowsStart, rowsEnd);
+  assert.match(rowsBlock, /WITH recent_projects AS/);
+  assert.match(rowsBlock, /LEFT JOIN project_work_items AS w/);
+  assert.doesNotMatch(rowsBlock, /\(SELECT COUNT\(\*\) FROM project_work_items/);
+}
+assert.ok(operations.includes("Date.now()-lastProjectsAt>300000"), "idle project polling must be throttled");
+assert.ok(operations.includes("needProjects?api('/projects'"), "active project polling must remain live");
+assert.ok(operations.includes("сохраняются, пока не появится подходящий исполнитель"), "project retention copy must match durable queue behavior");
+assert.ok(operations.includes("aiLive=aiRunning&&['online','paused'].includes(n.status)"), "AI LIVE badge must require a live/paused node");
+assert.ok(operations.includes("✦ AI · последнее состояние"), "offline nodes must label stale AI state explicitly");
 
 assert.ok(operations.includes("Promise.allSettled([api('/machines'"), "partial refresh must use allSettled");
 assert.ok(operations.includes("Часть данных не обновлена"), "partial refresh warning missing");
