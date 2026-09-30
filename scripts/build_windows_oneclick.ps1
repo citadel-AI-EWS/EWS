@@ -53,6 +53,10 @@ foreach ($Name in @("citadel_node_v1.py", "citadel_node_v2.py", "windows_enterpr
 New-Item -ItemType Directory -Force -Path (Join-Path $Payload "lmstudio") | Out-Null
 Copy-Item -LiteralPath (Join-Path $RepoRoot "agent\lmstudio\install_llmstudio_headless.ps1") -Destination (Join-Path $Payload "lmstudio\install_llmstudio_headless.ps1") -Force
 
+foreach ($Name in @("portable_fallback.py", "CITADEL_PORTABLE_FALLBACK.cmd", "CITADEL_PORTABLE_REMOVE.cmd")) {
+  Copy-Item -LiteralPath (Join-Path $RepoRoot "agent\windows\$Name") -Destination (Join-Path $Payload $Name) -Force
+}
+
 $ConfigProbe = Join-Path $WorkRoot "self-test-config.json"
 $ProbeState = Join-Path $WorkRoot "probe-state"
 New-Item -ItemType Directory -Force -Path $ProbeState | Out-Null
@@ -120,6 +124,17 @@ if (-not (Test-Path -LiteralPath $Installer)) {
 $Hash = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant()
 Set-Content -LiteralPath ($Installer + ".sha256") -Value ($Hash + "  " + (Split-Path -Leaf $Installer)) -Encoding ASCII
 
-Write-Host "[CITADEL] Windows one-click package ready:"
+$PortableZip = Join-Path $Dist ("CITADEL_EWS_Portable_Fallback_{0}_x64.zip" -f $Version)
+Remove-Item -LiteralPath $PortableZip -Force -ErrorAction SilentlyContinue
+Compress-Archive -Path (Join-Path $Payload "*") -DestinationPath $PortableZip -CompressionLevel Optimal
+if (-not (Test-Path -LiteralPath $PortableZip)) {
+  throw "Expected portable fallback archive was not produced: $PortableZip"
+}
+$PortableHash = (Get-FileHash -LiteralPath $PortableZip -Algorithm SHA256).Hash.ToLowerInvariant()
+Set-Content -LiteralPath ($PortableZip + ".sha256") -Value ($PortableHash + "  " + (Split-Path -Leaf $PortableZip)) -Encoding ASCII
+
+Write-Host "[CITADEL] Windows packages ready:"
 Write-Host "  $Installer"
 Write-Host "  SHA256 $Hash"
+Write-Host "  $PortableZip"
+Write-Host "  SHA256 $PortableHash"

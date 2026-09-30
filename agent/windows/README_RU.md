@@ -40,6 +40,27 @@ CITADEL_EWS_Node_Setup_<version>_x64.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTAR
 
 После появления интернета агент регистрируется/сверяет node identity и начинает heartbeat. Входящий порт для связи CITADEL с Controller не открывается: соединение идёт наружу по HTTPS.
 
+## Аварийный CMD fallback без EXE
+
+GitHub Actions одновременно с обычным EXE выпускает архив:
+
+`CITADEL_EWS_Portable_Fallback_<version>_x64.zip`
+
+Это запасной режим для случая, когда системный EXE-инсталлятор не может завершить установку из-за локальной политики Windows, SCM/UAC или повреждённой установочной среды.
+
+1. Полностью распаковать ZIP.
+2. Запустить `CITADEL_PORTABLE_FALLBACK.cmd`.
+3. Администраторские права для этого user-mode режима не требуются.
+4. Используется тот же встроенный Python runtime и тот же CITADEL agent.
+5. Состояние и node identity хранятся в `%LOCALAPPDATA%\CitadelEWS\state`.
+6. При входе пользователя в Windows fallback запускается через обычную Startup-запись.
+7. Когда Controller доступен, агент сам выполняет enrollment и появляется в Hub.
+8. Если позже штатный `CitadelEWSNode` Windows Service успешно запущен, portable supervisor прекращает свой агент, чтобы не было двух CITADEL-процессов.
+
+Portable fallback не добавляет remote shell, не отключает Defender/UAC/firewall и не пытается получить Administrator. Он использует тот же подписанный Controller protocol и тот же allow-list команд агента.
+
+Для удаления portable-режима запустить `CITADEL_PORTABLE_REMOVE.cmd`. По умолчанию node identity/state сохраняются, чтобы их можно было использовать при последующей штатной установке.
+
 ## LM Studio
 
 Агент поддерживает оба локальных интерфейса LM Studio, которые использует CITADEL:
