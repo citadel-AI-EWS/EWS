@@ -9,7 +9,7 @@
     "D1_USAGE_PLAN": "free"
   },
   "triggers": {
-    "crons": ["17 * * * *"]
+    "crons": ["*/5 * * * *", "17 * * * *"]
   },
   "assets": {
     "directory": "./public",
