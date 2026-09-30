@@ -593,7 +593,7 @@ jobs:
           Write-Host "Windows SYSTEM recovery uninstall: PASS"
           exit 0
       - name: Upload installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: CITADEL-Windows-OneClick-${{ github.sha }}
           path: |
@@ -603,7 +603,7 @@ jobs:
           retention-days: 14
 
       - name: Upload portable fallback
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: CITADEL-Windows-Portable-Fallback-${{ github.sha }}
           path: |
