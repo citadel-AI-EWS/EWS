@@ -6,7 +6,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 
 ROOT=Path(__file__).resolve().parents[1]
-node={'node_id':'node_test','hostname':'Тестовый Windows-агент','status':'online','agent_version':'0.3.23','latest_agent_version':'0.3.23','update_required':False,'ai_installed':1,'ai_server_running':1,'last_seen_at':'2026-09-30T00:00:00Z'}
+node={'node_id':'node_test','hostname':'Тестовый Windows-агент','status':'online','agent_version':'0.3.24','latest_agent_version':'0.3.24','update_required':False,'ai_installed':1,'ai_server_running':1,'last_seen_at':'2026-09-30T00:00:00Z'}
 ai={'installed':1,'server_running':1,'loaded_model':'test/model','selected_model':'test/model','query_id':'query_old','query_status':'completed','query_answer':'СТАРЫЙ ОТВЕТ','progress_phase':'query_complete','updated_at':'2026-09-29T00:00:00Z'}
 held=[];commands=[];details_count=[0];reject=[False];detail_failure=[False];errors=[]
 
@@ -27,7 +27,7 @@ with sync_playwright() as p:
                 body.update(project_id='project_test')
             else:body['projects']=[]
         elif path.endswith('/ai-state'):body.update(ai=ai)
-        elif path.endswith('/release'):body.update(release={'version':'0.3.23'},lmstudio={})
+        elif path.endswith('/release'):body.update(release={'version':'0.3.24'},lmstudio={})
         elif path.endswith('/details'):
             details_count[0]+=1
             if detail_failure[0]:return r.fulfill(status=503,content_type='application/json',body=json.dumps({'error':'temporarily_unavailable'}))
@@ -141,7 +141,7 @@ with sync_playwright() as p:
     legacy.route('https://ews.test/**',route)
     legacy.goto('https://ews.test/legacy')
     legacy.wait_for_function('lastOverview !== null')
-    legacy.evaluate('''()=>{const n={node_id:'node_test',hostname:'Legacy fixture',status:'online',last_seen_at:new Date().toISOString(),agent_version:'0.3.23',lmstudio_installed:1,lmstudio_loaded_model:'test/model',lmstudio_server_running:1,lmstudio_runtime:{}};lastOverview={nodes:[n],commands:[]};releaseVersion='0.3.23';hybridMode='python';openHybrid(n);setHubPanelCollapsed($('hybridPanel'),false,false)}''')
+    legacy.evaluate('''()=>{const n={node_id:'node_test',hostname:'Legacy fixture',status:'online',last_seen_at:new Date().toISOString(),agent_version:'0.3.24',lmstudio_installed:1,lmstudio_loaded_model:'test/model',lmstudio_server_running:1,lmstudio_runtime:{}};lastOverview={nodes:[n],commands:[]};releaseVersion='0.3.24';hybridMode='python';openHybrid(n);setHubPanelCollapsed($('hybridPanel'),false,false)}''')
     ai.update(query_id='legacy_old',query_status='completed',query_answer='OLD',progress_phase='query_complete')
     legacy.locator('#hybridPrompt').fill('calc: 2 + 2')
     legacy.locator('#hybridSend').click()
