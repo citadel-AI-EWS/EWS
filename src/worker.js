@@ -1,6 +1,6 @@
 import baseWorker, { expireStaleCommands, recoverStaleProjectAssignments } from "./index.js";
 import { runD1Guardian } from "./d1-guardian.js";
-import { json } from "./telemetry/common.js";
+import { json, pruneNodeRequestNonces } from "./telemetry/common.js";
 import { isTelemetryPath, handleTelemetryRequest } from "./telemetry/router.js";
 import { ensureTelemetryStorage, pruneExpiredTelemetry } from "./telemetry/schema.js";
 import {
@@ -28,7 +28,7 @@ export default {
       }
     }
     if (controller?.cron === "17 * * * *") {
-      await pruneExpiredTelemetry(env);
+      await Promise.all([pruneExpiredTelemetry(env), pruneNodeRequestNonces(env)]);
     }
   },
 
@@ -71,7 +71,7 @@ export default {
     }
 
     const response = await baseWorker.fetch(request, env);
-    const heartbeatMatch = url.pathname.match(/^\/api\/v1\/nodes\/([^/]+)\/heartbeat$/);
+    const heartbeatMatch = url.pathname.match(/^\/api\/v1\/nodes\/([^/]+)\/(?:heartbeat|sync)$/);
     if (request.method === "POST" && heartbeatMatch && response.ok) {
       const nodeId = decodeURIComponent(heartbeatMatch[1]);
       try {

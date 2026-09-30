@@ -29,8 +29,8 @@ need(index.includes("LEFT JOIN node_numbers AS nn"), "Architect node number join
 need(!readme.includes("-EnrollmentToken"), "README still documents EnrollmentToken");
 need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_token");
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
-need(agentV1.includes('VERSION = "0.3.24"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.24"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.25"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.25"'), "v2 release not bumped");
 need(agentV1.includes("hardware_snapshot"), "node hardware snapshot missing");
 need(agentV1.includes("gpu_inventory"), "GPU/VRAM discovery missing");
 need(agentV1.includes('"hardware"'), "hardware heartbeat payload missing");
@@ -113,8 +113,8 @@ need(!index.includes("datetime(received_at) < datetime('now', '-10 minutes')"), 
 need(!telemetryIngest.includes("retentionKey.endsWith"), "telemetry retention must not depend on node-controlled event IDs");
 need(!telemetryIngest.includes("datetime(received_at) < datetime('now', '-7 days')"), "telemetry ingestion must not full-scan received_at retention");
 need(telemetrySchema.includes("received_at < datetime('now', '-7 days')"), "telemetry prune helper must use the received_at index");
-need(worker.includes("async scheduled(_controller, env)") && worker.includes("await pruneExpiredTelemetry(env)"), "scheduled telemetry retention missing");
-need(wrangler.includes('"crons": ["17 * * * *"]'), "telemetry retention cron missing");
+need(worker.includes("async scheduled(_controller, env)") && worker.includes("pruneExpiredTelemetry(env)"), "scheduled telemetry retention missing");
+need(wrangler.includes('"17 * * * *"'), "telemetry retention cron missing");
 {
   const rolloutStart = index.indexOf("async function ensureRolloutCommandForNode");
   const rolloutEnd = index.indexOf("const WORK_ROLE_REGISTRY", rolloutStart);
@@ -194,7 +194,7 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.24"'), "Controller release not bumped");
+need(index.includes('version: "0.3.25"'), "Controller release not bumped");
 console.log("Review backlog guards: PASS");
 
 need(agentV1.includes("lmstudio_heartbeat_probe_failed"), "routine heartbeat does not refresh LM Studio readiness");

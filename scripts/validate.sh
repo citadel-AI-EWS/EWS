@@ -331,6 +331,9 @@ node tests/lmstudio-command-storage.mjs
 node tests/enterprise-policy.mjs
 node tests/hub-five-questions.mjs
 node tests/d1-usage.mjs
+node tests/d1-idle-storage.mjs
+node tests/d1-workerd-sync.mjs
+python tests/d1-agent-polling.py
 node tests/flow-a-fanout-races.mjs
 node tests/flow-a-assignment-recovery.mjs
 node tests/controller-error-diagnostics.mjs
