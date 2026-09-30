@@ -240,7 +240,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
     function safeHost(value){const host=String(value||"").trim().toLowerCase();return /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(host)&&host.includes(".")?host:""}
     function safeUser(value){const u=String(value||"").trim();return /^[a-zA-Z0-9._-]{1,64}$/.test(u)?u:""}
 
-    async function api(path,options={}){const headers=new Headers(options.headers||{});if(architectToken)headers.set("authorization",`Bearer ${architectToken}`);const response=await fetch(path,{...options,headers,cache:"no-store"});let data={};try{data=await response.json()}catch{}if(!response.ok)throw new Error(data.error||`HTTP ${response.status}`);return data}
+    async function api(path,options={}){const headers=new Headers(options.headers||{});if(architectToken)headers.set("authorization",`Bearer ${architectToken}`);const response=await fetch(path,{...options,headers,cache:"no-store"});let data={};try{data=await response.json()}catch{}if(!response.ok){const ref=typeof data.request_id==="string"&&/^[\\w-]{1,80}$/.test(data.request_id)?data.request_id:"";const message=(data.error||`HTTP ${response.status}`)+(ref?` · request ${ref}`:"");const error=new Error(message);error.status=response.status;error.requestId=ref;throw error}return data}
 
     function publicCard(node){const el=document.createElement("article");const state=freshness(node);el.className=`node ${state}`;el.dataset.search=`${node.display_name||""} ${node.agent_version||""} ${node.status||""}`.toLowerCase();el.innerHTML=`<div class="nodeTop"><div><div class="nodeName"></div><div class="nodeId"></div></div><span class="badge ${state}"></span></div><dl class="nodeMeta"><dt>AGENT</dt><dd></dd><dt>LAST SEEN</dt><dd></dd></dl>`;el.querySelector(".nodeName").textContent=node.display_name||`Node ${node.node_number}`;el.querySelector(".nodeId").textContent=`#${esc(node.node_number)}`;el.querySelector(".badge").textContent=state;const dds=el.querySelectorAll("dd");dds[0].textContent=esc(node.agent_version);dds[1].textContent=`${relativeTime(node.last_seen_at)} · ${esc(node.last_seen_at)}`;return el}
 
@@ -362,7 +362,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
     function applyAiSnapshot(node,data){
       if(!node||!data?.ai)return;
       const ai=data.ai;
-      node.lmstudio_installed=ai.installed;
+      node.lmstudio_installed=ai.observed===false?null:ai.installed;
       node.lmstudio_selected_model=ai.selected_model;
       node.lmstudio_loaded_model=ai.loaded_model;
       node.lmstudio_server_running=ai.server_running;
@@ -396,9 +396,17 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       if(op||phase){operationView($("lmstudioOperation"),{title:op?.status==='sending'?'Отправляю команду':op?.status==='queued'?'Ожидаю подтверждение агента':op?.status==='failed'?'Операция завершилась ошибкой':progressPhases[op?.ai?.progress_phase||phase]||op?.title||'Операция LM Studio',detail:op?(op.error||op.ai?.progress_detail||op.title):detail,status:op?.status||(['complete','download_complete','load_complete'].includes(phase)?'completed':phase==='failed'?'failed':'running'),ai:op?(op.ai||{}):runtime,startedAt:op?.startedAt})}
       $("lmstudioProgressBar").style.width=Math.max(0,Math.min(100,percent))+"%";
       $("lmstudioProgressText").textContent=(phase?phase+" · ":"")+(detail||"Прогресс пока не получен.")+(percent?" · "+percent+"%":"");
-      $("lmstudioStatus").textContent=installed
-        ?(loaded?"LM Studio установлен · активная модель: "+loaded+" · PROJECT WORKER READY":"LM Studio установлен · модель ещё не загружена")
-        :(currentAgent?"Runtime ещё не установлен.":"Сначала обновите агент этой ноды до "+(releaseVersion||"текущей версии")+".");
+      $("lmstudioStatus").textContent=freshness(node)!=="online"
+        ?"Узел не на связи или на паузе; готовность LM Studio не подтверждена."
+        :node.lmstudio_installed==null
+          ?"Состояние LM Studio ещё не получено. Нажмите «Проверить состояние»."
+          :installed
+            ?(Number(node.lmstudio_server_running||0)!==1
+              ?"LM Studio установлен, но сервер остановлен."
+              :loaded
+                ?"LM Studio установлен · активная модель: "+loaded+" · PROJECT WORKER READY"
+                :"LM Studio установлен · модель ещё не загружена")
+            :(currentAgent?"Runtime ещё не установлен.":"Сначала обновите агент этой ноды до "+(releaseVersion||"текущей версии")+".");
       if(pending)$("lmstudioStatus").textContent+=" · команда выполняется";
       $("lmstudioInstall").disabled=!currentAgent||installed||pending||freshness(node)!=="online";
       $("lmstudioUninstall").disabled=!currentAgent||!installed||pending||freshness(node)!=="online";
