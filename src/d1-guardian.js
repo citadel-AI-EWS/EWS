@@ -236,8 +236,8 @@ export async function runD1Guardian(env, hooks = {}) {
         next_run_at = datetime('now', '+5 minutes'),
         updated_at = CURRENT_TIMESTAMP
     WHERE guardian_id = 1
-      AND next_run_at <= CURRENT_TIMESTAMP
-  `).run();
+      AND (? = 1 OR next_run_at <= CURRENT_TIMESTAMP)
+  `).bind(hooks.force === true ? 1 : 0).run();
   if (changes(claim) !== 1) {
     return { ok: true, skipped: true, reason: "guardian_not_due" };
   }
