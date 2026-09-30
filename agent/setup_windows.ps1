@@ -166,6 +166,84 @@ function Find-MachinePython314 {
   return $null
 }
 
+function Find-WinGet {
+  $Command = Get-Command winget -ErrorAction SilentlyContinue
+  if ($null -ne $Command -and -not [string]::IsNullOrWhiteSpace([string]$Command.Source)) {
+    return [string]$Command.Source
+  }
+  $Alias = Join-Path $env:LOCALAPPDATA "Microsoft\\WindowsApps\\winget.exe"
+  if (Test-Path -LiteralPath $Alias) { return $Alias }
+  return $null
+}
+
+function Test-WinGetExecutable {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  try {
+    & $Path --version *> $null
+    return $LASTEXITCODE -eq 0
+  } catch {
+    return $false
+  }
+}
+
+function Ensure-WinGet {
+  $Existing = Find-WinGet
+  if ($null -ne $Existing -and (Test-WinGetExecutable -Path $Existing)) {
+    return $Existing
+  }
+
+  Write-Host "[CITADEL] WinGet is unavailable; checking Microsoft App Installer registration..."
+  try {
+    $AppInstaller = Get-AppxPackage -Name Microsoft.DesktopAppInstaller -ErrorAction SilentlyContinue |
+      Sort-Object Version -Descending |
+      Select-Object -First 1
+    if ($null -ne $AppInstaller) {
+      Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction Stop
+      Start-Sleep -Seconds 2
+      $Existing = Find-WinGet
+      if ($null -ne $Existing -and (Test-WinGetExecutable -Path $Existing)) {
+        Write-Host "[CITADEL] WinGet restored by re-registering Microsoft App Installer."
+        return $Existing
+      }
+    }
+  } catch {
+    Write-Warning ("[CITADEL] App Installer re-registration did not restore WinGet: " + $_.Exception.Message)
+  }
+
+  Write-Host "[CITADEL] Repairing WinGet with Microsoft's supported Microsoft.WinGet.Client method..."
+  try {
+    [Net.ServicePointManager]::SecurityProtocol =
+      [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+    $Gallery = Get-PSRepository -Name PSGallery -ErrorAction Stop
+    $GalleryUrl = [string]$Gallery.SourceLocation
+    if (-not $GalleryUrl.StartsWith("https://www.powershellgallery.com/", [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw "PSGallery points to an unexpected source: $GalleryUrl"
+    }
+
+    Install-PackageProvider -Name NuGet -Force | Out-Null
+    Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery -Scope AllUsers -AllowClobber | Out-Null
+    Import-Module Microsoft.WinGet.Client -Force
+    Repair-WinGetPackageManager -Force -Latest | Out-Null
+
+    try {
+      Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction Stop
+    } catch {
+      Write-Verbose ("App Installer family registration after repair was not required or failed: " + $_.Exception.Message)
+    }
+
+    Start-Sleep -Seconds 2
+    $Existing = Find-WinGet
+    if ($null -eq $Existing -or -not (Test-WinGetExecutable -Path $Existing)) {
+      throw "Microsoft repair completed but winget is still unavailable."
+    }
+    Write-Host "[CITADEL] WinGet repair completed."
+    return $Existing
+  } catch {
+    throw ("Windows Package Manager recovery failed: " + $_.Exception.Message)
+  }
+}
+
 function Find-FrameworkCompiler {
   foreach ($Candidate in @(
     (Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"),
@@ -233,12 +311,9 @@ if ($Uninstall) {
 
 $PythonPath = Find-MachinePython314
 if ($null -eq $PythonPath) {
-  $Winget = Get-Command winget -ErrorAction SilentlyContinue
-  if ($null -eq $Winget) {
-    throw "Python 3.14 machine installation is missing and Windows Package Manager is unavailable."
-  }
-  Write-Host "[CITADEL] Installing machine-wide Python 3.14..."
-  & $Winget.Source install --exact --id $PythonWingetId --source winget --scope machine --silent --accept-package-agreements --accept-source-agreements
+  $WingetPath = Ensure-WinGet
+  Write-Host "[CITADEL] Installing machine-wide Python 3.14 through verified WinGet..."
+  & $WingetPath install --exact --id $PythonWingetId --source winget --scope machine --silent --accept-package-agreements --accept-source-agreements
   if ($LASTEXITCODE -ne 0) { throw "Automatic machine-wide Python installation failed." }
   $PythonPath = Find-MachinePython314
 }
