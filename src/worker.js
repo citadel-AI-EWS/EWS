@@ -1,4 +1,5 @@
-import baseWorker from "./index.js";
+import baseWorker, { expireStaleCommands, recoverStaleProjectAssignments } from "./index.js";
+import { runD1Guardian } from "./d1-guardian.js";
 import { json } from "./telemetry/common.js";
 import { isTelemetryPath, handleTelemetryRequest } from "./telemetry/router.js";
 import { ensureTelemetryStorage, pruneExpiredTelemetry } from "./telemetry/schema.js";
@@ -14,8 +15,25 @@ import {
 } from "./presence.js";
 
 export default {
-  async scheduled(_controller, env) {
-    await pruneExpiredTelemetry(env);
+  async scheduled(controller, env) {
+    const jobs = [];
+    if (controller?.cron === "*/5 * * * *") {
+      jobs.push(
+        runD1Guardian(env, {
+          expireStaleCommands,
+          recoverStaleProjectAssignments
+        })
+      );
+    }
+    if (controller?.cron === "17 * * * *") {
+      jobs.push(pruneExpiredTelemetry(env));
+    }
+    const results = await Promise.allSettled(jobs);
+    for (const result of results) {
+      if (result.status === "rejected") {
+        console.error("Scheduled maintenance failed", result.reason);
+      }
+    }
   },
 
   async fetch(request, env) {
