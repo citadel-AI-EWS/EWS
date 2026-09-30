@@ -1802,7 +1802,8 @@ function projectAssignmentId(workItemId) {
   return "assignment_" + workItemId;
 }
 
-export async function recoverStaleProjectAssignments(env, maxRows = 150) {
+export async function recoverStaleProjectAssignments(env) {
+  const maxRows = arguments.length > 1 ? arguments[1] : 150;
   await ensureProjectStorage(env);
 
   const active = await env.DB.prepare(
@@ -4716,7 +4717,8 @@ function operationalNodeState(node, now = Date.now()) {
   return "offline";
 }
 
-export async function expireStaleCommands(env, nodeId = null, maxRows = 250) {
+export async function expireStaleCommands(env, nodeId = null) {
+  const maxRows = arguments.length > 2 ? arguments[2] : 250;
   await ensureNodeAiStorage(env);
   const cutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
   const stale = nodeId
