@@ -1802,7 +1802,7 @@ function projectAssignmentId(workItemId) {
   return "assignment_" + workItemId;
 }
 
-export async function recoverStaleProjectAssignments(env) {
+export async function recoverStaleProjectAssignments(env, maxRows = 150) {
   await ensureProjectStorage(env);
 
   const active = await env.DB.prepare(
@@ -1886,11 +1886,12 @@ export async function recoverStaleProjectAssignments(env) {
     `).bind(nodeLivenessCutoffIso, nodeLivenessCutoffSqlite)
   ]);
 
+  const recoveryLimit = Math.max(1, Math.min(150, Number(maxRows) || 150));
   const stale = [
     ...(scans[0]?.results || []),
     ...(scans[1]?.results || []),
     ...(scans[2]?.results || [])
-  ];
+  ].slice(0, recoveryLimit);
   let recovered = 0;
   for (const row of stale) {
     const reason = row.assignment_status === "running"
@@ -4715,7 +4716,7 @@ function operationalNodeState(node, now = Date.now()) {
   return "offline";
 }
 
-export async function expireStaleCommands(env, nodeId = null) {
+export async function expireStaleCommands(env, nodeId = null, maxRows = 250) {
   await ensureNodeAiStorage(env);
   const cutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
   const stale = nodeId
@@ -4751,7 +4752,8 @@ export async function expireStaleCommands(env, nodeId = null) {
         LIMIT 250
       `).bind(cutoff).all();
 
-  const rows = stale.results || [];
+  const commandLimit = Math.max(1, Math.min(nodeId ? 50 : 250, Number(maxRows) || (nodeId ? 50 : 250)));
+  const rows = (stale.results || []).slice(0, commandLimit);
   for (const row of rows) {
     const update = await env.DB.prepare(`
       UPDATE commands
