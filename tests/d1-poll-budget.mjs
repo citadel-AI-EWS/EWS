@@ -3,12 +3,15 @@ import fs from "node:fs";
 
 const index = fs.readFileSync("src/index.js", "utf8");
 const hub = fs.readFileSync("hub.html", "utf8");
+const publicHub = fs.readFileSync("live-index.html", "utf8");
 
 const FREE_DAILY_ROWS_READ = 5_000_000;
 const POLL_SECONDS = 30;
 const POLLS_PER_DAY = 86_400 / POLL_SECONDS;
 const HUB_REFRESH_SECONDS = 60;
 const HUB_POLLS_PER_DAY = 86_400 / HUB_REFRESH_SECONDS;
+const PUBLIC_HUB_REFRESH_SECONDS = 300;
+const PUBLIC_HUB_POLLS_PER_DAY = 86_400 / PUBLIC_HUB_REFRESH_SECONDS;
 
 // Steady-state idle path after #197 hot-polling reduction.
 // Each unit is one bounded indexed target/probe row-equivalent. UPDATE target
@@ -122,17 +125,28 @@ assert.match(hub, /if\(document\.hidden\|\|!architectToken\|\|!nodeId\)return nu
 assert.match(hub, /visibilitychange/,
   "Hub must refresh once when a hidden page becomes visible again");
 
+assert.match(publicHub, /const PUBLIC_HUB_REFRESH_MS=300000;/,
+  "public Hub refresh must be bounded to five minutes");
+assert.match(publicHub, /async function refresh\(\)\{\s*if\(document\.hidden\)/,
+  "public Hub must not poll D1 while the page is hidden");
+assert.match(publicHub, /visibilitychange/,
+  "public Hub must resume with one refresh when visible again");
+assert.match(publicHub, /if\(!document\.hidden\)scheduleRefresh\(delay\)/,
+  "public Hub must not schedule background D1 polling after an in-flight refresh");
+
 function fleetProjection(nodes) {
   const nodePolling = nodes * POLLS_PER_DAY * ROW_EQUIVALENTS_PER_POLL;
   const secureHubPerRefresh =
     HUB_AUTH_ROWS_PER_REFRESH +
     nodes * (MACHINE_ROW_EQUIVALENTS_PER_NODE + PRESENCE_ROW_EQUIVALENTS_PER_NODE);
   const secureHubRows = secureHubPerRefresh * HUB_POLLS_PER_DAY + RELEASE_AUTH_POLLS_PER_DAY;
-  const total = nodePolling + secureHubRows;
+  const publicHubRows = nodes * PUBLIC_HUB_POLLS_PER_DAY;
+  const total = nodePolling + secureHubRows + publicHubRows;
   return {
     nodes,
     node_polling_rows: nodePolling,
     secure_hub_rows: secureHubRows,
+    public_hub_rows: publicHubRows,
     projected_rows_read: total,
     daily_limit: FREE_DAILY_ROWS_READ,
     headroom_x: FREE_DAILY_ROWS_READ / total,
@@ -152,9 +166,10 @@ console.log(JSON.stringify({
     poll_seconds: POLL_SECONDS,
     row_equivalents_per_agent_poll: ROW_EQUIVALENTS_PER_POLL,
     secure_hub_refresh_seconds: HUB_REFRESH_SECONDS,
+    public_hub_refresh_seconds: PUBLIC_HUB_REFRESH_SECONDS,
     machine_row_equivalents_per_node: MACHINE_ROW_EQUIVALENTS_PER_NODE,
     presence_row_equivalents_per_node: PRESENCE_ROW_EQUIVALENTS_PER_NODE,
-    note: "Projection covers steady idle/control polling plus one continuously visible secure Hub. Hidden Hub tabs perform no polling. Production Cloudflare Analytics is authoritative."
+    note: "Projection covers steady idle/control polling plus one continuously visible secure Hub and one continuously visible public Hub. Hidden Hub tabs perform no polling. Production Cloudflare Analytics is authoritative."
   },
   fleets: [four, twenty]
 }, null, 2));
