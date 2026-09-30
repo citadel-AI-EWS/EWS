@@ -1,8 +1,6 @@
 const GUARDIAN_INTERVAL_MINUTES = 5;
 const GUARDIAN_DEEP_INTERVAL_MINUTES = 60;
 const GUARDIAN_BATCH_LIMIT = 50;
-const GUARDIAN_ACTION_LIMIT = 200;
-
 let guardianSchemaPromise;
 
 function changes(result) {
@@ -79,19 +77,6 @@ async function appendAction(env, action, severity, rowsAffected, details = {}) {
   ).run();
 }
 
-async function pruneGuardianActions(env) {
-  const result = await env.DB.prepare(`
-    DELETE FROM d1_guardian_actions
-    WHERE action_id IN (
-      SELECT action_id
-      FROM d1_guardian_actions
-      ORDER BY created_at DESC, action_id DESC
-      LIMIT -1 OFFSET ?
-    )
-  `).bind(GUARDIAN_ACTION_LIMIT).run();
-  return changes(result);
-}
-
 async function markStaleNodesOffline(env) {
   const result = await env.DB.prepare(`
     UPDATE nodes
@@ -158,34 +143,27 @@ async function reconcileCompletedProjects(env) {
   return changes(result);
 }
 
-async function pruneExpiredNonces(env) {
-  const result = await env.DB.prepare(`
-    DELETE FROM node_request_nonces
-    WHERE rowid IN (
-      SELECT rowid
-      FROM node_request_nonces
-      WHERE received_at < datetime('now', '-10 minutes')
-      ORDER BY received_at ASC
-      LIMIT ?
-    )
-  `).bind(GUARDIAN_BATCH_LIMIT).run();
-  return changes(result);
+async function countExpiredNonces(env) {
+  const rows = await env.DB.prepare(`
+    SELECT rowid
+    FROM node_request_nonces
+    WHERE received_at < datetime('now', '-10 minutes')
+    ORDER BY received_at ASC
+    LIMIT ?
+  `).bind(GUARDIAN_BATCH_LIMIT).all();
+  return (rows.results || []).length;
 }
 
-async function pruneOldRateWindows(env) {
-  const result = await env.DB.prepare(`
-    DELETE FROM node_log_rate_limits
-    WHERE rowid IN (
-      SELECT rowid
-      FROM node_log_rate_limits
-      WHERE window_started_at < datetime('now', '-1 day')
-      ORDER BY window_started_at ASC
-      LIMIT ?
-    )
-  `).bind(GUARDIAN_BATCH_LIMIT).run();
-  return changes(result);
+async function countOldRateWindows(env) {
+  const rows = await env.DB.prepare(`
+    SELECT rowid
+    FROM node_log_rate_limits
+    WHERE window_started_at < datetime('now', '-1 day')
+    ORDER BY window_started_at ASC
+    LIMIT ?
+  `).bind(GUARDIAN_BATCH_LIMIT).all();
+  return (rows.results || []).length;
 }
-
 async function deepConsistencyWarnings(env) {
   const warnings = [];
   try {
@@ -285,6 +263,24 @@ export async function runD1Guardian(env, hooks = {}) {
     }
   };
 
+  const observations = [];
+  const observeRule = async (name, fn) => {
+    checkedRules += 1;
+    try {
+      const count = Math.max(0, Number(await fn() || 0));
+      if (count > 0) {
+        detectedIssues += count;
+        observations.push({ action: name, rows_detected: count });
+      }
+      return count;
+    } catch (error) {
+      if (missingOptionalTable(error)) return 0;
+      warningCount += 1;
+      warnings.push({ rule: name, error: errorCode(error) });
+      return 0;
+    }
+  };
+
   await repairRule("stale_nodes_offline", () => markStaleNodesOffline(env));
   if (typeof hooks.expireStaleCommands === "function") {
     await repairRule("stale_commands_expired", () => hooks.expireStaleCommands(env, null, GUARDIAN_BATCH_LIMIT));
@@ -296,8 +292,8 @@ export async function runD1Guardian(env, hooks = {}) {
   }
   await repairRule("projects_marked_running", () => reconcileRunningProjects(env));
   await repairRule("projects_marked_completed", () => reconcileCompletedProjects(env));
-  await repairRule("expired_request_nonces_pruned", () => pruneExpiredNonces(env));
-  await repairRule("old_rate_windows_pruned", () => pruneOldRateWindows(env));
+  await observeRule("expired_request_nonces_detected", () => countExpiredNonces(env));
+  await observeRule("old_rate_windows_detected", () => countOldRateWindows(env));
 
   if (deep) {
     checkedRules += 1;
@@ -312,9 +308,6 @@ export async function runD1Guardian(env, hooks = {}) {
       warningCount += 1;
       warnings.push({ rule: "deep_consistency", error: errorCode(error) });
     }
-    await repairRule("guardian_history_pruned", () => pruneGuardianActions(env), {
-      keep_latest: GUARDIAN_ACTION_LIMIT
-    });
   }
 
   for (const action of actions.slice(0, 12)) {
@@ -335,7 +328,8 @@ export async function runD1Guardian(env, hooks = {}) {
       action: item.name,
       rows_affected: item.affected
     })),
-    warnings
+    warnings,
+    observations
   };
 
   await env.DB.prepare(`
