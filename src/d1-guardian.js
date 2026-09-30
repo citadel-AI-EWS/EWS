@@ -234,6 +234,7 @@ async function claimGuardianRun(env, force) {
         next_run_at = datetime('now', '+5 minutes'),
         updated_at = CURRENT_TIMESTAMP
     WHERE guardian_id = 1
+      AND (status != 'checking' OR updated_at < datetime('now', '-2 minutes'))
       AND (? = 1 OR next_run_at <= CURRENT_TIMESTAMP)
   `).bind(force ? 1 : 0).run();
 }
