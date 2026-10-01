@@ -62,7 +62,13 @@ def build() -> Path:
     if 'VERSION = "0.3.26"' not in v2.read_text(encoding="utf-8"):
         raise RuntimeError("repository v2 source is not release 0.3.26")
     enterprise_probe = STAGE / "windows_enterprise_probe.ps1"
-    if sha256(v1) not in setup or sha256(v2) not in setup or sha256(enterprise_probe) not in setup:
+    ssh_console = STAGE / "ssh_restricted_console.py"
+    if (
+        sha256(v1) not in setup
+        or sha256(v2) not in setup
+        or sha256(enterprise_probe) not in setup
+        or sha256(ssh_console) not in setup
+    ):
         raise RuntimeError("setup_linux.sh SHA pins do not match repository release files")
 
     write_start_here()
