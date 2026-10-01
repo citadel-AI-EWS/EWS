@@ -115,6 +115,31 @@ function Compile-RestrictedConsole([string]$Source, [string]$Destination) {
   Move-Item -LiteralPath $Temp -Destination $Destination -Force
 }
 
+function Set-CitadelSshServiceState([string]$StartMode, [bool]$WasRunning) {
+  $Service = Get-Service -Name "sshd" -ErrorAction SilentlyContinue
+  if ($null -eq $Service) { return }
+  Stop-Service -Name "sshd" -Force -ErrorAction SilentlyContinue
+  switch ($StartMode) {
+    "Auto" { Set-Service -Name "sshd" -StartupType Automatic }
+    "Automatic" { Set-Service -Name "sshd" -StartupType Automatic }
+    "Disabled" { Set-Service -Name "sshd" -StartupType Disabled }
+    default { Set-Service -Name "sshd" -StartupType Manual }
+  }
+  if ($WasRunning -and $StartMode -notin @("Disabled")) {
+    Start-Service -Name "sshd"
+  }
+}
+
+function Set-CitadelSshFirewallState([bool]$WasEnabled) {
+  $Rule = Get-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -ErrorAction SilentlyContinue
+  if ($null -eq $Rule) { return }
+  if ($WasEnabled) {
+    Enable-NetFirewallRule -Name "OpenSSH-Server-In-TCP" | Out-Null
+  } else {
+    Disable-NetFirewallRule -Name "OpenSSH-Server-In-TCP" | Out-Null
+  }
+}
+
 function Strip-CitadelBlocks([string]$Text) {
   $Result = [regex]::Replace(
     $Text,
@@ -160,11 +185,13 @@ if ($Uninstall) {
   if ($State.created_user -eq $true -and $State.ssh_user) {
     Remove-LocalUser -Name ([string]$State.ssh_user) -ErrorAction SilentlyContinue
   }
+  $RestoreFirewall = [bool]($State.firewall_rule_was_enabled_before -eq $true)
+  Set-CitadelSshFirewallState -WasEnabled $RestoreFirewall
+  $RestoreStartMode = if ($State.service_start_mode_before) { [string]$State.service_start_mode_before } else { "Manual" }
+  $RestoreRunning = [bool]($State.service_was_running_before -eq $true)
+  Set-CitadelSshServiceState -StartMode $RestoreStartMode -WasRunning $RestoreRunning
   foreach ($Path in @($ConsoleExe, $CaPath, (Join-Path $SshStateRoot "controller-url.txt"), $StatePath)) {
     Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
-  }
-  if (Get-Service -Name sshd -ErrorAction SilentlyContinue) {
-    Start-Service -Name sshd -ErrorAction SilentlyContinue
   }
   Write-Host "[CITADEL] Restricted SSH configuration removed. OpenSSH itself was left installed."
   exit 0
@@ -187,6 +214,24 @@ $CloudflareCaPublicKey = Require-CloudflareCaKey $CloudflareCaPublicKey
 $Capability = Get-WindowsCapability -Online -Name "OpenSSH.Server~~~~0.0.1.0"
 $OpenSshWasInstalled = $Capability.State -eq "Installed"
 $ExistingBootstrap = Test-Path -LiteralPath $StatePath
+$PriorBootstrapState = if ($ExistingBootstrap) { Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
+
+$ServiceStartModeBefore = "Manual"
+$ServiceWasRunningBefore = $false
+$FirewallWasEnabledBefore = $false
+if ($null -ne $PriorBootstrapState) {
+  if ($PriorBootstrapState.service_start_mode_before) { $ServiceStartModeBefore = [string]$PriorBootstrapState.service_start_mode_before }
+  $ServiceWasRunningBefore = [bool]($PriorBootstrapState.service_was_running_before -eq $true)
+  $FirewallWasEnabledBefore = [bool]($PriorBootstrapState.firewall_rule_was_enabled_before -eq $true)
+} elseif ($OpenSshWasInstalled) {
+  $BeforeService = Get-CimInstance Win32_Service -Filter "Name='sshd'" -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($null -ne $BeforeService) {
+    $ServiceStartModeBefore = [string]$BeforeService.StartMode
+    $ServiceWasRunningBefore = [string]$BeforeService.State -eq "Running"
+  }
+  $BeforeFirewall = Get-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -ErrorAction SilentlyContinue
+  $FirewallWasEnabledBefore = $null -ne $BeforeFirewall -and [string]$BeforeFirewall.Enabled -eq "True"
+}
 if ($OpenSshWasInstalled -and -not $ExistingBootstrap -and -not $ForceLoopback) {
   throw "OpenSSH Server already existed before CITADEL. Re-run with -ForceLoopback only if you accept restricting it to localhost."
 }
@@ -199,9 +244,7 @@ if (-not $OpenSshWasInstalled) {
 }
 
 if (-not (Test-Path -LiteralPath $SshdExe)) { throw "Windows OpenSSH sshd.exe is missing after installation." }
-Start-Service -Name sshd -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 500
-Stop-Service -Name sshd -Force -ErrorAction Stop
+Stop-Service -Name sshd -Force -ErrorAction SilentlyContinue
 
 New-Item -ItemType Directory -Force -Path $SshStateRoot | Out-Null
 $UserState = Ensure-NonPrivilegedUser -Name $SshUser
@@ -302,7 +345,9 @@ $NewConfig = $GlobalBlock.TrimEnd() + [Environment]::NewLine + [Environment]::Ne
 & $SshdExe -t -f $SshdConfig
 if ($LASTEXITCODE -ne 0) {
   Copy-Item -LiteralPath $BackupPath -Destination $SshdConfig -Force
-  throw "OpenSSH rejected the CITADEL configuration; original sshd_config was restored."
+  Set-CitadelSshFirewallState -WasEnabled $FirewallWasEnabledBefore
+  Set-CitadelSshServiceState -StartMode $ServiceStartModeBefore -WasRunning $ServiceWasRunningBefore
+  throw "OpenSSH rejected the CITADEL configuration; original sshd_config and service state were restored."
 }
 
 $FirewallRule = Get-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -ErrorAction SilentlyContinue
@@ -321,8 +366,9 @@ $UnsafeListener = $Listeners | Where-Object { $_.LocalAddress -notin @("127.0.0.
 if ($null -ne $UnsafeListener) {
   Stop-Service -Name sshd -Force -ErrorAction SilentlyContinue
   Copy-Item -LiteralPath $BackupPath -Destination $SshdConfig -Force
-  Start-Service -Name sshd -ErrorAction SilentlyContinue
-  throw "Unsafe non-loopback SSH listener detected; original sshd_config was restored."
+  Set-CitadelSshFirewallState -WasEnabled $FirewallWasEnabledBefore
+  Set-CitadelSshServiceState -StartMode $ServiceStartModeBefore -WasRunning $ServiceWasRunningBefore
+  throw "Unsafe non-loopback SSH listener detected; original sshd_config and service state were restored."
 }
 
 $State = [ordered]@{
@@ -332,6 +378,9 @@ $State = [ordered]@{
   created_user = $CreatedUser
   openssh_preexisted = $OpenSshWasInstalled
   backup_path = $BackupPath
+  service_start_mode_before = $ServiceStartModeBefore
+  service_was_running_before = $ServiceWasRunningBefore
+  firewall_rule_was_enabled_before = $FirewallWasEnabledBefore
   force_command = "C:/ProgramData/CitadelEWS/ssh/CitadelSshConsole.exe"
   ca_public_key_path = $CaPath
   configured_at = (Get-Date).ToUniversalTime().ToString("o")
