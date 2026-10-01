@@ -295,7 +295,7 @@ async function main() {
     applied: apply,
     account_id: accountId,
     zone: {id: zone.id, name: zone.name},
-    tunnel: {id: tunnel.id, name: tunnel.name, created: tunnelCreated},
+    tunnel: {id: tunnel.id, name: tunnel.name, status: tunnel.status || "unknown", created: tunnelCreated},
     ingress,
     dns: {id: dns?.id || null, name: hostname, target: tunnel.id === "<planned>" ? "<tunnel-id>.cfargotunnel.com" : `${tunnel.id}.cfargotunnel.com`},
     access_app: {id: app.id, domain: hostname, type: app.type || "ssh", created: appCreated},
