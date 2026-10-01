@@ -49,11 +49,11 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.25"
+VERSION = "0.3.26"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}
+SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe"}
 CORE_UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
 UPDATE_FILE_NAMES = CORE_UPDATE_FILE_NAMES | {"windows_enterprise_probe.ps1"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -1033,6 +1033,64 @@ def network_doctor_snapshot(controller_url: str) -> dict[str, Any]:
     }
 
 
+def ssh_runtime_snapshot() -> dict[str, Any]:
+    """Read-only SSH/Cloudflare readiness for Zero Trust browser access."""
+    ssh_client = shutil.which("ssh") or shutil.which("ssh.exe")
+    cloudflared = shutil.which("cloudflared") or shutil.which("cloudflared.exe")
+    sshd_running = False
+    cloudflared_running = False
+    try:
+        for proc in psutil.process_iter(["name"]):
+            name = str((proc.info or {}).get("name") or "").lower()
+            if name in {"sshd", "sshd.exe"}:
+                sshd_running = True
+            if name in {"cloudflared", "cloudflared.exe"}:
+                cloudflared_running = True
+            if sshd_running and cloudflared_running:
+                break
+    except Exception:
+        pass
+
+    local_port_open = False
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(0.35)
+    try:
+        local_port_open = probe.connect_ex(("127.0.0.1", 22)) == 0
+    except OSError:
+        local_port_open = False
+    finally:
+        probe.close()
+
+    return {
+        "schema": "citadel.ssh-readiness.v1",
+        "transport": "cloudflare_access_browser_ssh",
+        "bind_target": "localhost:22",
+        "ssh_client_available": bool(ssh_client),
+        "sshd_process_running": sshd_running,
+        "sshd_listening_local": local_port_open,
+        "cloudflared_installed": bool(cloudflared),
+        "cloudflared_running": cloudflared_running,
+        "browser_terminal_local_ready": bool(local_port_open and cloudflared_running),
+        "private_keys_on_hub": False,
+        "recommended_restricted_commands": [
+            "help",
+            "status",
+            "hostname",
+            "uptime",
+            "cpu",
+            "memory",
+            "disk",
+            "network",
+            "agent-status",
+            "agent-logs",
+            "lmstudio-status",
+            "diagnostics",
+            "ping-controller",
+            "exit",
+        ],
+    }
+
+
 def _windows_enterprise_probe_path() -> Path:
     return Path(__file__).resolve().with_name("windows_enterprise_probe.ps1")
 
@@ -1305,11 +1363,12 @@ class Agent:
         self.power_guard_active = False
         self.last_heartbeat = 0.0
         self.last_hardware_report = 0.0
+        self.last_ssh_report = 0.0
         self.enrollment_confirmed = False
 
     @property
     def capabilities(self) -> list[str]:
-        capabilities = set(HANDLERS) | {"hardware_doctor_readonly", "lmstudio_remote", "project_text", "project_python"}
+        capabilities = set(HANDLERS) | {"hardware_doctor_readonly", "lmstudio_remote", "project_text", "project_python", "ssh_probe_readonly"}
         if self.config.prevent_automatic_sleep:
             capabilities.add("always_on_guard")
         if self.config.network_recovery_enabled:
@@ -1377,6 +1436,9 @@ class Agent:
         if now - self.last_hardware_report >= 300:
             payload["hardware"] = hardware_snapshot()
             self.last_hardware_report = now
+        if now - self.last_ssh_report >= 300:
+            payload["ssh"] = ssh_runtime_snapshot()
+            self.last_ssh_report = now
         self.api.request(
             "POST",
             f"/api/v1/nodes/{node_id}/heartbeat",
@@ -3140,6 +3202,9 @@ class Agent:
                 elif command_type == "hybrid_query":
                     with self.long_operation(command_id):
                         self.run_hybrid_query(command.get("payload") or {})
+                elif command_type == "ssh_probe":
+                    self.last_ssh_report = 0.0
+                    self.heartbeat(timeout_seconds=5.0)
                 self.ack_command(command_id, "completed")
                 self.log.write(
                     "command_completed",
@@ -3680,7 +3745,7 @@ def self_test() -> int:
             "unapproved command accepted",
         )
         require_test(
-            {"system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}.issubset(SUPPORTED_COMMANDS),
+            {"system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe"}.issubset(SUPPORTED_COMMANDS),
             "restricted power/wake/LM Studio commands missing",
         )
         require_test(
