@@ -1,5 +1,6 @@
 import baseWorker, { expireStaleCommands, recoverStaleProjectAssignments } from "./index.js";
 import { runD1Guardian } from "./d1-guardian.js";
+import { pruneExpiredD1Bookkeeping } from "./d1-retention.js";
 import { json } from "./telemetry/common.js";
 import { isTelemetryPath, handleTelemetryRequest } from "./telemetry/router.js";
 import { ensureTelemetryStorage, pruneExpiredTelemetry } from "./telemetry/schema.js";
@@ -21,7 +22,8 @@ export default {
       try {
         await runD1Guardian(env, {
           expireStaleCommands,
-          recoverStaleProjectAssignments
+          recoverStaleProjectAssignments,
+          pruneExpiredD1Bookkeeping
         });
       } catch (error) {
         console.error("D1 Guardian scheduled maintenance failed", error);
