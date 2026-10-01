@@ -1051,8 +1051,9 @@ def ssh_runtime_snapshot() -> dict[str, Any]:
                 cloudflared_running = True
             if sshd_running and cloudflared_running:
                 break
-    except Exception:
-        pass
+    except (psutil.Error, OSError):
+        sshd_running = False
+        cloudflared_running = False
 
     local_port_open = False
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
