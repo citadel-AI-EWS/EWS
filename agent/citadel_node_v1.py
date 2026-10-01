@@ -1075,10 +1075,9 @@ def _windows_restricted_ssh_policy_snapshot() -> dict[str, Any]:
         "ForceCommand C:/ProgramData/CitadelEWS/ssh/CitadelSshConsole.exe",
         "AuthenticationMethods publickey",
         "PasswordAuthentication no",
-        "KbdInteractiveAuthentication no",
         "AllowAgentForwarding no",
         "AllowTcpForwarding no",
-        "PermitTunnel no",
+        "GatewayPorts no",
     ))
     console_installed = console_path.is_file()
     ca_present = ca_path.is_file()
