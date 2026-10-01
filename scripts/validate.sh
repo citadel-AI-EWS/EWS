@@ -334,6 +334,7 @@ node tests/d1-usage.mjs
 node tests/d1-idle-storage.mjs
 node tests/d1-workerd-sync.mjs
 python tests/d1-agent-polling.py
+node tests/d1-retention.mjs
 node tests/flow-a-fanout-races.mjs
 node tests/flow-a-assignment-recovery.mjs
 node tests/controller-error-diagnostics.mjs
