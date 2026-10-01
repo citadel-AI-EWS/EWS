@@ -38,7 +38,7 @@ jobs:
       - run: pip-audit --requirement agent/requirements.txt
       - run: scripts/validate.sh
       - run: npm run build && npm run check:cloudflare
-      - run: bandit -q controller_app.py agent/citadel_node_v1.py agent/citadel_node_v2.py
+      - run: bandit -q controller_app.py agent/citadel_node_v1.py agent/citadel_node_v2.py agent/ssh_prepare_windows.py
       - run: node --check scripts/smoke_test.mjs
       - run: node --check scripts/synthetic_user.mjs
 
