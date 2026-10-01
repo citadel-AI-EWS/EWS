@@ -1,5 +1,15 @@
 # CITADEL/EWS Python Node v1
 
+## v0.3.27 — restricted SSH bootstrap
+
+- Browser SSH считается READY только при одновременной проверке loopback-only `sshd`, запущенного `cloudflared`, CITADEL `ForceCommand` и запрета TCP/X11/tunnel forwarding.
+- Windows и Linux bootstrap используют существующего OS-user; CITADEL не создаёт password-bearing SSH accounts и не хранит private SSH keys в Hub/D1.
+- Windows installer/repair поддерживает явный `-ConfigureSsh`; OpenSSH capability устанавливается только при отдельном `-InstallOpenSsh`.
+- One-click installer поддерживает opt-in `/CONFIGURESSH=1 /SSHUSER=<user>`; `/INSTALLOPENSSH=1` остаётся отдельным явным сетевым действием.
+- Linux bootstrap включается только elevated-параметром `CITADEL_CONFIGURE_SSH=1`; distro package installation остаётся за ОС.
+- Оба bootstrap пути сохраняют исходный `sshd_config`, валидируют новый через `sshd -t`, проверяют loopback listener и откатываются при неудаче.
+- Bootstrap не создаёт inbound firewall rule. Windows OpenSSH host keys генерируются только локально на ноде и не передаются в Controller.
+
 ## v0.3.23 — прогресс операций и ответы агента
 
 - Хаб показывает отправку команды, ожидание агента, этапы установки, реальные байты скачивания и получение ответа.
