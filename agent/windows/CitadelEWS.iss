@@ -447,6 +447,85 @@ begin
     Log('CITADEL could not append install-recovery.log');
 end;
 
+function ConfigureSshRequested: Boolean;
+begin
+  Result := CompareText(ExpandConstant('{param:CONFIGURESSH|0}'), '1') = 0;
+end;
+
+function InstallOpenSshRequested: Boolean;
+begin
+  Result := CompareText(ExpandConstant('{param:INSTALLOPENSSH|0}'), '1') = 0;
+end;
+
+function RequestedSshUser: string;
+begin
+  Result := Trim(ExpandConstant('{param:SSHUSER|}'));
+  if Result = '' then
+    Result := Trim(GetUserNameString);
+end;
+
+procedure ConfigureRestrictedSshIfRequested;
+var
+  PythonExe, BootstrapScript, StateRoot, AgentConfig, UserName, Params: string;
+  ResultCode: Integer;
+begin
+  if not ConfigureSshRequested then exit;
+
+  PythonExe := ExpandConstant('{app}\runtime\python.exe');
+  BootstrapScript := ExpandConstant('{app}\ssh_prepare_windows.py');
+  StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\state');
+  AgentConfig := StateRoot + '\config.json';
+  UserName := RequestedSshUser;
+  if UserName = '' then
+    RaiseException('CITADEL SSH bootstrap requires /SSHUSER=<existing Windows user>.');
+
+  Params :=
+    '"' + BootstrapScript + '"' +
+    ' --release-root "' + ExpandConstant('{app}') + '"' +
+    ' --state-root "' + StateRoot + '"' +
+    ' --ssh-user "' + UserName + '"' +
+    ' --python-path "' + PythonExe + '"' +
+    ' --agent-config "' + AgentConfig + '"';
+  if InstallOpenSshRequested then
+    Params := Params + ' --install-openssh';
+
+  UpdateSetupStatus('CITADEL: configuring restricted loopback SSH...');
+  if not ExecAndLogOutput(PythonExe, Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode, nil) then
+    RaiseException('CITADEL restricted SSH bootstrap could not start.');
+  if ResultCode <> 0 then
+    RaiseException('CITADEL restricted SSH bootstrap failed with exit code ' + IntToStr(ResultCode) + '.');
+  AppendRecoveryLog('ssh_bootstrap', 'success',
+    'Loopback-only OpenSSH with CITADEL ForceCommand was verified for ' + UserName + '.');
+end;
+
+procedure RemoveRestrictedSshIfManaged;
+var
+  PythonExe, BootstrapScript, StateRoot, StateFile, Params: string;
+  ResultCode: Integer;
+begin
+  StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\state');
+  StateFile := StateRoot + '\ssh-bootstrap\state.json';
+  if not FileExists(StateFile) then exit;
+
+  PythonExe := ExpandConstant('{app}\runtime\python.exe');
+  BootstrapScript := ExpandConstant('{app}\ssh_prepare_windows.py');
+  if (not FileExists(PythonExe)) or (not FileExists(BootstrapScript)) then
+    RaiseException('CITADEL cannot restore managed sshd_config because SSH bootstrap files are missing.');
+
+  Params :=
+    '"' + BootstrapScript + '"' +
+    ' --release-root "' + ExpandConstant('{app}') + '"' +
+    ' --state-root "' + StateRoot + '"' +
+    ' --python-path "' + PythonExe + '"' +
+    ' --agent-config "' + StateRoot + '\config.json"' +
+    ' --remove';
+
+  if not ExecAndLogOutput(PythonExe, Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode, nil) then
+    RaiseException('CITADEL SSH rollback could not start.');
+  if ResultCode <> 0 then
+    RaiseException('CITADEL SSH rollback failed with exit code ' + IntToStr(ResultCode) + '.');
+end;
+
 function ForceFallbackRequested: Boolean;
 begin
   Result := CompareText(ExpandConstant('{param:FORCEFALLBACK|0}'), '1') = 0;
@@ -655,6 +734,7 @@ begin
         end;
       end;
     end;
+    ConfigureRestrictedSshIfRequested;
     StartupConfigured := True;
   end;
 end;
@@ -671,6 +751,7 @@ var
 begin
   if CurUninstallStep = usUninstall then
   begin
+    RemoveRestrictedSshIfManaged;
     Sc := ExpandConstant('{sys}\sc.exe');
     TryExec(Sc, 'stop {#ServiceName}');
     Sleep(1000);
