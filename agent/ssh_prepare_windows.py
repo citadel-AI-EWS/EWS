@@ -235,11 +235,14 @@ def configure(args: argparse.Namespace) -> None:
         result = run_fixed(ssh_keygen, "-A", timeout=60)
         require_success(result, "OpenSSH host key generation")
 
-    bootstrap_root = paths["state_root"] / "ssh-bootstrap"
-    bootstrap_root.mkdir(parents=True, exist_ok=True)
-    original = bootstrap_root / "sshd_config.original"
-    prechange = bootstrap_root / "sshd_config.prechange"
-    working = bootstrap_root / "sshd_config.citadel.new"
+    # Rollback material lives under the privileged OpenSSH tree, not in the
+    # agent-writable state directory. LocalService may update readiness state,
+    # but cannot rewrite the config backup later used by uninstall/rollback.
+    secure_root = ssh_root / "citadel-ews-backup"
+    secure_root.mkdir(parents=True, exist_ok=True)
+    original = secure_root / "sshd_config.original"
+    prechange = secure_root / "sshd_config.prechange"
+    working = secure_root / "sshd_config.citadel.new"
     if not original.is_file():
         shutil.copy2(config_path, original)
 
@@ -308,7 +311,7 @@ def remove(args: argparse.Namespace) -> None:
     sc_exe = windir / "System32" / "sc.exe"
     sshd, _, _ = find_openssh()
     config_path = program_data / "ssh" / "sshd_config"
-    original = paths["state_root"] / "ssh-bootstrap" / "sshd_config.original"
+    original = program_data / "ssh" / "citadel-ews-backup" / "sshd_config.original"
     if original.is_file() and sshd.is_file():
         validate_sshd(sshd, original)
         was_running = stop_sshd(sc_exe)
