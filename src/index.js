@@ -38,17 +38,17 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe"]);
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.29",
+  version: "0.3.30",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "6b9ca8e5dd704e8dab52a96e97155143ce97465e7050d5bf9ca94af355f3e1a2"
+      sha256: "6a444c3f2810090ac2d5b497b3ca29d35497d788de8dbb584c6ee22409f6cc07"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "be54e0d62fa0eb09696d2abb58a99601c9c85919cfe5034f8e96c791bb76e710"
+      sha256: "980968a9dca52a82f05c41ba8cf25b648a77c0008eb4612c8295e88d28024fac"
     },
     {
       path: "CitadelSshConsole.cs",
@@ -58,7 +58,7 @@ const LATEST_NODE_RELEASE = Object.freeze({
     {
       path: "configure_restricted_ssh.ps1",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/configure_restricted_ssh.ps1",
-      sha256: "9c2db2d5cbf42dc3c6df1e6df6cb94b5f45e0998f1772c4071d8445241d291d9"
+      sha256: "d60ada67883b731ab461c4c33c712571599c6740ad07059d50ef2459c21bce71"
     }
   ]
 });
