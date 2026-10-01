@@ -23,6 +23,8 @@ const sshMigration = fs.readFileSync("migrations/0020_ssh_zero_trust.sql", "utf8
 const sshBootstrapMigration = fs.readFileSync("migrations/0021_ssh_bootstrap_readiness.sql", "utf8");
 const windowsSshConsole = fs.readFileSync("agent/CitadelSshConsole.cs", "utf8");
 const windowsSshBootstrap = fs.readFileSync("agent/configure_restricted_ssh.ps1", "utf8");
+const oneClickBuilder = fs.readFileSync("scripts/build_windows_oneclick.ps1", "utf8");
+const oneClickIss = fs.readFileSync("agent/windows/CitadelEWS.iss", "utf8");
 const deployWorkflow = fs.readFileSync(".github/workflows/deploy-cloudflare.yml", "utf8");
 need(index.includes("auto_enrollment_windows"), "global auto-enrollment window missing");
 need(index.includes("AUTO_ENROLL_MAX_NEW_PER_HOUR"), "enrollment hourly setting missing");
@@ -83,6 +85,9 @@ need(!windowsSshBootstrap.includes("-ExecutionPolicy Bypass"), "Windows SSH boot
 need(!windowsSshConsole.includes("Process.Start("), "Windows restricted SSH console must not spawn child processes");
 need(!windowsSshConsole.includes("UseShellExecute"), "Windows restricted SSH console must not enable shell execution");
 need(windowsSshConsole.includes("SSH_ORIGINAL_COMMAND"), "Windows restricted SSH console must support OpenSSH ForceCommand input");
+need(windowsSshBootstrap.includes("Resolve-AgentLayout") && windowsSshBootstrap.includes('"flat_oneclick"'), "Windows SSH bootstrap must support one-click flat layout");
+need(oneClickBuilder.includes('"CitadelSshConsole.cs"') && oneClickBuilder.includes('"configure_restricted_ssh.ps1"'), "one-click builder must package restricted SSH assets");
+need(oneClickIss.includes("configure_restricted_ssh.ps1") && oneClickIss.includes("-Uninstall"), "one-click uninstaller must clean restricted SSH state");
 need(setup.includes('ServiceName = "CitadelEWSNode"'), "Windows Core Service name missing");
 need(setup.includes('LegacyUserSid'), "original user SID preservation missing");
 need(setup.includes('Set-CitadelDirectoryAcl'), "Windows clean ACL reconstruction missing");
