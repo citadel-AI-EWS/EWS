@@ -278,7 +278,15 @@ if (-not $OpenSshWasInstalled) {
 }
 
 if (-not (Test-Path -LiteralPath $SshdExe)) { throw "Windows OpenSSH sshd.exe is missing after installation." }
+if (-not (Test-Path -LiteralPath $SshdConfig)) {
+  # Windows OpenSSH creates the default sshd_config and host keys on first service start.
+  Start-Service -Name sshd -ErrorAction Stop
+  Start-Sleep -Milliseconds 750
+}
 Stop-Service -Name sshd -Force -ErrorAction SilentlyContinue
+if (-not (Test-Path -LiteralPath $SshdConfig)) {
+  throw "Windows OpenSSH did not generate sshd_config on first service start."
+}
 
 New-Item -ItemType Directory -Force -Path $SshStateRoot | Out-Null
 $UserState = Ensure-NonPrivilegedUser -Name $SshUser
@@ -347,12 +355,9 @@ AllowUsers $SshUser
 AuthenticationMethods publickey
 PubkeyAuthentication yes
 PasswordAuthentication no
-KbdInteractiveAuthentication no
 PermitEmptyPasswords no
 AllowAgentForwarding no
 AllowTcpForwarding no
-X11Forwarding no
-PermitTunnel no
 GatewayPorts no
 TrustedUserCAKeys C:/ProgramData/ssh/citadel_cloudflare_ca.pub
 # END CITADEL SSH GLOBAL
@@ -367,8 +372,6 @@ Match User $SshUser
     ForceCommand C:/ProgramData/CitadelEWS/ssh/CitadelSshConsole.exe
     PermitTTY yes
     AllowTcpForwarding no
-    X11Forwarding no
-    PermitTunnel no
     GatewayPorts no
 # END CITADEL SSH USER
 "@
