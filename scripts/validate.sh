@@ -4,7 +4,7 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 python -m unittest -v controller_tests.py
-python -m py_compile controller_app.py controller_tests.py agent/citadel_node_v1.py agent/citadel_node_v2.py agent/ssh_restricted_console.py tests/network-recovery-priority.py
+python -m py_compile controller_app.py controller_tests.py agent/citadel_node_v1.py agent/citadel_node_v2.py agent/ssh_restricted_console.py agent/ssh_configurator.py tests/network-recovery-priority.py tests/ssh-configurator.py
 python agent/citadel_node_v2.py self-test
 python tests/network-recovery-priority.py
 
@@ -344,6 +344,7 @@ python tests/lmstudio-local-protocol.py
 python tests/mini-agents.py
 python tests/lmstudio-progress.py
 python tests/ssh-restricted-console.py
+python tests/ssh-configurator.py
 node tests/openrouter-quality-gate.mjs
 
 python - <<'PY'
@@ -383,10 +384,18 @@ for column in ("report_type", "report_json", "report_sha256", "report_size_bytes
     if column not in columns:
         raise SystemExit(f"fresh migration chain missing results.{column}")
 
+ssh_columns = {
+    row[1]
+    for row in db.execute("PRAGMA table_info(node_ssh_state)")
+}
+for column in ("restricted_force_command", "forwarding_disabled", "managed_username"):
+    if column not in ssh_columns:
+        raise SystemExit(f"fresh migration chain missing node_ssh_state.{column}")
+
 print("Fresh D1 migration chain: OK")
 PY
 
-bash -n controller_deploy.sh scripts/build_site.sh scripts/package_controller.sh scripts/validate.sh agent/setup_linux.sh "agent/Install Linux Node.sh"
+bash -n controller_deploy.sh scripts/build_site.sh scripts/package_controller.sh scripts/validate.sh agent/setup_linux.sh agent/ssh_prepare_linux.sh "agent/Install Linux Node.sh"
 cfn-lint controller_template.yaml project_stack.yaml
 
 artifact="$(mktemp --suffix=.zip)"
