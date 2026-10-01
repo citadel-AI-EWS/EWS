@@ -95,7 +95,7 @@ jobs:
           console.log("");
           console.log(`- Applied: **${p.applied ? "YES" : "DRY RUN"}**`);
           console.log(`- Public hostname: \`${safe(p.access_app?.domain)}\``);
-          console.log(`- Tunnel: \`${safe(p.tunnel?.name)}\` (\`${safe(p.tunnel?.id)}\`)`);
+          console.log(`- Tunnel: \`${safe(p.tunnel?.name)}\` (\`${safe(p.tunnel?.id)}\`) · status: **${safe(p.tunnel?.status)}**`);
           console.log("- SSH origin: `ssh://localhost:22`");
           console.log(`- Access identity: \`${safe(p.access_policy?.allowed_email)}\``);
           console.log(`- Windows SSH user: \`${safe(p.ssh_user)}\``);
