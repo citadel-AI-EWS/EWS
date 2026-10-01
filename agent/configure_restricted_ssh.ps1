@@ -133,7 +133,7 @@ if (-not (Test-IsAdministrator)) {
   if (-not [string]::IsNullOrWhiteSpace($SshUser) -or -not [string]::IsNullOrWhiteSpace($CloudflareCaPublicKey)) {
     throw "Run this script from an Administrator PowerShell when passing SSH parameters."
   }
-  $Args = @("-NoLogo", "-NoProfile", "-File", ('"' + $PSCommandPath + '"'))
+  $Args = @("-NoLogo", "-NoProfile", "-File", ('"' + $PSCommandPath + '"'), "-InstallRoot", ('"' + $InstallRoot + '"'))
   if ($ForceLoopback) { $Args += "-ForceLoopback" }
   if ($Uninstall) { $Args += "-Uninstall" }
   $Elevated = Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $Args -Wait -PassThru
@@ -237,6 +237,13 @@ Set-Acl -LiteralPath $SshStateRoot -AclObject $Acl
 if (-not (Test-Path -LiteralPath $SshdConfig)) { throw "OpenSSH sshd_config was not created." }
 $Original = Get-Content -LiteralPath $SshdConfig -Raw -Encoding UTF8
 $Clean = Strip-CitadelBlocks $Original
+$ExternalAccessControl = [regex]::Matches(
+  $Clean,
+  '(?im)^\s*(AllowUsers|DenyUsers|AllowGroups|DenyGroups)\s+'
+)
+if ($ExternalAccessControl.Count -gt 0 -and -not $ExistingBootstrap) {
+  throw "Existing OpenSSH user/group access-control directives detected. CITADEL refuses to rewrite them automatically; review sshd_config manually first."
+}
 
 if (-not $ExistingBootstrap) {
   $BackupPath = Join-Path $SshStateRoot ("sshd_config.before-citadel-" + (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ") + ".bak")
@@ -260,7 +267,16 @@ $GlobalBlock = @"
 # BEGIN CITADEL SSH GLOBAL
 ListenAddress 127.0.0.1
 AllowUsers $SshUser
+AuthenticationMethods publickey
 PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+AllowAgentForwarding no
+AllowTcpForwarding no
+X11Forwarding no
+PermitTunnel no
+GatewayPorts no
 TrustedUserCAKeys C:/ProgramData/ssh/citadel_cloudflare_ca.pub
 # END CITADEL SSH GLOBAL
 "@
