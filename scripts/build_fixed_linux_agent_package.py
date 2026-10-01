@@ -40,6 +40,8 @@ def build() -> Path:
         "citadel_node_v2.py",
         "windows_enterprise_probe.ps1",
         "ssh_restricted_console.py",
+        "ssh_configurator.py",
+        "ssh_prepare_linux.sh",
         "requirements.txt",
         "setup_linux.sh",
         "Install Linux Node.sh",
@@ -63,11 +65,15 @@ def build() -> Path:
         raise RuntimeError("repository v2 source is not release 0.3.26")
     enterprise_probe = STAGE / "windows_enterprise_probe.ps1"
     ssh_console = STAGE / "ssh_restricted_console.py"
+    ssh_configurator = STAGE / "ssh_configurator.py"
+    ssh_bootstrap = STAGE / "ssh_prepare_linux.sh"
     if (
         sha256(v1) not in setup
         or sha256(v2) not in setup
         or sha256(enterprise_probe) not in setup
         or sha256(ssh_console) not in setup
+        or sha256(ssh_configurator) not in setup
+        or sha256(ssh_bootstrap) not in setup
     ):
         raise RuntimeError("setup_linux.sh SHA pins do not match repository release files")
 
