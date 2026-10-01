@@ -1,0 +1,114 @@
+name: Provision SSH Zero Trust
+
+on:
+  workflow_dispatch:
+    inputs:
+      public_hostname:
+        description: "Public SSH hostname managed by Cloudflare, e.g. ssh-node1.example.com"
+        required: true
+        type: string
+      allowed_email:
+        description: "Exact Cloudflare Access identity allowed to open Browser SSH"
+        required: true
+        type: string
+      node_id:
+        description: "Optional CITADEL node label/id used only for resource names"
+        required: false
+        type: string
+      tunnel_name:
+        description: "Optional dedicated Cloudflare Tunnel name"
+        required: false
+        type: string
+      session_duration:
+        description: "Access session duration"
+        required: true
+        default: "1h"
+        type: choice
+        options:
+          - "30m"
+          - "1h"
+          - "2h"
+          - "4h"
+      apply:
+        description: "Actually create/update Cloudflare resources. Disable for a dry-run plan."
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ssh-zero-trust-${{ inputs.public_hostname }}
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    name: Cloudflare SSH Zero Trust
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: cloudflare-test
+    env:
+      FULL_CLOUDFLARE_CONTROL: ${{ secrets.FULL_CLOUDFLARE_CONTROL }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CITADEL_SSH_HOSTNAME: ${{ inputs.public_hostname }}
+      CITADEL_SSH_ALLOWED_EMAIL: ${{ inputs.allowed_email }}
+      CITADEL_SSH_NODE_ID: ${{ inputs.node_id }}
+      CITADEL_SSH_TUNNEL_NAME: ${{ inputs.tunnel_name }}
+      CITADEL_SSH_SESSION_DURATION: ${{ inputs.session_duration }}
+      CITADEL_CF_APPLY: ${{ inputs.apply }}
+      CITADEL_CF_OUTPUT: /tmp/citadel-cloudflare-ssh.json
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Validate provisioner locally
+        run: node scripts/provision_cloudflare_ssh.mjs --self-test
+
+      - name: Provision Tunnel, DNS, Access and SSH CA
+        run: node scripts/provision_cloudflare_ssh.mjs
+
+      - name: Publish non-secret connection plan
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -s "$CITADEL_CF_OUTPUT" ]; then
+            {
+              echo "## CITADEL SSH Zero Trust"
+              echo
+              echo "Provisioning did not produce a connection plan. Check the failed step above."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          const fs = require("node:fs");
+          const p = JSON.parse(fs.readFileSync(process.env.CITADEL_CF_OUTPUT, "utf8"));
+          const safe = value => String(value ?? "").replaceAll("`", "\\`");
+          console.log("## CITADEL SSH Zero Trust");
+          console.log("");
+          console.log(`- Applied: **${p.applied ? "YES" : "DRY RUN"}**`);
+          console.log(`- Public hostname: \`${safe(p.access_app?.domain)}\``);
+          console.log(`- Tunnel: \`${safe(p.tunnel?.name)}\` (\`${safe(p.tunnel?.id)}\`)`);
+          console.log("- SSH origin: `ssh://localhost:22`");
+          console.log(`- Access identity: \`${safe(p.access_policy?.allowed_email)}\``);
+          console.log(`- Windows SSH user: \`${safe(p.ssh_user)}\``);
+          console.log("- Tunnel token stored in CITADEL/GitHub output: **NO**");
+          console.log("");
+          console.log("### Cloudflare SSH CA public key");
+          console.log("");
+          console.log("```text");
+          console.log(p.ca?.public_key || "<created only when apply=true>");
+          console.log("```");
+          console.log("");
+          console.log("### Node-side finish");
+          console.log("");
+          console.log("On the target Windows node, run the CITADEL SSH bootstrap as Administrator.");
+          console.log("Paste the CA public key above when prompted, then paste the dedicated Tunnel token locally when prompted.");
+          console.log("The Tunnel token must not be pasted into GitHub issues, Actions logs, D1, Hub, or chat.");
+          NODE
