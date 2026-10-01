@@ -221,7 +221,7 @@ function normalizeNodeHardware(value) {
 }
 
 
-function normalizeNodeSsh(value) {
+function normalizeNodeSsh(value, osName = "") {
   if (value === undefined || value === null) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new ApiError(400, "invalid_ssh_state");
@@ -237,6 +237,13 @@ function normalizeNodeSsh(value) {
   const loopbackOnly = bool("sshd_loopback_only");
   const cloudflaredRunning = bool("cloudflared_running");
   const localListen = bool("sshd_listening_local");
+  const restrictedBootstrapState = bool("restricted_bootstrap_state_present");
+  const restrictedConsoleInstalled = bool("restricted_console_installed");
+  const cloudflareCaPresent = bool("cloudflare_ca_public_key_present");
+  const forceCommandManaged = bool("sshd_force_command_managed");
+  const restrictedPolicyReady =
+    restrictedBootstrapState && restrictedConsoleInstalled && cloudflareCaPresent && forceCommandManaged ? 1 : 0;
+  const windowsPolicyRequired = String(osName || "").toLowerCase() === "windows";
   return {
     ssh_client_available: bool("ssh_client_available"),
     sshd_process_running: bool("sshd_process_running"),
@@ -245,8 +252,15 @@ function normalizeNodeSsh(value) {
     sshd_loopback_only: loopbackOnly,
     cloudflared_installed: bool("cloudflared_installed"),
     cloudflared_running: cloudflaredRunning,
+    restricted_bootstrap_state_present: restrictedBootstrapState,
+    restricted_console_installed: restrictedConsoleInstalled,
+    cloudflare_ca_public_key_present: cloudflareCaPresent,
+    sshd_force_command_managed: forceCommandManaged,
+    restricted_policy_ready: restrictedPolicyReady,
     browser_terminal_local_ready:
-      localListen && exposureVerified && loopbackOnly && cloudflaredRunning ? 1 : 0,
+      localListen && exposureVerified && loopbackOnly && cloudflaredRunning &&
+      (!windowsPolicyRequired || restrictedPolicyReady === 1) &&
+      value.browser_terminal_local_ready === true ? 1 : 0,
     bind_target: bindTarget
   };
 }
@@ -964,6 +978,11 @@ async function ensureNodeSshStorage(env) {
           sshd_loopback_only INTEGER NOT NULL DEFAULT 0 CHECK (sshd_loopback_only IN (0,1)),
           cloudflared_installed INTEGER NOT NULL DEFAULT 0 CHECK (cloudflared_installed IN (0,1)),
           cloudflared_running INTEGER NOT NULL DEFAULT 0 CHECK (cloudflared_running IN (0,1)),
+          restricted_bootstrap_state_present INTEGER NOT NULL DEFAULT 0 CHECK (restricted_bootstrap_state_present IN (0,1)),
+          restricted_console_installed INTEGER NOT NULL DEFAULT 0 CHECK (restricted_console_installed IN (0,1)),
+          cloudflare_ca_public_key_present INTEGER NOT NULL DEFAULT 0 CHECK (cloudflare_ca_public_key_present IN (0,1)),
+          sshd_force_command_managed INTEGER NOT NULL DEFAULT 0 CHECK (sshd_force_command_managed IN (0,1)),
+          restricted_policy_ready INTEGER NOT NULL DEFAULT 0 CHECK (restricted_policy_ready IN (0,1)),
           browser_terminal_local_ready INTEGER NOT NULL DEFAULT 0 CHECK (browser_terminal_local_ready IN (0,1)),
           bind_target TEXT NOT NULL DEFAULT 'localhost:22',
           public_hostname TEXT,
@@ -992,7 +1011,10 @@ async function nodeSshStateResponse(env, nodeId) {
   const row = await env.DB.prepare(`
     SELECT node_id, ssh_client_available, sshd_process_running, sshd_listening_local,
       sshd_exposure_verified, sshd_loopback_only,
-      cloudflared_installed, cloudflared_running, browser_terminal_local_ready,
+      cloudflared_installed, cloudflared_running,
+      restricted_bootstrap_state_present, restricted_console_installed,
+      cloudflare_ca_public_key_present, sshd_force_command_managed, restricted_policy_ready,
+      browser_terminal_local_ready,
       bind_target, public_hostname, ssh_user, host_key_fingerprint,
       config_updated_at, observed_at, updated_at
     FROM node_ssh_state WHERE node_id = ?
@@ -1006,6 +1028,11 @@ async function nodeSshStateResponse(env, nodeId) {
     sshd_loopback_only: 0,
     cloudflared_installed: 0,
     cloudflared_running: 0,
+    restricted_bootstrap_state_present: 0,
+    restricted_console_installed: 0,
+    cloudflare_ca_public_key_present: 0,
+    sshd_force_command_managed: 0,
+    restricted_policy_ready: 0,
     browser_terminal_local_ready: 0,
     bind_target: "localhost:22",
     public_hostname: null,
@@ -3411,7 +3438,7 @@ async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   }
 
   const node = await env.DB.prepare(
-    "SELECT node_id, public_key, status, agent_version FROM nodes WHERE node_id = ?"
+    "SELECT node_id, public_key, status, agent_version, os_name FROM nodes WHERE node_id = ?"
   ).bind(nodeId).first();
   if (!node) throw new ApiError(401, "invalid_node");
   if (node.status === "revoked") throw new ApiError(403, "node_revoked");
@@ -3677,7 +3704,7 @@ async function heartbeat(request, env, nodeId, url) {
     : normalizeCapabilities(body.capabilities);
   const network = normalizeNodeNetwork(body.network);
   const hardware = normalizeNodeHardware(body.hardware);
-  const ssh = normalizeNodeSsh(body.ssh);
+  const ssh = normalizeNodeSsh(body.ssh, node.os_name);
   if (network) await ensureNodeNetworkStorage(env);
   if (hardware) await ensureNodeHardwareStorage(env);
   if (ssh) await ensureNodeSshStorage(env);
@@ -3736,9 +3763,12 @@ async function heartbeat(request, env, nodeId, url) {
       INSERT INTO node_ssh_state (
         node_id, ssh_client_available, sshd_process_running, sshd_listening_local,
         sshd_exposure_verified, sshd_loopback_only,
-        cloudflared_installed, cloudflared_running, browser_terminal_local_ready,
+        cloudflared_installed, cloudflared_running,
+        restricted_bootstrap_state_present, restricted_console_installed,
+        cloudflare_ca_public_key_present, sshd_force_command_managed, restricted_policy_ready,
+        browser_terminal_local_ready,
         bind_target, observed_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT(node_id) DO UPDATE SET
         ssh_client_available = excluded.ssh_client_available,
         sshd_process_running = excluded.sshd_process_running,
@@ -3747,6 +3777,11 @@ async function heartbeat(request, env, nodeId, url) {
         sshd_loopback_only = excluded.sshd_loopback_only,
         cloudflared_installed = excluded.cloudflared_installed,
         cloudflared_running = excluded.cloudflared_running,
+        restricted_bootstrap_state_present = excluded.restricted_bootstrap_state_present,
+        restricted_console_installed = excluded.restricted_console_installed,
+        cloudflare_ca_public_key_present = excluded.cloudflare_ca_public_key_present,
+        sshd_force_command_managed = excluded.sshd_force_command_managed,
+        restricted_policy_ready = excluded.restricted_policy_ready,
         browser_terminal_local_ready = excluded.browser_terminal_local_ready,
         bind_target = excluded.bind_target,
         observed_at = CURRENT_TIMESTAMP,
@@ -3760,6 +3795,11 @@ async function heartbeat(request, env, nodeId, url) {
       ssh.sshd_loopback_only,
       ssh.cloudflared_installed,
       ssh.cloudflared_running,
+      ssh.restricted_bootstrap_state_present,
+      ssh.restricted_console_installed,
+      ssh.cloudflare_ca_public_key_present,
+      ssh.sshd_force_command_managed,
+      ssh.restricted_policy_ready,
       ssh.browser_terminal_local_ready,
       ssh.bind_target
     ));
