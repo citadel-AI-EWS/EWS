@@ -159,6 +159,15 @@ else
   fail "systemd is required for persistent Linux service installation."
 fi
 
+if [[ "${CITADEL_CONFIGURE_SSH:-0}" == "1" ]]; then
+  SSH_USER="${CITADEL_SSH_USER:-${SUDO_USER:-$USER}}"
+  [[ "${EUID:-$(id -u)}" -eq 0 ]] || fail "CITADEL_CONFIGURE_SSH=1 requires root privileges."
+  CITADEL_RELEASE_ROOT="$INSTALL_ROOT" CITADEL_STATE_ROOT="$STATE_ROOT" CITADEL_SSH_ACTION=configure \
+    "$INSTALL_ROOT/ssh_prepare_linux.sh" "$SSH_USER"
+else
+  log "SSH bootstrap not requested. Use CITADEL_CONFIGURE_SSH=1 on an elevated repair/install when needed."
+fi
+
 python3 - "$INSTALL_ROOT/install-state.json" "$NODE_ID" "$CONTROLLER_URL" <<'PY'
 import json, pathlib, sys, datetime
 path, node_id, controller = sys.argv[1:]
