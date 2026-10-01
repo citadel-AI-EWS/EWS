@@ -27,7 +27,7 @@ import sys
 raise SystemExit(0 if sys.version_info >= (3, 12) else 1)
 PY
 
-for pair in   "citadel_node_v1.py:$EXPECTED_V1_SHA256"   "citadel_node_v2.py:$EXPECTED_V2_SHA256"   "windows_enterprise_probe.ps1:$EXPECTED_ENTERPRISE_PROBE_SHA256"   "ssh_restricted_console.py:$EXPECTED_SSH_CONSOLE_SHA256"; do
+for pair in   "citadel_node_v1.py:$EXPECTED_V1_SHA256"   "citadel_node_v2.py:$EXPECTED_V2_SHA256"   "windows_enterprise_probe.ps1:$EXPECTED_ENTERPRISE_PROBE_SHA256"   "ssh_restricted_console.py:$EXPECTED_SSH_CONSOLE_SHA256"   "ssh_configurator.py:$EXPECTED_SSH_CONFIGURATOR_SHA256"   "ssh_prepare_linux.sh:$EXPECTED_SSH_LINUX_BOOTSTRAP_SHA256"; do
   name="${pair%%:*}"
   expected="${pair##*:}"
   source="$SCRIPT_DIR/$name"
