@@ -82,9 +82,16 @@ async function cf(path, options = {}, allowedStatuses = []) {
 }
 
 async function listAll(path) {
-  const join = path.includes("?") ? "&" : "?";
-  const {body} = await cf(`${path}${join}per_page=100`);
-  return Array.isArray(body?.result) ? body.result : [];
+  const results = [];
+  for (let page = 1; page <= 50; page += 1) {
+    const join = path.includes("?") ? "&" : "?";
+    const {body} = await cf(`${path}${join}per_page=100&page=${page}`);
+    const batch = Array.isArray(body?.result) ? body.result : [];
+    results.push(...batch);
+    const totalPages = Number(body?.result_info?.total_pages || 1);
+    if (page >= totalPages || batch.length === 0) return results;
+  }
+  fail("cloudflare_pagination_limit_exceeded");
 }
 
 async function findZone(hostname, accountId) {
@@ -158,6 +165,9 @@ async function ensureAccessApp(accountId, hostname, nodeLabel, sessionDuration, 
   if (matches.length > 1) fail("multiple_access_apps_for_ssh_hostname");
   if (matches.length === 1) {
     if (matches[0].type !== "ssh") fail("existing_access_app_for_hostname_is_not_browser_ssh");
+    if (!String(matches[0].name || "").startsWith("CITADEL SSH ")) {
+      fail("existing_access_app_for_hostname_is_not_owned_by_citadel");
+    }
     return {app: matches[0], created: false};
   }
   const desired = {
@@ -192,9 +202,10 @@ async function ensurePolicy(accountId, appId, hostname, email, apply) {
   const incompatible = policies.filter(p => !["allow", "deny"].includes(String(p?.decision || "")));
   if (incompatible.length) fail("browser_ssh_app_contains_unsupported_bypass_or_service_auth_policy");
   const wanted = desiredPolicy(hostname, email);
-  const otherAllow = policies.filter(p => p?.decision === "allow" && p?.name !== wanted.name);
-  if (otherAllow.length) fail("browser_ssh_app_contains_additional_allow_policy");
+  const unexpected = policies.filter(p => p?.name !== wanted.name);
+  if (unexpected.length) fail("browser_ssh_app_contains_additional_policy");
   const existing = policies.find(p => p?.name === wanted.name);
+  if (existing && existing.decision !== "allow") fail("citadel_ssh_policy_has_wrong_decision");
   if (!apply) return existing || {id: "<planned>", ...wanted};
   if (existing?.id) {
     const {body} = await cf(`/accounts/${accountId}/access/apps/${appId}/policies/${existing.id}`, {
