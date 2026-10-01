@@ -9,6 +9,7 @@ SERVICE_NAME="citadel-node.service"
 EXPECTED_V1_SHA256="0a732e5a7f057913ca843c560182fb1c30afbd7b0ccfb994605688d575ddaa16"
 EXPECTED_V2_SHA256="03b7a118bedc53fde57869af4a26e3213d41c0538f3f127f89aa51b49ec6f63d"
 EXPECTED_ENTERPRISE_PROBE_SHA256="0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
+EXPECTED_SSH_CONSOLE_SHA256="10050339a74cad33410aca0e109d800d29b01a8f3238d8ff7ce016fbd099dc8c"
 CONTROLLER_PUBLIC_X="erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 
 log(){ printf '[CITADEL] %s\n' "$*"; }
@@ -24,7 +25,7 @@ import sys
 raise SystemExit(0 if sys.version_info >= (3, 12) else 1)
 PY
 
-for pair in   "citadel_node_v1.py:$EXPECTED_V1_SHA256"   "citadel_node_v2.py:$EXPECTED_V2_SHA256"   "windows_enterprise_probe.ps1:$EXPECTED_ENTERPRISE_PROBE_SHA256"; do
+for pair in   "citadel_node_v1.py:$EXPECTED_V1_SHA256"   "citadel_node_v2.py:$EXPECTED_V2_SHA256"   "windows_enterprise_probe.ps1:$EXPECTED_ENTERPRISE_PROBE_SHA256"   "ssh_restricted_console.py:$EXPECTED_SSH_CONSOLE_SHA256"; do
   name="${pair%%:*}"
   expected="${pair##*:}"
   source="$SCRIPT_DIR/$name"
@@ -51,6 +52,7 @@ copy_if_changed "$SCRIPT_DIR/citadel_node_v1.py" "$INSTALL_ROOT/citadel_node_v1.
 copy_if_changed "$SCRIPT_DIR/citadel_node_v2.py" "$INSTALL_ROOT/citadel_node_v2.py"
 # Windows-only probe is installed as an inert, hash-pinned release asset so unified update/rollback remains complete.
 copy_if_changed "$SCRIPT_DIR/windows_enterprise_probe.ps1" "$INSTALL_ROOT/windows_enterprise_probe.ps1"
+copy_if_changed "$SCRIPT_DIR/ssh_restricted_console.py" "$INSTALL_ROOT/ssh_restricted_console.py"
 copy_if_changed "$SCRIPT_DIR/requirements.txt" "$INSTALL_ROOT/requirements.txt"
 
 VENV="$INSTALL_ROOT/.venv"
