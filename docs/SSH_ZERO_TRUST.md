@@ -35,7 +35,7 @@ SSH localhost:22
 Доступ к hostname защищается Cloudflare Access. Кнопка **Открыть интерактивный SSH** в Hub активируется только когда:
 
 1. для выбранной ноды сохранены hostname + username;
-2. агент подтвердил, что локальный `sshd` слушает `127.0.0.1:22`;
+2. агент подтвердил, что `sshd` слушает порт 22 **только на loopback**, а не на `0.0.0.0`/LAN;
 3. агент видит запущенный `cloudflared`.
 
 Hub открывает защищённый Cloudflare browser terminal в отдельном окне/вкладке. Он не проксирует SSH-байты через D1/Worker.
@@ -70,6 +70,8 @@ exit
 После установки OpenSSH отдельному CITADEL SSH-пользователю следует задать принудительную консоль и запретить forwarding. Пример для Linux:
 
 ```text
+ListenAddress 127.0.0.1
+
 Match User citadel-operator
     ForceCommand /path/to/citadel/.venv/bin/python /path/to/citadel/ssh_restricted_console.py --config /path/to/citadel/config.json
     PermitTTY yes
