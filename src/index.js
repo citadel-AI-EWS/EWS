@@ -35,20 +35,20 @@ const ALLOWED_REPORT_SENSITIVITIES = new Set([
 ]);
 const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
-const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"]);
+const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe"]);
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.25",
+  version: "0.3.26",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "0a732e5a7f057913ca843c560182fb1c30afbd7b0ccfb994605688d575ddaa16"
+      sha256: "1923b21d956827fc1da6f952dc0ce15cce224b2145277f6fefb7d1fc26003eea"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "03b7a118bedc53fde57869af4a26e3213d41c0538f3f127f89aa51b49ec6f63d"
+      sha256: "601a08fe59e2c3711c4f35d8f0ee15a1d7d6536eb2bc63e16ecf3d54d7da1c13"
     }
   ]
 });
@@ -83,6 +83,7 @@ let commandIndexPromise;
 let commandReadIndexPromise;
 let nodeNetworkSchemaPromise;
 let nodeHardwareSchemaPromise;
+let nodeSshSchemaPromise;
 let rolloutSchemaPromise;
 let projectSchemaPromise;
 let nodeAiSchemaPromise;
@@ -217,6 +218,62 @@ function normalizeNodeHardware(value) {
     cpu_logical_count: cpuLogical,
     gpus
   };
+}
+
+
+function normalizeNodeSsh(value) {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ApiError(400, "invalid_ssh_state");
+  }
+  const bool = (field) => value[field] === true ? 1 : 0;
+  const bindTarget = value.bind_target === undefined
+    ? "localhost:22"
+    : requireString(value.bind_target, "ssh_bind_target", 80);
+  if (bindTarget !== "localhost:22" && bindTarget !== "127.0.0.1:22") {
+    throw new ApiError(400, "invalid_ssh_bind_target");
+  }
+  const exposureVerified = bool("sshd_exposure_verified");
+  const loopbackOnly = bool("sshd_loopback_only");
+  const cloudflaredRunning = bool("cloudflared_running");
+  const localListen = bool("sshd_listening_local");
+  return {
+    ssh_client_available: bool("ssh_client_available"),
+    sshd_process_running: bool("sshd_process_running"),
+    sshd_listening_local: localListen,
+    sshd_exposure_verified: exposureVerified,
+    sshd_loopback_only: loopbackOnly,
+    cloudflared_installed: bool("cloudflared_installed"),
+    cloudflared_running: cloudflaredRunning,
+    browser_terminal_local_ready:
+      localListen && exposureVerified && loopbackOnly && cloudflaredRunning ? 1 : 0,
+    bind_target: bindTarget
+  };
+}
+
+function normalizeSshPublicHostname(value) {
+  const host = requireString(value, "ssh_public_hostname", 253).toLowerCase();
+  if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host)) {
+    throw new ApiError(400, "invalid_ssh_public_hostname");
+  }
+  return host;
+}
+
+function normalizeSshUser(value) {
+  const user = requireString(value, "ssh_user", 64);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(user)) {
+    throw new ApiError(400, "invalid_ssh_user");
+  }
+  return user;
+}
+
+function normalizeSshFingerprint(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const fingerprint = requireString(value, "ssh_host_key_fingerprint", 160);
+  if (!/^SHA256:[A-Za-z0-9+/=]{20,120}$/.test(fingerprint)) {
+    throw new ApiError(400, "invalid_ssh_host_key_fingerprint");
+  }
+  return fingerprint;
 }
 
 function subnet24(value) {
@@ -891,6 +948,130 @@ async function ensureNodeHardwareStorage(env) {
     });
   }
   await nodeHardwareSchemaPromise;
+}
+
+
+async function ensureNodeSshStorage(env) {
+  if (!nodeSshSchemaPromise) {
+    nodeSshSchemaPromise = env.DB.batch([
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS node_ssh_state (
+          node_id TEXT PRIMARY KEY,
+          ssh_client_available INTEGER NOT NULL DEFAULT 0 CHECK (ssh_client_available IN (0,1)),
+          sshd_process_running INTEGER NOT NULL DEFAULT 0 CHECK (sshd_process_running IN (0,1)),
+          sshd_listening_local INTEGER NOT NULL DEFAULT 0 CHECK (sshd_listening_local IN (0,1)),
+          sshd_exposure_verified INTEGER NOT NULL DEFAULT 0 CHECK (sshd_exposure_verified IN (0,1)),
+          sshd_loopback_only INTEGER NOT NULL DEFAULT 0 CHECK (sshd_loopback_only IN (0,1)),
+          cloudflared_installed INTEGER NOT NULL DEFAULT 0 CHECK (cloudflared_installed IN (0,1)),
+          cloudflared_running INTEGER NOT NULL DEFAULT 0 CHECK (cloudflared_running IN (0,1)),
+          browser_terminal_local_ready INTEGER NOT NULL DEFAULT 0 CHECK (browser_terminal_local_ready IN (0,1)),
+          bind_target TEXT NOT NULL DEFAULT 'localhost:22',
+          public_hostname TEXT,
+          ssh_user TEXT,
+          host_key_fingerprint TEXT,
+          config_updated_at TEXT,
+          observed_at TEXT,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+        )
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_node_ssh_ready
+        ON node_ssh_state(browser_terminal_local_ready, updated_at DESC)
+      `)
+    ]).catch((error) => {
+      nodeSshSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await nodeSshSchemaPromise;
+}
+
+async function nodeSshStateResponse(env, nodeId) {
+  await ensureNodeSshStorage(env);
+  const row = await env.DB.prepare(`
+    SELECT node_id, ssh_client_available, sshd_process_running, sshd_listening_local,
+      sshd_exposure_verified, sshd_loopback_only,
+      cloudflared_installed, cloudflared_running, browser_terminal_local_ready,
+      bind_target, public_hostname, ssh_user, host_key_fingerprint,
+      config_updated_at, observed_at, updated_at
+    FROM node_ssh_state WHERE node_id = ?
+  `).bind(nodeId).first();
+  const state = row || {
+    node_id: nodeId,
+    ssh_client_available: 0,
+    sshd_process_running: 0,
+    sshd_listening_local: 0,
+    sshd_exposure_verified: 0,
+    sshd_loopback_only: 0,
+    cloudflared_installed: 0,
+    cloudflared_running: 0,
+    browser_terminal_local_ready: 0,
+    bind_target: "localhost:22",
+    public_hostname: null,
+    ssh_user: null,
+    host_key_fingerprint: null,
+    config_updated_at: null,
+    observed_at: null,
+    updated_at: null
+  };
+  return {
+    ...state,
+    browser_url: state.public_hostname ? "https://" + state.public_hostname : null,
+    private_keys_stored: false
+  };
+}
+
+async function architectNodeSsh(request, env, nodeId) {
+  const actor = await authenticateArchitect(request, env);
+  const node = await env.DB.prepare(
+    "SELECT node_id, status FROM nodes WHERE node_id = ? AND status != 'revoked'"
+  ).bind(nodeId).first();
+  if (!node) throw new ApiError(404, "node_not_found");
+  await ensureNodeSshStorage(env);
+
+  if (request.method === "GET") {
+    return json({ ok: true, ssh: await nodeSshStateResponse(env, nodeId) });
+  }
+  if (request.method === "DELETE") {
+    if (!roleHasPermission(actor.role, "admin")) throw new ApiError(403, "architect_admin_required");
+    await env.DB.prepare(`
+      UPDATE node_ssh_state
+      SET public_hostname = NULL, ssh_user = NULL, host_key_fingerprint = NULL,
+          config_updated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE node_id = ?
+    `).bind(nodeId).run();
+    return json({ ok: true, ssh: await nodeSshStateResponse(env, nodeId) });
+  }
+  if (request.method !== "PUT") return methodNotAllowed(["GET", "PUT", "DELETE"]);
+  if (!roleHasPermission(actor.role, "operate")) throw new ApiError(403, "architect_operator_required");
+
+  const body = parseJsonObject(await readBodyText(request, 4096));
+  const allowedFields = new Set(["public_hostname", "ssh_user", "host_key_fingerprint"]);
+  const unknownField = Object.keys(body).find((key) => !allowedFields.has(key));
+  if (unknownField) {
+    if (/private|password|secret|token|credential|passphrase/i.test(unknownField)) {
+      throw new ApiError(400, "ssh_secret_material_not_allowed");
+    }
+    throw new ApiError(400, "invalid_ssh_config_field");
+  }
+  const publicHostname = normalizeSshPublicHostname(body.public_hostname);
+  const sshUser = normalizeSshUser(body.ssh_user);
+  const fingerprint = normalizeSshFingerprint(body.host_key_fingerprint);
+
+  await env.DB.prepare(`
+    INSERT INTO node_ssh_state (
+      node_id, public_hostname, ssh_user, host_key_fingerprint,
+      config_updated_at, updated_at
+    ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ON CONFLICT(node_id) DO UPDATE SET
+      public_hostname = excluded.public_hostname,
+      ssh_user = excluded.ssh_user,
+      host_key_fingerprint = excluded.host_key_fingerprint,
+      config_updated_at = CURRENT_TIMESTAMP,
+      updated_at = CURRENT_TIMESTAMP
+  `).bind(nodeId, publicHostname, sshUser, fingerprint).run();
+  return json({ ok: true, ssh: await nodeSshStateResponse(env, nodeId) });
 }
 
 async function ensureNodeAiStorage(env) {
@@ -3496,8 +3677,10 @@ async function heartbeat(request, env, nodeId, url) {
     : normalizeCapabilities(body.capabilities);
   const network = normalizeNodeNetwork(body.network);
   const hardware = normalizeNodeHardware(body.hardware);
+  const ssh = normalizeNodeSsh(body.ssh);
   if (network) await ensureNodeNetworkStorage(env);
   if (hardware) await ensureNodeHardwareStorage(env);
+  if (ssh) await ensureNodeSshStorage(env);
   const heartbeatAt = new Date().toISOString();
   const heartbeatStatements = [
     env.DB.prepare(`
@@ -3546,6 +3729,39 @@ async function heartbeat(request, env, nodeId, url) {
       hardware.memory_total_bytes,
       hardware.cpu_logical_count,
       JSON.stringify(hardware.gpus)
+    ));
+  }
+  if (ssh) {
+    heartbeatStatements.push(env.DB.prepare(`
+      INSERT INTO node_ssh_state (
+        node_id, ssh_client_available, sshd_process_running, sshd_listening_local,
+        sshd_exposure_verified, sshd_loopback_only,
+        cloudflared_installed, cloudflared_running, browser_terminal_local_ready,
+        bind_target, observed_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT(node_id) DO UPDATE SET
+        ssh_client_available = excluded.ssh_client_available,
+        sshd_process_running = excluded.sshd_process_running,
+        sshd_listening_local = excluded.sshd_listening_local,
+        sshd_exposure_verified = excluded.sshd_exposure_verified,
+        sshd_loopback_only = excluded.sshd_loopback_only,
+        cloudflared_installed = excluded.cloudflared_installed,
+        cloudflared_running = excluded.cloudflared_running,
+        browser_terminal_local_ready = excluded.browser_terminal_local_ready,
+        bind_target = excluded.bind_target,
+        observed_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+    `).bind(
+      nodeId,
+      ssh.ssh_client_available,
+      ssh.sshd_process_running,
+      ssh.sshd_listening_local,
+      ssh.sshd_exposure_verified,
+      ssh.sshd_loopback_only,
+      ssh.cloudflared_installed,
+      ssh.cloudflared_running,
+      ssh.browser_terminal_local_ready,
+      ssh.bind_target
     ));
   }
   const results = await env.DB.batch(heartbeatStatements);
@@ -6009,7 +6225,7 @@ async function architectCreateCommand(request, env, nodeId) {
     payload = { asset: lmstudioInstallAssetForNode(node) };
   } else if (commandType === "lmstudio_uninstall") {
     payload = { purge_data: body.purge_data === true };
-  } else if (commandType === "lmstudio_probe") {
+  } else if (commandType === "lmstudio_probe" || commandType === "ssh_probe") {
     payload = {};
   } else if (commandType === "lmstudio_model_get" || commandType === "lmstudio_model_load") {
     await ensureNodeAiStorage(env);
@@ -7138,6 +7354,16 @@ async function handleApi(request, env, url) {
           decodeURIComponent(architectReportMatch[1])
         )
       : methodNotAllowed(["GET"]);
+  }
+
+  const architectNodeSshMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/nodes\/([^/]+)\/ssh$/
+  );
+  if (architectNodeSshMatch) {
+    const nodeId = decodeURIComponent(architectNodeSshMatch[1]);
+    return ["GET", "PUT", "DELETE"].includes(request.method)
+      ? architectNodeSsh(request, env, nodeId)
+      : methodNotAllowed(["GET", "PUT", "DELETE"]);
   }
 
   const architectNodeDetailsMatch = url.pathname.match(

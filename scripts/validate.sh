@@ -4,7 +4,7 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 python -m unittest -v controller_tests.py
-python -m py_compile controller_app.py controller_tests.py agent/citadel_node_v1.py agent/citadel_node_v2.py tests/network-recovery-priority.py
+python -m py_compile controller_app.py controller_tests.py agent/citadel_node_v1.py agent/citadel_node_v2.py agent/ssh_restricted_console.py tests/network-recovery-priority.py
 python agent/citadel_node_v2.py self-test
 python tests/network-recovery-priority.py
 
@@ -42,7 +42,9 @@ for required in (
     "/api/v1/architect/release",
     "/api/v1/architect/missions",
     "cloudflared access ssh --hostname %h",
-    "CONFIGURED LOCALLY",
+    "browser_terminal_local_ready",
+    "sshReadyForBrowser",
+    "/api/v1/architect/nodes/${encodeURIComponent(sshNodeId)}/ssh",
     "prefers-reduced-motion",
     "system_inventory",
     "/api/v1/architect/nodes/${encodeURIComponent(node.node_id)}/wake",
@@ -84,8 +86,10 @@ for forbidden in (
     if forbidden in hub:
         raise SystemExit(f"unsafe or simulated Hub pattern detected: {forbidden}")
 
-if "SSH target configured locally; tunnel reachability is not yet verified" not in hub:
-    raise SystemExit("Hub must not claim SSH reachability before Tunnel verification")
+if "CONFIGURED LOCALLY" in hub or 'sessionStorage.setItem("citadelSshHost"' in hub:
+    raise SystemExit("Hub still uses obsolete local-only SSH configuration")
+if "private keys" not in hub.lower() and "приватные ssh-ключи" not in hub.lower():
+    raise SystemExit("Hub must explain that private SSH keys are not stored")
 
 secure_refresh_start = hub.find("async function refreshSecure")
 secure_refresh_end = hub.find("async function refresh(){", secure_refresh_start)
@@ -339,6 +343,7 @@ node tests/ten-prompt-routing.mjs
 python tests/lmstudio-local-protocol.py
 python tests/mini-agents.py
 python tests/lmstudio-progress.py
+python tests/ssh-restricted-console.py
 node tests/openrouter-quality-gate.mjs
 
 python - <<'PY'
@@ -358,7 +363,7 @@ required = {
     "architect_auth_state", "architect_recovery_attempts",
     "architect_access_tokens", "enterprise_sites", "enterprise_node_groups",
     "enterprise_node_scope", "enterprise_desired_state",
-    "d1_guardian_state", "d1_guardian_actions",
+    "d1_guardian_state", "d1_guardian_actions", "node_ssh_state",
 }
 tables = {
     row[0]
