@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
   [string]$InstallRoot = "$env:ProgramData\CitadelEWS\agent",
+  [string]$StateRoot = "$env:ProgramData\CitadelEWS\state",
   [string]$SshUser = "",
   [string]$CloudflareCaPublicKey = "",
   [switch]$ForceLoopback,
@@ -49,25 +50,52 @@ function Require-CloudflareCaKey([string]$Value) {
   return $Key
 }
 
-function Resolve-ActiveRelease([string]$Root) {
+function Resolve-AgentLayout([string]$Root, [string]$StateRootValue) {
   $Root = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
+  $StateRootValue = [System.IO.Path]::GetFullPath($StateRootValue).TrimEnd('\')
   $ProgramData = [System.IO.Path]::GetFullPath($env:ProgramData).TrimEnd('\')
-  if (-not ($Root + '\').StartsWith($ProgramData + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "InstallRoot must be under ProgramData."
+  foreach ($PathValue in @($Root, $StateRootValue)) {
+    if ([string]::Equals($PathValue, $ProgramData, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not ($PathValue + '\').StartsWith($ProgramData + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw "CITADEL SSH paths must be strict descendants of ProgramData."
+    }
   }
-  $StatePath = Join-Path $Root "install-state.json"
-  if (-not (Test-Path -LiteralPath $StatePath)) { throw "CITADEL install-state.json is missing. Install/update the node first." }
-  $State = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json
-  $ReleaseRoot = [System.IO.Path]::GetFullPath([string]$State.release_root).TrimEnd('\')
-  $ReleasesRoot = [System.IO.Path]::GetFullPath((Join-Path $Root "releases")).TrimEnd('\') + '\'
-  if (-not ($ReleaseRoot + '\').StartsWith($ReleasesRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "Active CITADEL release path is outside the managed releases directory."
+  $RootPrefix = $Root + '\'
+  $StatePrefix = $StateRootValue + '\'
+  if ([string]::Equals($Root, $StateRootValue, [System.StringComparison]::OrdinalIgnoreCase) -or
+      $RootPrefix.StartsWith($StatePrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+      $StatePrefix.StartsWith($RootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "InstallRoot and StateRoot must be separate, non-overlapping ProgramData directories."
   }
-  if (-not (Test-Path -LiteralPath $ReleaseRoot)) { throw "Active CITADEL release directory is missing." }
+
+  $InstallStatePath = Join-Path $Root "install-state.json"
+  if (Test-Path -LiteralPath $InstallStatePath) {
+    $State = Get-Content -LiteralPath $InstallStatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $ReleaseRoot = [System.IO.Path]::GetFullPath([string]$State.release_root).TrimEnd('\')
+    $ReleasesRoot = [System.IO.Path]::GetFullPath((Join-Path $Root "releases")).TrimEnd('\') + '\'
+    if (-not ($ReleaseRoot + '\').StartsWith($ReleasesRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw "Active CITADEL release path is outside the managed releases directory."
+    }
+    if (-not (Test-Path -LiteralPath $ReleaseRoot)) { throw "Active CITADEL release directory is missing." }
+    $ConfigPath = Join-Path $ReleaseRoot "config.json"
+    $Layout = "managed_release"
+  } else {
+    foreach ($Required in @("citadel_node_v2.py", "CitadelSshConsole.cs", "configure_restricted_ssh.ps1")) {
+      if (-not (Test-Path -LiteralPath (Join-Path $Root $Required))) {
+        throw "CITADEL flat one-click layout is incomplete: $Required is missing."
+      }
+    }
+    $ReleaseRoot = $Root
+    $ConfigPath = Join-Path $StateRootValue "config.json"
+    $Layout = "flat_oneclick"
+  }
+  if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Active CITADEL config.json is missing." }
   return @{
     InstallRoot = $Root
+    StateRoot = $StateRootValue
     ReleaseRoot = $ReleaseRoot
-    ConfigPath = (Join-Path $ReleaseRoot "config.json")
+    ConfigPath = $ConfigPath
+    Layout = $Layout
   }
 }
 
@@ -158,7 +186,11 @@ if (-not (Test-IsAdministrator)) {
   if (-not [string]::IsNullOrWhiteSpace($SshUser) -or -not [string]::IsNullOrWhiteSpace($CloudflareCaPublicKey)) {
     throw "Run this script from an Administrator PowerShell when passing SSH parameters."
   }
-  $Args = @("-NoLogo", "-NoProfile", "-File", ('"' + $PSCommandPath + '"'), "-InstallRoot", ('"' + $InstallRoot + '"'))
+  $Args = @(
+    "-NoLogo", "-NoProfile", "-File", ('"' + $PSCommandPath + '"'),
+    "-InstallRoot", ('"' + $InstallRoot + '"'),
+    "-StateRoot", ('"' + $StateRoot + '"')
+  )
   if ($ForceLoopback) { $Args += "-ForceLoopback" }
   if ($Uninstall) { $Args += "-Uninstall" }
   $Elevated = Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $Args -Wait -PassThru
@@ -197,10 +229,12 @@ if ($Uninstall) {
   exit 0
 }
 
-$Resolved = Resolve-ActiveRelease -Root $InstallRoot
+$Resolved = Resolve-AgentLayout -Root $InstallRoot -StateRootValue $StateRoot
 $InstallRoot = $Resolved.InstallRoot
+$StateRoot = $Resolved.StateRoot
 $ReleaseRoot = $Resolved.ReleaseRoot
 $ConfigPath = $Resolved.ConfigPath
+$AgentLayout = $Resolved.Layout
 
 if ([string]::IsNullOrWhiteSpace($SshUser)) {
   $SshUser = Read-Host "Cloudflare Access SSH username (normally your email prefix)"
@@ -377,6 +411,7 @@ $State = [ordered]@{
   user_sid = $User.SID.Value
   created_user = $CreatedUser
   openssh_preexisted = $OpenSshWasInstalled
+  agent_layout = $AgentLayout
   backup_path = $BackupPath
   service_start_mode_before = $ServiceStartModeBefore
   service_was_running_before = $ServiceWasRunningBefore
