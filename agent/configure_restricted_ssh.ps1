@@ -133,7 +133,7 @@ if (-not (Test-IsAdministrator)) {
   if (-not [string]::IsNullOrWhiteSpace($SshUser) -or -not [string]::IsNullOrWhiteSpace($CloudflareCaPublicKey)) {
     throw "Run this script from an Administrator PowerShell when passing SSH parameters."
   }
-  $Args = @("-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"' + $PSCommandPath + '"'))
+  $Args = @("-NoLogo", "-NoProfile", "-File", ('"' + $PSCommandPath + '"'))
   if ($ForceLoopback) { $Args += "-ForceLoopback" }
   if ($Uninstall) { $Args += "-Uninstall" }
   $Elevated = Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $Args -Wait -PassThru
