@@ -6,11 +6,15 @@ const database = config.match(/"D1_ANALYTICS_DATABASE_ID"\s*:\s*"([a-f0-9-]+)"/i
 if (!account || !database) throw Error("d1_configuration_missing");
 const date = new Date().toISOString().slice(0, 10);
 const report = { date_utc: date, source: "cloudflare_api", reads: null, writes: null,
+  database_reads: null, database_writes: null,
   storage_bytes: null, read_limit: 5_000_000, write_limit: 100_000,
   storage_limit: 500 * 1024 ** 2, errors: [] };
-const query = `query D1Capacity($account: string!, $date: Date!) {
+const query = `query D1Capacity($account: string!, $database: string!, $date: Date!) {
   viewer { accounts(filter: {accountTag: $account}) {
     usage: d1AnalyticsAdaptiveGroups(limit: 1, filter: {date: $date}) {
+      sum { rowsRead rowsWritten }
+    }
+    database_usage: d1AnalyticsAdaptiveGroups(limit: 1, filter: {date: $date, databaseId: $database}) {
       sum { rowsRead rowsWritten }
     }
   } }
@@ -38,7 +42,7 @@ async function cfJson(path, token, options = {}) {
 }
 const [usage, storage] = await Promise.allSettled([
   cfJson("graphql", process.env.D1_ANALYTICS_TOKEN || process.env.CLOUDFLARE_API_TOKEN, {
-    method: "POST", body: JSON.stringify({ query, variables: { account, date } })
+    method: "POST", body: JSON.stringify({ query, variables: { account, database, date } })
   }),
   cfJson("graphql", process.env.D1_ANALYTICS_TOKEN || process.env.CLOUDFLARE_API_TOKEN, {
     method: "POST", body: JSON.stringify({ query: storageQuery, variables: { account, database, date } })
@@ -50,6 +54,10 @@ if (usage.status === "fulfilled") {
   const sum = Array.isArray(rows) && !rows.length ? { rowsRead: 0, rowsWritten: 0 } : rows?.[0]?.sum;
   report.reads = number(sum?.rowsRead);
   report.writes = number(sum?.rowsWritten);
+  const dbRows = usage.value.data?.viewer?.accounts?.[0]?.database_usage;
+  const dbSum = Array.isArray(dbRows) && !dbRows.length ? { rowsRead: 0, rowsWritten: 0 } : dbRows?.[0]?.sum;
+  report.database_reads = number(dbSum?.rowsRead);
+  report.database_writes = number(dbSum?.rowsWritten);
   if (report.reads === null || report.writes === null) report.errors.push("invalid_analytics_response");
 } else report.errors.push("analytics:" + usage.reason.message);
 if (storage.status === "fulfilled") {
@@ -59,6 +67,14 @@ if (storage.status === "fulfilled") {
 } else report.errors.push("storage:" + storage.reason.message);
 
 try {
+  const worker = config.match(/"name"\s*:\s*"([^"]+)"/)?.[1];
+  const value = await cfJson(`accounts/${account}/workers/scripts/${worker}/schedules`, process.env.CLOUDFLARE_API_TOKEN);
+  const schedules = Array.isArray(value.result) ? value.result : value.result?.schedules;
+  report.guardian_cron_configured = Array.isArray(schedules)
+    ? schedules.some(s => s.cron === "*/5 * * * *") : null;
+} catch { report.guardian_cron_configured = null; }
+
+try {
   const response = await fetch("https://citadel-ai.init1.workers.dev/api/v1/status/d1-retention", {
     signal: AbortSignal.timeout(15000), redirect: "error"
   });
@@ -66,6 +82,7 @@ try {
 } catch { report.retention = { status: "unavailable" }; }
 report.threshold_percent = 80;
 report.alerts = [];
+if (report.guardian_cron_configured === false) report.alerts.push("guardian_cron_missing");
 for (const [name, used, limit] of [
   ['reads', report.reads, report.read_limit], ['writes', report.writes, report.write_limit],
   ['storage', report.storage_bytes, report.storage_limit]
