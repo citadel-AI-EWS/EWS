@@ -243,6 +243,7 @@ jobs:
             if (-not $text.Contains($required)) { throw "Restricted SSH bootstrap invariant missing: $required" }
           }
           if ($text.Contains("-ExecutionPolicy Bypass")) { throw "Restricted SSH bootstrap must not bypass execution policy" }
+          if (-not $text.Contains('"RemoteSigned"')) { throw "Restricted SSH bootstrap elevation must use process-only RemoteSigned policy" }
           foreach ($unsupported in @("KbdInteractiveAuthentication", "PermitTunnel", "X11Forwarding")) {
             if ($text.Contains($unsupported)) { throw "Windows OpenSSH unsupported directive returned: $unsupported" }
           }
