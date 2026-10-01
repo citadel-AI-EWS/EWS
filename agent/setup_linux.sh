@@ -55,6 +55,9 @@ copy_if_changed "$SCRIPT_DIR/citadel_node_v2.py" "$INSTALL_ROOT/citadel_node_v2.
 # Windows-only probe is installed as an inert, hash-pinned release asset so unified update/rollback remains complete.
 copy_if_changed "$SCRIPT_DIR/windows_enterprise_probe.ps1" "$INSTALL_ROOT/windows_enterprise_probe.ps1"
 copy_if_changed "$SCRIPT_DIR/ssh_restricted_console.py" "$INSTALL_ROOT/ssh_restricted_console.py"
+copy_if_changed "$SCRIPT_DIR/ssh_configurator.py" "$INSTALL_ROOT/ssh_configurator.py"
+copy_if_changed "$SCRIPT_DIR/ssh_prepare_linux.sh" "$INSTALL_ROOT/ssh_prepare_linux.sh"
+chmod 700 "$INSTALL_ROOT/ssh_prepare_linux.sh"
 copy_if_changed "$SCRIPT_DIR/requirements.txt" "$INSTALL_ROOT/requirements.txt"
 
 VENV="$INSTALL_ROOT/.venv"
