@@ -59,9 +59,11 @@ Controller updates should follow a controlled lifecycle:
 
 ## 7. Privileged access
 
-Architect SSH access should be temporary and explicitly approved. The intended model uses short-lived certificates or access grants with TTL, limited scope, audit records, and no display of private keys in the UI.
+Architect SSH access should be explicitly approved and protected by Cloudflare Access/Tunnel. The Hub stores only public routing metadata and readiness (hostname, SSH user, host-key fingerprint); SSH private keys, passwords, Access tokens, service tokens, and SSH CA private material are not stored in D1 or rendered in the UI.
 
-Credential categories such as Architect identity/recovery, controller machine identity, SSH CA material, and recovery secrets should remain isolated from one another.
+The origin SSH service remains private behind the Tunnel. CITADEL's managed SSH path uses an OpenSSH ForceCommand target (`ssh_restricted_console.py`) which implements a fixed read-only command allow-list and does not spawn a general-purpose shell. Browser SSH is enabled only after the agent reports that local sshd and cloudflared are ready.
+
+Credential categories such as Architect identity/recovery, controller machine identity, Cloudflare/SSH CA material, and recovery secrets remain isolated from one another. See `docs/SSH_ZERO_TRUST.md` for the concrete contract.
 
 ## 8. Security Center
 
