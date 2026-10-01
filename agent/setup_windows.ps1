@@ -14,13 +14,15 @@ Set-StrictMode -Version Latest
 $ServiceName = "CitadelEWSNode"
 $ServiceDisplayName = "CITADEL EWS Node"
 $PythonWingetId = "Python.Python.3.14"
-$ReleaseVersion = "0.3.26"
+$ReleaseVersion = "0.3.27"
 $ExpectedV1Sha256 = "1923b21d956827fc1da6f952dc0ce15cce224b2145277f6fefb7d1fc26003eea"
 $ExpectedV2Sha256 = "601a08fe59e2c3711c4f35d8f0ee15a1d7d6536eb2bc63e16ecf3d54d7da1c13"
 $ExpectedServiceHostSha256 = "892c5f388f9b54c0bcbb2956381dd601dfa8065b0e9258ba673e9505c2f81cad"
 $ExpectedServiceHelperSha256 = "e0e66f5a27018a283c65d42e6ead93e382706a163da682e6bd49f2b1fb9b0f99"
 $ExpectedEnterpriseProbeSha256 = "0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
 $ExpectedSshConsoleSha256 = "10050339a74cad33410aca0e109d800d29b01a8f3238d8ff7ce016fbd099dc8c"
+$ExpectedRestrictedSshConsoleSourceSha256 = "026d1d59420ce4a480bfd7d4027a4b54dd178600e08ae85acfd7f6f8bff4e96b"
+$ExpectedRestrictedSshBootstrapSha256 = "45b93f6a1b0703d6c1d81e7efc525c0914ed0d460ae2b8140487739b690cea67"
 
 function Get-Sha256([string]$Path) {
   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -287,6 +289,29 @@ function Quote-CitadelServiceArg {
 }
 
 if ($Uninstall) {
+  $SshBootstrapState = Join-Path $env:ProgramData "CitadelEWS\ssh\bootstrap-state.json"
+  if (Test-Path -LiteralPath $SshBootstrapState) {
+    $SshBootstrapScript = $null
+    $InstallStateForSsh = Join-Path $InstallRoot "install-state.json"
+    if (Test-Path -LiteralPath $InstallStateForSsh) {
+      try {
+        $SshInstallState = Get-Content -LiteralPath $InstallStateForSsh -Raw -Encoding UTF8 | ConvertFrom-Json
+        $CandidateSshBootstrap = Join-Path ([string]$SshInstallState.release_root) "configure_restricted_ssh.ps1"
+        if (Test-Path -LiteralPath $CandidateSshBootstrap) { $SshBootstrapScript = $CandidateSshBootstrap }
+      } catch {
+        $SshBootstrapScript = $null
+      }
+    }
+    if ($null -eq $SshBootstrapScript) {
+      $PackagedSshBootstrap = Join-Path $SourceRoot "configure_restricted_ssh.ps1"
+      if (Test-Path -LiteralPath $PackagedSshBootstrap) { $SshBootstrapScript = $PackagedSshBootstrap }
+    }
+    if ($null -eq $SshBootstrapScript) {
+      throw "Restricted SSH bootstrap state exists but cleanup script is unavailable; refusing to orphan sshd ForceCommand configuration."
+    }
+    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $SshBootstrapScript -InstallRoot $InstallRoot -Uninstall
+    if ($LASTEXITCODE -ne 0) { throw "Restricted SSH cleanup failed; CITADEL uninstall was stopped." }
+  }
   Stop-CitadelServiceIfPresent
   Remove-CitadelServiceDefinition -Name $ServiceName
   foreach ($Process in (Get-RunningLegacyCitadelAgents)) {
@@ -375,6 +400,8 @@ try {
   Copy-VerifiedReleaseFile "citadel_node_v2.py" $ExpectedV2Sha256 $ReleaseRoot
   Copy-VerifiedReleaseFile "windows_enterprise_probe.ps1" $ExpectedEnterpriseProbeSha256 $ReleaseRoot
   Copy-VerifiedReleaseFile "ssh_restricted_console.py" $ExpectedSshConsoleSha256 $ReleaseRoot
+  Copy-VerifiedReleaseFile "CitadelSshConsole.cs" $ExpectedRestrictedSshConsoleSourceSha256 $ReleaseRoot
+  Copy-VerifiedReleaseFile "configure_restricted_ssh.ps1" $ExpectedRestrictedSshBootstrapSha256 $ReleaseRoot
 Copy-VerifiedReleaseFile "CitadelNodeService.cs" $ExpectedServiceHostSha256 $ReleaseRoot
 Copy-VerifiedReleaseFile "windows_service.ps1" $ExpectedServiceHelperSha256 $ReleaseRoot
 
