@@ -6,12 +6,12 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_ROOT="${CITADEL_INSTALL_ROOT:-$HOME/.local/share/citadel-node}"
 STATE_ROOT="${CITADEL_STATE_ROOT:-$HOME/.local/state/citadel-node}"
 SERVICE_NAME="citadel-node.service"
-EXPECTED_V1_SHA256="1923b21d956827fc1da6f952dc0ce15cce224b2145277f6fefb7d1fc26003eea"
-EXPECTED_V2_SHA256="601a08fe59e2c3711c4f35d8f0ee15a1d7d6536eb2bc63e16ecf3d54d7da1c13"
+EXPECTED_V1_SHA256="509b19c652be6bd7b19c9b281d793d1361009117996f95145d02bc482c3e152a"
+EXPECTED_V2_SHA256="c8b7472aebd53ac44baaaf1cb78ace752b3df3bb27e5c049ef650aa0c9a24892"
 EXPECTED_ENTERPRISE_PROBE_SHA256="0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
 EXPECTED_SSH_CONSOLE_SHA256="10050339a74cad33410aca0e109d800d29b01a8f3238d8ff7ce016fbd099dc8c"
-EXPECTED_SSH_CONFIGURATOR_SHA256="__SSH_CONFIGURATOR_SHA256__"
-EXPECTED_SSH_LINUX_BOOTSTRAP_SHA256="__SSH_LINUX_BOOTSTRAP_SHA256__"
+EXPECTED_SSH_CONFIGURATOR_SHA256="5232dc07edd9fd492cd6753371533e1586cd37022fdd65d527cd86e92ae4a614"
+EXPECTED_SSH_LINUX_BOOTSTRAP_SHA256="7a807d9033e5f13bb665ffa2b87907bf83d0f6b19b88f6ce30cc779e5dd7b21f"
 CONTROLLER_PUBLIC_X="erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 
 log(){ printf '[CITADEL] %s\n' "$*"; }
@@ -174,7 +174,7 @@ path, node_id, controller = sys.argv[1:]
 payload = {
     "node_id": node_id,
     "controller_url": controller.rstrip("/"),
-    "agent_version": "0.3.26",
+    "agent_version": "0.3.27",
     "platform": "linux",
     "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
 }
