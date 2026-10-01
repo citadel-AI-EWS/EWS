@@ -237,6 +237,12 @@ function normalizeNodeSsh(value) {
   const loopbackOnly = bool("sshd_loopback_only");
   const cloudflaredRunning = bool("cloudflared_running");
   const localListen = bool("sshd_listening_local");
+  const restrictedForceCommand = bool("restricted_force_command");
+  const forwardingDisabled = bool("forwarding_disabled");
+  let managedUsername = null;
+  if (value.managed_username !== undefined && value.managed_username !== null && value.managed_username !== "") {
+    managedUsername = normalizeSshUser(value.managed_username);
+  }
   return {
     ssh_client_available: bool("ssh_client_available"),
     sshd_process_running: bool("sshd_process_running"),
@@ -245,8 +251,12 @@ function normalizeNodeSsh(value) {
     sshd_loopback_only: loopbackOnly,
     cloudflared_installed: bool("cloudflared_installed"),
     cloudflared_running: cloudflaredRunning,
+    restricted_force_command: restrictedForceCommand,
+    forwarding_disabled: forwardingDisabled,
+    managed_username: managedUsername,
     browser_terminal_local_ready:
-      localListen && exposureVerified && loopbackOnly && cloudflaredRunning ? 1 : 0,
+      localListen && exposureVerified && loopbackOnly && cloudflaredRunning &&
+      restrictedForceCommand && forwardingDisabled ? 1 : 0,
     bind_target: bindTarget
   };
 }
@@ -962,6 +972,9 @@ async function ensureNodeSshStorage(env) {
           sshd_listening_local INTEGER NOT NULL DEFAULT 0 CHECK (sshd_listening_local IN (0,1)),
           sshd_exposure_verified INTEGER NOT NULL DEFAULT 0 CHECK (sshd_exposure_verified IN (0,1)),
           sshd_loopback_only INTEGER NOT NULL DEFAULT 0 CHECK (sshd_loopback_only IN (0,1)),
+          restricted_force_command INTEGER NOT NULL DEFAULT 0 CHECK (restricted_force_command IN (0,1)),
+          forwarding_disabled INTEGER NOT NULL DEFAULT 0 CHECK (forwarding_disabled IN (0,1)),
+          managed_username TEXT,
           cloudflared_installed INTEGER NOT NULL DEFAULT 0 CHECK (cloudflared_installed IN (0,1)),
           cloudflared_running INTEGER NOT NULL DEFAULT 0 CHECK (cloudflared_running IN (0,1)),
           browser_terminal_local_ready INTEGER NOT NULL DEFAULT 0 CHECK (browser_terminal_local_ready IN (0,1)),
@@ -992,6 +1005,7 @@ async function nodeSshStateResponse(env, nodeId) {
   const row = await env.DB.prepare(`
     SELECT node_id, ssh_client_available, sshd_process_running, sshd_listening_local,
       sshd_exposure_verified, sshd_loopback_only,
+      restricted_force_command, forwarding_disabled, managed_username,
       cloudflared_installed, cloudflared_running, browser_terminal_local_ready,
       bind_target, public_hostname, ssh_user, host_key_fingerprint,
       config_updated_at, observed_at, updated_at
@@ -1004,6 +1018,9 @@ async function nodeSshStateResponse(env, nodeId) {
     sshd_listening_local: 0,
     sshd_exposure_verified: 0,
     sshd_loopback_only: 0,
+    restricted_force_command: 0,
+    forwarding_disabled: 0,
+    managed_username: null,
     cloudflared_installed: 0,
     cloudflared_running: 0,
     browser_terminal_local_ready: 0,
@@ -3736,15 +3753,19 @@ async function heartbeat(request, env, nodeId, url) {
       INSERT INTO node_ssh_state (
         node_id, ssh_client_available, sshd_process_running, sshd_listening_local,
         sshd_exposure_verified, sshd_loopback_only,
+        restricted_force_command, forwarding_disabled, managed_username,
         cloudflared_installed, cloudflared_running, browser_terminal_local_ready,
         bind_target, observed_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT(node_id) DO UPDATE SET
         ssh_client_available = excluded.ssh_client_available,
         sshd_process_running = excluded.sshd_process_running,
         sshd_listening_local = excluded.sshd_listening_local,
         sshd_exposure_verified = excluded.sshd_exposure_verified,
         sshd_loopback_only = excluded.sshd_loopback_only,
+        restricted_force_command = excluded.restricted_force_command,
+        forwarding_disabled = excluded.forwarding_disabled,
+        managed_username = excluded.managed_username,
         cloudflared_installed = excluded.cloudflared_installed,
         cloudflared_running = excluded.cloudflared_running,
         browser_terminal_local_ready = excluded.browser_terminal_local_ready,
@@ -3758,6 +3779,9 @@ async function heartbeat(request, env, nodeId, url) {
       ssh.sshd_listening_local,
       ssh.sshd_exposure_verified,
       ssh.sshd_loopback_only,
+      ssh.restricted_force_command,
+      ssh.forwarding_disabled,
+      ssh.managed_username,
       ssh.cloudflared_installed,
       ssh.cloudflared_running,
       ssh.browser_terminal_local_ready,
