@@ -1,5 +1,6 @@
 import { getProjectExperienceRegistry } from "./experience/registry.js";
 import { d1UsageOverview, d1UsageStatus } from "./d1-usage.js";
+import { readD1RetentionStatus } from "./d1-retention.js";
 import { readD1GuardianStatus, runD1Guardian } from "./d1-guardian.js";
 import { openRouterQualityConfig, reviewWithOpenRouter } from "./quality/openrouter.js";
 import { ARCHITECT_ROLE_PERMISSIONS, DEFAULT_ENTERPRISE_POLICY, evaluateEnterpriseNode, normalizeEnterprisePolicy, requiredArchitectPermission, roleHasPermission } from "./enterprise/policy.js";
@@ -6861,6 +6862,11 @@ async function handleApi(request, env, url) {
     return json(await d1UsageStatus(env), 200, {
       "cache-control": "public, max-age=60, stale-while-revalidate=240"
     });
+  }
+
+  if (url.pathname === "/api/v1/status/d1-retention") {
+    if (request.method !== "GET") return methodNotAllowed(["GET"]);
+    return json(await readD1RetentionStatus(env), 200, { "cache-control": "public, max-age=300" });
   }
 
   if (url.pathname === "/api/v1/architect/d1-usage") {

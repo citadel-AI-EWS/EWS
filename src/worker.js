@@ -18,15 +18,12 @@ import {
 export default {
   async scheduled(_controller, env) {
     const controller = _controller;
-    if (controller?.cron === "23 2 * * *") {
-      const retention = await pruneExpiredD1Bookkeeping(env);
-      console.log(JSON.stringify({ event: "d1_daily_retention", ...retention }));
-    }
     if (controller?.cron === "*/5 * * * *") {
       try {
         await runD1Guardian(env, {
           expireStaleCommands,
-          recoverStaleProjectAssignments
+          recoverStaleProjectAssignments,
+          pruneExpiredD1Bookkeeping
         });
       } catch (error) {
         console.error("D1 Guardian scheduled maintenance failed", error);

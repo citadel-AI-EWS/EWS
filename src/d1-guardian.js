@@ -341,6 +341,34 @@ export async function runD1Guardian(env, hooks = {}) {
   await observeRule("expired_request_nonces_detected", () => countExpiredNonces(env));
   await observeRule("old_rate_windows_detected", () => countOldRateWindows(env));
 
+  // The Guardian claim serializes maintenance. A durable success marker runs
+  // expiry once per UTC day, including the first tick after deployment.
+  if (typeof hooks.pruneExpiredD1Bookkeeping === "function") {
+    checkedRules += 1;
+    try {
+      const retained = await env.DB.prepare(`
+        SELECT action_id FROM d1_guardian_actions
+        WHERE created_at >= date('now') AND action = 'daily_bookkeeping_retention'
+        ORDER BY created_at DESC LIMIT 1
+      `).first();
+      if (!retained) {
+        const retention = await hooks.pruneExpiredD1Bookkeeping(env);
+        await appendAction(env, "daily_bookkeeping_retention", "info", retention.deleted_rows, retention);
+        detectedIssues += retention.deleted_rows;
+        repairedRows += retention.deleted_rows;
+        observations.push({ action: "daily_bookkeeping_retention", ...retention });
+        console.log(JSON.stringify({ event: "d1_daily_retention", ...retention }));
+        if (retention.rules.some((rule) => rule.batch_limit_reached)) {
+          warningCount += 1;
+          warnings.push({ rule: "daily_bookkeeping_retention", error: "retention_batch_limit_reached" });
+        }
+      }
+    } catch (error) {
+      warningCount += 1;
+      warnings.push({ rule: "daily_bookkeeping_retention", error: errorCode(error) });
+    }
+  }
+
   if (deep) {
     checkedRules += 1;
     try {
