@@ -68,6 +68,7 @@ foreach ($Required in @($Python, $Configurator, $Console, $AgentConfig)) {
 
 $OpenSshRoot = Join-Path $env:WINDIR "System32\OpenSSH"
 $Sshd = Join-Path $OpenSshRoot "sshd.exe"
+$SshKeygen = Join-Path $OpenSshRoot "ssh-keygen.exe"
 $DefaultConfig = Join-Path $OpenSshRoot "sshd_config_default"
 $SshConfigDir = Join-Path $env:ProgramData "ssh"
 $SshConfig = Join-Path $SshConfigDir "sshd_config"
@@ -117,6 +118,18 @@ if (-not (Test-Path -LiteralPath $Sshd)) {
 if (-not (Test-Path -LiteralPath $Sshd)) {
   Write-SshBootstrapState -Configured $false -Status "openssh_install_failed" -User $SshUser
   throw "OpenSSH Server installation did not provide sshd.exe."
+}
+if (-not (Test-Path -LiteralPath $SshKeygen)) {
+  throw "OpenSSH ssh-keygen.exe is missing."
+}
+
+$HostKeys = @(Get-ChildItem -LiteralPath (Join-Path $env:ProgramData "ssh") -Filter "ssh_host_*_key" -File -ErrorAction SilentlyContinue)
+if ($HostKeys.Count -eq 0) {
+  & $SshKeygen -A
+  if ($LASTEXITCODE -ne 0) {
+    Write-SshBootstrapState -Configured $false -Status "host_key_generation_failed" -User $SshUser
+    throw "OpenSSH host key generation failed."
+  }
 }
 
 $LocalUser = Get-LocalUser -Name $SshUser -ErrorAction SilentlyContinue
