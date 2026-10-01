@@ -42,7 +42,9 @@ for required in (
     "/api/v1/architect/release",
     "/api/v1/architect/missions",
     "cloudflared access ssh --hostname %h",
-    "CONFIGURED LOCALLY",
+    "browser_terminal_local_ready",
+    "sshReadyForBrowser",
+    "/api/v1/architect/nodes/${encodeURIComponent(sshNodeId)}/ssh",
     "prefers-reduced-motion",
     "system_inventory",
     "/api/v1/architect/nodes/${encodeURIComponent(node.node_id)}/wake",
@@ -84,8 +86,10 @@ for forbidden in (
     if forbidden in hub:
         raise SystemExit(f"unsafe or simulated Hub pattern detected: {forbidden}")
 
-if "SSH target configured locally; tunnel reachability is not yet verified" not in hub:
-    raise SystemExit("Hub must not claim SSH reachability before Tunnel verification")
+if "CONFIGURED LOCALLY" in hub or 'sessionStorage.setItem("citadelSshHost"' in hub:
+    raise SystemExit("Hub still uses obsolete local-only SSH configuration")
+if "private keys" not in hub.lower() and "приватные ssh-ключи" not in hub.lower():
+    raise SystemExit("Hub must explain that private SSH keys are not stored")
 
 secure_refresh_start = hub.find("async function refreshSecure")
 secure_refresh_end = hub.find("async function refresh(){", secure_refresh_start)
