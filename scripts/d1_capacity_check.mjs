@@ -4,8 +4,9 @@ const config = fs.readFileSync('wrangler.jsonc', 'utf8');
 const account = config.match(/"D1_ANALYTICS_ACCOUNT_ID"\s*:\s*"([a-f0-9]+)"/i)?.[1];
 const worker = config.match(/"name"\s*:\s*"([^"]+)"/)?.[1];
 const report = {scheduled_events: 0, guardian_errors: [], tail_status: 'starting'};
+fs.writeFileSync('/tmp/d1-guardian-tail.json', JSON.stringify({name: worker, account_id: account, compatibility_date: '2026-09-05'}));
 await new Promise(resolve => {
-  const child = spawn('./node_modules/.bin/wrangler', ['tail', worker, '--format', 'json', '--sampling-rate', '1', '--search', 'D1 Guardian'],
+  const child = spawn('./node_modules/.bin/wrangler', ['tail', worker, '--config', '/tmp/d1-guardian-tail.json', '--format', 'json', '--sampling-rate', '1', '--search', 'D1 Guardian'],
     {env: {...process.env, CLOUDFLARE_ACCOUNT_ID: account, WRANGLER_SEND_METRICS: 'false'}, stdio: ['ignore', 'pipe', 'pipe']});
   let buffer = '';
   let stopping = false;
@@ -15,6 +16,8 @@ await new Promise(resolve => {
     // Never forward raw trace output: it can contain HTTP headers and metadata.
     buffer = (buffer + chunk.toString()).slice(-100000);
     if (/Connected to/.test(buffer)) report.tail_status = 'connected';
+    const apiCode = buffer.match(/\[code:\s*(\d+)\]/);
+    if (apiCode) report.api_error_code = Number(apiCode[1]);
     if (/"cron"\s*:\s*"\*\/5 \* \* \* \*"/.test(buffer)) report.scheduled_events = 1;
     for (const [pattern, code] of [
       [/writ(?:e|ten).*?(?:quota|limit|exceed)/is, 'd1_write_quota_exceeded'],
