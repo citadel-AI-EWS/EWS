@@ -49,8 +49,6 @@ jobs:
     timeout-minutes: 15
     environment: cloudflare-test
     env:
-      FULL_CLOUDFLARE_CONTROL: ${{ secrets.FULL_CLOUDFLARE_CONTROL }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CITADEL_SSH_HOSTNAME: ${{ inputs.public_hostname }}
       CITADEL_SSH_ALLOWED_EMAIL: ${{ inputs.allowed_email }}
       CITADEL_SSH_NODE_ID: ${{ inputs.node_id }}
@@ -71,6 +69,9 @@ jobs:
         run: node scripts/provision_cloudflare_ssh.mjs --self-test
 
       - name: Provision Tunnel, DNS, Access and SSH CA
+        env:
+          FULL_CLOUDFLARE_CONTROL: ${{ secrets.FULL_CLOUDFLARE_CONTROL }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: node scripts/provision_cloudflare_ssh.mjs
 
       - name: Publish non-secret connection plan
