@@ -23,7 +23,8 @@ analytics must not be interpreted as zero usage or healthy capacity.
 
 The `D1 Capacity Check` workflow runs daily at 06:37 UTC and supports manual
 dispatch. It reads account-wide daily rows-read/rows-written and this database's
-storage from Cloudflare using the existing configured secrets. It publishes
+maximum observed storage today from Cloudflare GraphQL Analytics using the
+existing Analytics credential, without requiring D1 administration permission. It publishes
 numeric results, cleanup counters and safe availability reasons in a GitHub
 check named `D1 capacity diagnostics`. Missing API permissions are reported as
 incomplete diagnostics. The workflow performs no database writes or deletion.
