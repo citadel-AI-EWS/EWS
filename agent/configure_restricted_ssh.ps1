@@ -187,7 +187,7 @@ if (-not (Test-IsAdministrator)) {
     throw "Run this script from an Administrator PowerShell when passing SSH parameters."
   }
   $Args = @(
-    "-NoLogo", "-NoProfile", "-File", ('"' + $PSCommandPath + '"'),
+    "-NoLogo", "-NoProfile", "-ExecutionPolicy", "RemoteSigned", "-File", ('"' + $PSCommandPath + '"'),
     "-InstallRoot", ('"' + $InstallRoot + '"'),
     "-StateRoot", ('"' + $StateRoot + '"')
   )
