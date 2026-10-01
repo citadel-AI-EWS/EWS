@@ -65,6 +65,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/network-recovery-priority.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m py_compile agent/ssh_configurator.py agent/ssh_prepare_windows.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/ssh-configurator.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/openrouter-quality-gate.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -88,7 +92,15 @@ jobs:
           if ($service.ToLowerInvariant().Contains("powershell.exe")) {
             throw "Portable service must not require PowerShell."
           }
-          Write-Host "Target-PC bootstrap is offline and PowerShell-independent: PASS"
+          foreach ($required in @("CONFIGURESSH", "SSHUSER", "ssh_prepare_windows.py")) {
+            if (-not $iss.Contains($required)) {
+              throw "One-click SSH opt-in integration missing: $required"
+            }
+          }
+          if ($iss.Contains("New-NetFirewallRule") -or $iss.Contains("netsh advfirewall")) {
+            throw "One-click SSH integration must not open an inbound firewall port."
+          }
+          Write-Host "Target-PC default bootstrap is offline; SSH remains explicit opt-in: PASS"
 
       - name: Build one-click installer
         shell: pwsh
