@@ -1137,7 +1137,11 @@ def _ensure_ssh_restricted_console_file() -> Path:
         raise RuntimeError("embedded SSH restricted console is too large")
     if hashlib.sha256(payload).hexdigest() != SSH_RESTRICTED_CONSOLE_SHA256:
         raise RuntimeError("embedded SSH restricted console hash mismatch")
-    atomic_write_bytes(path, payload, 0o600)
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError("embedded SSH restricted console is not UTF-8") from exc
+    atomic_write(path, text, 0o600)
     return path
 
 
