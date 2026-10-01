@@ -233,13 +233,20 @@ function normalizeNodeSsh(value) {
   if (bindTarget !== "localhost:22" && bindTarget !== "127.0.0.1:22") {
     throw new ApiError(400, "invalid_ssh_bind_target");
   }
+  const exposureVerified = bool("sshd_exposure_verified");
+  const loopbackOnly = bool("sshd_loopback_only");
+  const cloudflaredRunning = bool("cloudflared_running");
+  const localListen = bool("sshd_listening_local");
   return {
     ssh_client_available: bool("ssh_client_available"),
     sshd_process_running: bool("sshd_process_running"),
-    sshd_listening_local: bool("sshd_listening_local"),
+    sshd_listening_local: localListen,
+    sshd_exposure_verified: exposureVerified,
+    sshd_loopback_only: loopbackOnly,
     cloudflared_installed: bool("cloudflared_installed"),
-    cloudflared_running: bool("cloudflared_running"),
-    browser_terminal_local_ready: bool("browser_terminal_local_ready"),
+    cloudflared_running: cloudflaredRunning,
+    browser_terminal_local_ready:
+      localListen && exposureVerified && loopbackOnly && cloudflaredRunning ? 1 : 0,
     bind_target: bindTarget
   };
 }
@@ -953,6 +960,8 @@ async function ensureNodeSshStorage(env) {
           ssh_client_available INTEGER NOT NULL DEFAULT 0 CHECK (ssh_client_available IN (0,1)),
           sshd_process_running INTEGER NOT NULL DEFAULT 0 CHECK (sshd_process_running IN (0,1)),
           sshd_listening_local INTEGER NOT NULL DEFAULT 0 CHECK (sshd_listening_local IN (0,1)),
+          sshd_exposure_verified INTEGER NOT NULL DEFAULT 0 CHECK (sshd_exposure_verified IN (0,1)),
+          sshd_loopback_only INTEGER NOT NULL DEFAULT 0 CHECK (sshd_loopback_only IN (0,1)),
           cloudflared_installed INTEGER NOT NULL DEFAULT 0 CHECK (cloudflared_installed IN (0,1)),
           cloudflared_running INTEGER NOT NULL DEFAULT 0 CHECK (cloudflared_running IN (0,1)),
           browser_terminal_local_ready INTEGER NOT NULL DEFAULT 0 CHECK (browser_terminal_local_ready IN (0,1)),
@@ -982,6 +991,7 @@ async function nodeSshStateResponse(env, nodeId) {
   await ensureNodeSshStorage(env);
   const row = await env.DB.prepare(`
     SELECT node_id, ssh_client_available, sshd_process_running, sshd_listening_local,
+      sshd_exposure_verified, sshd_loopback_only,
       cloudflared_installed, cloudflared_running, browser_terminal_local_ready,
       bind_target, public_hostname, ssh_user, host_key_fingerprint,
       config_updated_at, observed_at, updated_at
@@ -992,6 +1002,8 @@ async function nodeSshStateResponse(env, nodeId) {
     ssh_client_available: 0,
     sshd_process_running: 0,
     sshd_listening_local: 0,
+    sshd_exposure_verified: 0,
+    sshd_loopback_only: 0,
     cloudflared_installed: 0,
     cloudflared_running: 0,
     browser_terminal_local_ready: 0,
@@ -3723,13 +3735,16 @@ async function heartbeat(request, env, nodeId, url) {
     heartbeatStatements.push(env.DB.prepare(`
       INSERT INTO node_ssh_state (
         node_id, ssh_client_available, sshd_process_running, sshd_listening_local,
+        sshd_exposure_verified, sshd_loopback_only,
         cloudflared_installed, cloudflared_running, browser_terminal_local_ready,
         bind_target, observed_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT(node_id) DO UPDATE SET
         ssh_client_available = excluded.ssh_client_available,
         sshd_process_running = excluded.sshd_process_running,
         sshd_listening_local = excluded.sshd_listening_local,
+        sshd_exposure_verified = excluded.sshd_exposure_verified,
+        sshd_loopback_only = excluded.sshd_loopback_only,
         cloudflared_installed = excluded.cloudflared_installed,
         cloudflared_running = excluded.cloudflared_running,
         browser_terminal_local_ready = excluded.browser_terminal_local_ready,
@@ -3741,6 +3756,8 @@ async function heartbeat(request, env, nodeId, url) {
       ssh.ssh_client_available,
       ssh.sshd_process_running,
       ssh.sshd_listening_local,
+      ssh.sshd_exposure_verified,
+      ssh.sshd_loopback_only,
       ssh.cloudflared_installed,
       ssh.cloudflared_running,
       ssh.browser_terminal_local_ready,
