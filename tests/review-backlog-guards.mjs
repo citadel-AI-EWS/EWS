@@ -111,6 +111,8 @@ need(sshCloudflareProvisioner.includes("tunnel_token_stored: false"), "Cloudflar
 need(!sshCloudflareProvisioner.includes("/token"), "Cloudflare provisioner must not retrieve the tunnel token into Actions");
 need(sshCloudflareWorkflow.includes("environment: cloudflare-test"), "SSH Cloudflare provisioning must use the protected environment");
 need(sshCloudflareWorkflow.includes("FULL_CLOUDFLARE_CONTROL") && sshCloudflareWorkflow.includes("CLOUDFLARE_API_TOKEN"), "SSH workflow Cloudflare secret fallback missing");
+need(!/env:\n\s{6}(?:FULL_CLOUDFLARE_CONTROL|CLOUDFLARE_API_TOKEN):/.test(sshCloudflareWorkflow), "Cloudflare API secrets must not be job-wide environment variables");
+need(sshCloudflareProvisioner.includes('new Set(["30m", "1h", "2h", "4h"])'), "Cloudflare Access session duration is not bounded");
 need(sshCloudflareWorkflow.includes("workflow_dispatch:"), "SSH Cloudflare provisioning must be explicitly dispatched");
 need(sshCloudflareWorkflow.includes("apply:") && sshCloudflareWorkflow.includes("default: false"), "SSH Cloudflare provisioning must default to dry-run");
 need(!sshCloudflareWorkflow.includes("cfd_tunnel/$TUNNEL_ID/token"), "SSH workflow must never print or retrieve tunnel tokens");
