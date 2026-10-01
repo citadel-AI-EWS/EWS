@@ -718,8 +718,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
 
     const sshHost=$("sshHost"),sshUser=$("sshUser"),sshFingerprint=$("sshFingerprint");
     let sshNodeId="",sshState=null;
-    const sshBootstrapCommand='powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$s=Get-Content \'C:\\ProgramData\\CitadelEWS\\agent\\install-state.json\' -Raw|ConvertFrom-Json; & (Join-Path $s.release_root \'configure_restricted_ssh.ps1\')"';
-    function versionAtLeast(value,minimum){const p=v=>String(v||"").split(".").slice(0,3).map(x=>Number.parseInt(x,10));const a=p(value),b=p(minimum);if(a.some(Number.isNaN)||b.some(Number.isNaN))return false;for(let i=0;i<3;i++){if(a[i]!==b[i])return a[i]>b[i]}return true}
+    const sshBootstrapCommand='powershell -NoLogo -NoProfile -Command "$s=Get-Content \'C:\\ProgramData\\CitadelEWS\\agent\\install-state.json\' -Raw|ConvertFrom-Json; & (Join-Path $s.release_root \'configure_restricted_ssh.ps1\')"';
     function selectedSshNode(){return (lastOverview?.nodes||[]).find(n=>n.node_id===sshNodeId)||null}
     function nodeCapabilities(node){try{const value=JSON.parse(node?.capabilities_json||"[]");return Array.isArray(value)?value:[]}catch{return []}}
     function sshReadyForBrowser(){return Boolean(sshState&&sshState.browser_terminal_local_ready&&safeHost(sshHost.value)&&safeUser(sshUser.value))}
