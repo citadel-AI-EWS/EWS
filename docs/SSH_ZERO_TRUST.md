@@ -86,6 +86,10 @@ Match User citadel-operator
 
 Однократный `configure_restricted_ssh.ps1` выполняется с UAC/admin только для системной подготовки: Microsoft OpenSSH Server, отдельный непривилегированный пользователь, `ListenAddress 127.0.0.1`, `AllowUsers`, Cloudflare CA **public** key, `ForceCommand`, отключение password authentication/forwarding/tunneling и отключение стандартного inbound firewall rule. Если OpenSSH уже существовал до CITADEL, bootstrap без явного `-ForceLoopback` отказывается переписывать конфигурацию.
 
+Bootstrap поддерживает оба Windows-layout CITADEL: managed-release (`install-state.json` + `releases/...`) и плоскую one-click установку в `ProgramData\CitadelEWS\agent` с config в `ProgramData\CitadelEWS\state`. На чистой установке Windows OpenSSH bootstrap один раз запускает `sshd`, чтобы Windows создала штатный `sshd_config` и host keys, затем останавливает сервис, применяет CITADEL policy и проверяет её через `sshd.exe -t`.
+
+Windows-конфигурация сознательно не использует директивы `KbdInteractiveAuthentication`, `PermitTunnel` и `X11Forwarding`, которые Windows OpenSSH не поддерживает. Ограничение доступа обеспечивается `AllowUsers`, public-key-only authentication, `ForceCommand`, `AllowAgentForwarding no`, `AllowTcpForwarding no` и `GatewayPorts no`.
+
 После изменения sshd configuration конфигурацию следует проверить штатными средствами OpenSSH перед reload/restart.
 
 ## Agent / Controller contract
