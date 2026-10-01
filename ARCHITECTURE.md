@@ -61,7 +61,7 @@ Controller updates should follow a controlled lifecycle:
 
 Architect SSH access should be explicitly approved and protected by Cloudflare Access/Tunnel. The Hub stores only public routing metadata and readiness (hostname, SSH user, host-key fingerprint); SSH private keys, passwords, Access tokens, service tokens, and SSH CA private material are not stored in D1 or rendered in the UI.
 
-The origin SSH service remains private behind the Tunnel. CITADEL's managed SSH path uses an OpenSSH ForceCommand target (`ssh_restricted_console.py`) which implements a fixed read-only command allow-list and does not spawn a general-purpose shell. Browser SSH is enabled only after the agent reports that local sshd and cloudflared are ready.
+The origin SSH service remains private behind the Tunnel. CITADEL's managed SSH path uses an OpenSSH ForceCommand target with a fixed read-only command allow-list and no general-purpose shell. Linux uses `ssh_restricted_console.py`; Windows uses the stable `C:\\ProgramData\\CitadelEWS\\ssh\\CitadelSshConsole.exe` created by the one-time restricted bootstrap. Browser SSH is enabled only after the agent reports loopback-only sshd, cloudflared, and (on Windows) the managed restricted-policy state.
 
 Credential categories such as Architect identity/recovery, controller machine identity, Cloudflare/SSH CA material, and recovery secrets remain isolated from one another. See `docs/SSH_ZERO_TRUST.md` for the concrete contract.
 
