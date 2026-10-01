@@ -237,6 +237,9 @@ jobs:
             'Disable-NetFirewallRule',
             '& $SshdExe -t -f $SshdConfig',
             'Unsafe non-loopback SSH listener detected',
+            'Resolve-AgentLayout',
+            'flat_oneclick',
+            'StateRoot',
             'backup_path'
           )) {
             if (-not $text.Contains($required)) { throw "Restricted SSH bootstrap invariant missing: $required" }
