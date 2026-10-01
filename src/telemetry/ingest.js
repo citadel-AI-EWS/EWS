@@ -55,19 +55,21 @@ export async function ingestNodeLogs(request, env, nodeId, url) {
   // would make the supposedly bounded observability path grow D1 indefinitely.
   // The per-node cap stays strict. A server-controlled scheduled Worker trigger
   // enforces age-based retention independently of node-supplied event IDs.
-  const retention = [
+  // With no new retained rows, a duplicate/routine-only batch cannot exceed the
+  // cap. For new rows, seek the boundary once and delete only the overflow range.
+  const retention = accepted ? [
     env.DB.prepare(`
       DELETE FROM node_logs
       WHERE node_id = ?
-        AND event_id NOT IN (
-          SELECT event_id FROM node_logs
+        AND (created_at, event_id) < (
+          SELECT created_at, event_id FROM node_logs
           WHERE node_id = ?
           ORDER BY created_at DESC, event_id DESC
-          LIMIT 5000
+          LIMIT 1 OFFSET 4999
         )
     `).bind(nodeId, nodeId)
-  ];
-  await env.DB.batch(retention);
+  ] : [];
+  if (retention.length) await env.DB.batch(retention);
 
   return json({
     ok: true,

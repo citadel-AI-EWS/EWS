@@ -66,6 +66,10 @@ export async function recordNodePresence(request, env, nodeId) {
       colo = excluded.colo,
       asn = excluded.asn,
       updated_at = CURRENT_TIMESTAMP
+    WHERE node_presence.public_ip IS NOT excluded.public_ip
+      OR node_presence.country IS NOT excluded.country
+      OR node_presence.colo IS NOT excluded.colo
+      OR node_presence.asn IS NOT excluded.asn
   `).bind(nodeId, publicIp, country, colo, asn).run();
 }
 
