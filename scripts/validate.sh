@@ -4,7 +4,7 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 python -m unittest -v controller_tests.py
-python -m py_compile controller_app.py controller_tests.py agent/citadel_node_v1.py agent/citadel_node_v2.py agent/ssh_restricted_console.py agent/ssh_configurator.py tests/network-recovery-priority.py tests/ssh-configurator.py
+python -m py_compile controller_app.py controller_tests.py agent/citadel_node_v1.py agent/citadel_node_v2.py agent/ssh_restricted_console.py agent/ssh_configurator.py agent/ssh_prepare_windows.py tests/network-recovery-priority.py tests/ssh-configurator.py
 python agent/citadel_node_v2.py self-test
 python tests/network-recovery-priority.py
 
