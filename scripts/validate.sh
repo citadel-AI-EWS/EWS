@@ -342,6 +342,7 @@ node tests/flow-a-assignment-recovery.mjs
 node tests/controller-error-diagnostics.mjs
 node tests/ten-prompt-routing.mjs
 python tests/lmstudio-local-protocol.py
+node tests/flow-a-e2e.mjs
 python tests/mini-agents.py
 python tests/lmstudio-progress.py
 python tests/ssh-restricted-console.py

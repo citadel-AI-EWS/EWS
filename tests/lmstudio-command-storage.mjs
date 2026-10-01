@@ -8,8 +8,9 @@ const architectHash = Buffer.from(await crypto.subtle.digest(
 )).toString("hex");
 
 const state = {
-  tables: new Set(["nodes", "architect_auth_state"]),
+  tables: new Set(["nodes", "architect_auth_state", "commands"]),
   indexes: new Set(),
+  commandColumns: new Set(["command_id","node_id","command_type","payload_json","signature","status","created_at"]),
   commands: [],
   audit: []
 };
@@ -57,6 +58,9 @@ class Statement {
     throw new Error(`Unhandled first(): ${this.sql}`);
   }
   async all() {
+    if (this.sql === "PRAGMA table_info(commands)") {
+      return { results: [...state.commandColumns].map((name, cid) => ({ cid, name })) };
+    }
     if (this.sql.includes("FROM commands") && this.sql.includes("datetime(created_at) < datetime(?)")) {
       if (!state.tables.has("commands")) throw new Error("no such table: commands");
       return { results: [] };
@@ -66,6 +70,11 @@ class Statement {
   async run() {
     if (this.sql.startsWith("CREATE TABLE IF NOT EXISTS commands")) {
       state.tables.add("commands");
+      return { meta: { changes: 0 } };
+    }
+    if (this.sql === "ALTER TABLE commands ADD COLUMN completed_at TEXT") {
+      if (state.commandColumns.has("completed_at")) throw new Error("duplicate column name: completed_at");
+      state.commandColumns.add("completed_at");
       return { meta: { changes: 0 } };
     }
     if (this.sql.startsWith("CREATE TABLE IF NOT EXISTS audit_events")) {
@@ -115,7 +124,8 @@ const env = {
   ASSETS: { fetch() { return new Response("asset"); } }
 };
 
-assert.equal(state.tables.has("commands"), false);
+assert.equal(state.tables.has("commands"), true);
+assert.equal(state.commandColumns.has("completed_at"), false);
 assert.equal(state.tables.has("audit_events"), false);
 
 const response = await worker.fetch(new Request(
@@ -135,8 +145,9 @@ const data = await response.json();
 assert.equal(data.error, "controller_signing_not_configured");
 assert.notEqual(data.error, "internal_error");
 assert.equal(state.tables.has("commands"), true);
+assert.equal(state.commandColumns.has("completed_at"), true);
 assert.equal(state.tables.has("audit_events"), true);
 assert.equal(state.indexes.has("idx_commands_one_active_per_node"), true);
 assert.equal(state.commands.length, 0);
 
-console.log("LM Studio command storage bootstrap regression: OK");
+console.log("LM Studio legacy command schema repair regression: OK");
