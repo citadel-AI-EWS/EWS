@@ -1064,6 +1064,25 @@ def ssh_runtime_snapshot() -> dict[str, Any]:
     finally:
         probe.close()
 
+    listener_ips: list[str] = []
+    exposure_verified = False
+    try:
+        for connection in psutil.net_connections(kind="inet"):
+            if connection.status != psutil.CONN_LISTEN or not connection.laddr:
+                continue
+            if int(connection.laddr.port) != 22:
+                continue
+            listener_ips.append(str(connection.laddr.ip))
+        exposure_verified = True
+    except (psutil.AccessDenied, OSError):
+        exposure_verified = False
+    listener_ips = sorted(set(listener_ips))
+    loopback_only = bool(
+        exposure_verified
+        and listener_ips
+        and all(ipaddress.ip_address(value).is_loopback for value in listener_ips)
+    )
+
     return {
         "schema": "citadel.ssh-readiness.v1",
         "transport": "cloudflare_access_browser_ssh",
@@ -1071,9 +1090,12 @@ def ssh_runtime_snapshot() -> dict[str, Any]:
         "ssh_client_available": bool(ssh_client),
         "sshd_process_running": sshd_running,
         "sshd_listening_local": local_port_open,
+        "sshd_listener_ips": listener_ips[:8],
+        "sshd_exposure_verified": exposure_verified,
+        "sshd_loopback_only": loopback_only,
         "cloudflared_installed": bool(cloudflared),
         "cloudflared_running": cloudflared_running,
-        "browser_terminal_local_ready": bool(local_port_open and cloudflared_running),
+        "browser_terminal_local_ready": bool(local_port_open and loopback_only and cloudflared_running),
         "private_keys_on_hub": False,
         "recommended_restricted_commands": [
             "help",
