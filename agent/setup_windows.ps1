@@ -20,6 +20,7 @@ $ExpectedV2Sha256 = "03b7a118bedc53fde57869af4a26e3213d41c0538f3f127f89aa51b49ec
 $ExpectedServiceHostSha256 = "892c5f388f9b54c0bcbb2956381dd601dfa8065b0e9258ba673e9505c2f81cad"
 $ExpectedServiceHelperSha256 = "e0e66f5a27018a283c65d42e6ead93e382706a163da682e6bd49f2b1fb9b0f99"
 $ExpectedEnterpriseProbeSha256 = "0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
+$ExpectedSshConsoleSha256 = "10050339a74cad33410aca0e109d800d29b01a8f3238d8ff7ce016fbd099dc8c"
 
 function Get-Sha256([string]$Path) {
   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -373,6 +374,7 @@ try {
   Copy-VerifiedReleaseFile "citadel_node_v1.py" $ExpectedV1Sha256 $ReleaseRoot
   Copy-VerifiedReleaseFile "citadel_node_v2.py" $ExpectedV2Sha256 $ReleaseRoot
   Copy-VerifiedReleaseFile "windows_enterprise_probe.ps1" $ExpectedEnterpriseProbeSha256 $ReleaseRoot
+  Copy-VerifiedReleaseFile "ssh_restricted_console.py" $ExpectedSshConsoleSha256 $ReleaseRoot
 Copy-VerifiedReleaseFile "CitadelNodeService.cs" $ExpectedServiceHostSha256 $ReleaseRoot
 Copy-VerifiedReleaseFile "windows_service.ps1" $ExpectedServiceHelperSha256 $ReleaseRoot
 
