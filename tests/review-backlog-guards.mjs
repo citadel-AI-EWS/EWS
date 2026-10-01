@@ -98,7 +98,7 @@ need(windowsSshBootstrap.includes("Resolve-AgentLayout") && windowsSshBootstrap.
 need(oneClickBuilder.includes('"CitadelSshConsole.cs"') && oneClickBuilder.includes('"configure_restricted_ssh.ps1"'), "one-click builder must package restricted SSH assets");
 need(oneClickIss.includes("configure_restricted_ssh.ps1") && oneClickIss.includes("-Uninstall"), "one-click uninstaller must clean restricted SSH state");
 need(windowsSshBootstrap.includes("Read-Host $Prompt -AsSecureString"), "Tunnel token must be entered locally as hidden input");
-need(windowsSshBootstrap.includes("cloudflared service install $PlainTunnelToken"), "cloudflared service installation path missing");
+need(windowsSshBootstrap.includes("$Cloudflared service install $PlainTunnelToken"), "cloudflared service installation path missing");
 need(windowsSshBootstrap.includes("cloudflared_service_created_by_citadel"), "cloudflared ownership marker missing");
 need(windowsSshBootstrap.includes("service uninstall"), "CITADEL-created cloudflared service cleanup missing");
 need(!windowsSshBootstrap.includes("[string]$CloudflareTunnelToken"), "Tunnel token must not be accepted as a command-line parameter");
