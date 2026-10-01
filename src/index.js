@@ -1032,13 +1032,17 @@ async function architectNodeSsh(request, env, nodeId) {
     return json({ ok: true, ssh: await nodeSshStateResponse(env, nodeId) });
   }
   if (request.method !== "PUT") return methodNotAllowed(["GET", "PUT", "DELETE"]);
-  if (!roleHasPermission(actor.role, "operator")) throw new ApiError(403, "architect_operator_required");
+  if (!roleHasPermission(actor.role, "operate")) throw new ApiError(403, "architect_operator_required");
 
   const body = parseJsonObject(await readBodyText(request, 4096));
-  const forbidden = Object.keys(body).find((key) =>
-    /private|password|secret|token|credential|passphrase/i.test(key)
-  );
-  if (forbidden) throw new ApiError(400, "ssh_secret_material_not_allowed");
+  const allowedFields = new Set(["public_hostname", "ssh_user", "host_key_fingerprint"]);
+  const unknownField = Object.keys(body).find((key) => !allowedFields.has(key));
+  if (unknownField) {
+    if (/private|password|secret|token|credential|passphrase/i.test(unknownField)) {
+      throw new ApiError(400, "ssh_secret_material_not_allowed");
+    }
+    throw new ApiError(400, "invalid_ssh_config_field");
+  }
   const publicHostname = normalizeSshPublicHostname(body.public_hostname);
   const sshUser = normalizeSshUser(body.ssh_user);
   const fingerprint = normalizeSshFingerprint(body.host_key_fingerprint);
