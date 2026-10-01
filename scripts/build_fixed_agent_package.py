@@ -358,6 +358,10 @@ def build() -> Path:
     enterprise_probe_hash = sha256(enterprise_probe)
     if f'$ExpectedEnterpriseProbeSha256 = "{enterprise_probe_hash}"' not in setup_text:
         raise RuntimeError("setup_windows.ps1 enterprise-probe hash pin does not match repository source")
+    ssh_console = STAGE / "ssh_restricted_console.py"
+    ssh_console_hash = sha256(ssh_console)
+    if f'$ExpectedSshConsoleSha256 = "{ssh_console_hash}"' not in setup_text:
+        raise RuntimeError("setup_windows.ps1 SSH console hash pin does not match repository source")
     if '$ReleaseVersion = "0.3.26"' not in setup_text:
         raise RuntimeError("setup_windows.ps1 release version is not 0.3.26")
     write_extras()
