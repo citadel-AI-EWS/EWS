@@ -36,7 +36,8 @@ SSH localhost:22
 
 1. для выбранной ноды сохранены hostname + username;
 2. агент подтвердил, что `sshd` слушает порт 22 **только на loopback**, а не на `0.0.0.0`/LAN;
-3. агент видит запущенный `cloudflared`.
+3. агент видит запущенный `cloudflared`;
+4. агент подтверждает CITADEL-managed `ForceCommand` и запрет TCP/X11/tunnel forwarding.
 
 Hub открывает защищённый Cloudflare browser terminal в отдельном окне/вкладке. Он не проксирует SSH-байты через D1/Worker.
 
@@ -65,9 +66,53 @@ exit
 
 `ping-controller` использует только Controller URL из локального CITADEL config. Пользователь не может передать произвольный host. Shell metacharacters и неизвестные команды отклоняются.
 
+## Локальный SSH bootstrap / repair
+
+Agent 0.3.27 не получает постоянных административных прав. Изменение системного `sshd_config` выполняется только через уже привилегированный installer/repair путь.
+
+### Windows
+
+Для versioned repair package:
+
+```powershell
+.\setup_windows.ps1 -ConfigureSsh -SshUser <existing-local-user>
+```
+
+Если Windows OpenSSH Server ещё не установлен, это должно быть отдельным явным действием:
+
+```powershell
+.\setup_windows.ps1 -ConfigureSsh -SshUser <existing-local-user> -InstallOpenSsh
+```
+
+Для one-click installer эквивалентный opt-in:
+
+```text
+CITADEL_EWS_Node_Setup_0.3.27_x64.exe /CONFIGURESSH=1 /SSHUSER=<existing-local-user>
+```
+
+Опциональный `/INSTALLOPENSSH=1` разрешает installer добавить Windows capability `OpenSSH.Server~~~~0.0.1.0`. Без этого параметра отсутствие OpenSSH считается явной ошибкой SSH-bootstrap, а обычная установка CITADEL остаётся без сетевой зависимости.
+
+Windows bootstrap:
+- не создаёт Windows accounts и не задаёт им пароли;
+- создаёт server host keys только локально через OpenSSH, если их ещё нет;
+- не копирует private host keys в Hub/D1;
+- не создаёт inbound firewall rule;
+- сохраняет исходный `sshd_config`, проверяет новый через `sshd -t` и откатывает при неудаче;
+- после запуска проверяет фактические listeners и принимает только loopback.
+
+### Linux
+
+На Linux OpenSSH server устанавливается средствами самой ОС. После этого elevated install/repair можно запустить с:
+
+```bash
+sudo env CITADEL_CONFIGURE_SSH=1 CITADEL_SSH_USER=<existing-user> ./setup_linux.sh
+```
+
+Linux bootstrap также не создаёт пользователя, не открывает firewall, сохраняет исходный `/etc/ssh/sshd_config`, валидирует `sshd -t`, reload/restart делает только для `ssh.service` / `sshd.service` и откатывает конфигурацию при сбое.
+
 ## OpenSSH hardening
 
-После установки OpenSSH отдельному CITADEL SSH-пользователю следует задать принудительную консоль и запретить forwarding. Пример для Linux:
+Bootstrap устанавливает принудительную консоль и запрет forwarding. Эквивалентная политика выглядит так:
 
 ```text
 ListenAddress 127.0.0.1
@@ -87,9 +132,17 @@ Match User citadel-operator
 
 ## Agent / Controller contract
 
-Agent 0.3.26 сообщает capability `ssh_probe_readonly` и раз в несколько минут отправляет read-only readiness snapshot. Команда `ssh_probe` — подписанная Controller-команда без payload, которая только заставляет агента немедленно обновить readiness heartbeat.
+Agent 0.3.27 сообщает capability `ssh_probe_readonly` и раз в несколько минут отправляет read-only readiness snapshot. Команда `ssh_probe` — подписанная Controller-команда без payload, которая только заставляет агента немедленно обновить readiness heartbeat.
 
-Restricted console встроена в agent 0.3.26 как hash-pinned payload и материализуется рядом с агентом. Поэтому обновление существующей 0.3.25 ноды до 0.3.26 не требует добавлять новый тип update-файла.
+Readiness теперь требует одновременно:
+- loopback-only listener на 22;
+- запущенный `cloudflared`;
+- CITADEL-managed restricted `ForceCommand`;
+- disabled TCP/X11/tunnel forwarding.
+
+Controller повторно вычисляет `browser_terminal_local_ready` из этих полей и не доверяет одному client-provided boolean.
+
+Restricted console остаётся hash-pinned payload. Для включения системного OpenSSH/ForceCommand на уже установленной машине требуется один elevated installer/repair bootstrap; обычный LocalService-agent не получает право переписывать системный SSH config.
 
 ## Что остаётся внешней настройкой
 
@@ -98,7 +151,10 @@ CITADEL не может сам создать Cloudflare Zero Trust application/
 - Cloudflare Tunnel для конкретной ноды;
 - public hostname;
 - Access application/policy для разрешённых пользователей;
-- работающий OpenSSH server на компьютере;
-- ForceCommand policy для CITADEL SSH user.
+- работающий `cloudflared` tunnel process на компьютере;
+- Cloudflare public hostname, направленный на `localhost:22`;
+- Access application/policy для разрешённых пользователей.
+
+Локальный OpenSSH + ForceCommand теперь может подготовить CITADEL installer/repair. Cloudflare account objects всё ещё создаются вне D1/Hub. Для browser-rendered SSH выбранный OS username должен соответствовать выбранному Cloudflare Browser SSH authentication mode; при legacy browser mode Cloudflare документирует соответствие username части email до `@`.
 
 Пока эти внешние зависимости не подтверждены, Hub обязан показывать SSH как not ready и не заявлять о работающем соединении.
