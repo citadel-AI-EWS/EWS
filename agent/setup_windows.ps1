@@ -26,6 +26,7 @@ $ExpectedEnterpriseProbeSha256 = "0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf
 $ExpectedSshConsoleSha256 = "10050339a74cad33410aca0e109d800d29b01a8f3238d8ff7ce016fbd099dc8c"
 $ExpectedSshConfiguratorSha256 = "__SSH_CONFIGURATOR_SHA256__"
 $ExpectedSshWindowsBootstrapSha256 = "__SSH_WINDOWS_BOOTSTRAP_SHA256__"
+$ExpectedSshWindowsEngineSha256 = "__SSH_WINDOWS_ENGINE_SHA256__"
 
 function Get-Sha256([string]$Path) {
   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -405,6 +406,7 @@ try {
   Copy-VerifiedReleaseFile "ssh_restricted_console.py" $ExpectedSshConsoleSha256 $ReleaseRoot
   Copy-VerifiedReleaseFile "ssh_configurator.py" $ExpectedSshConfiguratorSha256 $ReleaseRoot
   Copy-VerifiedReleaseFile "ssh_prepare_windows.ps1" $ExpectedSshWindowsBootstrapSha256 $ReleaseRoot
+  Copy-VerifiedReleaseFile "ssh_prepare_windows.py" $ExpectedSshWindowsEngineSha256 $ReleaseRoot
 Copy-VerifiedReleaseFile "CitadelNodeService.cs" $ExpectedServiceHostSha256 $ReleaseRoot
 Copy-VerifiedReleaseFile "windows_service.ps1" $ExpectedServiceHelperSha256 $ReleaseRoot
 
