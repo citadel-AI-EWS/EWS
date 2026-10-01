@@ -82,6 +82,9 @@ need(windowsSshBootstrap.includes("AllowTcpForwarding no") && windowsSshBootstra
 need(windowsSshBootstrap.includes("Disable-NetFirewallRule"), "Windows SSH bootstrap must disable the public OpenSSH firewall rule");
 need(windowsSshBootstrap.includes("& $SshdExe -t -f $SshdConfig"), "Windows SSH bootstrap must validate sshd_config before restart");
 need(!windowsSshBootstrap.includes("-ExecutionPolicy Bypass"), "Windows SSH bootstrap must not bypass PowerShell policy");
+need(windowsSshBootstrap.includes('"RemoteSigned"'), "Windows SSH bootstrap elevation must use process-only RemoteSigned policy");
+need(hub.includes("-ExecutionPolicy RemoteSigned") && !hub.includes("-ExecutionPolicy Bypass"), "Hub SSH bootstrap must use RemoteSigned without Bypass");
+need(oneClickIss.includes("-ExecutionPolicy RemoteSigned") && !oneClickIss.includes("-ExecutionPolicy Bypass"), "one-click SSH cleanup must use RemoteSigned without Bypass");
 for (const unsupported of ["KbdInteractiveAuthentication", "PermitTunnel", "X11Forwarding"]) {
   need(!windowsSshBootstrap.includes(unsupported), `Windows OpenSSH unsupported directive returned: ${unsupported}`);
 }
