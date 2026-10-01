@@ -123,6 +123,26 @@ class ProgressTests(unittest.TestCase):
             self.agent.apply_update({'version':'test','files':[{'path':name,'url':'test','sha256':hashlib.sha256(data).hexdigest()}]})
         return install,original
 
+    def test_ssh_asset_release_payload_is_accepted(self):
+        names = [
+            "citadel_node_v1.py",
+            "citadel_node_v2.py",
+            "CitadelSshConsole.cs",
+            "configure_restricted_ssh.ps1",
+        ]
+        payload = {
+            "version": "0.3.28",
+            "files": [
+                {
+                    "path": name,
+                    "url": f"https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/{name}",
+                    "sha256": "a" * 64,
+                }
+                for name in names
+            ],
+        }
+        self.assertTrue(self.agent.validate_update_payload(payload))
+
     def test_v1_only_invalid_update_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError,'updated agent self-test failed'):
             self.update('citadel_node_v1.py',b'invalid syntax !!!')
