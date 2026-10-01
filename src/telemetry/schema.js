@@ -23,6 +23,10 @@ export async function ensureTelemetryStorage(env) {
         ON node_logs(node_id, created_at DESC, event_id DESC)
       `),
       env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_node_logs_node_created_time
+        ON node_logs(node_id, datetime(created_at) DESC, event_id DESC)
+      `),
+      env.DB.prepare(`
         CREATE INDEX IF NOT EXISTS idx_node_logs_received
         ON node_logs(received_at DESC)
       `),

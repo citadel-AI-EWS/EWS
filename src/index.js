@@ -38,17 +38,17 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe"]);
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.28",
+  version: "0.3.30",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "0b959a5b3439a4c2b0b51494aab88651fe895b3da7ba012dadf0ace8be67f6c1"
+      sha256: "6a444c3f2810090ac2d5b497b3ca29d35497d788de8dbb584c6ee22409f6cc07"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "6e798b93bef8fd3429438fa8d0834d7ac71f9f5976ad4e0810ccc34044887f03"
+      sha256: "980968a9dca52a82f05c41ba8cf25b648a77c0008eb4612c8295e88d28024fac"
     },
     {
       path: "CitadelSshConsole.cs",
@@ -807,6 +807,10 @@ async function ensureCommandReadIndexes(env) {
         ON commands(datetime(created_at) DESC, command_id DESC)
       `),
       env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_commands_node_created_time
+        ON commands(node_id, datetime(created_at) DESC, command_id DESC)
+      `),
+      env.DB.prepare(`
         CREATE INDEX IF NOT EXISTS idx_audit_events_target_action
         ON audit_events(target_type, target_id, action, event_id DESC)
       `)
@@ -897,18 +901,55 @@ async function ensureCommandStorage(env) {
       do {
         expiredBatchSize = await expireStaleCommands(env);
       } while (expiredBatchSize === 250);
+      const createIndex = () => env.DB.prepare(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_one_active_per_node
+        ON commands(node_id)
+        WHERE status IN ('pending', 'accepted')
+      `).run();
+
       try {
-        await env.DB.prepare(`
-          CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_one_active_per_node
-          ON commands(node_id)
-          WHERE status IN ('pending', 'accepted')
-        `).run();
+        await createIndex();
       } catch (error) {
-        const message = String(error);
-        if (message.includes("UNIQUE") || message.includes("idx_commands_one_active_per_node")) {
-          throw new ApiError(409, "command_already_pending");
+        const message = String(error).toLowerCase();
+        if (!message.includes("unique") && !message.includes("commands.node_id")) {
+          throw error;
         }
-        throw error;
+
+        // Older deployments could contain more than one active command for the
+        // same node before this invariant existed. Keep the newest active
+        // command and mark older duplicates failed so the queue can recover
+        // automatically instead of returning an opaque internal_error forever.
+        await env.DB.prepare(`
+          UPDATE commands
+          SET status = 'failed',
+              completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)
+          WHERE status IN ('pending', 'accepted')
+            AND EXISTS (
+              SELECT 1
+              FROM commands AS newer
+              WHERE newer.node_id = commands.node_id
+                AND newer.status IN ('pending', 'accepted')
+                AND (
+                  datetime(newer.created_at) > datetime(commands.created_at)
+                  OR (
+                    datetime(newer.created_at) = datetime(commands.created_at)
+                    AND newer.command_id > commands.command_id
+                  )
+                )
+            )
+        `).run();
+
+        await createIndex();
+        await env.DB.prepare(`
+          INSERT INTO audit_events (
+            actor_type, actor_id, action, target_type, target_id, details_json
+          ) VALUES (
+            'controller', 'command-storage-repair',
+            'commands.active_duplicates_repaired',
+            'commands', 'active',
+            '{"policy":"keep_newest_active_per_node"}'
+          )
+        `).run();
       }
     })().catch((error) => {
       commandIndexPromise = undefined;
@@ -1181,6 +1222,12 @@ async function upsertNodeAiState(env, nodeId, state) {
         server_running = excluded.server_running,
         last_action = COALESCE(excluded.last_action, node_ai_state.last_action),
         updated_at = CURRENT_TIMESTAMP
+      WHERE node_ai_state.installed IS NOT excluded.installed
+        OR node_ai_state.selected_model IS NOT COALESCE(excluded.selected_model, node_ai_state.selected_model)
+        OR node_ai_state.loaded_model IS NOT excluded.loaded_model
+        OR node_ai_state.server_running IS NOT excluded.server_running
+        OR node_ai_state.last_action IS NOT COALESCE(excluded.last_action, node_ai_state.last_action)
+        OR node_ai_state.updated_at <= datetime('now', '-5 minutes')
     `).bind(
       nodeId,
       state.installed,
@@ -1195,6 +1242,12 @@ async function upsertNodeAiState(env, nodeId, state) {
       ON CONFLICT(node_id) DO UPDATE SET
         state_json = excluded.state_json,
         updated_at = CURRENT_TIMESTAMP
+      WHERE node_ai_runtime_state.state_json IS NOT excluded.state_json
+        OR node_ai_runtime_state.updated_at <= datetime('now', '-5 minutes')
+        OR (json_extract(excluded.state_json, '$.operation_id') IS NOT NULL
+          AND COALESCE(json_extract(excluded.state_json, '$.progress_phase'), '') NOT IN
+            ('complete','completed','completed_partial','failed','cancelled','download_complete','load_complete','query_complete','ready')
+          AND node_ai_runtime_state.updated_at <= datetime('now', '-60 seconds'))
     `).bind(nodeId, stateJson)
   ]);
 }
@@ -1227,7 +1280,8 @@ async function nodeAiStateResponse(env, nodeId) {
     loaded_model: row.loaded_model,
     server_running: row.server_running,
     last_action: row.last_action,
-    updated_at: row.updated_at,
+    updated_at: parseControllerTimestamp(row.runtime_updated_at) > parseControllerTimestamp(row.updated_at)
+      ? row.runtime_updated_at : row.updated_at,
     runtime_updated_at: row.runtime_updated_at
   };
 }
@@ -1518,6 +1572,10 @@ async function ensureProjectStorage(env) {
       env.DB.prepare(`
         CREATE INDEX IF NOT EXISTS idx_architect_projects_hash_status
         ON architect_projects(task_sha256, status, created_at DESC)
+      `),
+      env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_architect_projects_created
+        ON architect_projects(created_at DESC)
       `),
       env.DB.prepare(`
         CREATE TABLE IF NOT EXISTS project_work_items (
@@ -3790,6 +3848,11 @@ async function heartbeat(request, env, nodeId, url) {
   const { bytes: bodyBytes, text: bodyText } = await readBody(request, MAX_NODE_BODY_BYTES);
   const node = await authenticateNode(request, env, nodeId, url, bodyBytes);
   const body = parseJsonObject(bodyText);
+  return json(await persistHeartbeat(env, node, body));
+}
+
+async function persistHeartbeat(env, node, body, coalesce = false) {
+  const nodeId = node.node_id;
 
   const cpuPercent = optionalPercent(body.cpu_percent, "cpu_percent");
   const memoryPercent = optionalPercent(body.memory_percent, "memory_percent");
@@ -3814,7 +3877,12 @@ async function heartbeat(request, env, nodeId, url) {
           status = CASE WHEN status = 'paused' THEN 'paused' ELSE 'online' END,
           last_seen_at = ?
       WHERE node_id = ? AND status != 'revoked'
-    `).bind(cpuPercent, memoryPercent, agentVersion, capabilitiesJson, heartbeatAt, nodeId)
+        AND (? = 0 OR datetime(last_seen_at) <= datetime(?, '-60 seconds')
+          OR status NOT IN ('online','paused')
+          OR agent_version IS NOT COALESCE(?, agent_version)
+          OR capabilities_json IS NOT COALESCE(?, capabilities_json))
+    `).bind(cpuPercent, memoryPercent, agentVersion, capabilitiesJson, heartbeatAt, nodeId,
+      coalesce ? 1 : 0, heartbeatAt, agentVersion, capabilitiesJson)
   ];
   if (network) {
     heartbeatStatements.push(env.DB.prepare(`
@@ -3829,6 +3897,10 @@ async function heartbeat(request, env, nodeId, url) {
           ELSE node_network_state.mac_addresses_json
         END,
         updated_at = CURRENT_TIMESTAMP
+      WHERE node_network_state.lan_ipv4 IS NOT COALESCE(excluded.lan_ipv4, node_network_state.lan_ipv4)
+        OR node_network_state.tailscale_ipv4 IS NOT COALESCE(excluded.tailscale_ipv4, node_network_state.tailscale_ipv4)
+        OR (excluded.mac_addresses_json != '[]'
+          AND node_network_state.mac_addresses_json IS NOT excluded.mac_addresses_json)
     `).bind(
       nodeId,
       network.lan_ipv4,
@@ -3846,6 +3918,9 @@ async function heartbeat(request, env, nodeId, url) {
         cpu_logical_count = excluded.cpu_logical_count,
         gpus_json = excluded.gpus_json,
         updated_at = CURRENT_TIMESTAMP
+      WHERE node_hardware_state.memory_total_bytes IS NOT excluded.memory_total_bytes
+        OR node_hardware_state.cpu_logical_count IS NOT excluded.cpu_logical_count
+        OR node_hardware_state.gpus_json IS NOT excluded.gpus_json
     `).bind(
       nodeId,
       hardware.memory_total_bytes,
@@ -3901,7 +3976,7 @@ async function heartbeat(request, env, nodeId, url) {
   }
   const results = await env.DB.batch(heartbeatStatements);
 
-  if ((results[0]?.meta?.changes || 0) !== 1) {
+  if (!coalesce && (results[0]?.meta?.changes || 0) !== 1) {
     throw new ApiError(404, "node_not_found");
   }
 
@@ -3909,14 +3984,19 @@ async function heartbeat(request, env, nodeId, url) {
   // only preserve paused or move a non-revoked node to online, so a second
   // point SELECT just to echo the heartbeat would double-read this hot path.
   const status = node.status === "paused" ? "paused" : "online";
-  return json({ ok: true, node_id: nodeId, status, last_seen_at: heartbeatAt });
+  return { ok: true, node_id: nodeId, status, last_seen_at: heartbeatAt };
 }
 
 async function listAssignments(request, env, nodeId, url) {
   const node = await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
+  return json(await assignmentsForNode(env, node));
+}
+
+async function assignmentsForNode(env, node) {
+  const nodeId = node.node_id;
 
   if (node.status === "paused") {
-    return json({ ok: true, node_status: "paused", assignments: [] });
+    return { ok: true, node_status: "paused", assignments: [] };
   }
 
   await recoverStaleProjectAssignments(env);
@@ -3964,7 +4044,32 @@ async function listAssignments(request, env, nodeId, url) {
       payload_json: undefined
     };
   }));
-  return json({ ok: true, node_status: node.status, assignments });
+  return { ok: true, node_status: node.status, assignments };
+}
+
+// One authenticated envelope replaces separate command, heartbeat, AI and work
+// polls. Legacy routes retain their existing authentication and response shape.
+async function syncNode(request, env, nodeId, url) {
+  const { bytes, text } = await readBody(request, 192 * 1024);
+  const node = await authenticateNode(request, env, nodeId, url, bytes);
+  const body = parseJsonObject(text);
+  const ai = body.ai === undefined ? null : normalizeAiState(body.ai);
+  if (body.heartbeat !== undefined) {
+    if (!body.heartbeat || typeof body.heartbeat !== "object" || Array.isArray(body.heartbeat)) {
+      throw new ApiError(400, "invalid_heartbeat");
+    }
+    const heartbeatState = await persistHeartbeat(env, node, body.heartbeat, true);
+    node.status = heartbeatState.status;
+    node.agent_version = body.heartbeat.agent_version || node.agent_version;
+  }
+  if (ai) await upsertNodeAiState(env, nodeId, ai);
+  const commands = await commandsForNode(env, node);
+  // Do not reserve work before the agent processes a pending control command.
+  const work = commands.commands.length || body.paused === true
+    ? { assignments: [] }
+    : await assignmentsForNode(env, node);
+  return json({ ok: true, node_status: node.status, commands: commands.commands,
+    assignments: work.assignments });
 }
 
 async function acceptAssignment(request, env, nodeId, assignmentId, url) {
@@ -5149,6 +5254,11 @@ async function expireStaleNodeCommands(env, nodeId) {
 
 async function listCommands(request, env, nodeId, url) {
   const node = await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
+  return json(await commandsForNode(env, node));
+}
+
+async function commandsForNode(env, node) {
+  const nodeId = node.node_id;
   // Current-version nodes cannot benefit from rollout discovery. Skipping the
   // lookup removes one D1 read from every steady-state command poll.
   if (node.agent_version !== LATEST_NODE_RELEASE.version) {
@@ -5171,7 +5281,7 @@ async function listCommands(request, env, nodeId, url) {
     payload: safeJson(row.payload_json, {}),
     payload_json: undefined
   }));
-  return json({ ok: true, node_status: node.status, commands });
+  return { ok: true, node_status: node.status, commands };
 }
 
 async function acknowledgeCommand(request, env, nodeId, commandId, url) {
@@ -5500,6 +5610,7 @@ async function authenticateArchitect(request, env) {
       UPDATE architect_access_tokens
       SET last_used_at = CURRENT_TIMESTAMP
       WHERE token_id = ?
+        AND (last_used_at IS NULL OR last_used_at < datetime('now', '-5 minutes'))
     `).bind(actor.token_id).run();
   }
 
@@ -7667,6 +7778,13 @@ async function handleApi(request, env, url, executionCtx = null) {
   if (match) {
     return request.method === "POST"
       ? heartbeat(request, env, decodeURIComponent(match[1]), url)
+      : methodNotAllowed(["POST"]);
+  }
+
+  match = url.pathname.match(/^\/api\/v1\/nodes\/([^/]+)\/sync$/);
+  if (match) {
+    return request.method === "POST"
+      ? syncNode(request, env, decodeURIComponent(match[1]), url)
       : methodNotAllowed(["POST"]);
   }
 

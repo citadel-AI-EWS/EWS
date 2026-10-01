@@ -49,7 +49,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.28"
+VERSION = "0.3.30"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -1478,6 +1478,9 @@ class Agent:
         self.last_hardware_report = 0.0
         self.last_ssh_report = 0.0
         self.enrollment_confirmed = False
+        self.sync_retry_at = 0.0
+        self.last_ai_report = 0.0
+        self.last_ai_fingerprint = None
 
     @property
     def capabilities(self) -> list[str]:
@@ -1538,6 +1541,12 @@ class Agent:
 
     def heartbeat(self, *, timeout_seconds: float | None = None) -> None:
         node_id = self.require_node_id()
+        payload = self.heartbeat_payload()
+        self.api.request("POST", f"/api/v1/nodes/{node_id}/heartbeat", payload,
+                         timeout_seconds=timeout_seconds)
+        self.heartbeat_succeeded(payload)
+
+    def heartbeat_payload(self) -> dict[str, Any]:
         network = local_network_addresses()
         now = time.monotonic()
         payload: dict[str, Any] = {
@@ -1553,17 +1562,16 @@ class Agent:
         }
         if now - self.last_hardware_report >= 300:
             payload["hardware"] = hardware_snapshot()
-            self.last_hardware_report = now
         if now - self.last_ssh_report >= 300:
             payload["ssh"] = ssh_runtime_snapshot()
-            self.last_ssh_report = now
-        self.api.request(
-            "POST",
-            f"/api/v1/nodes/{node_id}/heartbeat",
-            payload,
-            timeout_seconds=timeout_seconds,
-        )
+        return payload
+
+    def heartbeat_succeeded(self, payload: dict[str, Any]) -> None:
         self.last_heartbeat = time.monotonic()
+        if "hardware" in payload:
+            self.last_hardware_report = self.last_heartbeat
+        if "ssh" in payload:
+            self.last_ssh_report = self.last_heartbeat
         if time.monotonic() - self.last_network_remember >= 300:
             self.remember_network_profile()
             self.last_network_remember = time.monotonic()
@@ -2235,27 +2243,50 @@ class Agent:
                 thread.join(timeout=self.config.request_timeout_seconds + 1)
             self._operation_depth -= 1
 
-    def report_ai_state(self, **updates: Any) -> None:
+    def report_ai_state(self, force: bool = False, **updates: Any) -> None:
         self.save_lmstudio_state(**updates)
         if not self.identity.node_id:
             return
-        state = self.lmstudio_state()
-        allowed = {
-            "installed", "selected_model", "loaded_model", "server_running", "last_action",
-            "progress_phase", "progress_current", "progress_total", "progress_bytes",
-            "progress_total_bytes", "progress_detail", "download_job_id",
-            "query_id", "query_mode", "query_status", "query_prompt", "query_answer",
-            "load_config", "operation_id",
-        }
-        body = {key: state.get(key) for key in allowed if key in state}
+        body = self.ai_report_body()
+        if not force and not self.ai_report_due(body):
+            return
         try:
             self.api.request(
                 "POST",
                 f"/api/v1/nodes/{self.require_node_id()}/ai-state",
                 body,
             )
+            self.ai_report_succeeded(body)
         except Exception as error:
             self.log.write("lmstudio_state_report_failed", error=str(error)[:300])
+
+    def ai_report_body(self) -> dict[str, Any]:
+        state = self.lmstudio_state()
+        allowed = {
+            "installed", "selected_model", "loaded_model", "server_running", "last_action",
+            "progress_phase", "progress_current", "progress_total", "progress_bytes",
+            "progress_total_bytes", "progress_detail", "download_job_id",
+            "query_id", "query_mode", "query_status", "query_prompt", "query_answer",
+            "load_config", "operation_id", "live_checked_at",
+        }
+        return {key: state.get(key) for key in allowed if key in state}
+
+    @staticmethod
+    def ai_fingerprint(body: dict[str, Any]) -> str:
+        # Probe timestamps change every cycle; operational state does not.
+        return json.dumps({key: value for key, value in body.items() if key != "live_checked_at"},
+                          ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    def ai_report_due(self, body: dict[str, Any]) -> bool:
+        # Accepted long commands need runtime freshness inside the Controller's
+        # two-minute lease. Idle snapshots can wait five minutes.
+        interval = 60 if self._operation_depth else 300
+        return (self.ai_fingerprint(body) != self.last_ai_fingerprint
+                or time.monotonic() - self.last_ai_report >= interval)
+
+    def ai_report_succeeded(self, body: dict[str, Any]) -> None:
+        self.last_ai_fingerprint = self.ai_fingerprint(body)
+        self.last_ai_report = time.monotonic()
 
     def find_lms(self) -> str | None:
         candidates: list[str | None] = [shutil.which("lms")]
@@ -3260,9 +3291,10 @@ class Agent:
             {"status": status},
         )
 
-    def handle_commands(self) -> None:
+    def handle_commands(self, response: dict[str, Any] | None = None) -> None:
         node_id = self.require_node_id()
-        response = self.api.request("GET", f"/api/v1/nodes/{node_id}/commands")
+        if response is None:
+            response = self.api.request("GET", f"/api/v1/nodes/{node_id}/commands")
         for command in response.get("commands") or []:
             command_id = str(command.get("command_id") or "")
             command_type = str(command.get("command_type") or "")
@@ -3663,19 +3695,55 @@ class Agent:
                 self.heartbeat()
                 self.mark_service_ready()
             return
+        sent = self.results.flush(self.submit_result)
+        if sent:
+            self.log.write("queued_results_flushed", count=sent)
+        response = self.sync_cycle()
+        if response is not None:
+            self.handle_commands(response)
+            if not self.paused_path.exists() and response.get("node_status") != "paused":
+                for assignment in response.get("assignments") or []:
+                    self.execute_assignment(assignment)
+            return
         self.handle_commands()
         if time.monotonic() - self.last_heartbeat >= self.config.heartbeat_seconds:
             self.heartbeat()
             self.sync_lmstudio_readiness()
-        sent = self.results.flush(self.submit_result)
-        if sent:
-            self.log.write("queued_results_flushed", count=sent)
         if self.paused_path.exists():
             return
         node_id = self.require_node_id()
         response = self.api.request("GET", f"/api/v1/nodes/{node_id}/assignments")
         for assignment in response.get("assignments") or []:
             self.execute_assignment(assignment)
+
+    def sync_cycle(self) -> dict[str, Any] | None:
+        now = time.monotonic()
+        if now < self.sync_retry_at:
+            return None
+        body: dict[str, Any] = {"paused": self.paused_path.exists()}
+        if now - self.last_heartbeat >= self.config.heartbeat_seconds:
+            body["heartbeat"] = self.heartbeat_payload()
+            try:
+                self.probe_lmstudio()
+            except Exception as error:
+                self.log.write("lmstudio_heartbeat_probe_failed", error=str(error)[:300])
+        ai = self.ai_report_body()
+        if self.ai_report_due(ai):
+            body["ai"] = ai
+        try:
+            response = self.api.request("POST", f"/api/v1/nodes/{self.require_node_id()}/sync", body)
+        except RuntimeError as error:
+            # Only a missing route permits legacy fallback. Auth, quota and
+            # transport failures must not multiply requests or bypass protection.
+            if str(error).startswith("controller HTTP 404: "):
+                self.sync_retry_at = time.monotonic() + 300
+                return None
+            raise
+        if "heartbeat" in body:
+            self.heartbeat_succeeded(body["heartbeat"])
+        if "ai" in body:
+            self.ai_report_succeeded(ai)
+        return response
 
     def run(self, once: bool = False) -> int:
         self.log.write("agent_start", version=VERSION, once=once)

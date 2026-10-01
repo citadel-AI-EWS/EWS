@@ -173,6 +173,8 @@ assert.match(index, /architectCreateAccessToken/);
 assert.match(index, /architectSetEnterprisePolicy/);
 assert.match(index, /architectEnterpriseRecoveryManifest/);
 assert.match(index, /requiredArchitectPermission/);
+assert.match(index, /commands\.active_duplicates_repaired/);
+assert.match(index, /keep_newest_active_per_node/);
 assert.doesNotMatch(index, /command_type\s*[:=]\s*["']shell["']/);
 assert.match(index, /async function architectNodeDetails/);
 assert.ok(index.includes("/details$"), "node details route missing");
@@ -203,7 +205,7 @@ for (const required of [
   "lmstudio_model_load",
   "system_reboot",
   "system_shutdown",
-  "active?5000:60000"
+  "active||fleetOperation?10000:60000"
 ]) {
   assert.ok(operations.includes(required), "Operations capability missing: " + required);
 }
@@ -670,7 +672,7 @@ assert.match(operations, /🖥️/);
 assert.match(operations, /id="lmLiveStatus"/);
 assert.match(operations, /startDetailProgressWatch/);
 assert.match(operations, /waiting_agent/);
-assert.match(operations, /active\?5000:60000/);
+assert.match(operations, /active\|\|fleetOperation\?10000:60000/);
 assert.match(operations, /Официальный установщик LM Studio сейчас работает/);
 
 {

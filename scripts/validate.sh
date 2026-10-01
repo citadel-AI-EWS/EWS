@@ -63,12 +63,14 @@ for required in (
     "/api/v1/architect/models/search",
     'id="lmstudioProgress"',
     'id="hybridPanel"',
-    "\"hybrid_query\"",
+    "hybrid_query",
     "\"lmstudio_probe\"",
     "installHubCollapsers",
     "panelToggle",
     'sessionStorage.getItem("citadel-architect-token")',
     'new URLSearchParams(location.search).get("lmnode")',
+    "nodeHasPendingCommand",
+    "@media(max-width:980px),(max-height:620px)",
 ):
     if required not in hub:
         raise SystemExit(f"required real Hub capability missing: {required}")
@@ -333,9 +335,13 @@ node tests/legacy-experience.mjs
 node tests/experience-registry.mjs
 node tests/architect-ux-guards.mjs
 node tests/lmstudio-command-storage.mjs
+node tests/legacy-command-duplicates.mjs
 node tests/enterprise-policy.mjs
 node tests/hub-five-questions.mjs
 node tests/d1-usage.mjs
+node tests/d1-idle-storage.mjs
+node tests/d1-workerd-sync.mjs
+python tests/d1-agent-polling.py
 node tests/d1-retention.mjs
 node tests/flow-a-fanout-races.mjs
 node tests/flow-a-assignment-recovery.mjs
