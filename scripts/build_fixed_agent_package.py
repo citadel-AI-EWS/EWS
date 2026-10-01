@@ -326,6 +326,7 @@ def build() -> Path:
         "CitadelNodeService.cs",
         "windows_service.ps1",
         "windows_enterprise_probe.ps1",
+        "ssh_restricted_console.py",
         "requirements.txt",
         "requirements-win32.txt",
     ):
