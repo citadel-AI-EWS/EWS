@@ -8,13 +8,14 @@ import time
 import types
 import unittest
 from unittest.mock import Mock, patch
+from typing import Any
 
 SOURCE = Path(__file__).resolve().parents[1] / 'agent/citadel_node_v1.py'
 parsed = ast.parse(SOURCE.read_text(encoding="utf-8"))
 agent = next(n for n in parsed.body if isinstance(n, ast.ClassDef) and n.name == 'Agent')
 methods = [n for n in agent.body if isinstance(n, ast.FunctionDef) and n.name in
            {'handle_commands', 'cycle', 'interruptible_sleep'}]
-namespace = dict(os=os, time=time, Path=Path, subprocess=subprocess,
+namespace = dict(os=os, time=time, Path=Path, subprocess=subprocess, Any=Any,
                  SERVICE_STOP_EXIT_CODE=76, SERVICE_RESTART_EXIT_CODE=75)
 exec(compile(ast.Module(body=methods, type_ignores=[]), str(SOURCE), 'exec'), namespace)
 
