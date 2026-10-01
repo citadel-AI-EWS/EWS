@@ -192,6 +192,8 @@ async function ensurePolicy(accountId, appId, hostname, email, apply) {
   const incompatible = policies.filter(p => !["allow", "deny"].includes(String(p?.decision || "")));
   if (incompatible.length) fail("browser_ssh_app_contains_unsupported_bypass_or_service_auth_policy");
   const wanted = desiredPolicy(hostname, email);
+  const otherAllow = policies.filter(p => p?.decision === "allow" && p?.name !== wanted.name);
+  if (otherAllow.length) fail("browser_ssh_app_contains_additional_allow_policy");
   const existing = policies.find(p => p?.name === wanted.name);
   if (!apply) return existing || {id: "<planned>", ...wanted};
   if (existing?.id) {
