@@ -5,7 +5,10 @@ param(
   [string]$StateRoot = "$env:ProgramData\CitadelEWS\state",
   [switch]$Uninstall,
   [switch]$PreserveState,
-  [string]$LegacyUserSid = ""
+  [string]$LegacyUserSid = "",
+  [switch]$ConfigureSsh,
+  [string]$SshUser = "",
+  [switch]$InstallOpenSsh
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,6 +24,8 @@ $ExpectedServiceHostSha256 = "892c5f388f9b54c0bcbb2956381dd601dfa8065b0e9258ba67
 $ExpectedServiceHelperSha256 = "e0e66f5a27018a283c65d42e6ead93e382706a163da682e6bd49f2b1fb9b0f99"
 $ExpectedEnterpriseProbeSha256 = "0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
 $ExpectedSshConsoleSha256 = "10050339a74cad33410aca0e109d800d29b01a8f3238d8ff7ce016fbd099dc8c"
+$ExpectedSshConfiguratorSha256 = "__SSH_CONFIGURATOR_SHA256__"
+$ExpectedSshWindowsBootstrapSha256 = "__SSH_WINDOWS_BOOTSTRAP_SHA256__"
 
 function Get-Sha256([string]$Path) {
   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -64,6 +69,11 @@ if (-not (Test-IsAdministrator)) {
   )
   if ($Uninstall) { $ElevatedArgs += "-Uninstall" }
   if ($PreserveState) { $ElevatedArgs += "-PreserveState" }
+  if ($ConfigureSsh) { $ElevatedArgs += "-ConfigureSsh" }
+  if ($InstallOpenSsh) { $ElevatedArgs += "-InstallOpenSsh" }
+  if (-not [string]::IsNullOrWhiteSpace($SshUser)) {
+    $ElevatedArgs += @("-SshUser", ('"' + $SshUser + '"'))
+  }
   $Elevated = Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $ElevatedArgs -Wait -PassThru
   exit $Elevated.ExitCode
 }
@@ -287,6 +297,24 @@ function Quote-CitadelServiceArg {
 }
 
 if ($Uninstall) {
+  $BootstrapState = Join-Path $StateRoot "ssh-bootstrap\state.json"
+  $CurrentInstallState = Join-Path $InstallRoot "install-state.json"
+  if ((Test-Path -LiteralPath $BootstrapState) -and (Test-Path -LiteralPath $CurrentInstallState)) {
+    try {
+      $BootstrapInfo = Get-Content -LiteralPath $BootstrapState -Raw | ConvertFrom-Json
+      $InstalledInfo = Get-Content -LiteralPath $CurrentInstallState -Raw | ConvertFrom-Json
+      $InstalledRelease = [string]$InstalledInfo.release_root
+      $BootstrapScript = Join-Path $InstalledRelease "ssh_prepare_windows.ps1"
+      if ($BootstrapInfo.configured -eq $true -and
+          -not [string]::IsNullOrWhiteSpace([string]$BootstrapInfo.user) -and
+          (Test-Path -LiteralPath $BootstrapScript)) {
+        & $BootstrapScript -SshUser ([string]$BootstrapInfo.user) -ReleaseRoot $InstalledRelease -StateRoot $StateRoot -Uninstall
+        if ($LASTEXITCODE -ne 0) { throw "SSH bootstrap rollback returned a non-zero exit code." }
+      }
+    } catch {
+      throw ("CITADEL SSH rollback failed before uninstall: " + $_.Exception.Message)
+    }
+  }
   Stop-CitadelServiceIfPresent
   Remove-CitadelServiceDefinition -Name $ServiceName
   foreach ($Process in (Get-RunningLegacyCitadelAgents)) {
@@ -375,6 +403,8 @@ try {
   Copy-VerifiedReleaseFile "citadel_node_v2.py" $ExpectedV2Sha256 $ReleaseRoot
   Copy-VerifiedReleaseFile "windows_enterprise_probe.ps1" $ExpectedEnterpriseProbeSha256 $ReleaseRoot
   Copy-VerifiedReleaseFile "ssh_restricted_console.py" $ExpectedSshConsoleSha256 $ReleaseRoot
+  Copy-VerifiedReleaseFile "ssh_configurator.py" $ExpectedSshConfiguratorSha256 $ReleaseRoot
+  Copy-VerifiedReleaseFile "ssh_prepare_windows.ps1" $ExpectedSshWindowsBootstrapSha256 $ReleaseRoot
 Copy-VerifiedReleaseFile "CitadelNodeService.cs" $ExpectedServiceHostSha256 $ReleaseRoot
 Copy-VerifiedReleaseFile "windows_service.ps1" $ExpectedServiceHelperSha256 $ReleaseRoot
 
@@ -615,6 +645,95 @@ try {
     updated_at = [DateTime]::UtcNow.ToString("o")
   } | ConvertTo-Json
   [System.IO.File]::WriteAllText($InstallStatePath, $InstallState + [Environment]::NewLine, $Utf8NoBom)
+
+  if ($ConfigureSsh) {
+    $EffectiveSshUser = $SshUser.Trim()
+    if ([string]::IsNullOrWhiteSpace($EffectiveSshUser)) {
+      try {
+        $SidObject = New-Object System.Security.Principal.SecurityIdentifier($LegacyUserSid)
+        $Account = $SidObject.Translate([System.Security.Principal.NTAccount]).Value
+        $EffectiveSshUser = $Account.Substring($Account.LastIndexOf('\') + 1)
+      } catch {
+        throw "Unable to derive the original Windows username for SSH. Re-run with -SshUser."
+      }
+    }
+    if ($EffectiveSshUser -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}
+  if ($null -ne $PreviousReleaseRoot) { $KeepReleasePaths += $PreviousReleaseRoot }
+  foreach ($ReleaseDirectory in @(Get-ChildItem -LiteralPath $ReleaseBase -Directory -ErrorAction SilentlyContinue)) {
+    $ReleaseFullPath = [System.IO.Path]::GetFullPath($ReleaseDirectory.FullName).TrimEnd('\')
+    $Keep = $false
+    foreach ($KeepPath in $KeepReleasePaths) {
+      if ([string]::Equals($ReleaseFullPath, ([System.IO.Path]::GetFullPath($KeepPath).TrimEnd('\')), [System.StringComparison]::OrdinalIgnoreCase)) {
+        $Keep = $true
+        break
+      }
+    }
+    if (-not $Keep) {
+      try {
+        Remove-Item -LiteralPath $ReleaseFullPath -Recurse -Force -ErrorAction Stop
+      } catch {
+        Write-Warning ("[CITADEL] Could not prune superseded release " + $ReleaseFullPath + ": " + $_.Exception.Message)
+      }
+    }
+  }
+
+} catch {
+  $CutoverError = $_
+  if ($CutoverCommitted) {
+    Write-Warning "[CITADEL] New SCM service is already committed. It will not be rolled back after a secondary cleanup/metadata error."
+    throw $CutoverError
+  }
+  Write-Warning "[CITADEL] Service cutover failed before commit; restoring the previous lifecycle."
+  try {
+    Stop-CitadelServiceIfPresent
+    if ($CreatedService) {
+      Remove-CitadelServiceDefinition -Name $ServiceName
+    } elseif ($null -ne $ExistingSnapshot) {
+      Restore-CitadelServiceDefinition -Name $ServiceName -Snapshot $ExistingSnapshot
+      if ($ExistingWasRunning) {
+        Start-Service -Name $ServiceName
+        (Get-Service -Name $ServiceName).WaitForStatus("Running", [TimeSpan]::FromSeconds(30))
+      }
+    }
+    if ($PersistentStopExisted -and -not (Test-Path -LiteralPath $StopPath)) {
+      [System.IO.File]::WriteAllText($StopPath, $PersistentStopContent, $Utf8NoBom)
+    }
+    Remove-Item -LiteralPath $HoldPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $ReadyPath -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $ReleaseRoot) {
+      Remove-Item -LiteralPath $ReleaseRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  } catch {
+    Write-Warning ("[CITADEL] Rollback also encountered an error: " + $_.Exception.Message)
+  }
+  throw $CutoverError
+}
+
+Write-Host ""
+Write-Host "[CITADEL] Setup/repair complete."
+Write-Host "[CITADEL] Node: $NodeId"
+Write-Host "[CITADEL] Controller: $($ControllerUrl.TrimEnd('/'))"
+Write-Host "[CITADEL] Release: $ReleaseRoot"
+Write-Host "[CITADEL] Windows service: $ServiceName / LocalService / Automatic (Delayed Start)"
+Write-Host "[CITADEL] SCM process and managed Python child were verified after cutover."
+if (-not $ConfigureSsh) {
+  Write-Host "[CITADEL] SSH bootstrap was not requested. Re-run setup_windows.ps1 with -ConfigureSsh when you want Browser SSH."
+}
+Write-Host "[CITADEL] Re-running this installer stages and verifies a new release before touching the running lifecycle."
+) {
+      throw "Derived SSH username is not safe for an OpenSSH Match User rule. Re-run with -SshUser."
+    }
+    $SshBootstrap = Join-Path $ReleaseRoot "ssh_prepare_windows.ps1"
+    $SshArgs = @{
+      SshUser = $EffectiveSshUser
+      ReleaseRoot = $ReleaseRoot
+      StateRoot = $StateRoot
+    }
+    if ($InstallOpenSsh) { $SshArgs.InstallOpenSsh = $true }
+    & $SshBootstrap @SshArgs
+    if ($LASTEXITCODE -ne 0) { throw "CITADEL restricted SSH bootstrap failed." }
+    Write-Host "[CITADEL] Restricted SSH bootstrap verified for $EffectiveSshUser."
+  }
 
   $KeepReleasePaths = @($ReleaseRoot)
   if ($null -ne $PreviousReleaseRoot) { $KeepReleasePaths += $PreviousReleaseRoot }
