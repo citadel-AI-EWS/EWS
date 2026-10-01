@@ -76,12 +76,16 @@ need(sshBootstrapMigration.includes("restricted_policy_ready"), "SSH bootstrap r
 need(!sshBootstrapMigration.toLowerCase().includes("private_key"), "SSH bootstrap migration must not store private keys");
 need(windowsSshBootstrap.includes("ListenAddress 127.0.0.1"), "Windows SSH bootstrap must bind loopback only");
 need(windowsSshBootstrap.includes("AllowUsers $SshUser"), "Windows SSH bootstrap must restrict daemon to the dedicated user");
-need(windowsSshBootstrap.includes("PasswordAuthentication no") && windowsSshBootstrap.includes("KbdInteractiveAuthentication no"), "Windows SSH bootstrap must disable password and keyboard-interactive auth");
+need(windowsSshBootstrap.includes("PasswordAuthentication no"), "Windows SSH bootstrap must disable password auth");
 need(windowsSshBootstrap.includes("AllowAgentForwarding no"), "Windows SSH bootstrap must disable agent forwarding");
-need(windowsSshBootstrap.includes("AllowTcpForwarding no") && windowsSshBootstrap.includes("PermitTunnel no"), "Windows SSH bootstrap must disable forwarding/tunneling");
+need(windowsSshBootstrap.includes("AllowTcpForwarding no") && windowsSshBootstrap.includes("GatewayPorts no"), "Windows SSH bootstrap must disable TCP forwarding and gateway ports");
 need(windowsSshBootstrap.includes("Disable-NetFirewallRule"), "Windows SSH bootstrap must disable the public OpenSSH firewall rule");
 need(windowsSshBootstrap.includes("& $SshdExe -t -f $SshdConfig"), "Windows SSH bootstrap must validate sshd_config before restart");
 need(!windowsSshBootstrap.includes("-ExecutionPolicy Bypass"), "Windows SSH bootstrap must not bypass PowerShell policy");
+for (const unsupported of ["KbdInteractiveAuthentication", "PermitTunnel", "X11Forwarding"]) {
+  need(!windowsSshBootstrap.includes(unsupported), `Windows OpenSSH unsupported directive returned: ${unsupported}`);
+}
+need(windowsSshBootstrap.includes("Windows OpenSSH did not generate sshd_config on first service start."), "fresh OpenSSH config generation guard missing");
 need(!windowsSshConsole.includes("Process.Start("), "Windows restricted SSH console must not spawn child processes");
 need(!windowsSshConsole.includes("UseShellExecute"), "Windows restricted SSH console must not enable shell execution");
 need(windowsSshConsole.includes("SSH_ORIGINAL_COMMAND"), "Windows restricted SSH console must support OpenSSH ForceCommand input");
