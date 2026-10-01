@@ -179,6 +179,68 @@ jobs:
             Pop-Location
           }
           Write-Host "Windows Enterprise Probe AST/runtime/bootstrap: OK"
+      - name: Compile and exercise restricted SSH console
+        shell: pwsh
+        run: |
+          $candidates = @(
+            (Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"),
+            (Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\csc.exe")
+          )
+          $csc = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $csc) { throw ".NET Framework csc.exe not found" }
+          $out = Join-Path $env:RUNNER_TEMP "CitadelSshConsole.exe"
+          $source = (Resolve-Path -LiteralPath "agent\CitadelSshConsole.cs").Path
+          & $csc /nologo /optimize+ /target:exe "/out:$out" /reference:System.Management.dll /reference:System.ServiceProcess.dll $source
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $sourceText = Get-Content -LiteralPath $source -Raw
+          if ($sourceText.Contains("Process.Start(") -or $sourceText.Contains("UseShellExecute")) {
+            throw "Restricted SSH console must not spawn child processes"
+          }
+
+          $env:SSH_ORIGINAL_COMMAND = "help"
+          $help = & $out 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0 -or -not $help.Contains("Allowed commands:")) { throw "Restricted SSH help failed" }
+
+          foreach ($denied in @("whoami", "status;whoami", "cmd", "powershell")) {
+            $env:SSH_ORIGINAL_COMMAND = $denied
+            $text = & $out 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 2 -or -not $text.Contains("DENIED:")) {
+              throw "Restricted SSH console accepted unsafe command: $denied"
+            }
+          }
+          Remove-Item Env:SSH_ORIGINAL_COMMAND -ErrorAction SilentlyContinue
+          Write-Host "Restricted SSH console compile/allow-list: OK"
+
+      - name: Validate restricted SSH bootstrap policy
+        shell: pwsh
+        run: |
+          $path = (Resolve-Path -LiteralPath "agent\configure_restricted_ssh.ps1").Path
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count) { throw ($errors | Out-String) }
+          $text = Get-Content -LiteralPath $path -Raw
+          foreach ($required in @(
+            'ListenAddress 127.0.0.1',
+            'AllowUsers $SshUser',
+            'AuthenticationMethods publickey',
+            'PasswordAuthentication no',
+            'ForceCommand C:/ProgramData/CitadelEWS/ssh/CitadelSshConsole.exe',
+            'AllowTcpForwarding no',
+            'X11Forwarding no',
+            'PermitTunnel no',
+            'GatewayPorts no',
+            'Disable-NetFirewallRule',
+            '& $SshdExe -t -f $SshdConfig',
+            'Unsafe non-loopback SSH listener detected',
+            'backup_path'
+          )) {
+            if (-not $text.Contains($required)) { throw "Restricted SSH bootstrap invariant missing: $required" }
+          }
+          if ($text.Contains("-ExecutionPolicy Bypass")) { throw "Restricted SSH bootstrap must not bypass execution policy" }
+          Write-Host "Restricted SSH bootstrap policy: OK"
+
       - name: Compile Windows SCM service host
         shell: pwsh
         run: |
