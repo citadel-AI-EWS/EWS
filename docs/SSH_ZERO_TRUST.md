@@ -96,7 +96,9 @@ Windows-конфигурация сознательно не используе�
 
 Agent 0.3.27 продолжает capability `ssh_probe_readonly`, отправляет SSH readiness v2 и умеет принимать два новых подписанных update-asset: `CitadelSshConsole.cs` и `configure_restricted_ssh.ps1`. Команда `ssh_probe` остаётся read-only и только заставляет немедленно обновить readiness heartbeat.
 
-`0.3.27` — совместимый bridge-релиз: существующий `0.3.26` принимает его через старый набор v1/v2. После перехода на `0.3.27` следующий asset-релиз может штатно доставить Windows SSH bootstrap через обычный hash-verified update, без непроверенных download-скриптов и без скрытой сетевой зависимости. Свежий Windows installer `0.3.27` уже содержит эти assets.
+`0.3.27` — совместимый bridge-релиз: существующий `0.3.26` принимает его через старый набор v1/v2. Windows installer `0.3.27+` уже содержит SSH assets при чистой установке.
+
+`0.3.28` — asset-delivery релиз: Controller включает `CitadelSshConsole.cs` и `configure_restricted_ssh.ps1` в обычный подписанный/hash-verified update payload вместе с v1/v2. Поэтому нода, уже перешедшая с `0.3.26` на bridge `0.3.27`, получает недостающие SSH assets удалённо без переустановки. После применения assets Windows-нода публикует capability `windows_restricted_ssh_bootstrap`; только после этого Hub разрешает копирование локальной elevated bootstrap-команды.
 
 ## Windows bootstrap security model
 
