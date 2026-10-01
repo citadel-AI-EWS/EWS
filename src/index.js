@@ -6228,7 +6228,6 @@ async function architectCreateCommand(request, env, nodeId) {
     if (mode !== "python") {
       await ensureNodeAiStorage(env);
       const ai = await nodeAiStateResponse(env, nodeId);
-  const ssh = await nodeSshStateResponse(env, nodeId);
       if (Number(ai.installed || 0) !== 1 || Number(ai.server_running || 0) !== 1 || !ai.loaded_model) {
         throw new ApiError(409, "lmstudio_model_not_ready");
       }
@@ -6327,6 +6326,7 @@ async function architectNodeDetails(request, env, nodeId) {
   const macAddresses = safeJson(row.mac_addresses_json, []);
   const gpus = safeJson(row.gpus_json, []);
   const ai = await nodeAiStateResponse(env, nodeId);
+  const ssh = await nodeSshStateResponse(env, nodeId);
   const agentCapability = buildAgentCapabilityContract({
     node_id: row.node_id,
     agent_version: row.agent_version,
