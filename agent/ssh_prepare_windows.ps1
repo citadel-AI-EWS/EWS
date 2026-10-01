@@ -123,7 +123,8 @@ if (-not (Test-Path -LiteralPath $SshKeygen)) {
   throw "OpenSSH ssh-keygen.exe is missing."
 }
 
-$HostKeys = @(Get-ChildItem -LiteralPath (Join-Path $env:ProgramData "ssh") -Filter "ssh_host_*_key" -File -ErrorAction SilentlyContinue)
+New-Item -ItemType Directory -Path $SshConfigDir -Force | Out-Null
+$HostKeys = @(Get-ChildItem -LiteralPath $SshConfigDir -Filter "ssh_host_*_key" -File -ErrorAction SilentlyContinue)
 if ($HostKeys.Count -eq 0) {
   & $SshKeygen -A
   if ($LASTEXITCODE -ne 0) {
