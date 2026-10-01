@@ -6329,7 +6329,7 @@ async function architectNodeAiState(request, env, nodeId) {
 
 async function architectNodeDetails(request, env, nodeId) {
   await authenticateArchitect(request, env);
-  await Promise.all([ensureNodeNetworkStorage(env), ensureNodeAiStorage(env), ensureNodeHardwareStorage(env), ensureNodeSshStorage(env)]);
+  await Promise.all([ensureNodeNetworkStorage(env), ensureNodeAiStorage(env), ensureNodeHardwareStorage(env)]);
   const row = await env.DB.prepare(`
     SELECT n.node_id, n.hostname, n.os_name, n.os_version, n.architecture,
       n.agent_version, n.status, n.cpu_percent, n.memory_percent, n.last_seen_at, n.capabilities_json,
@@ -6347,7 +6347,6 @@ async function architectNodeDetails(request, env, nodeId) {
   const macAddresses = safeJson(row.mac_addresses_json, []);
   const gpus = safeJson(row.gpus_json, []);
   const ai = await nodeAiStateResponse(env, nodeId);
-  const ssh = await nodeSshStateResponse(env, nodeId);
   const agentCapability = buildAgentCapabilityContract({
     node_id: row.node_id,
     agent_version: row.agent_version,
@@ -6397,8 +6396,7 @@ async function architectNodeDetails(request, env, nodeId) {
       memory_total_bytes: Number(row.memory_total_bytes || 0) || null,
       gpus: safeJson(row.gpus_json, [])
     }),
-    ai,
-    ssh
+    ai
   });
 }
 
