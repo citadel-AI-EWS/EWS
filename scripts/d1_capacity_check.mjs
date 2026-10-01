@@ -6,7 +6,7 @@ const worker = config.match(/"name"\s*:\s*"([^"]+)"/)?.[1];
 const report = {scheduled_events: 0, guardian_errors: [], tail_status: 'starting'};
 fs.writeFileSync('/tmp/d1-guardian-tail.json', JSON.stringify({name: worker, account_id: account, compatibility_date: '2026-09-05'}));
 await new Promise(resolve => {
-  const child = spawn('./node_modules/.bin/wrangler', ['tail', worker, '--config', '/tmp/d1-guardian-tail.json', '--format', 'json', '--sampling-rate', '1', '--search', 'D1 Guardian'],
+  const child = spawn('./node_modules/.bin/wrangler', ['tail', worker, '--config', '/tmp/d1-guardian-tail.json', '--format', 'json', '--search', 'D1 Guardian'],
     {env: {...process.env, CLOUDFLARE_ACCOUNT_ID: account, WRANGLER_SEND_METRICS: 'false'}, stdio: ['ignore', 'pipe', 'pipe']});
   let buffer = '';
   let stopping = false;
