@@ -249,7 +249,7 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.26"'), "Controller release not bumped");
+need(index.includes('version: "0.3.27"'), "Controller release not bumped");
 console.log("Review backlog guards: PASS");
 
 need(agentV1.includes("lmstudio_heartbeat_probe_failed"), "routine heartbeat does not refresh LM Studio readiness");
