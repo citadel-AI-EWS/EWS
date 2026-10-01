@@ -15,6 +15,13 @@ const query = `query D1Capacity($account: string!, $date: Date!) {
     }
   } }
 }`;
+const storageQuery = `query D1Storage($account: string!, $database: string!, $date: Date!) {
+  viewer { accounts(filter: {accountTag: $account}) {
+    storage: d1StorageAdaptiveGroups(limit: 1, filter: {date: $date, databaseId: $database}) {
+      max { databaseSizeBytes }
+    }
+  } }
+}`;
 async function cfJson(path, token, options = {}) {
   if (!token) throw Error("token_unconfigured");
   let response;
@@ -33,7 +40,9 @@ const [usage, storage] = await Promise.allSettled([
   cfJson("graphql", process.env.D1_ANALYTICS_TOKEN || process.env.CLOUDFLARE_API_TOKEN, {
     method: "POST", body: JSON.stringify({ query, variables: { account, date } })
   }),
-  cfJson(`accounts/${account}/d1/database/${database}`, process.env.CLOUDFLARE_API_TOKEN)
+  cfJson("graphql", process.env.D1_ANALYTICS_TOKEN || process.env.CLOUDFLARE_API_TOKEN, {
+    method: "POST", body: JSON.stringify({ query: storageQuery, variables: { account, database, date } })
+  })
 ]);
 const number = v => typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
 if (usage.status === "fulfilled") {
@@ -44,7 +53,8 @@ if (usage.status === "fulfilled") {
   if (report.reads === null || report.writes === null) report.errors.push("invalid_analytics_response");
 } else report.errors.push("analytics:" + usage.reason.message);
 if (storage.status === "fulfilled") {
-  report.storage_bytes = number(storage.value.result?.file_size);
+  report.storage_bytes = number(storage.value.data?.viewer?.accounts?.[0]?.storage?.[0]?.max?.databaseSizeBytes);
+  report.storage_measurement = "maximum_observed_today";
   if (report.storage_bytes === null) report.errors.push("storage_size_unavailable");
 } else report.errors.push("storage:" + storage.reason.message);
 
