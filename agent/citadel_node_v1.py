@@ -37,6 +37,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from hardware_doctor import hardware_doctor_snapshot, network_doctor_snapshot
+
 try:
     import psutil
     from cryptography.hazmat.primitives import serialization
@@ -54,7 +56,7 @@ USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"}
-CORE_UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
+CORE_UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py", "hardware_doctor.py"}
 UPDATE_FILE_NAMES = CORE_UPDATE_FILE_NAMES | {"windows_enterprise_probe.ps1"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
 COMMAND_MAX_AGE_SECONDS = 15 * 60
@@ -882,6 +884,7 @@ def system_inventory(payload: dict[str, Any]) -> dict[str, Any]:
         "disk_home_total_bytes": int(disk.total),
         "disk_home_free_bytes": int(disk.free),
         "network": local_network_addresses(),
+        "hardware_doctor": hardware_doctor_snapshot(),
         "windows_enterprise": windows_enterprise_probe(),
     }
 
@@ -925,7 +928,7 @@ class Agent:
 
     @property
     def capabilities(self) -> list[str]:
-        capabilities = set(HANDLERS) | {"lmstudio_remote", "project_text", "project_python"}
+        capabilities = set(HANDLERS) | {"hardware_doctor_readonly", "lmstudio_remote", "project_text", "project_python"}
         if self.config.prevent_automatic_sleep:
             capabilities.add("always_on_guard")
         if self.config.network_recovery_enabled:
@@ -1424,6 +1427,8 @@ class Agent:
                 report = self.execute_project_text(assignment.get("payload") or {})
             else:
                 report = handler(assignment.get("payload") or {})
+                if mission_type == "system_inventory" and isinstance(report, dict):
+                    report["network_doctor"] = network_doctor_snapshot(self.config.controller_url)
             result = {
                 "assignment_id": assignment_id,
                 "outcome": "success",
