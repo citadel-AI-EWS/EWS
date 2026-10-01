@@ -1073,7 +1073,10 @@ def _windows_restricted_ssh_policy_snapshot() -> dict[str, Any]:
         "# BEGIN CITADEL SSH USER",
         f"Match User {ssh_user}",
         "ForceCommand C:/ProgramData/CitadelEWS/ssh/CitadelSshConsole.exe",
+        "AuthenticationMethods publickey",
         "PasswordAuthentication no",
+        "KbdInteractiveAuthentication no",
+        "AllowAgentForwarding no",
         "AllowTcpForwarding no",
         "PermitTunnel no",
     ))
