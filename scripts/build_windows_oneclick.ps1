@@ -47,7 +47,7 @@ $PipArgs = @(
 & python @PipArgs
 if ($LASTEXITCODE -ne 0) { throw "Unable to freeze Windows agent dependencies." }
 
-foreach ($Name in @("citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1")) {
+foreach ($Name in @("citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1", "CitadelSshConsole.cs", "configure_restricted_ssh.ps1")) {
   Copy-Item -LiteralPath (Join-Path $RepoRoot "agent\$Name") -Destination (Join-Path $Payload $Name) -Force
 }
 New-Item -ItemType Directory -Force -Path (Join-Path $Payload "lmstudio") | Out-Null
