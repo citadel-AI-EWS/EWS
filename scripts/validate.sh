@@ -4,7 +4,7 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 python -m unittest -v controller_tests.py
-python -m py_compile controller_app.py controller_tests.py agent/citadel_node_v1.py agent/citadel_node_v2.py tests/network-recovery-priority.py
+python -m py_compile controller_app.py controller_tests.py agent/citadel_node_v1.py agent/citadel_node_v2.py agent/ssh_restricted_console.py tests/network-recovery-priority.py
 python agent/citadel_node_v2.py self-test
 python tests/network-recovery-priority.py
 
@@ -339,6 +339,7 @@ node tests/ten-prompt-routing.mjs
 python tests/lmstudio-local-protocol.py
 python tests/mini-agents.py
 python tests/lmstudio-progress.py
+python tests/ssh-restricted-console.py
 node tests/openrouter-quality-gate.mjs
 
 python - <<'PY'
@@ -358,7 +359,7 @@ required = {
     "architect_auth_state", "architect_recovery_attempts",
     "architect_access_tokens", "enterprise_sites", "enterprise_node_groups",
     "enterprise_node_scope", "enterprise_desired_state",
-    "d1_guardian_state", "d1_guardian_actions",
+    "d1_guardian_state", "d1_guardian_actions", "node_ssh_state",
 }
 tables = {
     row[0]
