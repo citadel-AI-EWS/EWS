@@ -682,7 +682,7 @@ begin
       StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\state');
       RequireExec(
         PowerShell,
-        '-NoLogo -NoProfile -File "' + SshBootstrap + '" -InstallRoot "' + AppRoot +
+        '-NoLogo -NoProfile -ExecutionPolicy RemoteSigned -File "' + SshBootstrap + '" -InstallRoot "' + AppRoot +
           '" -StateRoot "' + StateRoot + '" -Uninstall',
         'Restricted SSH cleanup failed'
       );
