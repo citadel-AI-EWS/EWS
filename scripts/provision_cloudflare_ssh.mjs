@@ -29,7 +29,7 @@ function normalizeTunnelName(value) {
 
 function normalizeSession(value) {
   const session = String(value || "1h").trim();
-  if (!/^\d+(?:ms|s|m|h)$/.test(session)) fail("invalid_session_duration");
+  if (!new Set(["30m", "1h", "2h", "4h"]).has(session)) fail("invalid_session_duration");
   return session;
 }
 
@@ -245,6 +245,11 @@ function selfTest() {
     let rejected = false;
     try { normalizeHostname(bad); } catch { rejected = true; }
     if (!rejected) fail("self_test_bad_hostname_accepted");
+  }
+  for (const bad of ["5m", "8h", "1d"]) {
+    let rejected = false;
+    try { normalizeSession(bad); } catch { rejected = true; }
+    if (!rejected) fail("self_test_bad_session_accepted");
   }
   console.log("Cloudflare SSH provisioner self-test: PASS");
 }
