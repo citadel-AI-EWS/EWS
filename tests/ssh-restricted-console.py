@@ -23,12 +23,15 @@ for node in ast.walk(tree):
     if isinstance(node, ast.ImportFrom):
         require(node.module != "subprocess", "restricted SSH console imports subprocess")
     if isinstance(node, ast.Call):
-        name = ""
         if isinstance(node.func, ast.Name):
-            name = node.func.id
-        elif isinstance(node.func, ast.Attribute):
-            name = node.func.attr
-        require(name not in {"system", "popen", "Popen", "run", "call", "check_call", "check_output", "eval", "exec"}, f"forbidden execution primitive: {name}")
+            require(node.func.id not in {"eval", "exec"}, f"forbidden execution primitive: {node.func.id}")
+        elif isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
+            owner, name = node.func.value.id, node.func.attr
+            require(
+                not (owner == "os" and name in {"system", "popen"})
+                and not (owner == "subprocess" and name in {"Popen", "run", "call", "check_call", "check_output"}),
+                f"forbidden execution primitive: {owner}.{name}",
+            )
 
 spec = importlib.util.spec_from_file_location("citadel_ssh_console", SOURCE)
 require(spec is not None and spec.loader is not None, "unable to load restricted SSH console")
