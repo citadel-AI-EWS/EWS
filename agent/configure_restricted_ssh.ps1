@@ -555,6 +555,7 @@ if (-not $SkipCloudflared) {
       & $Cloudflared service install $PlainTunnelToken *> $null
       if ($LASTEXITCODE -ne 0) { throw "cloudflared service install failed." }
       $State.cloudflared_service_created_by_citadel = $true
+      [System.IO.File]::WriteAllText($StatePath, (($State | ConvertTo-Json -Depth 4) + [Environment]::NewLine), (New-Object System.Text.UTF8Encoding($false)))
     } finally {
       $PlainTunnelToken = $null
     }
@@ -569,8 +570,12 @@ if (-not $SkipCloudflared) {
   }
   $CloudflaredReady = (Get-Service -Name cloudflared -ErrorAction Stop).Status -eq "Running"
 } else {
-  $State.cloudflared_service_preexisted = $null -ne (Get-Service -Name cloudflared -ErrorAction SilentlyContinue)
-  $CloudflaredReady = $State.cloudflared_service_preexisted
+  $ExistingCloudflaredNow = $null -ne (Get-Service -Name cloudflared -ErrorAction SilentlyContinue)
+  $PriorCreatedCloudflared = $ExistingBootstrap -and $null -ne $PriorBootstrapState -and
+    ($PriorBootstrapState.cloudflared_service_created_by_citadel -eq $true)
+  $State.cloudflared_service_created_by_citadel = [bool]$PriorCreatedCloudflared
+  $State.cloudflared_service_preexisted = [bool]($ExistingCloudflaredNow -and -not $PriorCreatedCloudflared)
+  $CloudflaredReady = $ExistingCloudflaredNow
 }
 
 [System.IO.File]::WriteAllText($StatePath, (($State | ConvertTo-Json -Depth 4) + [Environment]::NewLine), (New-Object System.Text.UTF8Encoding($false)))
