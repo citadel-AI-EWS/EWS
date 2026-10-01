@@ -190,3 +190,22 @@ read-only operational telemetry.
 Signed node requests from agent 0.3.10 and later include a UUIDv4 `x-node-request-id` header. The request id is part of the Ed25519 canonical request between the timestamp and body hash. The Controller stores recent per-node request ids and rejects reuse with `409 replayed_request`.
 
 For compatibility during rollout, nodes older than 0.3.10 may continue using the previous signature form inside the existing timestamp window. Once a node reports agent 0.3.10 or later, `x-node-request-id` is mandatory.
+
+## Hub node management
+
+`POST /api/v1/architect/node-groups` creates a named group and assigns the selected
+nodes in one transaction. The authenticated Architect must have operate permission.
+Send `{ "name": "Europe team", "category": "geography", "node_ids": ["node_1", "node_2"] }`.
+Categories are `name`, `geography`, `work`, `specialty`, and `other`; up to 50 node IDs
+are accepted. Each node belongs to one group; regrouping preserves its existing
+enterprise site. `GET /api/v1/architect/machines` returns `groups` and each node's
+`group_id`, so labels and filtering survive page reloads. Creating a group does not
+change the node's execution role or scheduling policy.
+
+`DELETE /api/v1/architect/nodes/{node_id}` requires owner/admin permission and
+`{ "confirmation": "DELETE_NODE" }`. It revokes the node registration and removes
+the node from active lists while retaining task/report history and an audit event.
+It does not uninstall software from the machine. Active commands, assignments, or
+planned/running work items cause `409 node_busy`; a busy node remains registered.
+A removed agent cannot reconnect with the revoked identity; returning it requires
+a new enrollment identity. No nodes are removed by deploying these features.

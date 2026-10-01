@@ -118,6 +118,7 @@ export function requiredArchitectPermission(method, pathname) {
     return "admin";
   }
   if (upper === "GET" || upper === "HEAD") return "read";
+  if (upper === "DELETE" && /^\/api\/v1\/architect\/nodes\/[^/]+$/.test(path)) return "admin";
   if (
     path.startsWith("/api/v1/architect/security/") ||
     path === "/api/v1/architect/update-all" ||
