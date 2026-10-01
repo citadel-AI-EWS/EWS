@@ -7,7 +7,7 @@ SSH в CITADEL предназначен для управляемых компь
 Целевая цепочка:
 
 ```text
-Hub → Cloudflare Access → Cloudflare Tunnel → localhost:22 → OpenSSH → ForceCommand → ssh_restricted_console.py
+Hub → Cloudflare Access → Cloudflare Tunnel → localhost:22 → OpenSSH → ForceCommand → restricted CITADEL console
 ```
 
 Публичный TCP/22 на компьютере не требуется.
@@ -36,7 +36,8 @@ SSH localhost:22
 
 1. для выбранной ноды сохранены hostname + username;
 2. агент подтвердил, что `sshd` слушает порт 22 **только на loopback**, а не на `0.0.0.0`/LAN;
-3. агент видит запущенный `cloudflared`.
+3. агент видит запущенный `cloudflared`;
+4. на Windows агент подтвердил CITADEL bootstrap-state, установленную restricted console, Cloudflare CA **public** key и управляемый `ForceCommand`.
 
 Hub открывает защищённый Cloudflare browser terminal в отдельном окне/вкладке. Он не проксирует SSH-байты через D1/Worker.
 
@@ -81,15 +82,25 @@ Match User citadel-operator
     GatewayPorts no
 ```
 
-Для Windows используется тот же принцип: `ForceCommand` должен указывать на Python из установленного CITADEL release и `ssh_restricted_console.py`. Конкретный путь зависит от активного versioned release; его нельзя зашивать в Cloudflare или Hub.
+Для Windows используется отдельная стабильная console `C:\ProgramData\CitadelEWS\ssh\CitadelSshConsole.exe`. Она компилируется локально из hash-pinned `CitadelSshConsole.cs`, не запускает `cmd.exe`, PowerShell или произвольные дочерние процессы и реализует тот же фиксированный allow-list.
+
+Однократный `configure_restricted_ssh.ps1` выполняется с UAC/admin только для системной подготовки: Microsoft OpenSSH Server, отдельный непривилегированный пользователь, `ListenAddress 127.0.0.1`, `AllowUsers`, Cloudflare CA **public** key, `ForceCommand`, отключение password authentication/forwarding/tunneling и отключение стандартного inbound firewall rule. Если OpenSSH уже существовал до CITADEL, bootstrap без явного `-ForceLoopback` отказывается переписывать конфигурацию.
 
 После изменения sshd configuration конфигурацию следует проверить штатными средствами OpenSSH перед reload/restart.
 
 ## Agent / Controller contract
 
-Agent 0.3.26 сообщает capability `ssh_probe_readonly` и раз в несколько минут отправляет read-only readiness snapshot. Команда `ssh_probe` — подписанная Controller-команда без payload, которая только заставляет агента немедленно обновить readiness heartbeat.
+Agent 0.3.27 продолжает capability `ssh_probe_readonly`, отправляет SSH readiness v2 и умеет принимать два новых подписанных update-asset: `CitadelSshConsole.cs` и `configure_restricted_ssh.ps1`. Команда `ssh_probe` остаётся read-only и только заставляет немедленно обновить readiness heartbeat.
 
-Restricted console встроена в agent 0.3.26 как hash-pinned payload и материализуется рядом с агентом. Поэтому обновление существующей 0.3.25 ноды до 0.3.26 не требует добавлять новый тип update-файла.
+`0.3.27` — совместимый bridge-релиз: существующий `0.3.26` принимает его через старый набор v1/v2. После перехода на `0.3.27` следующий asset-релиз может штатно доставить Windows SSH bootstrap через обычный hash-verified update, без непроверенных download-скриптов и без скрытой сетевой зависимости. Свежий Windows installer `0.3.27` уже содержит эти assets.
+
+## Windows bootstrap security model
+
+Hub не передаёт bootstrap-пароль, приватный SSH key, Cloudflare Tunnel token или CA private key. Кнопка **Копировать Windows bootstrap** доступна только если сама нода сообщила capability `windows_restricted_ssh_bootstrap` — то есть assets реально присутствуют рядом с агентом.
+
+Bootstrap просит локально только SSH username и Cloudflare SSH CA **public** key. Созданный CITADEL SSH user не состоит в Administrators; его случайный локальный пароль не выводится и для SSH отключён через `AuthenticationMethods publickey` + `PasswordAuthentication no`. `sshd_config` сначала резервируется, затем проверяется через `sshd.exe -t`; при опасном non-loopback listener исходная конфигурация восстанавливается.
+
+При удалении CITADEL основной Windows uninstaller сначала вызывает SSH cleanup. Он восстанавливает исходный `sshd_config`, удаляет только созданного CITADEL SSH user и CITADEL SSH artifacts, но не удаляет Microsoft OpenSSH feature целиком.
 
 ## Что остаётся внешней настройкой
 
