@@ -210,6 +210,7 @@ jobs:
             }
           }
           Remove-Item Env:SSH_ORIGINAL_COMMAND -ErrorAction SilentlyContinue
+          $global:LASTEXITCODE = 0
           Write-Host "Restricted SSH console compile/allow-list: OK"
 
       - name: Validate restricted SSH bootstrap policy
