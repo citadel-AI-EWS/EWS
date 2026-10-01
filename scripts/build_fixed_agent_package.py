@@ -329,6 +329,7 @@ def build() -> Path:
         "ssh_restricted_console.py",
         "ssh_configurator.py",
         "ssh_prepare_windows.ps1",
+        "ssh_prepare_windows.py",
         "requirements.txt",
         "requirements-win32.txt",
     ):
@@ -372,6 +373,10 @@ def build() -> Path:
     ssh_bootstrap_hash = sha256(ssh_bootstrap)
     if f'$ExpectedSshWindowsBootstrapSha256 = "{ssh_bootstrap_hash}"' not in setup_text:
         raise RuntimeError("setup_windows.ps1 SSH bootstrap hash pin does not match repository source")
+    ssh_engine = STAGE / "ssh_prepare_windows.py"
+    ssh_engine_hash = sha256(ssh_engine)
+    if f'$ExpectedSshWindowsEngineSha256 = "{ssh_engine_hash}"' not in setup_text:
+        raise RuntimeError("setup_windows.ps1 SSH engine hash pin does not match repository source")
     if '$ReleaseVersion = "0.3.26"' not in setup_text:
         raise RuntimeError("setup_windows.ps1 release version is not 0.3.26")
     write_extras()
