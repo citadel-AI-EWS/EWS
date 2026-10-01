@@ -3,7 +3,7 @@
 
 The builder packages the checked-in reviewed agent release without mutating source,
 validates release pins, and emits one ZIP containing every install file.
-It deliberately does not add SSH or arbitrary remote execution.
+It packages the reviewed restricted-SSH bootstrap assets but never adds arbitrary remote execution.
 """
 from __future__ import annotations
 
