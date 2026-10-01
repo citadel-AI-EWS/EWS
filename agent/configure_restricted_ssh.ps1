@@ -18,6 +18,13 @@ function Test-IsAdministrator {
   return $Principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Get-OptionalProperty($Object, [string]$Name, $DefaultValue = $null) {
+  if ($null -eq $Object) { return $DefaultValue }
+  $Property = $Object.PSObject.Properties[$Name]
+  if ($null -eq $Property) { return $DefaultValue }
+  return $Property.Value
+}
+
 function Find-FrameworkCompiler {
   foreach ($Candidate in @(
     (Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"),
@@ -318,7 +325,7 @@ if ($Uninstall) {
   if ($State.created_user -eq $true -and $State.ssh_user) {
     Remove-LocalUser -Name ([string]$State.ssh_user) -ErrorAction SilentlyContinue
   }
-  if ($State.cloudflared_service_created_by_citadel -eq $true) {
+  if ((Get-OptionalProperty -Object $State -Name "cloudflared_service_created_by_citadel" -DefaultValue $false) -eq $true) {
     $Cloudflared = Find-Cloudflared
     if ($null -ne $Cloudflared) {
       & $Cloudflared service uninstall *> $null
@@ -358,6 +365,8 @@ $Capability = Get-WindowsCapability -Online -Name "OpenSSH.Server~~~~0.0.1.0"
 $OpenSshWasInstalled = $Capability.State -eq "Installed"
 $ExistingBootstrap = Test-Path -LiteralPath $StatePath
 $PriorBootstrapState = if ($ExistingBootstrap) { Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
+$PriorCloudflaredCreated = [bool](Get-OptionalProperty -Object $PriorBootstrapState -Name "cloudflared_service_created_by_citadel" -DefaultValue $false)
+$PriorCloudflaredPreexisted = [bool](Get-OptionalProperty -Object $PriorBootstrapState -Name "cloudflared_service_preexisted" -DefaultValue $false)
 
 $ServiceStartModeBefore = "Manual"
 $ServiceWasRunningBefore = $false
@@ -530,8 +539,8 @@ $State = [ordered]@{
   firewall_rule_was_enabled_before = $FirewallWasEnabledBefore
   force_command = "C:/ProgramData/CitadelEWS/ssh/CitadelSshConsole.exe"
   ca_public_key_path = $CaPath
-  cloudflared_service_created_by_citadel = $false
-  cloudflared_service_preexisted = $false
+  cloudflared_service_created_by_citadel = $PriorCloudflaredCreated
+  cloudflared_service_preexisted = $PriorCloudflaredPreexisted
   configured_at = (Get-Date).ToUniversalTime().ToString("o")
 }
 [System.IO.File]::WriteAllText($StatePath, (($State | ConvertTo-Json -Depth 4) + [Environment]::NewLine), (New-Object System.Text.UTF8Encoding($false)))
@@ -539,8 +548,7 @@ $State = [ordered]@{
 $CloudflaredReady = $false
 if (-not $SkipCloudflared) {
   $CloudflaredService = Get-Service -Name cloudflared -ErrorAction SilentlyContinue
-  $PriorCreatedCloudflared = $ExistingBootstrap -and $null -ne $PriorBootstrapState -and
-    ($PriorBootstrapState.cloudflared_service_created_by_citadel -eq $true)
+  $PriorCreatedCloudflared = $ExistingBootstrap -and $PriorCloudflaredCreated
 
   if ($null -ne $CloudflaredService -and -not $PriorCreatedCloudflared) {
     throw "A pre-existing cloudflared Windows service is present. CITADEL will not overwrite an unknown tunnel service; re-run with -SkipCloudflared or review it manually."
@@ -571,8 +579,7 @@ if (-not $SkipCloudflared) {
   $CloudflaredReady = (Get-Service -Name cloudflared -ErrorAction Stop).Status -eq "Running"
 } else {
   $ExistingCloudflaredNow = $null -ne (Get-Service -Name cloudflared -ErrorAction SilentlyContinue)
-  $PriorCreatedCloudflared = $ExistingBootstrap -and $null -ne $PriorBootstrapState -and
-    ($PriorBootstrapState.cloudflared_service_created_by_citadel -eq $true)
+  $PriorCreatedCloudflared = $ExistingBootstrap -and $PriorCloudflaredCreated
   $State.cloudflared_service_created_by_citadel = [bool]$PriorCreatedCloudflared
   $State.cloudflared_service_preexisted = [bool]($ExistingCloudflaredNow -and -not $PriorCreatedCloudflared)
   $CloudflaredReady = $ExistingCloudflaredNow
