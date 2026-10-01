@@ -383,6 +383,20 @@ for column in ("report_type", "report_json", "report_sha256", "report_size_bytes
     if column not in columns:
         raise SystemExit(f"fresh migration chain missing results.{column}")
 
+ssh_columns = {
+    row[1]
+    for row in db.execute("PRAGMA table_info(node_ssh_state)")
+}
+for column in (
+    "restricted_bootstrap_state_present",
+    "restricted_console_installed",
+    "cloudflare_ca_public_key_present",
+    "sshd_force_command_managed",
+    "restricted_policy_ready",
+):
+    if column not in ssh_columns:
+        raise SystemExit(f"fresh migration chain missing node_ssh_state.{column}")
+
 print("Fresh D1 migration chain: OK")
 PY
 
