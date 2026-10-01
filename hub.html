@@ -722,7 +722,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       $("sshLight").classList.toggle("ready",configured&&localReady);
       $("sshMode").textContent=!sshNodeId?"SELECT NODE":configured&&localReady?"READY":configured?"CONFIGURED":"NOT CONFIGURED";
       $("sshStateText").textContent=!sshNodeId?"Выберите ноду.":localReady?(configured?"Локальный SSH и cloudflared готовы; можно открыть Browser SSH.":"Нода локально готова; сохраните hostname и username."):(sshState?.observed_at?"Локальная SSH-готовность не подтверждена. Нажмите «Проверить SSH».":"SSH-состояние этой ноды ещё не получено.");
-      $("sshRuntime").textContent=!sshNodeId?"Выберите ноду и выполните проверку SSH.":`sshd localhost:22: ${sshState?.sshd_listening_local?"YES":"NO"} · cloudflared: ${sshState?.cloudflared_running?"RUNNING":sshState?.cloudflared_installed?"INSTALLED":"NOT FOUND"} · observed: ${sshState?.observed_at||"—"}`;
+      $("sshRuntime").textContent=!sshNodeId?"Выберите ноду и выполните проверку SSH.":`sshd localhost:22: ${sshState?.sshd_listening_local?"YES":"NO"} · loopback-only: ${sshState?.sshd_exposure_verified?(sshState?.sshd_loopback_only?"YES":"NO"):"UNVERIFIED"} · cloudflared: ${sshState?.cloudflared_running?"RUNNING":sshState?.cloudflared_installed?"INSTALLED":"NOT FOUND"} · observed: ${sshState?.observed_at||"—"}`;
       $("sshCommand").textContent=configured?`ssh -o ProxyCommand="cloudflared access ssh --hostname %h" ${user}@${host}`:"Cloudflare Access hostname + SSH user are required.";
       $("saveSshButton").disabled=!sshNodeId||!architectToken||!configured;
       $("probeSshButton").disabled=!sshNodeId||!architectToken;
