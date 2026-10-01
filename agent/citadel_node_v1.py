@@ -49,7 +49,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.26"
+VERSION = "0.3.27"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -1036,6 +1036,97 @@ def network_doctor_snapshot(controller_url: str) -> dict[str, Any]:
     }
 
 
+
+def ssh_managed_config_snapshot() -> dict[str, Any]:
+    """Verify that the local sshd config still enforces the CITADEL restricted console."""
+    if os.name == "nt":
+        root = Path(os.environ.get("PROGRAMDATA") or r"C:\ProgramData")
+        config_path = root / "ssh" / "sshd_config"
+    else:
+        config_path = Path("/etc/ssh/sshd_config")
+    try:
+        raw_bytes = config_path.read_bytes()
+    except OSError:
+        return {
+            "config_path": str(config_path),
+            "managed_global": False,
+            "managed_user": False,
+            "restricted_force_command": False,
+            "forwarding_disabled": False,
+            "managed_username": None,
+            "ready": False,
+        }
+    if not raw_bytes or len(raw_bytes) > 512 * 1024:
+        return {
+            "config_path": str(config_path),
+            "managed_global": False,
+            "managed_user": False,
+            "restricted_force_command": False,
+            "forwarding_disabled": False,
+            "managed_username": None,
+            "ready": False,
+        }
+    try:
+        text = raw_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return {
+            "config_path": str(config_path),
+            "managed_global": False,
+            "managed_user": False,
+            "restricted_force_command": False,
+            "forwarding_disabled": False,
+            "managed_username": None,
+            "ready": False,
+        }
+
+    global_match = re.search(
+        r"(?ms)^# BEGIN CITADEL EWS SSH GLOBAL\s*$"
+        r"(.*?)"
+        r"^# END CITADEL EWS SSH GLOBAL\s*$",
+        text,
+    )
+    user_match = re.search(
+        r"(?ms)^# BEGIN CITADEL EWS SSH USER\s*$"
+        r"(.*?)"
+        r"^# END CITADEL EWS SSH USER\s*$",
+        text,
+    )
+    global_block = global_match.group(1) if global_match else ""
+    user_block = user_match.group(1) if user_match else ""
+    username_match = re.search(
+        r"(?mi)^\s*Match\s+User\s+([A-Za-z0-9][A-Za-z0-9._-]{0,63})\s*$",
+        user_block,
+    )
+    global_ready = bool(
+        global_match
+        and re.search(r"(?mi)^\s*Port\s+22\s*$", global_block)
+        and re.search(r"(?mi)^\s*ListenAddress\s+127\.0\.0\.1\s*$", global_block)
+    )
+    force_command = bool(
+        re.search(r"(?mi)^\s*ForceCommand\s+.+ssh_restricted_console\.py.+--config\s+", user_block)
+    )
+    forwarding_disabled = all(
+        re.search(pattern, user_block)
+        for pattern in (
+            r"(?mi)^\s*AllowTcpForwarding\s+no\s*$",
+            r"(?mi)^\s*X11Forwarding\s+no\s*$",
+            r"(?mi)^\s*PermitTunnel\s+no\s*$",
+            r"(?mi)^\s*GatewayPorts\s+no\s*$",
+        )
+    )
+    managed_username = username_match.group(1) if username_match else None
+    ready = bool(global_ready and user_match and managed_username and force_command and forwarding_disabled)
+    return {
+        "config_path": str(config_path),
+        "managed_global": bool(global_match),
+        "managed_user": bool(user_match),
+        "restricted_force_command": force_command,
+        "forwarding_disabled": forwarding_disabled,
+        "managed_username": managed_username,
+        "ready": ready,
+    }
+
+
 def ssh_runtime_snapshot() -> dict[str, Any]:
     """Read-only SSH/Cloudflare readiness for Zero Trust browser access."""
     ssh_client = shutil.which("ssh") or shutil.which("ssh.exe")
@@ -1078,13 +1169,7 @@ def ssh_runtime_snapshot() -> dict[str, Any]:
     except (psutil.AccessDenied, OSError):
         exposure_verified = False
     listener_ips = sorted(set(listener_ips))
-    loopback_only = bool(
-        exposure_verified
-        and listener_ips
-        and all(ipaddress.ip_address(value).is_loopback for value in listener_ips)
-    )
-
-    return {
+    loopback_only = bool(\n        exposure_verified\n        and listener_ips\n        and all(ipaddress.ip_address(value).is_loopback for value in listener_ips)\n    )\n    managed = ssh_managed_config_snapshot()\n\n    return {
         "schema": "citadel.ssh-readiness.v1",
         "transport": "cloudflare_access_browser_ssh",
         "bind_target": "localhost:22",
@@ -1096,7 +1181,16 @@ def ssh_runtime_snapshot() -> dict[str, Any]:
         "sshd_loopback_only": loopback_only,
         "cloudflared_installed": bool(cloudflared),
         "cloudflared_running": cloudflared_running,
-        "browser_terminal_local_ready": bool(local_port_open and loopback_only and cloudflared_running),
+        "restricted_force_command": bool(managed.get("restricted_force_command")),
+        "forwarding_disabled": bool(managed.get("forwarding_disabled")),
+        "managed_username": managed.get("managed_username"),
+        "managed_config_path": managed.get("config_path"),
+        "browser_terminal_local_ready": bool(
+            local_port_open
+            and loopback_only
+            and cloudflared_running
+            and managed.get("ready")
+        ),
         "private_keys_on_hub": False,
         "recommended_restricted_commands": [
             "help",
