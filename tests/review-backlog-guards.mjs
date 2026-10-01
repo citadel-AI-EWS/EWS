@@ -74,7 +74,8 @@ need(sshBootstrapMigration.includes("restricted_policy_ready"), "SSH bootstrap r
 need(!sshBootstrapMigration.toLowerCase().includes("private_key"), "SSH bootstrap migration must not store private keys");
 need(windowsSshBootstrap.includes("ListenAddress 127.0.0.1"), "Windows SSH bootstrap must bind loopback only");
 need(windowsSshBootstrap.includes("AllowUsers $SshUser"), "Windows SSH bootstrap must restrict daemon to the dedicated user");
-need(windowsSshBootstrap.includes("PasswordAuthentication no"), "Windows SSH bootstrap must disable password auth");
+need(windowsSshBootstrap.includes("PasswordAuthentication no") && windowsSshBootstrap.includes("KbdInteractiveAuthentication no"), "Windows SSH bootstrap must disable password and keyboard-interactive auth");
+need(windowsSshBootstrap.includes("AllowAgentForwarding no"), "Windows SSH bootstrap must disable agent forwarding");
 need(windowsSshBootstrap.includes("AllowTcpForwarding no") && windowsSshBootstrap.includes("PermitTunnel no"), "Windows SSH bootstrap must disable forwarding/tunneling");
 need(windowsSshBootstrap.includes("Disable-NetFirewallRule"), "Windows SSH bootstrap must disable the public OpenSSH firewall rule");
 need(windowsSshBootstrap.includes("& $SshdExe -t -f $SshdConfig"), "Windows SSH bootstrap must validate sshd_config before restart");
