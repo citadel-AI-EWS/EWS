@@ -39,6 +39,7 @@ def build() -> Path:
         "citadel_node_v1.py",
         "citadel_node_v2.py",
         "windows_enterprise_probe.ps1",
+        "ssh_restricted_console.py",
         "requirements.txt",
         "setup_linux.sh",
         "Install Linux Node.sh",
