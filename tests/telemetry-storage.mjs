@@ -141,7 +141,7 @@ class Statement {
       state.logs = state.logs.filter((item) => Date.parse(item.received_at) >= cutoff);
       return { meta: { changes: before - state.logs.length } };
     }
-    if (this.sql.startsWith("DELETE FROM node_logs") && this.sql.includes("event_id NOT IN")) {
+    if (this.sql.startsWith("DELETE FROM node_logs") && this.sql.includes("(created_at, event_id) <")) {
       const [nodeId] = this.args;
       const selected = state.logs
         .filter((item) => item.node_id === nodeId)
@@ -155,6 +155,7 @@ class Statement {
       state.logs = state.logs.filter((item) => item.node_id !== nodeId || keep.has(item.event_id));
       return { meta: { changes: before - state.logs.length } };
     }
+    if (this.sql.startsWith("UPDATE project_work_items") || this.sql.startsWith("UPDATE architect_projects")) return {meta: {changes: 0}};
     throw new Error(`Unhandled run(): ${this.sql}`);
   }
 }

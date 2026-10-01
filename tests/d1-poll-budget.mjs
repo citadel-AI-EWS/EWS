@@ -157,11 +157,32 @@ function fleetProjection(nodes) {
 const four = fleetProjection(4);
 const twenty = fleetProjection(20);
 
+// Separate writes from reads: replay INSERT + eventual DELETE are charged even
+// for idle signed GETs. Include the table, PK and received_at index for each nonce
+// mutation, both last_seen indexes on nodes, and five-minute AI refreshes.
+const FREE_DAILY_ROWS_WRITTEN = 100_000;
+function writeProjection(nodes, sync = true) {
+  const requests = POLLS_PER_DAY * (sync ? 1 : 4);
+  const nonceWrites = requests * 2 * 3;
+  const heartbeatWrites = (86_400 / (sync ? 60 : 30)) * 3;
+  const aiWrites = (86_400 / (sync ? 300 : 30)) * 2;
+  const legacySnapshots = sync ? 0 : POLLS_PER_DAY * 3; // network + presence table/index
+  const total = nodes * (nonceWrites + heartbeatWrites + aiWrites + legacySnapshots);
+  return {nodes, projected_rows_written: total, daily_limit: FREE_DAILY_ROWS_WRITTEN,
+    usage_percent: total / FREE_DAILY_ROWS_WRITTEN * 100,
+    within_free_daily_write_limit: total <= FREE_DAILY_ROWS_WRITTEN};
+}
+const syncFour = writeProjection(4);
+assert.ok(syncFour.projected_rows_written <= FREE_DAILY_ROWS_WRITTEN * 0.9,
+  'four idle sync nodes must retain at least 10% daily write headroom');
+assert.equal(writeProjection(20).within_free_daily_write_limit, false,
+  'read headroom must never imply that twenty nodes fit the daily write quota');
+
 assert.ok(four.headroom_x >= 10, "4-node projection must keep >=10x D1 read headroom");
 assert.ok(twenty.headroom_x >= 10, "20-node projection must keep >=10x D1 read headroom");
 
 console.log(JSON.stringify({
-  model: "citadel.d1-steady-poll-budget.v2",
+  model: "citadel.d1-steady-poll-budget.v3",
   assumptions: {
     poll_seconds: POLL_SECONDS,
     row_equivalents_per_agent_poll: ROW_EQUIVALENTS_PER_POLL,
@@ -169,7 +190,9 @@ console.log(JSON.stringify({
     public_hub_refresh_seconds: PUBLIC_HUB_REFRESH_SECONDS,
     machine_row_equivalents_per_node: MACHINE_ROW_EQUIVALENTS_PER_NODE,
     presence_row_equivalents_per_node: PRESENCE_ROW_EQUIVALENTS_PER_NODE,
-    note: "Projection covers steady idle/control polling plus one continuously visible secure Hub and one continuously visible public Hub. Hidden Hub tabs perform no polling. Production Cloudflare Analytics is authoritative."
+    note: "Read projection retains the legacy three-poll estimate for comparison. Write projection covers stable 30s sync polling with 60s persisted heartbeat, unchanged network/presence/hardware, 5m AI refresh and nonce index writes. It excludes tasks, logs, startup, browser auth and other databases. Production Cloudflare Analytics is authoritative; 20 nodes do not fit the Free daily write quota."
   },
-  fleets: [four, twenty]
+  fleets: [four, twenty],
+  writes: {legacy_four_nodes: writeProjection(4, false), sync_four_nodes: syncFour,
+    sync_twenty_nodes: writeProjection(20)}
 }, null, 2));

@@ -345,11 +345,16 @@ export async function authenticateNode(request, env, nodeId, url, bodyBytes) {
     if ((nonce?.meta?.changes || 0) !== 1) {
       throw new TelemetryError(409, "replayed_request");
     }
-    await env.DB.prepare(
-      "DELETE FROM node_request_nonces WHERE datetime(received_at) < datetime('now', '-10 minutes')"
-    ).run();
+    if (requestId.endsWith("0")) await pruneNodeRequestNonces(env);
   }
   return node;
+}
+
+export async function pruneNodeRequestNonces(env) {
+  await ensureNodeRequestNonceStorage(env);
+  await env.DB.prepare(
+    "DELETE FROM node_request_nonces WHERE received_at < datetime('now', '-10 minutes')"
+  ).run();
 }
 
 function redactString(value) {

@@ -203,7 +203,7 @@ for (const required of [
   "lmstudio_model_load",
   "system_reboot",
   "system_shutdown",
-  "active?5000:60000"
+  "active||fleetOperation?10000:60000"
 ]) {
   assert.ok(operations.includes(required), "Operations capability missing: " + required);
 }
@@ -670,7 +670,7 @@ assert.match(operations, /🖥️/);
 assert.match(operations, /id="lmLiveStatus"/);
 assert.match(operations, /startDetailProgressWatch/);
 assert.match(operations, /waiting_agent/);
-assert.match(operations, /active\?5000:60000/);
+assert.match(operations, /active\|\|fleetOperation\?10000:60000/);
 assert.match(operations, /Официальный установщик LM Studio сейчас работает/);
 
 {
