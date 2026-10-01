@@ -22,7 +22,7 @@ $ExpectedServiceHelperSha256 = "e0e66f5a27018a283c65d42e6ead93e382706a163da682e6
 $ExpectedEnterpriseProbeSha256 = "0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
 $ExpectedSshConsoleSha256 = "10050339a74cad33410aca0e109d800d29b01a8f3238d8ff7ce016fbd099dc8c"
 $ExpectedRestrictedSshConsoleSourceSha256 = "026d1d59420ce4a480bfd7d4027a4b54dd178600e08ae85acfd7f6f8bff4e96b"
-$ExpectedRestrictedSshBootstrapSha256 = "c3342a79081d4727bb19a7ad7471da4a00c877b58178e72f2c5847878953ecf0"
+$ExpectedRestrictedSshBootstrapSha256 = "9c2db2d5cbf42dc3c6df1e6df6cb94b5f45e0998f1772c4071d8445241d291d9"
 
 function Get-Sha256([string]$Path) {
   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
