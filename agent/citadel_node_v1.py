@@ -49,13 +49,13 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.26"
+VERSION = "0.3.27"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe"}
 CORE_UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
-UPDATE_FILE_NAMES = CORE_UPDATE_FILE_NAMES | {"windows_enterprise_probe.ps1"}
+UPDATE_FILE_NAMES = CORE_UPDATE_FILE_NAMES | {"windows_enterprise_probe.ps1", "CitadelSshConsole.cs", "configure_restricted_ssh.ps1"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
 COMMAND_MAX_AGE_SECONDS = 15 * 60
 SERVICE_RESTART_EXIT_CODE = 75
@@ -1036,6 +1036,60 @@ def network_doctor_snapshot(controller_url: str) -> dict[str, Any]:
     }
 
 
+def _windows_restricted_ssh_policy_snapshot() -> dict[str, Any]:
+    if os.name != "nt":
+        return {
+            "restricted_bootstrap_state_present": False,
+            "restricted_console_installed": False,
+            "cloudflare_ca_public_key_present": False,
+            "sshd_force_command_managed": False,
+            "restricted_policy_ready": False,
+        }
+    program_data = Path(os.environ.get("PROGRAMDATA") or r"C:\ProgramData")
+    state_root = program_data / "CitadelEWS" / "ssh"
+    state_path = state_root / "bootstrap-state.json"
+    console_path = state_root / "CitadelSshConsole.exe"
+    ca_path = program_data / "ssh" / "citadel_cloudflare_ca.pub"
+    sshd_config = program_data / "ssh" / "sshd_config"
+    state = load_json(state_path, {}) if state_path.is_file() else {}
+    state_present = bool(
+        isinstance(state, dict)
+        and state.get("schema") == "citadel.restricted-ssh-bootstrap.v1"
+        and isinstance(state.get("ssh_user"), str)
+        and bool(state.get("ssh_user"))
+    )
+    config_text = ""
+    try:
+        if sshd_config.is_file():
+            config_text = sshd_config.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        config_text = ""
+    ssh_user = str(state.get("ssh_user") or "") if isinstance(state, dict) else ""
+    managed = bool(ssh_user) and all(token in config_text for token in (
+        "# BEGIN CITADEL SSH GLOBAL",
+        "ListenAddress 127.0.0.1",
+        f"AllowUsers {ssh_user}",
+        "TrustedUserCAKeys C:/ProgramData/ssh/citadel_cloudflare_ca.pub",
+        "# BEGIN CITADEL SSH USER",
+        f"Match User {ssh_user}",
+        "ForceCommand C:/ProgramData/CitadelEWS/ssh/CitadelSshConsole.exe",
+        "AuthenticationMethods publickey",
+        "PasswordAuthentication no",
+        "AllowAgentForwarding no",
+        "AllowTcpForwarding no",
+        "GatewayPorts no",
+    ))
+    console_installed = console_path.is_file()
+    ca_present = ca_path.is_file()
+    return {
+        "restricted_bootstrap_state_present": state_present,
+        "restricted_console_installed": console_installed,
+        "cloudflare_ca_public_key_present": ca_present,
+        "sshd_force_command_managed": managed,
+        "restricted_policy_ready": bool(state_present and console_installed and ca_present and managed),
+    }
+
+
 def ssh_runtime_snapshot() -> dict[str, Any]:
     """Read-only SSH/Cloudflare readiness for Zero Trust browser access."""
     ssh_client = shutil.which("ssh") or shutil.which("ssh.exe")
@@ -1083,9 +1137,11 @@ def ssh_runtime_snapshot() -> dict[str, Any]:
         and listener_ips
         and all(ipaddress.ip_address(value).is_loopback for value in listener_ips)
     )
+    policy = _windows_restricted_ssh_policy_snapshot()
+    policy_gate = policy["restricted_policy_ready"] if os.name == "nt" else True
 
     return {
-        "schema": "citadel.ssh-readiness.v1",
+        "schema": "citadel.ssh-readiness.v2",
         "transport": "cloudflare_access_browser_ssh",
         "bind_target": "localhost:22",
         "ssh_client_available": bool(ssh_client),
@@ -1096,7 +1152,8 @@ def ssh_runtime_snapshot() -> dict[str, Any]:
         "sshd_loopback_only": loopback_only,
         "cloudflared_installed": bool(cloudflared),
         "cloudflared_running": cloudflared_running,
-        "browser_terminal_local_ready": bool(local_port_open and loopback_only and cloudflared_running),
+        **policy,
+        "browser_terminal_local_ready": bool(local_port_open and loopback_only and cloudflared_running and policy_gate),
         "private_keys_on_hub": False,
         "recommended_restricted_commands": [
             "help",
@@ -1115,7 +1172,6 @@ def ssh_runtime_snapshot() -> dict[str, Any]:
             "exit",
         ],
     }
-
 
 
 def _ssh_restricted_console_path() -> Path:
@@ -1426,6 +1482,11 @@ class Agent:
     @property
     def capabilities(self) -> list[str]:
         capabilities = set(HANDLERS) | {"hardware_doctor_readonly", "lmstudio_remote", "project_text", "project_python", "ssh_probe_readonly"}
+        if os.name == "nt" and all(
+            (Path(__file__).resolve().parent / name).is_file()
+            for name in ("CitadelSshConsole.cs", "configure_restricted_ssh.ps1")
+        ):
+            capabilities.add("windows_restricted_ssh_bootstrap")
         if self.config.prevent_automatic_sleep:
             capabilities.add("always_on_guard")
         if self.config.network_recovery_enabled:

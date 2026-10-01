@@ -20,6 +20,11 @@ const hub = fs.readFileSync("hub.html", "utf8");
 const operations = fs.readFileSync("operations.html", "utf8");
 const sshConsole = fs.readFileSync("agent/ssh_restricted_console.py", "utf8");
 const sshMigration = fs.readFileSync("migrations/0020_ssh_zero_trust.sql", "utf8");
+const sshBootstrapMigration = fs.readFileSync("migrations/0021_ssh_bootstrap_readiness.sql", "utf8");
+const windowsSshConsole = fs.readFileSync("agent/CitadelSshConsole.cs", "utf8");
+const windowsSshBootstrap = fs.readFileSync("agent/configure_restricted_ssh.ps1", "utf8");
+const oneClickBuilder = fs.readFileSync("scripts/build_windows_oneclick.ps1", "utf8");
+const oneClickIss = fs.readFileSync("agent/windows/CitadelEWS.iss", "utf8");
 const deployWorkflow = fs.readFileSync(".github/workflows/deploy-cloudflare.yml", "utf8");
 need(index.includes("auto_enrollment_windows"), "global auto-enrollment window missing");
 need(index.includes("AUTO_ENROLL_MAX_NEW_PER_HOUR"), "enrollment hourly setting missing");
@@ -31,8 +36,8 @@ need(index.includes("LEFT JOIN node_numbers AS nn"), "Architect node number join
 need(!readme.includes("-EnrollmentToken"), "README still documents EnrollmentToken");
 need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_token");
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
-need(agentV1.includes('VERSION = "0.3.26"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.26"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.27"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.27"'), "v2 release not bumped");
 need(agentV1.includes("hardware_snapshot"), "node hardware snapshot missing");
 need(agentV1.includes("gpu_inventory"), "GPU/VRAM discovery missing");
 need(agentV1.includes('"hardware"'), "hardware heartbeat payload missing");
@@ -60,6 +65,36 @@ need(!sshMigration.toLowerCase().includes("private_key"), "SSH migration must no
 need(sshConsole.includes("ALLOWED_COMMANDS"), "restricted SSH allow-list missing");
 need(!sshConsole.includes("import subprocess"), "restricted SSH console must not import subprocess");
 need(!sshConsole.includes("shell=True"), "restricted SSH console must never enable a shell");
+need(agentV1.includes('"CitadelSshConsole.cs"') && agentV1.includes('"configure_restricted_ssh.ps1"'), "0.3.27 bridge must accept signed SSH bootstrap assets");
+need(agentV1.includes('"windows_restricted_ssh_bootstrap"'), "Windows SSH bootstrap capability missing");
+need(index.includes("restricted_policy_ready"), "Controller restricted SSH policy gate missing");
+need(index.includes("n.capabilities_json"), "Hub overview must expose node capabilities for bootstrap eligibility");
+need(hub.includes('id="copySshBootstrapButton"'), "Hub Windows SSH bootstrap action missing");
+need(hub.includes("windows_restricted_ssh_bootstrap"), "Hub must gate SSH bootstrap on reported capability");
+need(hub.includes("restricted_policy_ready"), "Hub restricted SSH policy status missing");
+need(sshBootstrapMigration.includes("restricted_policy_ready"), "SSH bootstrap readiness migration missing");
+need(!sshBootstrapMigration.toLowerCase().includes("private_key"), "SSH bootstrap migration must not store private keys");
+need(windowsSshBootstrap.includes("ListenAddress 127.0.0.1"), "Windows SSH bootstrap must bind loopback only");
+need(windowsSshBootstrap.includes("AllowUsers $SshUser"), "Windows SSH bootstrap must restrict daemon to the dedicated user");
+need(windowsSshBootstrap.includes("PasswordAuthentication no"), "Windows SSH bootstrap must disable password auth");
+need(windowsSshBootstrap.includes("AllowAgentForwarding no"), "Windows SSH bootstrap must disable agent forwarding");
+need(windowsSshBootstrap.includes("AllowTcpForwarding no") && windowsSshBootstrap.includes("GatewayPorts no"), "Windows SSH bootstrap must disable TCP forwarding and gateway ports");
+need(windowsSshBootstrap.includes("Disable-NetFirewallRule"), "Windows SSH bootstrap must disable the public OpenSSH firewall rule");
+need(windowsSshBootstrap.includes("& $SshdExe -t -f $SshdConfig"), "Windows SSH bootstrap must validate sshd_config before restart");
+need(!windowsSshBootstrap.includes("-ExecutionPolicy Bypass"), "Windows SSH bootstrap must not bypass PowerShell policy");
+need(windowsSshBootstrap.includes('"RemoteSigned"'), "Windows SSH bootstrap elevation must use process-only RemoteSigned policy");
+need(hub.includes("-ExecutionPolicy RemoteSigned") && !hub.includes("-ExecutionPolicy Bypass"), "Hub SSH bootstrap must use RemoteSigned without Bypass");
+need(oneClickIss.includes("-ExecutionPolicy RemoteSigned") && !oneClickIss.includes("-ExecutionPolicy Bypass"), "one-click SSH cleanup must use RemoteSigned without Bypass");
+for (const unsupported of ["KbdInteractiveAuthentication", "PermitTunnel", "X11Forwarding"]) {
+  need(!windowsSshBootstrap.includes(unsupported), `Windows OpenSSH unsupported directive returned: ${unsupported}`);
+}
+need(windowsSshBootstrap.includes("Windows OpenSSH did not generate sshd_config on first service start."), "fresh OpenSSH config generation guard missing");
+need(!windowsSshConsole.includes("Process.Start("), "Windows restricted SSH console must not spawn child processes");
+need(!windowsSshConsole.includes("UseShellExecute"), "Windows restricted SSH console must not enable shell execution");
+need(windowsSshConsole.includes("SSH_ORIGINAL_COMMAND"), "Windows restricted SSH console must support OpenSSH ForceCommand input");
+need(windowsSshBootstrap.includes("Resolve-AgentLayout") && windowsSshBootstrap.includes('"flat_oneclick"'), "Windows SSH bootstrap must support one-click flat layout");
+need(oneClickBuilder.includes('"CitadelSshConsole.cs"') && oneClickBuilder.includes('"configure_restricted_ssh.ps1"'), "one-click builder must package restricted SSH assets");
+need(oneClickIss.includes("configure_restricted_ssh.ps1") && oneClickIss.includes("-Uninstall"), "one-click uninstaller must clean restricted SSH state");
 need(setup.includes('ServiceName = "CitadelEWSNode"'), "Windows Core Service name missing");
 need(setup.includes('LegacyUserSid'), "original user SID preservation missing");
 need(setup.includes('Set-CitadelDirectoryAcl'), "Windows clean ACL reconstruction missing");
@@ -220,7 +255,7 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.26"'), "Controller release not bumped");
+need(index.includes('version: "0.3.27"'), "Controller release not bumped");
 console.log("Review backlog guards: PASS");
 
 need(agentV1.includes("lmstudio_heartbeat_probe_failed"), "routine heartbeat does not refresh LM Studio readiness");

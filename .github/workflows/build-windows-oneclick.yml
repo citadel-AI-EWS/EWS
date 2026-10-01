@@ -73,6 +73,7 @@ jobs:
         run: |
           $iss = Get-Content -LiteralPath agent/windows/CitadelEWS.iss -Raw
           $service = Get-Content -LiteralPath agent/windows/CitadelPortableService.cs -Raw
+          $builder = Get-Content -LiteralPath scripts/build_windows_oneclick.ps1 -Raw
           foreach ($forbidden in @(
             "winget",
             "pip install",
@@ -87,6 +88,14 @@ jobs:
           }
           if ($service.ToLowerInvariant().Contains("powershell.exe")) {
             throw "Portable service must not require PowerShell."
+          }
+          foreach ($asset in @("CitadelSshConsole.cs", "configure_restricted_ssh.ps1")) {
+            if (-not $builder.Contains($asset)) {
+              throw "One-click builder is missing restricted SSH asset: $asset"
+            }
+          }
+          if (-not $iss.Contains("configure_restricted_ssh.ps1") -or -not $iss.Contains("-Uninstall")) {
+            throw "One-click uninstaller is missing restricted SSH cleanup."
           }
           Write-Host "Target-PC bootstrap is offline and PowerShell-independent: PASS"
 
@@ -202,6 +211,11 @@ jobs:
 
           if (-not (Test-Path -LiteralPath $runtimePython)) { throw "Bundled Python runtime missing." }
           if (-not (Test-Path -LiteralPath $config)) { throw "Agent config missing." }
+          foreach ($asset in @("CitadelSshConsole.cs", "configure_restricted_ssh.ps1")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $agentRoot $asset))) {
+              throw "Installed one-click SSH bootstrap asset missing: $asset"
+            }
+          }
 
           $oldHome = $env:PYTHONHOME
           try {

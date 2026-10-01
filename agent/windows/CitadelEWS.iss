@@ -667,10 +667,27 @@ end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
-  Sc: string;
+  Sc, PowerShell, SshBootstrap, SshState, AppRoot, StateRoot: string;
 begin
   if CurUninstallStep = usUninstall then
   begin
+    SshState := ExpandConstant('{commonappdata}\CitadelEWS\ssh\bootstrap-state.json');
+    if FileExists(SshState) then
+    begin
+      SshBootstrap := ExpandConstant('{app}\configure_restricted_ssh.ps1');
+      if not FileExists(SshBootstrap) then
+        RaiseException('Restricted SSH bootstrap state exists but cleanup script is missing.');
+      PowerShell := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+      AppRoot := ExpandConstant('{app}');
+      StateRoot := ExpandConstant('{commonappdata}\CitadelEWS\state');
+      RequireExec(
+        PowerShell,
+        '-NoLogo -NoProfile -ExecutionPolicy RemoteSigned -File "' + SshBootstrap + '" -InstallRoot "' + AppRoot +
+          '" -StateRoot "' + StateRoot + '" -Uninstall',
+        'Restricted SSH cleanup failed'
+      );
+    end;
+
     Sc := ExpandConstant('{sys}\sc.exe');
     TryExec(Sc, 'stop {#ServiceName}');
     Sleep(1000);
