@@ -1,5 +1,6 @@
 import baseWorker, { expireStaleCommands, recoverStaleProjectAssignments } from "./index.js";
 import { runD1Guardian } from "./d1-guardian.js";
+import { pruneExpiredD1Bookkeeping } from "./d1-retention.js";
 import { json } from "./telemetry/common.js";
 import { isTelemetryPath, handleTelemetryRequest } from "./telemetry/router.js";
 import { ensureTelemetryStorage, pruneExpiredTelemetry } from "./telemetry/schema.js";
@@ -17,6 +18,10 @@ import {
 export default {
   async scheduled(_controller, env) {
     const controller = _controller;
+    if (controller?.cron === "23 2 * * *") {
+      const retention = await pruneExpiredD1Bookkeeping(env);
+      console.log(JSON.stringify({ event: "d1_daily_retention", ...retention }));
+    }
     if (controller?.cron === "*/5 * * * *") {
       try {
         await runD1Guardian(env, {
