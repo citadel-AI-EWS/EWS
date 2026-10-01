@@ -79,11 +79,13 @@ need(sshConfigurator.includes("ForceCommand"), "SSH configurator does not instal
 need(!sshConfigurator.includes("subprocess"), "SSH configurator must not execute subprocesses");
 need(sshWindowsBootstrap.includes("ssh_prepare_windows.py"), "Windows SSH PowerShell wrapper does not use the canonical engine");
 need(sshWindowsEngine.includes("sshd_config.original"), "Windows SSH bootstrap lacks rollback backup");
+need(sshWindowsEngine.includes("citadel-ews-backup"), "Windows SSH rollback material is not kept under the privileged OpenSSH tree");
 need(sshWindowsEngine.includes("psutil.net_connections"), "Windows SSH bootstrap lacks live listener verification");
 need(sshWindowsEngine.includes("shell=False"), "Windows SSH bootstrap must not invoke a shell");
 need(!sshWindowsEngine.includes("New-NetFirewallRule") && !sshWindowsEngine.includes("netsh advfirewall"), "Windows SSH bootstrap must not open a firewall port");
 need(sshWindowsEngine.includes("OpenSSH.Server~~~~0.0.1.0"), "Windows SSH bootstrap capability pin missing");
 need(sshLinuxBootstrap.includes("sshd_config.original"), "Linux SSH bootstrap lacks rollback backup");
+need(sshLinuxBootstrap.includes('SECURE_DIR="/etc/ssh/citadel-ews"'), "Linux SSH rollback material is not root-only under /etc/ssh");
 need(sshLinuxBootstrap.includes("127.0.0.1:22"), "Linux SSH bootstrap lacks loopback listener verification");
 need(!sshLinuxBootstrap.includes("ufw allow") && !sshLinuxBootstrap.includes("firewall-cmd --add-port"), "Linux SSH bootstrap must not open a firewall port");
 need(setup.includes("-ConfigureSsh"), "Windows installer lacks explicit SSH repair switch");
