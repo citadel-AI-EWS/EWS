@@ -309,7 +309,7 @@ if ($Uninstall) {
     if ($null -eq $SshBootstrapScript) {
       throw "Restricted SSH bootstrap state exists but cleanup script is unavailable; refusing to orphan sshd ForceCommand configuration."
     }
-    & powershell.exe -NoLogo -NoProfile -File $SshBootstrapScript -InstallRoot $InstallRoot -Uninstall
+    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy RemoteSigned -File $SshBootstrapScript -InstallRoot $InstallRoot -Uninstall
     if ($LASTEXITCODE -ne 0) { throw "Restricted SSH cleanup failed; CITADEL uninstall was stopped." }
   }
   Stop-CitadelServiceIfPresent
