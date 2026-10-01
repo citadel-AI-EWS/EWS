@@ -29,11 +29,21 @@ need(index.includes("LEFT JOIN node_numbers AS nn"), "Architect node number join
 need(!readme.includes("-EnrollmentToken"), "README still documents EnrollmentToken");
 need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_token");
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
-need(agentV1.includes('VERSION = "0.3.24"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.24"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.25"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.25"'), "v2 release not bumped");
 need(agentV1.includes("hardware_snapshot"), "node hardware snapshot missing");
 need(agentV1.includes("gpu_inventory"), "GPU/VRAM discovery missing");
 need(agentV1.includes('"hardware"'), "hardware heartbeat payload missing");
+need(agentV1.includes("hardware_doctor_snapshot"), "read-only Hardware Doctor missing");
+need(agentV1.includes("network_doctor_snapshot"), "Network Doctor missing");
+need(agentV1.includes('"hardware_doctor_readonly"'), "Hardware Doctor capability missing");
+need(agentV1.includes('"usb_scanning": False'), "Hardware Doctor must explicitly exclude USB scanning");
+need(agentV1.includes('"firmware_metadata_available"'), "NIC firmware metadata check missing");
+need(agentV1.includes('"vpd_metadata_available"'), "PCI/VPD metadata check missing");
+need(agentV1.includes('"controller_dns"'), "Network Doctor DNS stage missing");
+need(agentV1.includes('"controller_tcp"'), "Network Doctor Controller TCP stage missing");
+need(!agentV1.includes("eeupdate64e"), "firmware writer must not be embedded in agent");
+need(!agentV1.includes("iqvlinux"), "legacy low-level IQV driver must not be embedded in agent");
 need(setup.includes('ServiceName = "CitadelEWSNode"'), "Windows Core Service name missing");
 need(setup.includes('LegacyUserSid'), "original user SID preservation missing");
 need(setup.includes('Set-CitadelDirectoryAcl'), "Windows clean ACL reconstruction missing");
@@ -194,7 +204,7 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.24"'), "Controller release not bumped");
+need(index.includes('version: "0.3.25"'), "Controller release not bumped");
 console.log("Review backlog guards: PASS");
 
 need(agentV1.includes("lmstudio_heartbeat_probe_failed"), "routine heartbeat does not refresh LM Studio readiness");

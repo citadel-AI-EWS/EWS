@@ -49,7 +49,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.24"
+VERSION = "0.3.25"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -650,6 +650,389 @@ def local_network_addresses() -> dict[str, Any]:
     }
 
 
+def _doctor_powershell_json(command: str, timeout: int = 12) -> Any:
+    """Run a fixed, read-only PowerShell inventory query and decode JSON."""
+    if os.name != "nt":
+        return None
+    powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+    if not powershell:
+        return None
+    try:
+        result = subprocess.run(  # nosec B603
+            [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+            timeout=timeout,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+
+
+def _doctor_pci_ids(value: str) -> dict[str, str]:
+    text = str(value or "").upper()
+    found: dict[str, str] = {}
+    for key, pattern in (
+        ("vendor_id", r"(?:VEN|VID)_([0-9A-F]{4})"),
+        ("device_id", r"(?:DEV|PID)_([0-9A-F]{4})"),
+        ("subsystem_id", r"SUBSYS_([0-9A-F]{8})"),
+    ):
+        match = re.search(pattern, text)
+        if match:
+            found[key] = match.group(1)
+    return found
+
+
+def _doctor_local_interfaces() -> list[dict[str, Any]]:
+    try:
+        stats = psutil.net_if_stats()
+        addresses = psutil.net_if_addrs()
+    except Exception:
+        return []
+    link_family = getattr(psutil, "AF_LINK", None)
+    rows: list[dict[str, Any]] = []
+    for name, items in addresses.items():
+        lowered = name.lower()
+        if TAILSCALE_INTERFACE_MARKER in lowered or any(
+            token in lowered for token in VIRTUAL_INTERFACE_TOKENS
+        ):
+            continue
+        state = stats.get(name)
+        row: dict[str, Any] = {
+            "name": name[:120],
+            "is_up": bool(state.isup) if state is not None else None,
+            "speed_mbps": int(state.speed) if state is not None and state.speed >= 0 else None,
+            "mtu": int(state.mtu) if state is not None and state.mtu > 0 else None,
+            "ipv4": [],
+            "mac": None,
+        }
+        for item in items:
+            if item.family == socket.AF_INET:
+                try:
+                    address = ipaddress.ip_address(item.address)
+                except ValueError:
+                    continue
+                if not (
+                    address.is_loopback
+                    or address.is_link_local
+                    or address.is_multicast
+                    or address.is_unspecified
+                ):
+                    row["ipv4"].append(str(address))
+            elif link_family is not None and item.family == link_family:
+                row["mac"] = row["mac"] or _normalize_mac(str(item.address or ""))
+        if row["ipv4"] or row["mac"]:
+            rows.append(row)
+    return rows[:32]
+
+
+def _doctor_windows_network_devices() -> list[dict[str, Any]]:
+    decoded = _doctor_powershell_json(
+        "Get-CimInstance Win32_NetworkAdapter | "
+        "Where-Object {$_.PhysicalAdapter -eq $true} | "
+        "Select-Object Name,Manufacturer,MACAddress,Speed,PNPDeviceID,"
+        "NetConnectionID,NetConnectionStatus | ConvertTo-Json -Compress"
+    )
+    rows = decoded if isinstance(decoded, list) else ([decoded] if isinstance(decoded, dict) else [])
+    drivers_decoded = _doctor_powershell_json(
+        "Get-CimInstance Win32_PnPSignedDriver | "
+        "Where-Object {$_.DeviceClass -eq 'NET'} | "
+        "Select-Object DeviceName,Manufacturer,DriverVersion,DriverDate,DeviceID | "
+        "ConvertTo-Json -Compress"
+    )
+    drivers = drivers_decoded if isinstance(drivers_decoded, list) else (
+        [drivers_decoded] if isinstance(drivers_decoded, dict) else []
+    )
+    by_device_id = {
+        str(item.get("DeviceID") or "").upper(): item
+        for item in drivers
+        if isinstance(item, dict) and item.get("DeviceID")
+    }
+    result: list[dict[str, Any]] = []
+    for item in rows[:32]:
+        if not isinstance(item, dict):
+            continue
+        pnp_id = str(item.get("PNPDeviceID") or "")
+        driver = by_device_id.get(pnp_id.upper(), {})
+        speed = item.get("Speed")
+        row: dict[str, Any] = {
+            "name": str(item.get("NetConnectionID") or item.get("Name") or "")[:160],
+            "description": str(item.get("Name") or "")[:200] or None,
+            "manufacturer": str(item.get("Manufacturer") or driver.get("Manufacturer") or "")[:160] or None,
+            "mac": _normalize_mac(str(item.get("MACAddress") or "")),
+            "speed_bps": int(speed) if isinstance(speed, (int, float)) and speed >= 0 else None,
+            "driver_version": str(driver.get("DriverVersion") or "")[:80] or None,
+            "driver_date": str(driver.get("DriverDate") or "")[:80] or None,
+            "pnp_device_id": pnp_id[:240] or None,
+            "source": "windows_cim_readonly",
+        }
+        row.update(_doctor_pci_ids(pnp_id))
+        result.append({key: value for key, value in row.items() if value is not None})
+    return result
+
+
+def _doctor_ethtool_driver(interface_name: str) -> dict[str, str]:
+    executable = shutil.which("ethtool")
+    if not executable:
+        return {}
+    try:
+        result = subprocess.run(  # nosec B603
+            [executable, "-i", interface_name],
+            timeout=5,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if result.returncode != 0:
+        return {}
+    mapped: dict[str, str] = {}
+    keys = {
+        "driver": "driver",
+        "version": "driver_version",
+        "firmware-version": "firmware_version",
+        "bus-info": "pci_address",
+    }
+    for line in result.stdout.splitlines():
+        key, sep, value = line.partition(":")
+        target = keys.get(key.strip().lower())
+        if sep and target and value.strip():
+            mapped[target] = value.strip()[:160]
+    return mapped
+
+
+def _doctor_linux_vpd(pci_address: str) -> dict[str, str]:
+    executable = shutil.which("lspci")
+    if not executable or not pci_address:
+        return {}
+    try:
+        result = subprocess.run(  # nosec B603
+            [executable, "-s", pci_address, "-vv"],
+            timeout=6,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            shell=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if result.returncode != 0:
+        return {}
+    summary: dict[str, str] = {}
+    labels = {
+        "product name": "product_name",
+        "part number": "part_number",
+        "revision": "revision",
+        "serial number": "serial_number",
+    }
+    for raw_line in result.stdout.splitlines():
+        normalized = re.sub(r"^\[[A-Za-z0-9]+\]\s*", "", raw_line.strip())
+        key, sep, value = normalized.partition(":")
+        target = labels.get(key.strip().lower())
+        if sep and target and value.strip():
+            summary[target] = value.strip()[:200]
+    return summary
+
+
+def _doctor_linux_network_devices() -> list[dict[str, Any]]:
+    if os.name == "nt":
+        return []
+    try:
+        names = list(psutil.net_if_addrs())
+    except Exception:
+        return []
+    result: list[dict[str, Any]] = []
+    sys_net = Path("/sys/class/net")
+    for name in names[:64]:
+        lowered = name.lower()
+        if TAILSCALE_INTERFACE_MARKER in lowered or any(
+            token in lowered for token in VIRTUAL_INTERFACE_TOKENS
+        ):
+            continue
+        device_link = sys_net / name / "device"
+        if not device_link.exists():
+            continue
+        try:
+            pci_address = device_link.resolve().name
+        except OSError:
+            pci_address = device_link.name
+        driver_name = None
+        with contextlib.suppress(OSError):
+            driver_name = (device_link / "driver").resolve().name
+
+        def read_id(filename: str) -> str | None:
+            try:
+                value = (device_link / filename).read_text(
+                    encoding="ascii", errors="replace"
+                ).strip()
+            except OSError:
+                return None
+            return value.removeprefix("0x").upper()[:32] or None
+
+        row: dict[str, Any] = {
+            "name": name[:120],
+            "pci_address": pci_address[:40],
+            "vendor_id": read_id("vendor"),
+            "device_id": read_id("device"),
+            "subsystem_vendor_id": read_id("subsystem_vendor"),
+            "subsystem_device_id": read_id("subsystem_device"),
+            "driver": driver_name,
+            "vpd_available": (device_link / "vpd").exists(),
+            "source": "linux_sysfs_readonly",
+        }
+        row.update(_doctor_ethtool_driver(name))
+        row.update(_doctor_linux_vpd(pci_address))
+        result.append({key: value for key, value in row.items() if value is not None})
+    return result
+
+
+def _doctor_network_devices() -> list[dict[str, Any]]:
+    return _doctor_windows_network_devices() if os.name == "nt" else _doctor_linux_network_devices()
+
+
+def _doctor_default_routes() -> list[dict[str, Any]]:
+    if os.name == "nt":
+        decoded = _doctor_powershell_json(
+            "Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | "
+            "Sort-Object RouteMetric | Select-Object -First 4 "
+            "InterfaceAlias,NextHop,RouteMetric,State | ConvertTo-Json -Compress"
+        )
+        rows = decoded if isinstance(decoded, list) else ([decoded] if isinstance(decoded, dict) else [])
+        return [
+            {
+                "interface": str(item.get("InterfaceAlias") or "")[:120] or None,
+                "gateway": str(item.get("NextHop") or "")[:64] or None,
+                "metric": item.get("RouteMetric"),
+                "state": str(item.get("State") or "")[:40] or None,
+            }
+            for item in rows[:4]
+            if isinstance(item, dict)
+        ]
+
+    try:
+        lines = Path("/proc/net/route").read_text(
+            encoding="ascii", errors="replace"
+        ).splitlines()[1:]
+    except OSError:
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 8 or fields[1] != "00000000":
+            continue
+        try:
+            gateway_raw = int(fields[2], 16).to_bytes(4, "little")
+            gateway = socket.inet_ntoa(gateway_raw)
+            metric = int(fields[6])
+        except (ValueError, OSError):
+            continue
+        rows.append({"interface": fields[0][:120], "gateway": gateway, "metric": metric})
+    return rows[:4]
+
+
+def hardware_doctor_snapshot() -> dict[str, Any]:
+    """Bounded hardware inventory derived from physical-NIC/MAC/VPD diagnostics."""
+    interfaces = _doctor_local_interfaces()
+    devices = _doctor_network_devices()
+    macs = [str(row.get("mac")) for row in interfaces if row.get("mac")]
+    duplicate_macs = sorted({value for value in macs if macs.count(value) > 1})
+    return {
+        "schema": "citadel.hardware-doctor.v1",
+        "readonly": True,
+        "usb_scanning": False,
+        "network_interfaces": interfaces,
+        "network_devices": devices,
+        "default_routes": _doctor_default_routes(),
+        "checks": {
+            "physical_network_present": bool(devices or macs),
+            "duplicate_mac_addresses": duplicate_macs,
+            "pci_metadata_available": any(
+                item.get("pci_address") or item.get("pnp_device_id")
+                for item in devices if isinstance(item, dict)
+            ),
+            "firmware_metadata_available": any(
+                item.get("firmware_version")
+                for item in devices if isinstance(item, dict)
+            ),
+            "vpd_metadata_available": any(
+                item.get("vpd_available") or item.get("product_name") or item.get("part_number")
+                for item in devices if isinstance(item, dict)
+            ),
+        },
+    }
+
+
+def network_doctor_snapshot(controller_url: str) -> dict[str, Any]:
+    """Check local link, route, DNS and TCP reachability to the configured Controller."""
+    parsed = urllib.parse.urlsplit(controller_url)
+    host = parsed.hostname or ""
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    interfaces = _doctor_local_interfaces()
+    routes = _doctor_default_routes()
+    checks: list[dict[str, Any]] = [
+        {
+            "name": "local_interface",
+            "ok": any(row.get("is_up") and row.get("ipv4") for row in interfaces),
+            "detail": next(
+                (", ".join(row.get("ipv4") or []) for row in interfaces
+                 if row.get("is_up") and row.get("ipv4")),
+                "no active physical IPv4 interface detected",
+            ),
+        },
+        {
+            "name": "default_route",
+            "ok": bool(routes),
+            "detail": routes[0].get("gateway") if routes else "default route not detected",
+        },
+    ]
+    resolved: list[str] = []
+    dns_error = None
+    try:
+        resolved = list(dict.fromkeys(
+            item[4][0]
+            for item in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            if item and item[4]
+        ))[:8]
+    except OSError as error:
+        dns_error = type(error).__name__
+    checks.append({
+        "name": "controller_dns",
+        "ok": bool(resolved),
+        "detail": ", ".join(resolved) if resolved else (dns_error or "resolution failed"),
+    })
+    tcp_ok = False
+    tcp_error = None
+    if resolved:
+        try:
+            with socket.create_connection((host, port), timeout=3.0):
+                tcp_ok = True
+        except OSError as error:
+            tcp_error = type(error).__name__
+    checks.append({
+        "name": "controller_tcp",
+        "ok": tcp_ok,
+        "detail": f"{host}:{port}" if tcp_ok else (tcp_error or "not attempted"),
+    })
+    passed = sum(1 for item in checks if item.get("ok"))
+    return {
+        "schema": "citadel.network-doctor.v1",
+        "readonly": True,
+        "controller_host": host,
+        "controller_port": port,
+        "checks": checks,
+        "passed": passed,
+        "total": len(checks),
+        "status": "ok" if passed == len(checks) else ("degraded" if passed >= 2 else "failed"),
+    }
+
+
 def _windows_enterprise_probe_path() -> Path:
     return Path(__file__).resolve().with_name("windows_enterprise_probe.ps1")
 
@@ -882,6 +1265,7 @@ def system_inventory(payload: dict[str, Any]) -> dict[str, Any]:
         "disk_home_total_bytes": int(disk.total),
         "disk_home_free_bytes": int(disk.free),
         "network": local_network_addresses(),
+        "hardware_doctor": hardware_doctor_snapshot(),
         "windows_enterprise": windows_enterprise_probe(),
     }
 
@@ -925,7 +1309,7 @@ class Agent:
 
     @property
     def capabilities(self) -> list[str]:
-        capabilities = set(HANDLERS) | {"lmstudio_remote", "project_text", "project_python"}
+        capabilities = set(HANDLERS) | {"hardware_doctor_readonly", "lmstudio_remote", "project_text", "project_python"}
         if self.config.prevent_automatic_sleep:
             capabilities.add("always_on_guard")
         if self.config.network_recovery_enabled:
@@ -1424,6 +1808,8 @@ class Agent:
                 report = self.execute_project_text(assignment.get("payload") or {})
             else:
                 report = handler(assignment.get("payload") or {})
+                if mission_type == "system_inventory" and isinstance(report, dict):
+                    report["network_doctor"] = network_doctor_snapshot(self.config.controller_url)
             result = {
                 "assignment_id": assignment_id,
                 "outcome": "success",
