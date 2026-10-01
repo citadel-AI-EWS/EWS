@@ -227,13 +227,11 @@ jobs:
             'AllowUsers $SshUser',
             'AuthenticationMethods publickey',
             'PasswordAuthentication no',
-            'KbdInteractiveAuthentication no',
             'AllowAgentForwarding no',
             'ForceCommand C:/ProgramData/CitadelEWS/ssh/CitadelSshConsole.exe',
             'AllowTcpForwarding no',
-            'X11Forwarding no',
-            'PermitTunnel no',
             'GatewayPorts no',
+            'Windows OpenSSH did not generate sshd_config on first service start.',
             'Disable-NetFirewallRule',
             '& $SshdExe -t -f $SshdConfig',
             'Unsafe non-loopback SSH listener detected',
@@ -245,6 +243,9 @@ jobs:
             if (-not $text.Contains($required)) { throw "Restricted SSH bootstrap invariant missing: $required" }
           }
           if ($text.Contains("-ExecutionPolicy Bypass")) { throw "Restricted SSH bootstrap must not bypass execution policy" }
+          foreach ($unsupported in @("KbdInteractiveAuthentication", "PermitTunnel", "X11Forwarding")) {
+            if ($text.Contains($unsupported)) { throw "Windows OpenSSH unsupported directive returned: $unsupported" }
+          }
           Write-Host "Restricted SSH bootstrap policy: OK"
 
       - name: Compile Windows SCM service host
