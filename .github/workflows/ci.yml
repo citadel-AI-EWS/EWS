@@ -226,6 +226,8 @@ jobs:
             'AllowUsers $SshUser',
             'AuthenticationMethods publickey',
             'PasswordAuthentication no',
+            'KbdInteractiveAuthentication no',
+            'AllowAgentForwarding no',
             'ForceCommand C:/ProgramData/CitadelEWS/ssh/CitadelSshConsole.exe',
             'AllowTcpForwarding no',
             'X11Forwarding no',
