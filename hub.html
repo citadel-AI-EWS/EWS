@@ -130,6 +130,7 @@
           <div id="sshNodeName" class="micro">Нода не выбрана</div>
           <div class="sshState"><span id="sshLight" class="light"></span><strong id="sshStateText" data-i18n="sshNotReady">Secure tunnel not configured</strong></div>
           <div id="sshRuntime" class="notice">Выберите ноду и выполните проверку SSH.</div>
+          <div id="sshPolicy" class="notice">Restricted policy: —</div>
           <div class="sshGrid">
             <div class="field"><label for="sshHost" data-i18n="sshHost">Cloudflare Access hostname</label><input id="sshHost" type="text" inputmode="url" placeholder="ssh.example.com"></div>
             <div class="field"><label for="sshUser" data-i18n="sshUser">SSH user</label><input id="sshUser" type="text" autocomplete="username" placeholder="operator"></div>
@@ -139,6 +140,7 @@
           <div class="btnrow" style="margin-top:9px">
             <button id="saveSshButton" class="btn good" type="button" disabled>Сохранить публичную конфигурацию</button>
             <button id="probeSshButton" class="btn" type="button" disabled>Проверить SSH</button>
+            <button id="copySshBootstrapButton" class="btn" type="button" disabled>Копировать Windows bootstrap</button>
             <button id="copySshButton" class="btn" type="button" disabled data-i18n="copyCommand">Копировать команду</button>
             <button id="openSshButton" class="btn cyan" type="button" disabled data-i18n="browserSsh">Открыть интерактивный SSH</button>
           </div>
@@ -716,6 +718,9 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
 
     const sshHost=$("sshHost"),sshUser=$("sshUser"),sshFingerprint=$("sshFingerprint");
     let sshNodeId="",sshState=null;
+    const sshBootstrapCommand='powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$s=Get-Content \'C:\\ProgramData\\CitadelEWS\\agent\\install-state.json\' -Raw|ConvertFrom-Json; & (Join-Path $s.release_root \'configure_restricted_ssh.ps1\')"';
+    function versionAtLeast(value,minimum){const p=v=>String(v||"").split(".").slice(0,3).map(x=>Number.parseInt(x,10));const a=p(value),b=p(minimum);if(a.some(Number.isNaN)||b.some(Number.isNaN))return false;for(let i=0;i<3;i++){if(a[i]!==b[i])return a[i]>b[i]}return true}
+    function selectedSshNode(){return (lastOverview?.nodes||[]).find(n=>n.node_id===sshNodeId)||null}
     function sshReadyForBrowser(){return Boolean(sshState&&sshState.browser_terminal_local_ready&&safeHost(sshHost.value)&&safeUser(sshUser.value))}
     function renderSshState(){
       const host=safeHost(sshHost.value),user=safeUser(sshUser.value),configured=Boolean(host&&user),localReady=Boolean(sshState?.browser_terminal_local_ready);
@@ -723,9 +728,12 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       $("sshMode").textContent=!sshNodeId?"SELECT NODE":configured&&localReady?"READY":configured?"CONFIGURED":"NOT CONFIGURED";
       $("sshStateText").textContent=!sshNodeId?"Выберите ноду.":localReady?(configured?"Локальный SSH и cloudflared готовы; можно открыть Browser SSH.":"Нода локально готова; сохраните hostname и username."):(sshState?.observed_at?"Локальная SSH-готовность не подтверждена. Нажмите «Проверить SSH».":"SSH-состояние этой ноды ещё не получено.");
       $("sshRuntime").textContent=!sshNodeId?"Выберите ноду и выполните проверку SSH.":`sshd localhost:22: ${sshState?.sshd_listening_local?"YES":"NO"} · loopback-only: ${sshState?.sshd_exposure_verified?(sshState?.sshd_loopback_only?"YES":"NO"):"UNVERIFIED"} · cloudflared: ${sshState?.cloudflared_running?"RUNNING":sshState?.cloudflared_installed?"INSTALLED":"NOT FOUND"} · observed: ${sshState?.observed_at||"—"}`;
+      $("sshPolicy").textContent=!sshNodeId?"Restricted policy: —":`Restricted policy: ${sshState?.restricted_policy_ready?"READY":"NOT READY"} · state: ${sshState?.restricted_bootstrap_state_present?"YES":"NO"} · console: ${sshState?.restricted_console_installed?"YES":"NO"} · CA public key: ${sshState?.cloudflare_ca_public_key_present?"YES":"NO"} · ForceCommand: ${sshState?.sshd_force_command_managed?"YES":"NO"}`;
       $("sshCommand").textContent=configured?`ssh -o ProxyCommand="cloudflared access ssh --hostname %h" ${user}@${host}`:"Cloudflare Access hostname + SSH user are required.";
       $("saveSshButton").disabled=!sshNodeId||!architectToken||!configured;
       $("probeSshButton").disabled=!sshNodeId||!architectToken;
+      const sshNode=selectedSshNode(),bootstrapEligible=Boolean(sshNode&&String(sshNode.os_name||"").toLowerCase()==="windows"&&versionAtLeast(sshNode.agent_version,"0.3.27"));
+      $("copySshBootstrapButton").disabled=!bootstrapEligible;
       $("copySshButton").disabled=!configured;
       $("openSshButton").disabled=!sshReadyForBrowser();
     }
@@ -764,6 +772,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
     sshHost.addEventListener("input",renderSshState);sshUser.addEventListener("input",renderSshState);sshFingerprint.addEventListener("input",renderSshState);
     $("saveSshButton").addEventListener("click",saveSshState);
     $("probeSshButton").addEventListener("click",probeSsh);
+    $("copySshBootstrapButton").addEventListener("click",()=>navigator.clipboard.writeText(sshBootstrapCommand).then(()=>toast("SSH","Windows bootstrap command copied")));
     $("copySshButton").addEventListener("click",()=>navigator.clipboard.writeText($("sshCommand").textContent).then(()=>toast("SSH","Command copied")));
     $("openSshButton").addEventListener("click",()=>{const host=safeHost(sshHost.value);if(host&&sshReadyForBrowser())window.open(`https://${host}`,"_blank","noopener,noreferrer")});
     function focusSsh(node){document.querySelector(".sshPanel").scrollIntoView({behavior:"smooth",block:"center"});loadSshState(node.node_id)}
