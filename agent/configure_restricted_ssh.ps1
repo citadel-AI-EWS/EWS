@@ -140,10 +140,6 @@ if (-not (Test-IsAdministrator)) {
   exit $Elevated.ExitCode
 }
 
-$Resolved = Resolve-ActiveRelease -Root $InstallRoot
-$InstallRoot = $Resolved.InstallRoot
-$ReleaseRoot = $Resolved.ReleaseRoot
-$ConfigPath = $Resolved.ConfigPath
 $SshStateRoot = Join-Path $env:ProgramData "CitadelEWS\ssh"
 $StatePath = Join-Path $SshStateRoot "bootstrap-state.json"
 $ConsoleExe = Join-Path $SshStateRoot "CitadelSshConsole.exe"
@@ -173,6 +169,11 @@ if ($Uninstall) {
   Write-Host "[CITADEL] Restricted SSH configuration removed. OpenSSH itself was left installed."
   exit 0
 }
+
+$Resolved = Resolve-ActiveRelease -Root $InstallRoot
+$InstallRoot = $Resolved.InstallRoot
+$ReleaseRoot = $Resolved.ReleaseRoot
+$ConfigPath = $Resolved.ConfigPath
 
 if ([string]::IsNullOrWhiteSpace($SshUser)) {
   $SshUser = Read-Host "Cloudflare Access SSH username (normally your email prefix)"
@@ -258,6 +259,7 @@ $Clean = [regex]::Replace(
 $GlobalBlock = @"
 # BEGIN CITADEL SSH GLOBAL
 ListenAddress 127.0.0.1
+AllowUsers $SshUser
 PubkeyAuthentication yes
 TrustedUserCAKeys C:/ProgramData/ssh/citadel_cloudflare_ca.pub
 # END CITADEL SSH GLOBAL
