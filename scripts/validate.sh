@@ -322,6 +322,7 @@ node --check src/telemetry/cursor.js
 node --check src/telemetry/architect.js
 node --check src/telemetry/router.js
 
+node tests/node-management.mjs
 node tests/report-storage.mjs
 node tests/session-storage.mjs
 node tests/telemetry-storage.mjs

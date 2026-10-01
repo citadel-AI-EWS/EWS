@@ -5282,6 +5282,13 @@ async function ensureEnterpriseStorage(env) {
         ON enterprise_node_scope(site_id, node_id)
       `),
       env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS node_group_categories (
+          group_id TEXT PRIMARY KEY,
+          category TEXT NOT NULL CHECK (category IN ('name','geography','work','specialty','other')),
+          FOREIGN KEY (group_id) REFERENCES enterprise_node_groups(group_id) ON DELETE CASCADE
+        )
+      `),
+      env.DB.prepare(`
         CREATE INDEX IF NOT EXISTS idx_enterprise_node_scope_group
         ON enterprise_node_scope(group_id, node_id)
       `),
@@ -5909,6 +5916,72 @@ async function architectCreateEnterpriseGroup(request, env) {
     throw error;
   }
   return json({ ok: true, group: { group_id: groupId, name, description } }, 201);
+}
+
+async function architectCreateNodeGroup(request, env) {
+  const actor = await authenticateArchitect(request, env);
+  await ensureEnterpriseStorage(env);
+  const body = parseJsonObject(await readBodyText(request, 16 * 1024));
+  const name = requireString(body.name, "group_name", 120);
+  const category = requireString(body.category, "group_category", 32);
+  if (!["name", "geography", "work", "specialty", "other"].includes(category)) {
+    throw new ApiError(400, "invalid_group_category");
+  }
+  if (!Array.isArray(body.node_ids) || !body.node_ids.length || body.node_ids.length > 50) {
+    throw new ApiError(400, "invalid_group_nodes");
+  }
+  const nodeIds = [...new Set(body.node_ids.map((id) => requireString(id, "node_id", 128)))];
+  const placeholders = nodeIds.map(() => "?").join(",");
+  const nodes = await env.DB.prepare(
+    `SELECT node_id FROM nodes WHERE node_id IN (${placeholders}) AND status != 'revoked'`
+  ).bind(...nodeIds).all();
+  if (nodes.results.length !== nodeIds.length) throw new ApiError(404, "node_not_found");
+  const groupId = `group_${crypto.randomUUID()}`;
+  try {
+    // One D1 transaction creates the group and moves its members together.
+    // Existing geography/site assignments remain intact.
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO enterprise_node_groups (group_id, name) VALUES (?, ?)").bind(groupId, name),
+      env.DB.prepare("INSERT INTO node_group_categories (group_id, category) VALUES (?, ?)").bind(groupId, category),
+      ...nodeIds.map((id) => env.DB.prepare(`
+        INSERT INTO enterprise_node_scope (node_id, group_id) VALUES (?, ?)
+        ON CONFLICT(node_id) DO UPDATE SET group_id = excluded.group_id, updated_at = CURRENT_TIMESTAMP
+      `).bind(id, groupId)),
+      env.DB.prepare(`INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json)
+        VALUES ('architect', ?, 'node_group.created', 'node_group', ?, ?)`)
+        .bind(actor.actor_id, groupId, JSON.stringify({ name, category, node_ids: nodeIds }))
+    ]);
+  } catch (error) {
+    if (String(error).toLowerCase().includes("unique")) throw new ApiError(409, "group_name_exists");
+    throw error;
+  }
+  return json({ ok: true, group: { group_id: groupId, name, category }, node_ids: nodeIds }, 201);
+}
+
+async function architectDeleteNode(request, env, nodeId) {
+  const actor = await authenticateArchitect(request, env);
+  const body = parseJsonObject(await readBodyText(request, 1024));
+  if (body.confirmation !== "DELETE_NODE") throw new ApiError(400, "node_delete_confirmation_required");
+  await Promise.all([ensureCommandStorage(env), ensureProjectStorage(env)]);
+  await expireStaleNodeCommands(env, nodeId);
+  const node = await env.DB.prepare("SELECT node_id, hostname, status FROM nodes WHERE node_id = ?").bind(nodeId).first();
+  if (!node) throw new ApiError(404, "node_not_found");
+  if (node.status === "revoked") return json({ ok: true, deleted_node_id: nodeId });
+  // A tombstone preserves reports and denies future agent authentication.
+  // Keep the activity check inside the write so a busy node cannot be removed.
+  const results = await env.DB.batch([
+    env.DB.prepare(`UPDATE nodes SET status = 'revoked'
+      WHERE node_id = ? AND status != 'revoked'
+      AND NOT EXISTS (SELECT 1 FROM commands WHERE node_id = nodes.node_id AND status IN ('pending','accepted'))
+      AND NOT EXISTS (SELECT 1 FROM assignments WHERE node_id = nodes.node_id AND status IN ('assigned','running'))
+      AND NOT EXISTS (SELECT 1 FROM project_work_items WHERE node_id = nodes.node_id AND status IN ('planned','assigned','running'))`)
+      .bind(nodeId),
+    env.DB.prepare(`INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json)
+      SELECT 'architect', ?, 'node.deleted', 'node', node_id, ? FROM nodes WHERE node_id = ? AND status = 'revoked'`)
+      .bind(actor.actor_id, JSON.stringify({ hostname: node.hostname }), nodeId)
+  ]);
+  if (!results[0].meta.changes) throw new ApiError(409, "node_busy");
+  return json({ ok: true, deleted_node_id: nodeId });
 }
 
 async function architectSetNodeEnterpriseScope(request, env, nodeId) {
@@ -7182,6 +7255,19 @@ async function handleApi(request, env, url) {
       : methodNotAllowed(["POST"]);
   }
 
+  if (url.pathname === "/api/v1/architect/node-groups") {
+    return request.method === "POST"
+      ? architectCreateNodeGroup(request, env)
+      : methodNotAllowed(["POST"]);
+  }
+
+  const deleteNodeMatch = url.pathname.match(/^\/api\/v1\/architect\/nodes\/([^/]+)$/);
+  if (deleteNodeMatch) {
+    return request.method === "DELETE"
+      ? architectDeleteNode(request, env, decodeURIComponent(deleteNodeMatch[1]))
+      : methodNotAllowed(["DELETE"]);
+  }
+
   if (url.pathname === "/api/v1/architect/enterprise/recovery-manifest") {
     return request.method === "GET"
       ? architectEnterpriseRecoveryManifest(request, env)
@@ -7238,9 +7324,10 @@ async function handleApi(request, env, url) {
       ensureNodeAiStorage(env),
       ensureNodeNetworkStorage(env),
       ensureAutoEnrollmentStorage(env),
+      ensureEnterpriseStorage(env),
       ensureCommandReadIndexes(env)
     ]);
-    const [nodes, commands] = await Promise.all([
+    const [nodes, commands, groups] = await Promise.all([
       env.DB.prepare(`SELECT n.node_id, nn.node_number, n.hostname, n.os_name, n.os_version, n.architecture,
         n.agent_version, n.cpu_percent, n.memory_percent, n.last_seen_at,
         CASE WHEN n.status = 'online' AND
@@ -7252,18 +7339,23 @@ async function handleApi(request, env, url) {
         ai.selected_model AS ai_selected_model,
         ai.loaded_model AS ai_loaded_model,
         ai.updated_at AS ai_updated_at,
-        air.state_json AS ai_runtime_json
+        air.state_json AS ai_runtime_json, scope.group_id
         FROM nodes AS n
         LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id
         LEFT JOIN node_network_state AS net ON net.node_id = n.node_id
         LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
         LEFT JOIN node_ai_runtime_state AS air ON air.node_id = n.node_id
+        LEFT JOIN enterprise_node_scope AS scope ON scope.node_id = n.node_id
         WHERE n.status != 'revoked' ORDER BY n.node_id LIMIT 500`).all(),
       env.DB.prepare(`SELECT command_id, node_id, command_type, status, created_at, completed_at
         FROM commands
         WHERE status IN ('pending','accepted')
           OR datetime(created_at) >= datetime('now', '-30 minutes')
-        ORDER BY created_at DESC LIMIT 500`).all()
+        ORDER BY created_at DESC LIMIT 500`).all(),
+      env.DB.prepare(`SELECT g.group_id, g.name, COALESCE(c.category, 'other') AS category
+        FROM enterprise_node_groups AS g
+        LEFT JOIN node_group_categories AS c ON c.group_id = g.group_id
+        ORDER BY g.name`).all()
     ]);
     const commandRows = commands.results || [];
     const latestCommands = new Map();
@@ -7303,7 +7395,7 @@ async function handleApi(request, env, url) {
         update_required: node.agent_version !== LATEST_NODE_RELEASE.version
       };
     });
-    return json({ok:true, nodes:machineNodes, commands:commandRows});
+    return json({ok:true, nodes:machineNodes, commands:commandRows, groups:groups.results || []});
   }
 
   if (url.pathname === "/api/v1/architect/projects/check") {
