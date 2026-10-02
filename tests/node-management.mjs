@@ -55,5 +55,18 @@ r=await request('/nodes/n2','DELETE',{confirmation:'DELETE_NODE'});assert.equal(
 r=await request('/machines');assert.deepEqual(r.data.nodes.map(n=>n.node_id),['n1']);
 r=await request('/node-groups','POST',{name:'Revoked',category:'other',node_ids:['n2']});assert.equal(r.status,404);
 assert.equal(db.prepare("SELECT COUNT(*) AS count FROM audit_events WHERE action='node.deleted'").get().count,2);
+const publicNodeStatus = async () => {
+  const response = await controller.fetch(new Request('https://ews.test/api/v1/hub/nodes'), env);
+  assert.equal(response.status, 200);
+  return (await response.json()).nodes[0].status;
+};
+db.prepare("UPDATE nodes SET last_seen_at = '' WHERE node_id = 'n1'").run();
+assert.equal(await publicNodeStatus(), 'offline', 'empty heartbeat must not appear online');
+db.prepare("UPDATE nodes SET last_seen_at = datetime('now', '-12 hours') WHERE node_id = 'n1'").run();
+assert.equal(await publicNodeStatus(), 'offline', 'stale heartbeat must not appear online');
+db.prepare("UPDATE nodes SET last_seen_at = CURRENT_TIMESTAMP WHERE node_id = 'n1'").run();
+assert.equal(await publicNodeStatus(), 'online', 'fresh heartbeat must appear online');
+db.prepare("UPDATE nodes SET status = 'paused' WHERE node_id = 'n1'").run();
+assert.equal(await publicNodeStatus(), 'paused', 'explicit paused status must be preserved');
 db.close();
-console.log('Node management: auth, categories, atomic grouping, site preservation, busy guard, deletion, history and persisted machine data PASS');
+console.log('Node management: auth, categories, atomic grouping, site preservation, busy guard, deletion, history and public liveness PASS');

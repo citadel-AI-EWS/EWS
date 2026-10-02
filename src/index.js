@@ -6656,17 +6656,23 @@ async function publicHubNodes(env) {
     const b = String(right?.enrolled_at || "") + "\n" + String(right?.node_id || "");
     return a.localeCompare(b);
   });
+  const liveCutoff = Date.now() - NODE_LIVE_WINDOW_MINUTES * 60 * 1000;
   return json({
     ok: true,
     refreshed_at: new Date().toISOString(),
-    nodes: rows.map((node, index) => ({
-      node_number: index + 1,
-      display_name: `CITADEL Node ${index + 1}`,
-      agent_version: typeof node.agent_version === "string" ? node.agent_version : null,
-      status: typeof node.status === "string" ? node.status : "unknown",
-      enrolled_at: typeof node.enrolled_at === "string" ? node.enrolled_at : null,
-      last_seen_at: typeof node.last_seen_at === "string" ? node.last_seen_at : null
-    }))
+    nodes: rows.map((node, index) => {
+      const seenAt = parseControllerTimestamp(node.last_seen_at);
+      const status = node.status === "online" && (seenAt === null || seenAt < liveCutoff)
+        ? "offline" : typeof node.status === "string" ? node.status : "unknown";
+      return {
+        node_number: index + 1,
+        display_name: `CITADEL Node ${index + 1}`,
+        agent_version: typeof node.agent_version === "string" ? node.agent_version : null,
+        status,
+        enrolled_at: typeof node.enrolled_at === "string" ? node.enrolled_at : null,
+        last_seen_at: typeof node.last_seen_at === "string" ? node.last_seen_at : null
+      };
+    })
   }, 200, {
     "cache-control": "public, max-age=60, stale-while-revalidate=120"
   });
