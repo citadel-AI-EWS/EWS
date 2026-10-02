@@ -63,12 +63,14 @@ for required in (
     "/api/v1/architect/models/search",
     'id="lmstudioProgress"',
     'id="hybridPanel"',
-    "\"hybrid_query\"",
+    "hybrid_query",
     "\"lmstudio_probe\"",
     "installHubCollapsers",
     "panelToggle",
     'sessionStorage.getItem("citadel-architect-token")',
     'new URLSearchParams(location.search).get("lmnode")',
+    "nodeHasPendingCommand",
+    "@media(max-width:980px),(max-height:620px)",
 ):
     if required not in hub:
         raise SystemExit(f"required real Hub capability missing: {required}")
@@ -333,6 +335,7 @@ node tests/legacy-experience.mjs
 node tests/experience-registry.mjs
 node tests/architect-ux-guards.mjs
 node tests/lmstudio-command-storage.mjs
+node tests/legacy-command-duplicates.mjs
 node tests/enterprise-policy.mjs
 node tests/hub-five-questions.mjs
 node tests/d1-usage.mjs
@@ -345,10 +348,12 @@ node tests/flow-a-assignment-recovery.mjs
 node tests/controller-error-diagnostics.mjs
 node tests/ten-prompt-routing.mjs
 python tests/lmstudio-local-protocol.py
+node tests/flow-a-e2e.mjs
 python tests/mini-agents.py
 python tests/lmstudio-progress.py
 python tests/ssh-restricted-console.py
 node scripts/provision_cloudflare_ssh.mjs --self-test
+node tests/ssh-provisioning.mjs
 node tests/openrouter-quality-gate.mjs
 
 python - <<'PY'

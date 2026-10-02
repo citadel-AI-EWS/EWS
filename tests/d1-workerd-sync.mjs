@@ -20,6 +20,14 @@ try {
   const nodeId = 'node_workerd_test';
   await db.prepare(`INSERT INTO nodes (node_id, public_key, hostname, os_name, agent_version)
     VALUES (?, ?, 'workerd-test', 'Linux', '0.3.24')`).bind(nodeId, JSON.stringify({kty: jwk.kty, crv: jwk.crv, x: jwk.x})).run();
+  // A legacy relative timestamp is legal table data, but datetime(created_at)
+  // in an expression index is non-deterministic for this row. Core telemetry
+  // readiness must survive it without rewriting or deleting historical logs.
+  await db.prepare(`INSERT INTO node_logs (event_id, node_id, level, event_type, message, created_at)
+    VALUES ('legacy_relative_time', ?, 'info', 'agent_start', 'legacy log', 'now')`).bind(nodeId).run();
+  const healthResponse = await mf.dispatchFetch('https://local.test/api/health');
+  assert.equal((await healthResponse.json()).telemetry_storage, 'ready');
+  assert.equal((await db.prepare("SELECT created_at FROM node_logs WHERE event_id = 'legacy_relative_time'").first()).created_at, 'now');
   const route = `/api/v1/nodes/${nodeId}/sync`;
   const body = JSON.stringify({heartbeat: {agent_version: '0.3.24', cpu_percent: 2, memory_percent: 20},
     ai: {installed: false, server_running: false}});

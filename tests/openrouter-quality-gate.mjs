@@ -67,6 +67,8 @@ assert.ok(index.includes("finalizeProjectAnswer"), "Controller quality-gate fina
 assert.ok(index.includes("project_quality_gates"), "Quality-gate cache table missing");
 assert.ok(index.includes("final_quality_gate_running"), "Quality-gate execution state missing");
 assert.ok(index.includes("quality_gate:"), "Final report quality-gate metadata missing");
-assert.ok(index.includes('status: "deferred"'), "Configured OpenRouter must not block local project results");
+assert.ok(index.includes('status: "deferred"'), "Configured OpenRouter must keep a local-result fallback");
+assert.ok(index.includes("executionCtx.waitUntil(backgroundReview)"), "Configured OpenRouter review must run in Worker background context");
+assert.ok(index.includes('status: "processing"'), "Background quality-gate state must be visible without hiding the local result");
 
 console.log("OpenRouter final quality gate: PASS");

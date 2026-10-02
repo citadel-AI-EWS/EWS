@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import {pathToFileURL} from "node:url";
 
 const API = "https://api.cloudflare.com/client/v4";
 
@@ -67,7 +68,7 @@ async function cf(path, options = {}, allowedStatuses = []) {
     ...(options.body ? {"content-type": "application/json"} : {}),
     ...(options.headers || {})
   };
-  const response = await fetch(API + path, {...options, headers});
+  const response = await fetch(API + path, {...options, headers, signal: AbortSignal.timeout(20000)});
   let body = {};
   try { body = await response.json(); } catch { body = {}; }
   if (!response.ok && !allowedStatuses.includes(response.status)) {
@@ -126,9 +127,11 @@ async function ensureTunnel(accountId, tunnelName, apply) {
 
 async function ensureTunnelIngress(accountId, tunnelId, hostname, apply) {
   let ingress = [];
+  let config = {};
   if (tunnelId !== "<planned>") {
     const current = await cf(`/accounts/${accountId}/cfd_tunnel/${tunnelId}/configurations`, {}, [404]);
-    ingress = Array.isArray(current.body?.result?.config?.ingress) ? current.body.result.config.ingress : [];
+    config = current.body?.result?.config || {};
+    ingress = Array.isArray(config.ingress) ? config.ingress : [];
   }
   const routes = ingress.filter(item => item && item.hostname && item.hostname !== hostname);
   routes.push({hostname, service: "ssh://localhost:22"});
@@ -137,7 +140,7 @@ async function ensureTunnelIngress(accountId, tunnelId, hostname, apply) {
   if (apply && tunnelId !== "<planned>") {
     await cf(`/accounts/${accountId}/cfd_tunnel/${tunnelId}/configurations`, {
       method: "PUT",
-      body: JSON.stringify({config: {ingress: routes}})
+      body: JSON.stringify({config: {...config, ingress: routes}})
     });
   }
   return routes;
@@ -216,6 +219,7 @@ function desiredPolicy(hostname, email) {
 async function ensurePolicy(accountId, appId, hostname, email, apply) {
   if (appId === "<planned>") return {id: "<planned>", ...desiredPolicy(hostname, email)};
   const policies = await listAll(`/accounts/${accountId}/access/apps/${appId}/policies`);
+  if (policies.length > 1) fail("browser_ssh_app_contains_multiple_policies");
   const incompatible = policies.filter(p => !["allow", "deny"].includes(String(p?.decision || "")));
   if (incompatible.length) fail("browser_ssh_app_contains_unsupported_bypass_or_service_auth_policy");
   const wanted = desiredPolicy(hostname, email);
@@ -223,6 +227,10 @@ async function ensurePolicy(accountId, appId, hostname, email, apply) {
   if (unexpected.length) fail("browser_ssh_app_contains_additional_policy");
   const existing = policies.find(p => p?.name === wanted.name);
   if (existing && existing.decision !== "allow") fail("citadel_ssh_policy_has_wrong_decision");
+  if (existing) {
+    wanted.require = existing.require || [];
+    wanted.exclude = existing.exclude || [];
+  }
   if (!apply) return existing || {id: "<planned>", ...wanted};
   if (existing?.id) {
     const {body} = await cf(`/accounts/${accountId}/access/apps/${appId}/policies/${existing.id}`, {
@@ -282,7 +290,7 @@ function selfTest() {
   console.log("Cloudflare SSH provisioner self-test: PASS");
 }
 
-async function main() {
+export async function main() {
   if (process.argv.includes("--self-test")) return selfTest();
 
   const apply = String(process.env.CITADEL_CF_APPLY || "").toLowerCase() === "true" ||
@@ -312,7 +320,8 @@ async function main() {
     account_id: accountId,
     zone: {id: zone.id, name: zone.name},
     tunnel: {id: tunnel.id, name: tunnel.name, status: tunnel.status || "unknown", created: tunnelCreated},
-    ingress,
+    ingress: ingress.filter(route => route.hostname === hostname)
+      .map(route => ({hostname: route.hostname, service: route.service})),
     dns: {id: dns?.id || null, name: hostname, target: tunnel.id === "<planned>" ? "<tunnel-id>.cfargotunnel.com" : `${tunnel.id}.cfargotunnel.com`},
     access_app: {
       id: app.id,
@@ -331,7 +340,9 @@ async function main() {
   });
 }
 
-main().catch(error => {
-  console.error("CITADEL Cloudflare SSH provisioning failed:", error?.message || String(error));
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch(error => {
+    console.error("CITADEL Cloudflare SSH provisioning failed:", error?.message || String(error));
+    process.exit(1);
+  });
+}

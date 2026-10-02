@@ -94,13 +94,15 @@ Windows-конфигурация сознательно не используе�
 
 ## Agent / Controller contract
 
-Agent 0.3.30 продолжает capability `ssh_probe_readonly`, отправляет SSH readiness v2 и принимает подписанные/hash-verified assets `CitadelSshConsole.cs` и `configure_restricted_ssh.ps1`. Команда `ssh_probe` остаётся read-only и только заставляет немедленно обновить readiness heartbeat.
+Agent 0.3.31 продолжает capability `ssh_probe_readonly`, отправляет SSH readiness v2 и принимает подписанные/hash-verified assets `CitadelSshConsole.cs` и `configure_restricted_ssh.ps1`. Команда `ssh_probe` остаётся read-only и только заставляет немедленно обновить readiness heartbeat.
 
-Ноды 0.3.29 уже знают эти два asset-имени, поэтому переход на 0.3.30 доставляет обновлённый Cloudflare/bootstrap код обычным signed update без переустановки. Чистые Windows one-click/fixed packages также содержат restricted SSH assets.
+Ноды 0.3.29 уже знают эти два asset-имени, поэтому переход на 0.3.31 доставляет обновлённый Cloudflare/bootstrap код обычным signed update без переустановки. Чистые Windows one-click/fixed packages также содержат restricted SSH assets.
+
+Для старых нод 0.3.26 сначала нужен bridge 0.3.27 с прежним набором v1/v2; только после этого нода принимает расширенный SSH asset manifest. Автоматический переход через bridge не реализован. После применения assets Windows-нода публикует capability `windows_restricted_ssh_bootstrap`; Hub разрешает локальную elevated bootstrap-команду только после этой проверки.
 
 ## Cloudflare Zero Trust provisioning
 
-Workflow `.github/workflows/provision-ssh-zero-trust.yml` запускается вручную в защищённом environment `cloudflare-test`. По умолчанию это dry-run; реальное изменение Cloudflare выполняется только с input `apply=true`.
+Workflow `.github/workflows/provision-ssh-zero-trust.yml` запускается вручную в защищённом environment `cloudflare-test`. По умолчанию это dry-run: он читает существующие Cloudflare ресурсы и проверяет конфликты, но ничего не изменяет; реальное изменение Cloudflare выполняется только с input `apply=true`.
 
 Workflow через Cloudflare API создаёт или проверяет:
 
@@ -127,7 +129,7 @@ Bootstrap просит локально только SSH username и Cloudflare 
 
 ## Что остаётся внешней настройкой
 
-После merge 0.3.30 программная цепочка готова к provisioning. Для первого реального Browser SSH всё ещё нужны два значения, которые нельзя безопасно выдумать:
+После merge 0.3.31 программная цепочка готова к provisioning. Для первого реального Browser SSH всё ещё нужны два значения, которые нельзя безопасно выдумать:
 
 - public hostname в домене/zone, управляемом вашим Cloudflare;
 - точный email identity, которому Cloudflare Access разрешит вход.

@@ -51,7 +51,7 @@
     .site-clock{position:fixed;right:12px;bottom:10px;z-index:45;padding:7px 10px;border:1px solid var(--line2);border-radius:10px;background:#07141bea;color:#a9c3cc;font:12px/1.2 ui-monospace,SFMono-Regular,monospace;box-shadow:var(--shadow)}[dir="rtl"] .site-clock{right:auto;left:12px}.footer{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:20px;color:#5f7b86;font-size:11px}.footer a{color:#83dfff;text-decoration:none}.toast{position:fixed;right:22px;bottom:22px;z-index:50;min-width:260px;max-width:420px;border:1px solid var(--line2);background:#07141bea;border-radius:14px;padding:12px 14px;box-shadow:var(--shadow);transform:translateY(20px);opacity:0;pointer-events:none;transition:.2s ease}.toast.show{transform:none;opacity:1}.toast.ok{border-color:#27634c}.toast.bad{border-color:#6b3038}.toast strong{display:block;font-size:12px}.toast span{display:block;font-size:11px;color:var(--muted);margin-top:4px}
     @media(max-width:1100px){.metrics{grid-template-columns:repeat(3,1fr)}.layout,.hero{grid-template-columns:1fr}.topbar{position:relative;top:0}}@media(max-width:720px){.shell{width:min(100% - 18px,1480px);padding-top:9px}.topbar{grid-template-columns:1fr}.toptools{justify-content:flex-start}.heroCard{padding:20px}.metrics{grid-template-columns:1fr 1fr}.toolbar{grid-template-columns:1fr}.actionsTop{justify-content:flex-start}.grid{grid-template-columns:1fr}.sshGrid{grid-template-columns:1fr}.sshGrid .field:first-child{grid-column:auto}.nodeMeta{grid-template-columns:86px 1fr}.footer{align-items:flex-start;flex-direction:column}}
   .operation-view{margin:12px 0;padding:14px;border:1px solid #365978;border-radius:14px;background:linear-gradient(135deg,#0d1b29,#11283a);overflow:hidden;color:#e8f1fb}.operation-heading{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.operation-heading strong{flex:1;min-width:120px}.operation-time{font-variant-numeric:tabular-nums;color:#80e7d1}.operation-track{height:10px;border-radius:999px;background:#23364a;overflow:hidden;margin:12px 0 6px;position:relative}.operation-fill{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#68e6cf,#70a9ff);transition:width .35s ease}.operation-track.indeterminate .operation-fill{width:35%;animation:operationSlide 1.5s ease-in-out infinite}.operation-view[data-state=running] .operation-fill,.operation-view[data-state=receiving] .operation-fill{background-image:repeating-linear-gradient(110deg,#68e6cf 0 12px,#70a9ff 12px 24px);background-size:60px 100%;animation:operationStripes 1s linear infinite}.operation-track.indeterminate .operation-fill{animation:operationSlide 1.5s ease-in-out infinite!important}.operation-view[data-state=failed]{border-color:#8b3e4a}.operation-view[data-state=failed] .operation-icon{color:#ff9a9a}.operation-view[data-state=completed]{border-color:#347058}.operation-view[data-state=completed] .operation-icon{color:#9bf2c4}.operation-detail{font-size:13px;line-height:1.5;color:#a9bed2;margin:7px 0 0;overflow-wrap:anywhere}.operation-caption{font-variant-numeric:tabular-nums;color:#b8cce0}.operation-steps{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.operation-steps span{padding:4px 8px;border:1px solid #34475c;border-radius:999px;font-size:12px;color:#8fa5ba}.operation-steps .current{color:#c6fff0;border-color:#68e6cf;background:#14342d}.operation-steps .done{color:#9bf2c4}.operation-view .spin{flex:0 0 15px}@keyframes operationSlide{0%{transform:translateX(-100%)}100%{transform:translateX(390%)}}@keyframes operationStripes{to{background-position:60px 0}}@media(prefers-reduced-motion:reduce){.operation-track .operation-fill{animation:none!important;transition:none}.operation-track.indeterminate .operation-fill{width:100%;opacity:.4;transform:none}}
-#lmstudioProgress{display:none}</style>
+#lmstudioProgress{display:none}@media(max-width:980px),(max-height:620px){.site-clock{position:static;margin:12px 12px 10px auto;width:max-content;max-width:calc(100% - 24px)}[dir="rtl"] .site-clock{margin-left:12px;margin-right:auto}.toast{bottom:14px}}</style>
 </head>
 <body>
   <div class="scanline"></div>
@@ -366,8 +366,11 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
     function hybridNode(){
       return (lastOverview?.nodes||[]).find(n=>n.node_id===hybridNodeId)||null;
     }
+    function nodeHasPendingCommand(nodeId){
+      return (lastOverview?.commands||[]).some(c=>c.node_id===nodeId&&["pending","accepted"].includes(c.status));
+    }
     function lmstudioPending(nodeId){
-      return (lastOverview?.commands||[]).some(c=>c.node_id===nodeId&&["pending","accepted"].includes(c.status)&&["lmstudio_install","lmstudio_uninstall","lmstudio_probe","lmstudio_model_get","lmstudio_model_load","hybrid_query"].includes(String(c.command_type||"")));
+      return nodeHasPendingCommand(nodeId);
     }
     function applyAiSnapshot(node,data){
       if(!node||!data?.ai)return;
@@ -471,6 +474,9 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       }
       const labels={lmstudio_install:"install",lmstudio_uninstall:"uninstall",lmstudio_probe:"probe",lmstudio_model_get:"download model",lmstudio_model_load:"load model"};
       const label=labels[type]||type;
+      if(nodeHasPendingCommand(node.node_id)){
+        return toast("LM Studio","У этой ноды уже выполняется команда. Дождитесь её завершения и повторите.","bad");
+      }
       if(type!=="lmstudio_probe"&&type!=="lmstudio_uninstall"&&!confirm("LM Studio "+label+" → "+(node.hostname||node.node_id)+"?"))return;
       const op={nodeId:node.node_id,type,startedAt:Date.now(),status:'sending',title:operationTitles[type]||'Операция LM Studio'};legacyLmOperation=op;syncLmstudioPanel();
       try{const d=await api("/api/v1/architect/nodes/"+encodeURIComponent(node.node_id)+"/commands",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});op.commandId=d.command?.command_id;op.status='queued'}catch(error){op.status='failed';op.error=error.message;operationView($("lmstudioOperation"),{title:'Команда не отправлена',detail:error.message,status:'failed'});throw error}
