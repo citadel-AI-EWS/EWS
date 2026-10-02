@@ -1,0 +1,7 @@
+ssh-gateway.example.com {
+    route {
+        @ssh path /ssh
+        reverse_proxy @ssh 127.0.0.1:8080
+        respond 404
+    }
+}
