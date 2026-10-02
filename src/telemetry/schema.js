@@ -2,6 +2,11 @@ import { TELEMETRY_LIMITS, TelemetryError } from "./common.js";
 
 let telemetrySchemaPromise;
 
+// Keep health/bootstrap on the established raw per-node index. Building a
+// datetime() expression index over legacy data can fail (for example, relative
+// SQLite timestamps such as "now") and must not disable telemetry storage.
+// Latest-event reads still filter by node_id and use the bounded per-node index.
+
 export async function ensureTelemetryStorage(env) {
   if (!telemetrySchemaPromise) {
     telemetrySchemaPromise = env.DB.batch([
@@ -21,10 +26,6 @@ export async function ensureTelemetryStorage(env) {
       env.DB.prepare(`
         CREATE INDEX IF NOT EXISTS idx_node_logs_node_created
         ON node_logs(node_id, created_at DESC, event_id DESC)
-      `),
-      env.DB.prepare(`
-        CREATE INDEX IF NOT EXISTS idx_node_logs_node_created_time
-        ON node_logs(node_id, datetime(created_at) DESC, event_id DESC)
       `),
       env.DB.prepare(`
         CREATE INDEX IF NOT EXISTS idx_node_logs_received
