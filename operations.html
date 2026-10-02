@@ -282,6 +282,93 @@ body:not(.authenticated) .art-network-bottom{width:min(45vw,680px)!important;rig
  body:not(.authenticated) .art-network-bottom{width:96vw!important;right:-54vw!important;bottom:5vh!important;opacity:.46!important}
 }
 
+
+/* CITADEL MOBILE CONCEPT REALIGN v4 */
+@media(max-width:700px){
+ body:not(.authenticated){min-height:100svh;overflow-x:hidden;background:#010304!important}
+ body:not(.authenticated) main{min-height:100svh!important;overflow:hidden!important;padding:8px 8px 12px!important}
+ body:not(.authenticated) header{min-height:128px!important;padding-top:24px!important}
+ body:not(.authenticated) .brand-lockup{margin-top:8px!important}
+ body:not(.authenticated) .brand-lockup::before{top:0!important;font-size:7px!important;letter-spacing:.075em!important;color:#ff4055!important}
+ body:not(.authenticated) .brand{font-size:clamp(68px,20vw,88px)!important;line-height:.76!important}
+ body:not(.authenticated) .chrome-subbrand{font-size:12px!important;letter-spacing:.38em!important;text-indent:.38em!important;margin-top:15px!important}
+
+ body:not(.authenticated) .terminal-strip{width:94vw!important;margin:7px auto 15px!important;padding:9px 11px!important}
+ body:not(.authenticated) .terminal-line{font-size:11px!important;line-height:1.4!important;min-height:24px!important}
+
+ body:not(.authenticated) #auth{width:94vw!important;max-width:none!important;margin:0 auto!important;padding:24px 20px 22px!important}
+ body:not(.authenticated) #auth::before{font-size:10px!important;letter-spacing:.18em!important;margin-bottom:17px!important}
+ body:not(.authenticated) #auth label{font-size:10.5px!important}
+ body:not(.authenticated) #auth input{height:56px!important;font-size:16px!important;padding-left:50px!important}
+ body:not(.authenticated) #auth .primary{height:58px!important;font-size:19px!important;letter-spacing:.2em!important}
+ body:not(.authenticated) .auth-monitor-note{font-size:8.5px!important;line-height:1.5!important;margin-top:15px!important}
+
+ body:not(.authenticated) .login-boot{
+   position:absolute!important;
+   z-index:9!important;
+   left:4vw!important;
+   top:58svh!important;
+   bottom:auto!important;
+   width:47vw!important;
+   margin:0!important;
+   padding:9px 10px!important;
+   font-size:7.3px!important;
+   line-height:1.45!important;
+   background:#020708dd!important;
+   border-color:#2e5f64!important
+ }
+
+ body:not(.authenticated) .art-mask-left{
+   width:108vw!important;
+   left:-38vw!important;
+   top:11vh!important;
+   opacity:.88!important;
+   transform:rotate(-1deg)!important
+ }
+ body:not(.authenticated) .art-mask-right{
+   width:76vw!important;
+   right:-39vw!important;
+   top:12vh!important;
+   opacity:.52!important
+ }
+ body:not(.authenticated) .art-hood-right{
+   display:block!important;
+   width:94vw!important;
+   right:-48vw!important;
+   top:9vh!important;
+   bottom:auto!important;
+   opacity:.78!important
+ }
+ body:not(.authenticated) .art-globe-left{
+   display:block!important;
+   width:118vw!important;
+   right:-43vw!important;
+   left:auto!important;
+   bottom:0!important;
+   opacity:.76!important
+ }
+ body:not(.authenticated) .art-network-bottom{
+   width:112vw!important;
+   right:-48vw!important;
+   bottom:4vh!important;
+   opacity:.63!important
+ }
+ body:not(.authenticated) .cyber-art::after{
+   content:"// GLOBAL NODES  ·  OBSERVE  ·  ROUTE  ·  VERIFY";
+   position:absolute;
+   z-index:3;
+   right:5vw;
+   top:69svh;
+   width:42vw;
+   color:#5de4ef;
+   font:700 7px/1.45 "Cascadia Mono",Consolas,monospace;
+   letter-spacing:.08em;
+   text-align:right;
+   text-shadow:0 0 8px #25d8ff77;
+   opacity:.8
+ }
+}
+
 </style></head><body><div id="activityBar" class="activity-bar" aria-hidden="true"></div><div id="cyberArt" class="cyber-art" aria-hidden="true">
 <svg class="login-only art-mask-left cyber-glitch" viewBox="0 0 360 620" role="presentation">
 <defs><pattern id="gridA" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" class="cyber-grid"/></pattern><clipPath id="faceClip"><path d="M82 104Q180 42 278 104L312 208 286 416Q266 500 180 552Q94 500 74 416L48 208Z"/></clipPath></defs>
