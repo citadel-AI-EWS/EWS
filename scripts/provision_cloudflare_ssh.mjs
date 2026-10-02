@@ -126,10 +126,13 @@ async function ensureTunnel(accountId, tunnelName, apply) {
 }
 
 async function ensureTunnelIngress(accountId, tunnelId, hostname, apply) {
+  let baseConfig = {};
   let ingress = [];
   if (tunnelId !== "<planned>") {
     const current = await cf(`/accounts/${accountId}/cfd_tunnel/${tunnelId}/configurations`, {}, [404]);
-    ingress = Array.isArray(current.body?.result?.config?.ingress) ? current.body.result.config.ingress : [];
+    const rawConfig = current.body?.result?.config;
+    baseConfig = rawConfig && typeof rawConfig === "object" && !Array.isArray(rawConfig) ? rawConfig : {};
+    ingress = Array.isArray(baseConfig.ingress) ? baseConfig.ingress : [];
   }
 
   const foreignRoutes = ingress.filter(item => item && item.hostname && item.hostname !== hostname);
@@ -152,7 +155,7 @@ async function ensureTunnelIngress(accountId, tunnelId, hostname, apply) {
   if (apply && tunnelId !== "<planned>") {
     await cf(`/accounts/${accountId}/cfd_tunnel/${tunnelId}/configurations`, {
       method: "PUT",
-      body: JSON.stringify({config: {ingress: routes}})
+      body: JSON.stringify({config: {...baseConfig, ingress: routes}})
     });
   }
   return routes;
@@ -238,7 +241,9 @@ async function ensurePolicy(accountId, appId, hostname, email, apply) {
   if (incompatible.length) fail("browser_ssh_app_contains_unsupported_bypass_or_service_auth_policy");
   const unexpected = policies.filter(p => p?.name !== wanted.name);
   if (unexpected.length) fail("browser_ssh_app_contains_additional_policy");
-  const existing = policies.find(p => p?.name === wanted.name);
+  const matching = policies.filter(p => p?.name === wanted.name);
+  if (matching.length > 1) fail("duplicate_citadel_ssh_policy");
+  const existing = matching[0];
   if (existing && existing.decision !== "allow") fail("citadel_ssh_policy_has_wrong_decision");
 
   const include = Array.isArray(existing?.include) ? existing.include : [];
@@ -329,24 +334,77 @@ async function main() {
 
   token();
 
+  // Preflight every conflict-prone resource before the first write.
   const zone = await findZone(hostname, accountId);
-  const {tunnel, created: tunnelCreated} = await ensureTunnel(accountId, tunnelName, apply);
-  const ingress = await ensureTunnelIngress(accountId, tunnel.id, hostname, apply);
-  const dns = await ensureDns(zone.id, hostname, tunnel.id, apply);
+  const tunnelPlan = await ensureTunnel(accountId, tunnelName, false);
+  const ingressPlan = await ensureTunnelIngress(accountId, tunnelPlan.tunnel.id, hostname, false);
+  const dnsPlan = await ensureDns(zone.id, hostname, tunnelPlan.tunnel.id, false);
+  const appPlan = await ensureAccessApp(accountId, hostname, nodeLabel, sessionDuration, false);
+  const policyPlan = await ensurePolicy(accountId, appPlan.app.id, hostname, allowedEmail, false);
+  const caPlan = await ensureCa(accountId, appPlan.app.id, false);
+
+  if (!apply) {
+    return writeOutput({
+      schema: "citadel.cloudflare-ssh.v1",
+      applied: false,
+      account_id: accountId,
+      zone: {id: zone.id, name: zone.name},
+      tunnel: {
+        id: tunnelPlan.tunnel.id,
+        name: tunnelPlan.tunnel.name,
+        status: tunnelPlan.tunnel.status || "unknown",
+        created: tunnelPlan.created
+      },
+      ingress: ingressPlan,
+      dns: {
+        id: dnsPlan?.id || null,
+        name: hostname,
+        target: tunnelPlan.tunnel.id === "<planned>"
+          ? "<tunnel-id>.cfargotunnel.com"
+          : `${tunnelPlan.tunnel.id}.cfargotunnel.com`
+      },
+      access_app: {
+        id: appPlan.app.id,
+        domain: hostname,
+        type: appPlan.app.type || "ssh",
+        created: appPlan.created,
+        updated: false,
+        update_required: appPlan.update_required,
+        session_duration: appPlan.app.session_duration || sessionDuration
+      },
+      access_policy: {
+        id: policyPlan.policy?.id || null,
+        decision: "allow",
+        allowed_email: allowedEmail,
+        created: policyPlan.created,
+        updated: false,
+        update_required: policyPlan.update_required
+      },
+      ssh_user: sshUser,
+      ca: {id: caPlan?.id || null, public_key: caPlan?.public_key || null},
+      tunnel_token_stored: false,
+      next_local_step: "Re-run with apply=true after reviewing this conflict-checked plan."
+    });
+  }
+
+  // Apply Access controls before publishing SSH routing.
+  const {tunnel, created: tunnelCreated} = await ensureTunnel(accountId, tunnelName, true);
   const {app, created: appCreated, updated: appUpdated, update_required: appUpdateRequired} =
-    await ensureAccessApp(accountId, hostname, nodeLabel, sessionDuration, apply);
+    await ensureAccessApp(accountId, hostname, nodeLabel, sessionDuration, true);
   const {policy, created: policyCreated, updated: policyUpdated, update_required: policyUpdateRequired} =
-    await ensurePolicy(accountId, app.id, hostname, allowedEmail, apply);
-  const ca = await ensureCa(accountId, app.id, apply);
+    await ensurePolicy(accountId, app.id, hostname, allowedEmail, true);
+  const ca = await ensureCa(accountId, app.id, true);
+  const ingress = await ensureTunnelIngress(accountId, tunnel.id, hostname, true);
+  const dns = await ensureDns(zone.id, hostname, tunnel.id, true);
 
   writeOutput({
     schema: "citadel.cloudflare-ssh.v1",
-    applied: apply,
+    applied: true,
     account_id: accountId,
     zone: {id: zone.id, name: zone.name},
     tunnel: {id: tunnel.id, name: tunnel.name, status: tunnel.status || "unknown", created: tunnelCreated},
     ingress,
-    dns: {id: dns?.id || null, name: hostname, target: tunnel.id === "<planned>" ? "<tunnel-id>.cfargotunnel.com" : `${tunnel.id}.cfargotunnel.com`},
+    dns: {id: dns?.id || null, name: hostname, target: `${tunnel.id}.cfargotunnel.com`},
     access_app: {
       id: app.id,
       domain: hostname,
