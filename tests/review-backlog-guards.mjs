@@ -401,6 +401,7 @@ const inlineSessionGuardIndex = operations.indexOf("if(!current())return;", inli
 need(inlineStoreIndex >= 0 && inlineSessionGuardIndex > inlineStoreIndex, "terminal command ID can be lost when the dialog closes during POST");
 need(operations.includes("formatSshCommandResult(command)") && operations.includes("result.output"), "failed SSH console output is discarded");
 need(operations.includes("command ID retained") && operations.includes("Получить результат SSH"), "pending SSH commands cannot be resumed after the initial polling window");
+need(operations.includes("withButton('sshProbe',probeOperationsSsh).finally(()=>renderOperationsSshState())"), "withButton cleanup can erase the pending SSH probe retrieval label");
 need(operations.includes("if($('sshDialog').open&&sshNodeId===n.node_id)renderOperationsSshState()"), "SSH bootstrap eligibility is not refreshed after details load");
 need(operations.includes("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"), "deployed Machines SSH user validation drifts from Controller");
 need(operations.includes("command_type:'ssh_console'") && operations.includes("command_type:'ssh_probe'"), "deployed Machines SSH commands missing");
