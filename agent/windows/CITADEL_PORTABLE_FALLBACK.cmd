@@ -22,4 +22,5 @@ if errorlevel 1 (
 echo.
 echo CITADEL portable fallback is installed.
 echo The node will appear in the Hub when the Controller becomes reachable.
+pause
 exit /b 0
