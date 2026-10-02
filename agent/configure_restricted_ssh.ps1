@@ -188,7 +188,9 @@ function Read-SecretPlainText([string]$Prompt) {
 
 function Require-SafeUsername([string]$Value) {
   $Name = $Value.Trim()
-  if ($Name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,19}
+  if ($Name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$') {
+    throw "SSH username must be 1-20 characters: letters, digits, dot, underscore or hyphen."
+  }
   $Reserved = @("administrator", "guest", "defaultaccount", "wdagutilityaccount", "system", "localservice", "networkservice")
   if ($Reserved -contains $Name.ToLowerInvariant()) {
     throw "Built-in or privileged Windows accounts are not allowed for CITADEL SSH."
