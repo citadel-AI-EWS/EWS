@@ -55,6 +55,13 @@ if [[ -d "$OUTPUT" ]]; then
 fi
 
 mkdir -p "$OUTPUT/architect/logs" "$OUTPUT/hub" "$OUTPUT/logs"
+mkdir -p "$OUTPUT/assets"
+cp "$ROOT/node_modules/@xterm/xterm/lib/xterm.js" "$OUTPUT/assets/xterm.js"
+cp "$ROOT/node_modules/@xterm/xterm/css/xterm.css" "$OUTPUT/assets/xterm.css"
+cp "$ROOT/node_modules/@xterm/addon-fit/lib/addon-fit.js" "$OUTPUT/assets/addon-fit.js"
+cp "$ROOT/ui/ssh-terminal.js" "$ROOT/ui/ssh-terminal.css" "$OUTPUT/assets/"
+cp "$ROOT/node_modules/@xterm/xterm/LICENSE" "$OUTPUT/assets/xterm-LICENSE.txt"
+cp "$ROOT/node_modules/@xterm/addon-fit/LICENSE" "$OUTPUT/assets/addon-fit-LICENSE.txt"
 cp "$ROOT/operations.html" "$OUTPUT/index.html"
 # Compatibility links lead to the two-page console; legacy panels are not shipped.
 for route in architect hub; do
