@@ -20,6 +20,27 @@ export class NodeSshRelay {
       return Response.json({agent_connected: this.sockets('agent').length > 0},
         {headers: {'cache-control': 'no-store'}});
     }
+    if (role === 'replay') {
+      if (request.method !== 'POST') return new Response(null, {status: 405});
+      const requestId = request.headers.get('x-citadel-request-id');
+      const expires = Number(request.headers.get('x-citadel-request-expires'));
+      const now = Math.floor(Date.now() / 1000);
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId || '') ||
+          !Number.isInteger(expires) || expires <= now || expires - now > 600) {
+        return new Response(null, {status: 403});
+      }
+      const used = await this.state.storage.transaction(async tx => {
+        const key = 'nonce:' + requestId;
+        if (await tx.get(key)) return true;
+        await tx.put(key, expires);
+        return false;
+      });
+      if (used) return new Response(null, {status: 409});
+      const currentAlarm = await this.state.storage.getAlarm();
+      const targetAlarm = expires * 1000;
+      if (currentAlarm === null || targetAlarm < currentAlarm) await this.state.storage.setAlarm(targetAlarm);
+      return new Response(null, {status: 201});
+    }
     if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket' || !['agent', 'browser'].includes(role)) {
       return new Response(null, {status: 403});
     }
@@ -87,7 +108,15 @@ export class NodeSshRelay {
 
   async alarm() {
     for (const browser of this.sockets('browser')) browser.close(1000, 'session_expired');
-    const expired = await this.state.storage.list({prefix: 'ticket:', limit: 1000});
-    for (const [key, value] of expired) if (value <= Date.now() / 1000) await this.state.storage.delete(key);
+    const now = Date.now() / 1000;
+    let next = null;
+    for (const prefix of ['ticket:', 'nonce:']) {
+      const rows = await this.state.storage.list({prefix, limit: 1000});
+      for (const [key, value] of rows) {
+        if (value <= now) await this.state.storage.delete(key);
+        else next = next === null ? value : Math.min(next, value);
+      }
+    }
+    if (next !== null) await this.state.storage.setAlarm(next * 1000);
   }
 }
