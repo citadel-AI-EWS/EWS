@@ -71,7 +71,9 @@ need(agentV1.includes("execute_ssh_console_command"), "agent inline SSH executio
 need(index.includes("SSH_CONSOLE_COMMANDS"), "Controller inline SSH allow-list missing");
 need(index.includes("MAX_SSH_CONSOLE_OUTPUT_BYTES = 24 * 1024"), "inline SSH result bound missing");
 need(index.includes("ssh_console_result_required"), "Controller must require inline SSH command results");
-need(index.includes("result_json TEXT"), "runtime command result storage missing");
+need(index.includes("CREATE TABLE IF NOT EXISTS ssh_console_results"), "runtime SSH result table missing");
+need(index.includes("LEFT JOIN ssh_console_results"), "inline SSH result read path missing");
+need(!index.includes("ALTER TABLE commands ADD COLUMN result_json"), "inline SSH results must stay out of the hot commands table");
 need(hub.includes('id="sshInlinePanel"') && hub.includes('id="sshInlineInput"'), "Hub inline restricted terminal missing");
 need(hub.includes('command_type:"ssh_console"'), "Hub does not dispatch signed inline SSH commands");
 need(hub.includes('versionAtLeast(node.agent_version,"0.3.31")'), "Hub inline SSH must require agent 0.3.31+");
