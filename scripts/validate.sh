@@ -354,6 +354,9 @@ python tests/lmstudio-progress.py
 python tests/ssh-restricted-console.py
 node scripts/provision_cloudflare_ssh.mjs --self-test
 node tests/ssh-provisioning.mjs
+node tests/ssh-terminal-e2e.mjs
+node --check ui/ssh-terminal.js
+node --check gateway/server.mjs
 node tests/openrouter-quality-gate.mjs
 
 python - <<'PY'
