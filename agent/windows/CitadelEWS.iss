@@ -432,6 +432,20 @@ begin
   end;
 end;
 
+function KeepInstallerForegroundRequested: Boolean;
+begin
+  Result := CompareText(ExpandConstant('{param:FOREGROUND|0}'), '1') = 0;
+end;
+
+procedure MinimizeInstallerForBackgroundWork;
+begin
+  if Assigned(WizardForm) and (not KeepInstallerForegroundRequested) then
+  begin
+    UpdateSetupStatus('CITADEL: installation continues in the background...');
+    WizardForm.WindowState := wsMinimized;
+  end;
+end;
+
 procedure AppendRecoveryLog(StepName, Outcome, Detail: string);
 var
   StateRoot, RecoveryPath, Line: string;
@@ -613,6 +627,9 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
+  if CurStep = ssInstall then
+    MinimizeInstallerForBackgroundWork;
+
   if CurStep = ssPostInstall then
   begin
     WriteDefaultConfig;
