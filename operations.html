@@ -514,13 +514,40 @@ const terminalPhrases=[
   'NODES SPEAK. CITADEL LISTENS.',
   'TRUST THE LOGS. VERIFY THE STATE.',
   'QUIET SYSTEMS. CLEAR SIGNALS.',
-  'ACCESS IS TEMPORARY. AUDIT IS FOREVER.'
+  'ACCESS IS TEMPORARY. AUDIT IS FOREVER.',
+  'SYSTEMS DO NOT SLEEP. PEOPLE DO.',
+  'POWER LOVES DARK ROOMS. DATA TURNS ON THE LIGHT.',
+  'MONEY IS TRUST WRITTEN AS A NUMBER.',
+  'CONTROL IS QUIETEST WHEN YOU STOP NOTICING IT.',
+  'FEAR IS A FIREWALL BUILT INSIDE THE MIND.',
+  'THE NETWORK NEVER FORGETS. IT ONLY ARCHIVES.',
+  'MAFIA IS NOT CHAOS. IT IS ORDER WITH PRIVATE RULES.',
+  'THE MOST DANGEROUS DOOR IS THE ONE EVERYONE ASSUMES IS LOCKED.',
+  'SECRETS HAVE WEIGHT. SYSTEMS LEAK UNDER PRESSURE.',
+  'EVERY PASSWORD EXPIRES. CONSEQUENCES DO NOT.',
+  'THE MACHINE DOES NOT LIE. THE INPUT CAN.',
+  'A QUIET SERVER CAN HOLD A VERY LOUD TRUTH.',
+  'TRUST IS NOT A SETTING. VERIFY THE STATE.',
+  'NO SYSTEM IS TOO BIG TO FAIL. ONLY TOO BIG TO FAIL QUIETLY.',
+  'EMPIRES COLLAPSE TWICE: FIRST IN PRIVATE, THEN IN PUBLIC.',
+  'REVOLUTIONS START AS WHISPERS AND END AS VERSION HISTORY.',
+  'WHO CONTROLS THE INTERFACE SHAPES WHAT OTHERS BELIEVE IS POSSIBLE.',
+  'THE LOG IS THE MEMORY POWER CANNOT NEGOTIATE WITH.',
+  'THIS IS NOT CHAOS. THIS IS A SYSTEM REVEALING ITS RULES.',
+  'ИСТОРИЯ ПОМНИТ ПОБЕДИТЕЛЕЙ. ЛОГИ ПОМНЯТ ВСЕХ.',
+  'ИМПЕРИИ РУШАТСЯ ДВАЖДЫ: СНАЧАЛА ТИХО, ПОТОМ ПУБЛИЧНО.',
+  'МАФИЯ — НЕ ХАОС. ЭТО ПОРЯДОК С ЧАСТНЫМИ ПРАВИЛАМИ.',
+  'ВЛАСТЬ ЛЮБИТ ТИШИНУ. ДАННЫЕ ЛЮБЯТ СВЕТ.'
 ];
 let terminalPhraseIndex=0;
 function rotateTerminalPhrase(){
   const target=$('terminalPhrase');
   if(!target)return;
-  terminalPhraseIndex=(terminalPhraseIndex+1)%terminalPhrases.length;
+  let next=terminalPhraseIndex;
+  if(terminalPhrases.length>1){
+    while(next===terminalPhraseIndex)next=Math.floor(Math.random()*terminalPhrases.length);
+  }
+  terminalPhraseIndex=next;
   target.classList.remove('glitch-flash');
   void target.offsetWidth;
   target.textContent=terminalPhrases[terminalPhraseIndex];
