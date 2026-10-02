@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": {"start": "node server.mjs"},
+  "scripts": {"start": "node server.mjs", "doctor": "node doctor.mjs"},
   "engines": {"node": ">=22.13"},
   "dependencies": {"ssh2": "1.17.0", "ws": "8.22.0"}
 }

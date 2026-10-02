@@ -78,6 +78,25 @@ configuration. Configure a real hostname and certificate for that server.
 The gateway checks the exact Hub origin and validates the signed ticket, so
 do not configure proxy logs to capture request headers or session tickets.
 
+Before enabling Hub, run a real connection check on the gateway server as its
+service account (replace `NODE_ID` with a registered id from the target file):
+
+```sh
+cd /opt/citadel/EWS
+sudo -u citadel-ssh node --env-file=/etc/citadel-ssh/gateway.env gateway/doctor.mjs --node NODE_ID
+```
+
+Omit `--node NODE_ID` to check every configured target. The doctor creates a
+local gateway, redeems a short-lived ticket, verifies the pinned SSH host key,
+opens a PTY and requires the restricted-console banner and allow-list proof. It
+does not need D1 and prints only node ids and result codes. A result such as
+`{"ok":true,"nodes":[{"node_id":"NODE_ID","status":"ready","code":"ready"}]}`
+means this server can reach that SSH account and the console is usable. A
+nonzero exit means the target is not ready; `ssh_connection_failed` covers
+network, key and host-key errors, while `ssh_restricted_console_required` means
+the account did not start the required ForceCommand console. The doctor cannot
+verify the public TLS reverse proxy or Hub bindings; check those separately.
+
 Use one gateway process. Ticket ids/expiry times are stored atomically in its
 local SQLite replay database and survive restart; no credentials or terminal
 output are written there. The sample systemd service creates the writable
@@ -96,6 +115,9 @@ The deploy workflow syncs them only when both are configured. A partial
 configuration fails deployment rather than enabling an incomplete gateway.
 Then run Deploy Cloudflare TEST. Without these secrets, the terminal tells
 the user that interactive SSH is not configured; it does not simulate a session.
+Seeing “Шлюз настроен” in the dialog confirms only the Hub bindings. The
+selected target is checked when Connect is pressed. Run the doctor above first
+to establish target readiness without relying on D1 or the browser.
 
 Sign into Hub as the owner, choose **SSH** on a node and click **Connect**.
 Operator/viewer tokens cannot obtain full SSH sessions. The node need not have

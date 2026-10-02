@@ -6,6 +6,7 @@ import {WebSocket} from 'ws';
 import {issueSshTicket, verifySshTicket} from '../src/ssh/tickets.js';
 import {sshFixture} from './helpers/ssh-fixture.mjs';
 import {TicketReplayStore} from '../gateway/replay-store.mjs';
+import {runGatewayDoctor} from '../gateway/doctor.mjs';
 
 const gatewaySource = fs.readFileSync('gateway/server.mjs', 'utf8');
 const caddySource = fs.readFileSync('gateway/Caddyfile.example', 'utf8');
@@ -39,6 +40,11 @@ async function refused(ticket, origin = f.origin) {
   });
 }
 try {
+  const doctor = await runGatewayDoctor({secret: f.secret, hubOrigin: f.origin, targets: f.targets,
+    nodeIds: ['node-one', 'bad-pin', 'unrestricted', 'unmapped'], timeoutMs: 8000});
+  assert.deepEqual(doctor.nodes.map(node => node.code),
+    ['ready', 'ssh_connection_failed', 'ssh_restricted_console_required', 'ssh_target_not_configured']);
+  assert.equal(doctor.ok, false);
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'citadel-replay-'));
   try {
     const filename = path.join(directory, 'replay.sqlite');
@@ -113,7 +119,7 @@ try {
       await page.locator('#sshTerminal .xterm-helper-textarea').press('Enter');
       await page.waitForFunction(() => document.getElementById('sshTerminal').innerText.includes('SSH_RESULT:status'));
       await page.locator('#sshNodeSelect').selectOption('node-two');
-      await page.locator('#sshStatus').filter({hasText: 'Готов к подключению.'}).waitFor();
+      await page.locator('#sshStatus').filter({hasText: 'Шлюз настроен.'}).waitFor();
       assert.ok(!(await page.locator('#sshTerminal').innerText()).includes('SSH_RESULT:status'), 'switch clears previous node output');
       await page.locator('#sshConnect').click();
       await page.locator('#sshStatus').filter({hasText: 'SSH подключён.'}).waitFor();
@@ -130,7 +136,7 @@ try {
       assert.ok(f.audit.filter(e => e.event === 'ssh.closed').length >= 4, 'closing dialog terminates SSH');
       await page.setViewportSize({width: 390, height: 844});
       await page.locator('#nodes .node-card').filter({has: page.locator('h2', {hasText: 'Хост node-one'})}).getByRole('button', {name: 'SSH', exact: true}).click();
-      await page.locator('#sshStatus').filter({hasText: 'Готов к подключению.'}).waitFor();
+      await page.locator('#sshStatus').filter({hasText: 'Шлюз настроен.'}).waitFor();
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
       await page.locator('#sshConnect').click();
       await page.locator('#sshStatus').filter({hasText: 'SSH подключён.'}).waitFor();
