@@ -15,6 +15,29 @@ const JSON_HEADERS = {
   "x-content-type-options": "nosniff"
 };
 const SIGNATURE_WINDOW_SECONDS = 300;
+const DURABLE_REPLAY_EXTRA_SECONDS = 30;
+
+async function claimDurableReplayNonce(env, nodeId, requestId) {
+  if (!env.SSH_RELAY || typeof env.SSH_RELAY.idFromName !== "function") return null;
+  try {
+    const stub = env.SSH_RELAY.get(env.SSH_RELAY.idFromName(nodeId));
+    const expires = Math.floor(Date.now() / 1000) + SIGNATURE_WINDOW_SECONDS + DURABLE_REPLAY_EXTRA_SECONDS;
+    const response = await stub.fetch("https://relay.internal/replay-claim", {
+      method: "POST",
+      headers: {
+        "x-citadel-relay-role": "replay",
+        "x-citadel-request-id": requestId,
+        "x-citadel-request-expires": String(expires)
+      }
+    });
+    if (response.status === 201) return true;
+    if (response.status === 409) return false;
+  } catch {
+    // Fail closed to the existing D1-backed replay store when DO is unavailable.
+  }
+  return null;
+}
+
 const SECRET_KEY = /(pass(word)?|secret|token|api[_-]?key|authorization|cookie|private[_-]?key|credential)/i;
 const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 let architectAuthSchemaPromise;
@@ -379,14 +402,23 @@ export async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   if (!verified) throw new TelemetryError(401, "invalid_signature");
 
   if (requestId) {
-    await ensureNodeRequestNonceStorage(env);
-    const nonce = await env.DB.prepare(
-      "INSERT OR IGNORE INTO node_request_nonces (node_id, request_id) VALUES (?, ?)"
-    ).bind(nodeId, requestId).run();
-    if ((nonce?.meta?.changes || 0) !== 1) {
+    const syncHotPath = url.pathname.endsWith("/sync");
+    const durableClaim = syncHotPath
+      ? await claimDurableReplayNonce(env, nodeId, requestId)
+      : null;
+    if (durableClaim === false) {
       throw new TelemetryError(409, "replayed_request");
     }
-    if (requestId.endsWith("0")) await pruneNodeRequestNonces(env);
+    if (durableClaim !== true) {
+      await ensureNodeRequestNonceStorage(env);
+      const nonce = await env.DB.prepare(
+        "INSERT OR IGNORE INTO node_request_nonces (node_id, request_id) VALUES (?, ?)"
+      ).bind(nodeId, requestId).run();
+      if ((nonce?.meta?.changes || 0) !== 1) {
+        throw new TelemetryError(409, "replayed_request");
+      }
+      if (requestId.endsWith("0")) await pruneNodeRequestNonces(env);
+    }
   }
   return node;
 }
