@@ -56,7 +56,7 @@ class CitadelSshTerminal {
       if (epoch !== this.epoch || nodeId !== this.nodeId) return;
       this.canConnect = state.can_connect === true;
       this.status(!state.configured ? 'Интерактивный SSH ещё не настроен администратором.' :
-        !this.canConnect ? 'Для SSH требуется доступ владельца.' : 'Готов к подключению.');
+        !this.canConnect ? 'Для SSH требуется доступ владельца.' : 'Шлюз настроен. Доступность SSH узла проверится при подключении.');
       this.buttons();
     } catch (error) {if (epoch === this.epoch) this.status('Подключение недоступно: ' + error.message);}
   }

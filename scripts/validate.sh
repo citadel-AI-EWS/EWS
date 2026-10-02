@@ -358,6 +358,7 @@ node tests/ssh-provisioning.mjs
 node tests/ssh-terminal-e2e.mjs
 node --check ui/ssh-terminal.js
 node --check gateway/server.mjs
+node --check gateway/doctor.mjs
 node tests/openrouter-quality-gate.mjs
 
 python - <<'PY'

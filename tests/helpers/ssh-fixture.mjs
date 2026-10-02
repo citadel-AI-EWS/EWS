@@ -52,10 +52,11 @@ export async function sshFixture({assets = false} = {}) {
   const secret = 'fixture-ticket-secret-not-a-production-key';
   const target = {host: '127.0.0.1', port: ssh.address().port, username: 'operator', mode: 'citadel-restricted',
     privateKey: userKeys.private, hostKeySha256: hash(utils.parseKey(hostKeys.private).getPublicSSH())};
-  const gateway = createSshGateway({secret, hubOrigin: origin, targets: new Map([
+  const targets = new Map([
     ['node-one', target], ['node-two', target], ['bad-pin', {...target, hostKeySha256: 'SHA256:' + 'A'.repeat(43)}],
     ['unrestricted', {...target, username: 'unrestricted'}]
-  ]), audit: event => audit.push(event)});
+  ]);
+  const gateway = createSshGateway({secret, hubOrigin: origin, targets, audit: event => audit.push(event)});
   gateway.server.prependListener('upgrade', req => upgrades.push({url: req.url, authorization: req.headers.authorization, origin: req.headers.origin}));
   await new Promise(resolve => gateway.server.listen(0, '127.0.0.1', resolve));
   const token = 'fixture-owner-token', operator = 'fixture-operator-token', viewer = 'fixture-viewer-token';
@@ -86,7 +87,7 @@ export async function sshFixture({assets = false} = {}) {
     if (!response.ok) throw Error('fixture ticket rejected: ' + response.status + ' ' + await response.text());
     return (await response.json()).ticket;
   }
-  return {origin, secret, token, operator, viewer, commands, windows, audit, upgrades, db, mf, request, ticket,
+  return {origin, secret, targets, token, operator, viewer, commands, windows, audit, upgrades, db, mf, request, ticket,
     async close() {
       await mf.dispose(); await gateway.close();
       for (const client of clients) client.end();
