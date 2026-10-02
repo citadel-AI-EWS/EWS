@@ -4059,7 +4059,7 @@ async function persistHeartbeat(env, node, body, coalesce = false) {
           status = CASE WHEN status = 'paused' THEN 'paused' ELSE 'online' END,
           last_seen_at = ?
       WHERE node_id = ? AND status != 'revoked'
-        AND (? = 0 OR datetime(last_seen_at) <= datetime(?, '-60 seconds')
+        AND (? = 0 OR datetime(last_seen_at) <= datetime(?, '-240 seconds')
           OR status NOT IN ('online','paused')
           OR agent_version IS NOT COALESCE(?, agent_version)
           OR capabilities_json IS NOT COALESCE(?, capabilities_json))
@@ -4228,6 +4228,8 @@ async function assignmentsForNode(env, node) {
 
 // One authenticated envelope replaces separate command, heartbeat, AI and work
 // polls. Legacy routes retain their existing authentication and response shape.
+// Stable sync heartbeats persist at most once every four minutes; live relay
+// connectivity and 30-second sync reads keep control responsive without D1 write churn.
 async function syncNode(request, env, nodeId, url) {
   const { bytes, text } = await readBody(request, 192 * 1024);
   const node = await authenticateNode(request, env, nodeId, url, bytes);
