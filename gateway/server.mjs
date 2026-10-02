@@ -8,6 +8,7 @@ import {verifySshTicket} from '../src/ssh/tickets.js';
 import {TicketReplayStore} from './replay-store.mjs';
 
 const {Client} = ssh2;
+const RESTRICTED_CONSOLE_BANNER = 'CITADEL Restricted SSH Console';
 const fingerprint = key => 'SHA256:' + createHash('sha256').update(key).digest('base64').replace(/=+$/, '');
 function targetConfig(target) {
   if (!target || typeof target.host !== 'string' || !/^[A-Za-z0-9.:-]{1,253}$/.test(target.host) ||
@@ -72,13 +73,13 @@ export function createSshGateway({secret, targets, hubOrigin, idleMs = 600000, m
   function startSession(ws, claims) {
     const target = targets.get(claims.node_id);
     const ssh = new Client();
-    let channel = null, done = false, reason = 'disconnected', exitCode = null;
+    let channel = null, done = false, reason = 'disconnected', exitCode = null, handshakeTimer = null;
     let lastActivity = Date.now(), inputBytes = 0, inputWindow = Date.now();
     sessions.set(claims.jti, claims);
     const send = event => {if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(event));};
     const finish = code => {
       if (done) return;
-      done = true; reason = code; clearInterval(timer); sessions.delete(claims.jti);
+      done = true; reason = code; clearInterval(timer); if (handshakeTimer) clearTimeout(handshakeTimer); sessions.delete(claims.jti);
       channel?.destroy(); ssh.destroy();
       if (ws.readyState === WebSocket.OPEN) ws.close(1000, code);
       audit({event: 'ssh.closed', node_id: claims.node_id, actor_id: claims.actor_id, session_id: claims.jti, reason, exit_code: exitCode});
@@ -117,20 +118,33 @@ export function createSshGateway({secret, targets, hubOrigin, idleMs = 600000, m
       ssh.shell({term: 'xterm-256color', cols: 80, rows: 24}, (error, stream) => {
         if (error) return fail('ssh_shell_unavailable');
         if (done) return stream.destroy();
-        channel = stream;
-        const output = data => {
+        const preface = [];
+        let prefaceBytes = 0, restrictedVerified = false;
+        const forward = data => {
           if (done || ws.readyState !== WebSocket.OPEN) return;
           lastActivity = Date.now();
           if (ws.bufferedAmount > 2 * 1024 * 1024) return fail('terminal_client_too_slow');
           ws.send(data, {binary: true});
-          if (ws.bufferedAmount > 512 * 1024) channel.pause();
+          if (channel && ws.bufferedAmount > 512 * 1024) channel.pause();
         };
-        stream.on('data', output); stream.stderr.on('data', output);
+        const verifyOutput = data => {
+          if (restrictedVerified) return forward(data);
+          preface.push(Buffer.from(data)); prefaceBytes += data.length;
+          if (prefaceBytes > 16 * 1024) return fail('ssh_restricted_console_required');
+          const text = Buffer.concat(preface).toString('utf8');
+          if (!text.includes(RESTRICTED_CONSOLE_BANNER)) return;
+          restrictedVerified = true; if (handshakeTimer) clearTimeout(handshakeTimer); handshakeTimer = null;
+          channel = stream;
+          forward(Buffer.concat(preface));
+          audit({event: 'ssh.opened', node_id: claims.node_id, actor_id: claims.actor_id, session_id: claims.jti, restricted_console: true});
+          send({type: 'ready', node_id: claims.node_id, session_id: claims.jti, expires_at: new Date(claims.session_exp * 1000).toISOString()});
+        };
+        handshakeTimer = setTimeout(() => fail('ssh_restricted_console_required'), 5000);
+        handshakeTimer.unref?.();
+        stream.on('data', verifyOutput); stream.stderr.on('data', verifyOutput);
         stream.on('exit', (code, signal) => {exitCode = Number.isInteger(code) ? code : null; reason = 'ssh_exited'; send({type: 'exit', code: exitCode, signal: signal || null});});
         stream.on('close', () => finish(reason));
         stream.on('error', () => fail('ssh_channel_failed'));
-        audit({event: 'ssh.opened', node_id: claims.node_id, actor_id: claims.actor_id, session_id: claims.jti});
-        send({type: 'ready', node_id: claims.node_id, session_id: claims.jti, expires_at: new Date(claims.session_exp * 1000).toISOString()});
       });
     });
     try {
