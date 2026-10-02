@@ -93,21 +93,46 @@ function Ensure-WinGet {
   return $Existing
 }
 
-function Find-Cloudflared {
-  $Command = Get-Command cloudflared -ErrorAction SilentlyContinue
-  if ($null -ne $Command -and -not [string]::IsNullOrWhiteSpace([string]$Command.Source)) {
-    return [string]$Command.Source
+function Test-TrustedCloudflaredExecutable([string]$Path) {
+  if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    return $false
   }
-  $Candidates = @(
-    (Join-Path $env:ProgramFiles "cloudflared\cloudflared.exe")
-  )
+  $FullPath = [System.IO.Path]::GetFullPath($Path)
+  $Roots = @(
+    [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles),
+    [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)
+  ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+  $UnderProtectedRoot = $false
+  foreach ($Root in $Roots) {
+    $RootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    if (($FullPath + '\').StartsWith($RootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+      $UnderProtectedRoot = $true
+      break
+    }
+  }
+  if (-not $UnderProtectedRoot) { return $false }
+
+  $Signature = Get-AuthenticodeSignature -FilePath $FullPath
+  if ($Signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or $null -eq $Signature.SignerCertificate) {
+    return $false
+  }
+  $Subject = [string]$Signature.SignerCertificate.Subject
+  return $Subject -match '(?i)(^|[,= ])Cloudflare([, =]|$)'
+}
+
+function Find-Cloudflared {
+  $Candidates = @()
+  $ProgramFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
+  if (-not [string]::IsNullOrWhiteSpace($ProgramFiles)) {
+    $Candidates += (Join-Path $ProgramFiles "cloudflared\cloudflared.exe")
+  }
   $ProgramFilesX86 = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)
   if (-not [string]::IsNullOrWhiteSpace($ProgramFilesX86)) {
     $Candidates += (Join-Path $ProgramFilesX86 "cloudflared\cloudflared.exe")
   }
-  $Candidates += (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links\cloudflared.exe")
   foreach ($Candidate in $Candidates) {
-    if ($Candidate -and (Test-Path -LiteralPath $Candidate)) { return $Candidate }
+    if (Test-TrustedCloudflaredExecutable -Path $Candidate) { return $Candidate }
   }
   return $null
 }
@@ -119,11 +144,10 @@ function Ensure-Cloudflared {
   Write-Host "[CITADEL] Installing Cloudflare cloudflared through WinGet..."
   & $Winget install --id Cloudflare.cloudflared --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
   if ($LASTEXITCODE -ne 0) { throw "cloudflared WinGet installation failed." }
-  $MachinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-  $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-  $env:Path = (($MachinePath, $UserPath) -join ";")
   $Installed = Find-Cloudflared
-  if ($null -eq $Installed) { throw "cloudflared was installed but the executable could not be found." }
+  if ($null -eq $Installed) {
+    throw "cloudflared was installed but no Authenticode-valid Cloudflare executable was found under protected Program Files paths."
+  }
   return $Installed
 }
 
