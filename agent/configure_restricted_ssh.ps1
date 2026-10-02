@@ -98,10 +98,15 @@ function Find-Cloudflared {
   if ($null -ne $Command -and -not [string]::IsNullOrWhiteSpace([string]$Command.Source)) {
     return [string]$Command.Source
   }
-  foreach ($Candidate in @(
-    (Join-Path $env:ProgramFiles "cloudflared\cloudflared.exe"),
-    (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links\cloudflared.exe")
-  )) {
+  $Candidates = @(
+    (Join-Path $env:ProgramFiles "cloudflared\cloudflared.exe")
+  )
+  $ProgramFilesX86 = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)
+  if (-not [string]::IsNullOrWhiteSpace($ProgramFilesX86)) {
+    $Candidates += (Join-Path $ProgramFilesX86 "cloudflared\cloudflared.exe")
+  }
+  $Candidates += (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links\cloudflared.exe")
+  foreach ($Candidate in $Candidates) {
     if ($Candidate -and (Test-Path -LiteralPath $Candidate)) { return $Candidate }
   }
   return $null
