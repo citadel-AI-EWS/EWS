@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import {pathToFileURL} from "node:url";
 
 const API = "https://api.cloudflare.com/client/v4";
 
@@ -68,7 +69,7 @@ async function cf(path, options = {}, allowedStatuses = []) {
     ...(options.body ? {"content-type": "application/json"} : {}),
     ...(options.headers || {})
   };
-  const response = await fetch(API + path, {...options, headers});
+  const response = await fetch(API + path, {...options, headers, signal: AbortSignal.timeout(20000)});
   let body = {};
   try { body = await response.json(); } catch { body = {}; }
   if (!response.ok && !allowedStatuses.includes(response.status)) {
@@ -250,8 +251,15 @@ async function ensurePolicy(accountId, appId, hostname, email, apply) {
   const exclude = Array.isArray(existing?.exclude) ? existing.exclude : [];
   const requireRules = Array.isArray(existing?.require) ? existing.require : [];
   const exactEmail = include.length === 1 &&
+    Object.keys(include[0] || {}).length === 1 &&
     String(include[0]?.email?.email || "").trim().toLowerCase() === email;
-  const updateRequired = Boolean(existing) && !(exactEmail && exclude.length === 0 && requireRules.length === 0);
+  // A matching identity may still have stricter MFA and exclusion rules.
+  // Keep those rules when changing the email, and never weaken them on reuse.
+  if (existing) {
+    wanted.exclude = exclude;
+    wanted.require = requireRules;
+  }
+  const updateRequired = Boolean(existing) && !exactEmail;
 
   if (existing && (!updateRequired || !apply)) {
     return {policy: existing, created: false, updated: false, update_required: updateRequired};
@@ -327,7 +335,7 @@ function selfTest() {
   console.log("Cloudflare SSH provisioner self-test: PASS");
 }
 
-async function main() {
+export async function main() {
   if (process.argv.includes("--self-test")) return selfTest();
 
   const apply = String(process.env.CITADEL_CF_APPLY || "").toLowerCase() === "true" ||
@@ -363,7 +371,8 @@ async function main() {
         status: tunnelPlan.tunnel.status || "unknown",
         created: tunnelPlan.created
       },
-      ingress: ingressPlan,
+      ingress: ingressPlan.filter(route => route.hostname === hostname)
+        .map(route => ({hostname: route.hostname, service: route.service})),
       dns: {
         id: dnsPlan?.id || null,
         name: hostname,
@@ -411,7 +420,8 @@ async function main() {
     account_id: accountId,
     zone: {id: zone.id, name: zone.name},
     tunnel: {id: tunnel.id, name: tunnel.name, status: tunnel.status || "unknown", created: tunnelCreated},
-    ingress,
+    ingress: ingress.filter(route => route.hostname === hostname)
+      .map(route => ({hostname: route.hostname, service: route.service})),
     dns: {id: dns?.id || null, name: hostname, target: `${tunnel.id}.cfargotunnel.com`},
     access_app: {
       id: app.id,
@@ -437,7 +447,9 @@ async function main() {
   });
 }
 
-main().catch(error => {
-  console.error("CITADEL Cloudflare SSH provisioning failed:", error?.message || String(error));
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch(error => {
+    console.error("CITADEL Cloudflare SSH provisioning failed:", error?.message || String(error));
+    process.exit(1);
+  });
+}
