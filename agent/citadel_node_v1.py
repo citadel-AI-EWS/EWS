@@ -18,6 +18,7 @@ import ctypes
 import dataclasses
 import datetime as dt
 import hashlib
+import importlib.util
 import ipaddress
 import http.client
 import json
@@ -49,11 +50,11 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.30"
+VERSION = "0.3.31"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe"}
+SUPPORTED_COMMANDS = {"pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe", "ssh_console"}
 CORE_UPDATE_FILE_NAMES = {"citadel_node_v1.py", "citadel_node_v2.py"}
 UPDATE_FILE_NAMES = CORE_UPDATE_FILE_NAMES | {"windows_enterprise_probe.ps1", "CitadelSshConsole.cs", "configure_restricted_ssh.ps1"}
 UPDATE_MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -64,6 +65,11 @@ LMSTUDIO_INSTALL_FILE_NAMES = {"install_llmstudio_headless.ps1", "install_llmstu
 LMSTUDIO_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,95})?(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,31})?$")
 LMSTUDIO_QUANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
 HYBRID_MODES = {"python", "lmstudio", "both"}
+SSH_INLINE_COMMANDS = frozenset({
+    "help", "status", "hostname", "uptime", "cpu", "memory", "disk", "network",
+    "agent-status", "agent-logs", "lmstudio-status", "diagnostics", "ping-controller", "exit",
+})
+SSH_INLINE_OUTPUT_MAX_BYTES = 24 * 1024
 NETWORK_PRIMARY_PROFILE_RETRIES = 3
 NETWORK_PRIMARY_RETRY_DELAYS = (2, 4, 8)
 WINDOWS_DPAPI_PROTECTION = "windows-dpapi-local-machine-v1"
@@ -2080,6 +2086,9 @@ class Agent:
         elif command_type == "hybrid_query":
             if not self.validate_hybrid_payload(payload):
                 return False
+        elif command_type == "ssh_console":
+            if not self.validate_ssh_console_payload(payload):
+                return False
         elif payload != {}:
             return False
         payload_json = json_text(payload)
@@ -2101,6 +2110,13 @@ class Agent:
             return True
         except Exception:
             return False
+
+    @staticmethod
+    def validate_ssh_console_payload(payload: dict[str, Any]) -> bool:
+        if set(payload) != {"command"}:
+            return False
+        command = payload.get("command")
+        return isinstance(command, str) and command in SSH_INLINE_COMMANDS
 
     @staticmethod
     def validate_update_payload(payload: dict[str, Any]) -> bool:
@@ -3282,13 +3298,47 @@ class Agent:
         )
         self.log.write(event)
 
-    def ack_command(self, command_id: str, status: str) -> None:
+    def execute_ssh_console_command(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self.validate_ssh_console_payload(payload):
+            raise RuntimeError("invalid restricted SSH console payload")
+        console_path = _ensure_ssh_restricted_console_file()
+        if hashlib.sha256(console_path.read_bytes()).hexdigest() != SSH_RESTRICTED_CONSOLE_SHA256:
+            raise RuntimeError("restricted SSH console integrity mismatch")
+        spec = importlib.util.spec_from_file_location(
+            "citadel_restricted_ssh_console_runtime",
+            console_path,
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError("restricted SSH console loader unavailable")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        execute = getattr(module, "execute", None)
+        if not callable(execute):
+            raise RuntimeError("restricted SSH console execute function missing")
+        output, _ = execute(payload["command"], self.config_path)
+        text = str(output or "")
+        encoded = text.encode("utf-8")
+        if len(encoded) > SSH_INLINE_OUTPUT_MAX_BYTES:
+            suffix = "\n...[truncated]"
+            budget = max(0, SSH_INLINE_OUTPUT_MAX_BYTES - len(suffix.encode("utf-8")))
+            text = encoded[:budget].decode("utf-8", errors="ignore") + suffix
+        return {"output": text, "exit_code": 0}
+
+    def ack_command(
+        self,
+        command_id: str,
+        status: str,
+        result: dict[str, Any] | None = None,
+    ) -> None:
         node_id = self.require_node_id()
         quoted = urllib.parse.quote(command_id, safe="")
+        body: dict[str, Any] = {"status": status}
+        if result is not None:
+            body["result"] = result
         self.api.request(
             "POST",
             f"/api/v1/nodes/{node_id}/commands/{quoted}/ack",
-            {"status": status},
+            body,
         )
 
     def handle_commands(self, response: dict[str, Any] | None = None) -> None:
@@ -3355,6 +3405,15 @@ class Agent:
                 elif command_type == "ssh_probe":
                     self.last_ssh_report = 0.0
                     self.heartbeat(timeout_seconds=5.0)
+                elif command_type == "ssh_console":
+                    ssh_result = self.execute_ssh_console_command(command.get("payload") or {})
+                    self.ack_command(command_id, "completed", ssh_result)
+                    self.log.write(
+                        "ssh_console_command_completed",
+                        command_id=command_id,
+                        command=str((command.get("payload") or {}).get("command") or ""),
+                    )
+                    continue
                 self.ack_command(command_id, "completed")
                 self.log.write(
                     "command_completed",
@@ -3931,12 +3990,26 @@ def self_test() -> int:
             "unapproved command accepted",
         )
         require_test(
-            {"system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe"}.issubset(SUPPORTED_COMMANDS),
+            {"system_reboot", "system_shutdown", "wake_peer", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe", "ssh_console"}.issubset(SUPPORTED_COMMANDS),
             "restricted power/wake/LM Studio commands missing",
         )
         require_test(
             "shell" not in SUPPORTED_COMMANDS,
             "arbitrary shell command registered",
+        )
+        require_test(
+            agent.validate_ssh_console_payload({"command": "status"})
+            and agent.validate_ssh_console_payload({"command": "diagnostics"})
+            and not agent.validate_ssh_console_payload({"command": "whoami"})
+            and not agent.validate_ssh_console_payload({"command": "status", "extra": True}),
+            "restricted Hub SSH command validation failed",
+        )
+        inline_ssh_result = agent.execute_ssh_console_command({"command": "help"})
+        require_test(
+            inline_ssh_result.get("exit_code") == 0
+            and "Allowed commands:" in str(inline_ssh_result.get("output") or "")
+            and len(str(inline_ssh_result.get("output") or "").encode("utf-8")) <= SSH_INLINE_OUTPUT_MAX_BYTES,
+            "restricted Hub SSH command execution failed",
         )
         ssh_console = _ensure_ssh_restricted_console_file()
         require_test(
