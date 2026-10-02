@@ -1,5 +1,9 @@
 # CITADEL SSH / Zero Trust
 
+Для нового интерактивного SSH-окна в действующей странице Machines без
+Cloudflare Tunnel см. [SSH_DIRECT_TERMINAL.md](SSH_DIRECT_TERMINAL.md).
+Ниже описан отдельный restricted/Zero Trust режим.
+
 ## Цель
 
 SSH в CITADEL предназначен для управляемых компьютеров владельца/администратора. Он не должен превращать Hub в хранилище постоянных SSH-ключей или в универсальный remote shell.
