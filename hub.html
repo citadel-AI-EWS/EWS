@@ -741,7 +741,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
 
     const sshHost=$("sshHost"),sshUser=$("sshUser"),sshFingerprint=$("sshFingerprint");
     const sshInlineCommands=new Set(["help","status","hostname","uptime","cpu","memory","disk","network","agent-status","agent-logs","lmstudio-status","diagnostics","ping-controller","exit"]);
-    let sshNodeId="",sshState=null,sshInlineBusy=false;
+    let sshNodeId="",sshState=null;const sshInlineBusyNodes=new Set();
     function versionAtLeast(value,minimum){const parse=v=>String(v||"").split(".").slice(0,3).map(x=>Number.parseInt(x,10));const a=parse(value),b=parse(minimum);if(a.length<3||b.length<3||a.some(Number.isNaN)||b.some(Number.isNaN))return false;for(let i=0;i<3;i++){if(a[i]!==b[i])return a[i]>b[i]}return true}
     function appendSshInline(text,nodeId=sshNodeId){if(nodeId!==sshNodeId)return false;const out=$("sshInlineOutput");out.textContent+=(out.textContent?"\n":"")+String(text??"");out.scrollTop=out.scrollHeight;return true}
     function resetSshInline(node){$("sshInlineOutput").textContent=`CITADEL restricted terminal · ${node?.hostname||node?.node_id||"no node"}\nType help to see the allow-list.`;}
@@ -763,7 +763,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       $("copySshBootstrapButton").disabled=!bootstrapEligible;
       $("copySshButton").disabled=!configured;
       $("openSshButton").disabled=!sshReadyForBrowser();
-      const inlineReady=Boolean(sshNode&&architectToken&&versionAtLeast(sshNode.agent_version,"0.3.32")&&!sshInlineBusy);
+      const inlineReady=Boolean(sshNode&&architectToken&&versionAtLeast(sshNode.agent_version,"0.3.32")&&!sshInlineBusyNodes.has(sshNodeId));
       $("sshInlineInput").disabled=!inlineReady;
       $("sshInlineSend").disabled=!inlineReady;
     }
@@ -819,7 +819,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       appendSshInline("[still pending after 45s — node may be offline or busy]",nodeId);
     }
     async function sendSshInlineCommand(){
-      if(!sshNodeId||sshInlineBusy)return;
+      if(!sshNodeId||sshInlineBusyNodes.has(sshNodeId))return;
       const verb=$("sshInlineInput").value.trim();
       if(!sshInlineCommands.has(verb)){
         appendSshInline(`citadel> ${verb||"(empty)"}\nDENIED: command is not in the CITADEL allow-list. Type help.`);
@@ -830,7 +830,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
         appendSshInline(`citadel> ${verb}\n[agent 0.3.32+ required]`);
         return;
       }
-      sshInlineBusy=true;renderSshState();
+      sshInlineBusyNodes.add(nodeId);renderSshState();
       $("sshInlineInput").value="";
       appendSshInline(`citadel> ${verb}`);
       try{
@@ -844,7 +844,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       }catch(e){
         appendSshInline(`[error: ${e.message}]`,nodeId);
       }finally{
-        sshInlineBusy=false;renderSshState();if(sshNodeId===nodeId)$("sshInlineInput").focus();
+        sshInlineBusyNodes.delete(nodeId);renderSshState();if(sshNodeId===nodeId)$("sshInlineInput").focus();
       }
     }
     sshHost.addEventListener("input",renderSshState);sshUser.addEventListener("input",renderSshState);sshFingerprint.addEventListener("input",renderSshState);
