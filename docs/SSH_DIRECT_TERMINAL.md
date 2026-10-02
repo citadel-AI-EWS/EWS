@@ -2,7 +2,7 @@
 
 The Machines page now offers **SSH** on every registered node. Its dialog has a
 host selector, an xterm terminal, Connect and Disconnect. The terminal transports
-real SSH PTY input/output, including control keys and resize events. Closing the
+real SSH PTY input/output, including control keys and resize events, **only after** the remote account proves that OpenSSH launched `CITADEL Restricted SSH Console` via ForceCommand. Ordinary bash, PowerShell, cmd or administrator shells are rejected. Closing the
 dialog, selecting another node, logging out or leaving the page closes the
 session. Reconnecting starts a new session; output from the previous node is cleared.
 
@@ -37,18 +37,14 @@ relay or open ports on nodes automatically.
 5. Copy `gateway/targets.example.json` to `/etc/citadel-ssh/targets.json` and
    replace its placeholders. Each map key is the registered CITADEL `node_id`
    from `/api/v1/architect/machines`. The value contains `host`, integer `port`,
-   `username`, verified `hostKeySha256` and absolute `privateKeyFile`.
+   `username`, `mode: "citadel-restricted"`, verified `hostKeySha256` and absolute `privateKeyFile`.
 
 Targets are provisioned by the gateway administrator. A browser cannot change
 the IP, port, user, fingerprint or key through the session API. A missing target
 produces an explicit not-configured error before any SSH connection is attempted.
 Hosts without a registered CITADEL node are not selectable in this first version.
 
-Existing CITADEL Windows Zero Trust bootstrap binds OpenSSH to loopback and
-enforces the restricted ForceCommand. It is not changed by this feature. Such
-an installation needs a separately reviewed direct-access SSH configuration
-before the gateway can reach it. A restricted account remains restricted;
-this feature does not remove its ForceCommand or grant administrator rights.
+Existing CITADEL Windows Zero Trust bootstrap binds OpenSSH to loopback and enforces the restricted ForceCommand. Direct gateway routing must expose that same dedicated restricted SSH account to the gateway through a separately reviewed network path. The gateway waits for the exact `CITADEL Restricted SSH Console` banner before enabling browser input; if it sees an ordinary shell instead, the session is terminated. This feature does not remove ForceCommand or grant administrator rights.
 
 ## Run the gateway
 
