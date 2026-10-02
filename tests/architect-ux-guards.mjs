@@ -750,6 +750,7 @@ const sshInlineStore = operations.indexOf("active={commandId,verb};sshPendingInl
 const sshInlineGuard = operations.indexOf("if(!current())return;", sshInlineStore);
 assert.ok(sshInlineStore >= 0 && sshInlineGuard > sshInlineStore, "terminal command ID must be retained before dialog-session guard");
 assert.ok(operations.includes("command ID retained") && operations.includes("Получить результат"), "pending terminal commands need a resumable retrieval path");
+assert.ok(operations.includes("withButton('sshProbe',probeOperationsSsh).finally(()=>renderOperationsSshState())"), "probe retrieval label must be restored after withButton cleanup");
 assert.ok(operations.includes("formatSshCommandResult(command)"), "failed SSH command output must be rendered");
 assert.ok(operations.includes("if($('sshDialog').open&&sshNodeId===n.node_id)renderOperationsSshState()"), "SSH bootstrap eligibility must refresh after node details load");
 
