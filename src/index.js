@@ -3973,7 +3973,7 @@ async function persistHeartbeat(env, node, body, coalesce = false) {
     heartbeatStatements.push(env.DB.prepare(`
       INSERT INTO node_hardware_state (
         node_id, memory_total_bytes, cpu_logical_count, gpus_json, updated_at
-      ) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
       ON CONFLICT(node_id) DO UPDATE SET
         memory_total_bytes = excluded.memory_total_bytes,
         cpu_logical_count = excluded.cpu_logical_count,
