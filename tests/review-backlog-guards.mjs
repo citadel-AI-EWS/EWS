@@ -111,7 +111,11 @@ need(sshCloudflareProvisioner.includes("/ca"), "Cloudflare short-lived SSH CA pr
 need(sshCloudflareProvisioner.includes("tunnel_token_stored: false"), "Cloudflare provisioner must explicitly keep tunnel tokens out of output");
 need(!sshCloudflareProvisioner.includes("/token"), "Cloudflare provisioner must not retrieve the tunnel token into Actions");
 need(sshCloudflareProvisioner.includes('existing_tunnel_is_not_remotely_managed'), "Cloudflare tunnel reuse must reject non-remotely-managed tunnels");
+need(sshCloudflareProvisioner.includes('tunnel_name_must_use_citadel_ssh_prefix'), "Cloudflare tunnel name must prove CITADEL ownership convention");
+need(sshCloudflareProvisioner.includes('existing_tunnel_contains_unmanaged_hostname_routes'), "Cloudflare SSH tunnel must reject shared hostname routes");
+need(sshCloudflareProvisioner.includes('existing_tunnel_contains_unmanaged_catch_all_route'), "Cloudflare SSH tunnel must reject unmanaged catch-all routes");
 need(sshCloudflareProvisioner.includes('update_required: durationMismatch'), "Cloudflare Access session-duration drift reporting missing");
+need(sshCloudflareProvisioner.includes('policyUpdateRequired'), "Cloudflare Access policy drift reporting missing");
 need(sshCloudflareProvisioner.includes('await findZone(hostname, accountId)'), "Cloudflare dry-run must resolve the real zone");
 need(sshCloudflareProvisioner.includes('await ensureTunnel(accountId, tunnelName, apply)'), "Cloudflare dry-run must inspect existing tunnels");
 need(sshCloudflareWorkflow.includes("environment: cloudflare-test"), "SSH Cloudflare provisioning must use the protected environment");
