@@ -44,6 +44,7 @@ need(agentV2.includes('VERSION = "0.3.34"'), "v2 release not bumped");
 need(!agentV1.includes("tailscale_ipv4"), "agent must not report Tailscale telemetry");
 need(agentV1.includes("WINDOWS_CREATE_NO_WINDOW = 0x08000000"), "Windows child-process no-window flag missing");
 need(agentV1.includes("def _citadel_subprocess_run") && agentV1.includes("def _citadel_subprocess_popen"), "Windows no-window subprocess wrappers missing");
+need((agentV1.match(/kwargs\.setdefault\("creationflags", WINDOWS_CREATE_NO_WINDOW\)/g) || []).length === 2, "Windows subprocess wrappers must default no-window creationflags");
 need((agentV1.match(/subprocess\.run\(/g) || []).length === 1, "direct subprocess.run calls can flash Windows consoles");
 need((agentV1.match(/subprocess\.Popen\(/g) || []).length === 1, "direct subprocess.Popen calls can flash Windows consoles");
 need(!index.includes("tailscale_ipv4"), "Controller must not store or expose Tailscale telemetry");
