@@ -45,17 +45,17 @@ const SSH_CONSOLE_RESULT_CLEANUP_BATCH = 250;
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe", "ssh_console"]);
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.32",
+  version: "0.3.33",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "ab238de8bb24bece329db602fedd3b394aea902b71251268af0d168c421520c8"
+      sha256: "46f39136d3f1b3418d2b7c8d31aabd6cef93447ef8182da0f0991152be90bc0d"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "f4c3892870b139a0e3c59317420e01249f9310314b1b9c9186991d06155b1f41"
+      sha256: "7977c4f259c57ad120770c6ec8ee45406527ed69f2fd33e6ba02952a2face95a"
     },
     {
       path: "CitadelSshConsole.cs",
@@ -226,7 +226,6 @@ function normalizeNodeNetwork(value) {
   const macAddresses = [...new Set(rawMacs.map(normalizeMac).filter(Boolean))].slice(0, 16);
   return {
     lan_ipv4: normalizeIpv4(value.lan_ipv4, true),
-    tailscale_ipv4: normalizeIpv4(value.tailscale_ipv4, false),
     mac_addresses: macAddresses
   };
 }
@@ -1056,7 +1055,6 @@ async function ensureNodeNetworkStorage(env) {
         CREATE TABLE IF NOT EXISTS node_network_state (
           node_id TEXT PRIMARY KEY,
           lan_ipv4 TEXT,
-          tailscale_ipv4 TEXT,
           mac_addresses_json TEXT NOT NULL DEFAULT '[]',
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
@@ -3953,24 +3951,21 @@ async function persistHeartbeat(env, node, body, coalesce = false) {
   if (network) {
     heartbeatStatements.push(env.DB.prepare(`
       INSERT INTO node_network_state (
-        node_id, lan_ipv4, tailscale_ipv4, mac_addresses_json, updated_at
-      ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        node_id, lan_ipv4, mac_addresses_json, updated_at
+      ) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
       ON CONFLICT(node_id) DO UPDATE SET
         lan_ipv4 = COALESCE(excluded.lan_ipv4, node_network_state.lan_ipv4),
-        tailscale_ipv4 = COALESCE(excluded.tailscale_ipv4, node_network_state.tailscale_ipv4),
         mac_addresses_json = CASE
           WHEN excluded.mac_addresses_json != '[]' THEN excluded.mac_addresses_json
           ELSE node_network_state.mac_addresses_json
         END,
         updated_at = CURRENT_TIMESTAMP
       WHERE node_network_state.lan_ipv4 IS NOT COALESCE(excluded.lan_ipv4, node_network_state.lan_ipv4)
-        OR node_network_state.tailscale_ipv4 IS NOT COALESCE(excluded.tailscale_ipv4, node_network_state.tailscale_ipv4)
         OR (excluded.mac_addresses_json != '[]'
           AND node_network_state.mac_addresses_json IS NOT excluded.mac_addresses_json)
     `).bind(
       nodeId,
       network.lan_ipv4,
-      network.tailscale_ipv4,
       JSON.stringify(network.mac_addresses)
     ));
   }
@@ -3978,7 +3973,7 @@ async function persistHeartbeat(env, node, body, coalesce = false) {
     heartbeatStatements.push(env.DB.prepare(`
       INSERT INTO node_hardware_state (
         node_id, memory_total_bytes, cpu_logical_count, gpus_json, updated_at
-      ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
       ON CONFLICT(node_id) DO UPDATE SET
         memory_total_bytes = excluded.memory_total_bytes,
         cpu_logical_count = excluded.cpu_logical_count,
@@ -6428,7 +6423,7 @@ async function architectOverview(request, env) {
       "n.agent_version, n.capabilities_json, CASE WHEN n.status = 'online' " +
       "AND (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-5 minutes')) " +
       "THEN 'offline' ELSE n.status END AS status, n.cpu_percent, n.memory_percent, " +
-      "n.enrolled_at, n.last_seen_at, net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json, " +
+      "n.enrolled_at, n.last_seen_at, net.lan_ipv4, net.mac_addresses_json, " +
       "ai.installed AS lmstudio_installed, ai.selected_model AS lmstudio_selected_model, " +
       "ai.loaded_model AS lmstudio_loaded_model, ai.server_running AS lmstudio_server_running, " +
       "ai.last_action AS lmstudio_last_action, ai.updated_at AS lmstudio_updated_at, " +
@@ -6566,7 +6561,7 @@ async function queryArchitectMachines(env) {
       CASE WHEN n.status = 'online' AND
       (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-2 minutes'))
       THEN 'offline' ELSE n.status END AS status,
-      net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json,
+      net.lan_ipv4, net.mac_addresses_json,
       COALESCE(ai.installed, 0) AS ai_installed,
       COALESCE(ai.server_running, 0) AS ai_server_running,
       ai.selected_model AS ai_selected_model,
@@ -6921,7 +6916,7 @@ async function architectNodeDetails(request, env, nodeId) {
   const row = await env.DB.prepare(`
     SELECT n.node_id, n.hostname, n.os_name, n.os_version, n.architecture,
       n.agent_version, n.status, n.cpu_percent, n.memory_percent, n.last_seen_at, n.capabilities_json,
-      net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json,
+      net.lan_ipv4, net.mac_addresses_json,
       net.updated_at AS network_updated_at,
       hw.memory_total_bytes, hw.cpu_logical_count, hw.gpus_json,
       hw.updated_at AS hardware_updated_at
@@ -6969,7 +6964,6 @@ async function architectNodeDetails(request, env, nodeId) {
     },
     network: {
       lan_ipv4: row.lan_ipv4 || null,
-      tailscale_ipv4: row.tailscale_ipv4 || null,
       mac_addresses: Array.isArray(macAddresses) ? macAddresses : [],
       updated_at: row.network_updated_at || null
     },
