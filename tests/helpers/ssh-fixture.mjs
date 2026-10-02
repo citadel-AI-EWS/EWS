@@ -48,7 +48,7 @@ export async function sshFixture({assets = false} = {}) {
   await new Promise(resolve => tempServer.close(resolve));
   const origin = 'http://127.0.0.1:' + hubPort;
   const secret = 'fixture-ticket-secret-not-a-production-key';
-  const target = {host: '127.0.0.1', port: ssh.address().port, username: 'operator',
+  const target = {host: '127.0.0.1', port: ssh.address().port, username: 'operator', mode: 'citadel-restricted',
     privateKey: userKeys.private, hostKeySha256: hash(utils.parseKey(hostKeys.private).getPublicSSH())};
   const gateway = createSshGateway({secret, hubOrigin: origin, targets: new Map([
     ['node-one', target], ['node-two', target], ['bad-pin', {...target, hostKeySha256: 'SHA256:' + 'A'.repeat(43)}],
