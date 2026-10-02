@@ -94,9 +94,9 @@ Windows-конфигурация сознательно не используе�
 
 ## Agent / Controller contract
 
-Agent 0.3.30 продолжает capability `ssh_probe_readonly`, отправляет SSH readiness v2 и принимает подписанные/hash-verified assets `CitadelSshConsole.cs` и `configure_restricted_ssh.ps1`. Команда `ssh_probe` остаётся read-only и только заставляет немедленно обновить readiness heartbeat.
+Agent 0.3.31 продолжает capability `ssh_probe_readonly`, отправляет SSH readiness v2 и принимает подписанные/hash-verified assets `CitadelSshConsole.cs` и `configure_restricted_ssh.ps1`. Команда `ssh_probe` остаётся read-only и только заставляет немедленно обновить readiness heartbeat.
 
-Ноды 0.3.29 уже знают эти два asset-имени, поэтому переход на 0.3.30 доставляет обновлённый Cloudflare/bootstrap код обычным signed update без переустановки. Чистые Windows one-click/fixed packages также содержат restricted SSH assets.
+Ноды 0.3.29 уже знают эти два asset-имени, поэтому переход на 0.3.31 доставляет обновлённый Cloudflare/bootstrap код обычным signed update без переустановки. Чистые Windows one-click/fixed packages также содержат restricted SSH assets.
 
 ## Cloudflare Zero Trust provisioning
 
@@ -127,7 +127,7 @@ Bootstrap просит локально только SSH username и Cloudflare 
 
 ## Что остаётся внешней настройкой
 
-После merge 0.3.30 программная цепочка готова к provisioning. Для первого реального Browser SSH всё ещё нужны два значения, которые нельзя безопасно выдумать:
+После merge 0.3.31 программная цепочка готова к provisioning. Для первого реального Browser SSH всё ещё нужны два значения, которые нельзя безопасно выдумать:
 
 - public hostname в домене/zone, управляемом вашим Cloudflare;
 - точный email identity, которому Cloudflare Access разрешит вход.
