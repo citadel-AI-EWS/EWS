@@ -311,6 +311,11 @@ function selfTest() {
     try { normalizeHostname(bad); } catch { rejected = true; }
     if (!rejected) fail("self_test_bad_hostname_accepted");
   }
+  for (const bad of ["shared-tunnel", "ssh-node-1"]) {
+    let rejected = false;
+    try { normalizeTunnelName(bad); } catch { rejected = true; }
+    if (!rejected) fail("self_test_unowned_tunnel_name_accepted");
+  }
   for (const bad of ["5m", "8h", "1d"]) {
     let rejected = false;
     try { normalizeSession(bad); } catch { rejected = true; }
