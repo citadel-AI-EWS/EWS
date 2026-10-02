@@ -307,9 +307,9 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.32"'), "Controller release not bumped");
-need(index.includes('path: "CitadelSshConsole.cs"'), "0.3.32 release must deliver the restricted SSH console source");
-need(index.includes('path: "configure_restricted_ssh.ps1"'), "0.3.32 release must deliver the restricted SSH bootstrap");
+need(index.includes('version: "0.3.33"'), "Controller release not bumped");
+need(index.includes('path: "CitadelSshConsole.cs"'), "0.3.33 release must deliver the restricted SSH console source");
+need(index.includes('path: "configure_restricted_ssh.ps1"'), "0.3.33 release must deliver the restricted SSH bootstrap");
 need(index.includes('"ssh_console"'), "inline SSH command missing from Controller allow-list");
 need(agentV1.includes('"ssh_console"'), "inline SSH command missing from node allow-list");
 need(agentV1.includes("validate_ssh_console_payload"), "inline SSH payload allow-list validation missing");
