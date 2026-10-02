@@ -741,6 +741,18 @@ assert.ok(operations.includes("sshInlineGeneration") && operations.includes("ssh
 assert.ok(operations.includes("async function waitForOperationsSshProbe"), "deployed SSH probe must poll queued command completion");
 assert.ok(operations.includes("sshSelectionGeneration===selectionGeneration&&sshInlineGeneration===inlineGeneration"), "deployed SSH terminal must reject earlier dialog-session polls");
 assert.ok(operations.includes("sshSelectionGeneration===selectionGeneration&&sshProbeGeneration===probeGeneration"), "deployed SSH probe must reject earlier dialog-session polls");
+assert.ok(operations.includes("host===savedHost&&user===savedUser"), "Browser SSH must require saved hostname/user");
+assert.ok(operations.includes("sshPendingProbeCommands=new Map()") && operations.includes("sshPendingInlineCommands=new Map()"), "pending SSH command IDs must be retained");
+const sshProbeStore = operations.indexOf("pending={commandId};sshPendingProbeCommands.set(nodeId,pending);");
+const sshProbeGuard = operations.indexOf("if(!$('sshDialog').open||sshNodeId!==nodeId", sshProbeStore);
+assert.ok(sshProbeStore >= 0 && sshProbeGuard > sshProbeStore, "probe command ID must be retained before dialog-session guard");
+const sshInlineStore = operations.indexOf("active={commandId,verb};sshPendingInlineCommands.set(nodeId,active);");
+const sshInlineGuard = operations.indexOf("if(!current())return;", sshInlineStore);
+assert.ok(sshInlineStore >= 0 && sshInlineGuard > sshInlineStore, "terminal command ID must be retained before dialog-session guard");
+assert.ok(operations.includes("command ID retained") && operations.includes("Получить результат"), "pending terminal commands need a resumable retrieval path");
+assert.ok(operations.includes("withButton('sshProbe',probeOperationsSsh).finally(()=>renderOperationsSshState())"), "probe retrieval label must be restored after withButton cleanup");
+assert.ok(operations.includes("formatSshCommandResult(command)"), "failed SSH command output must be rendered");
+assert.ok(operations.includes("if($('sshDialog').open&&sshNodeId===n.node_id)renderOperationsSshState()"), "SSH bootstrap eligibility must refresh after node details load");
 
 
 assert.ok(index.includes("CREATE TABLE IF NOT EXISTS commands"), "runtime command table bootstrap missing");

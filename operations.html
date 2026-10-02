@@ -80,6 +80,7 @@ async function api(path,options={}){const r=await fetch(base+path,{...options,ca
 const sshAllowedCommands=new Set(['help','status','hostname','uptime','cpu','memory','disk','network','agent-status','agent-logs','lmstudio-status','diagnostics','ping-controller','exit']);
 let sshNodeId='',sshState=null,sshInlineBusy=false,sshSelectionGeneration=0,sshLoadGeneration=0,sshSaveGeneration=0,sshInlineGeneration=0,sshProbeGeneration=0;
 const sshDirtyFields=new Set();
+const sshPendingProbeCommands=new Map(),sshPendingInlineCommands=new Map();
 const sshBootstrapCommand='powershell -NoLogo -NoProfile -ExecutionPolicy RemoteSigned -Command "$r=Join-Path $env:ProgramData \'CitadelEWS\\agent\';$p=Join-Path $r \'configure_restricted_ssh.ps1\';if(!(Test-Path -LiteralPath $p)){$s=Get-Content (Join-Path $r \'install-state.json\') -Raw|ConvertFrom-Json;$p=Join-Path $s.release_root \'configure_restricted_ssh.ps1\'};& $p"';
 function safeSshHost(value){const host=String(value||'').trim().toLowerCase();return /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host)?host:''}
 function safeSshUser(value){const user=String(value||'').trim();return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(user)?user:''}
@@ -90,24 +91,39 @@ function sshNodeCapabilities(node){if(Array.isArray(node?.capabilities))return n
 function applySshServerFields(state){if(!sshDirtyFields.has('host'))$('sshHost').value=state?.public_hostname||'';if(!sshDirtyFields.has('user'))$('sshUser').value=state?.ssh_user||'';if(!sshDirtyFields.has('fingerprint'))$('sshFingerprint').value=state?.host_key_fingerprint||''}
 function appendSshInline(text,nodeId=sshNodeId){if(nodeId!==sshNodeId||!$('sshDialog').open)return false;const out=$('sshInlineOutput');out.textContent+=(out.textContent?'\n':'')+String(text??'');out.scrollTop=out.scrollHeight;return true}
 function resetSshInline(node){$('sshInlineOutput').textContent='CITADEL restricted terminal · '+(node?.hostname||node?.node_id||'no node')+'\nType help to see the allow-list.'}
-function sshBrowserReady(){return Boolean(sshState?.browser_terminal_local_ready&&safeSshHost($('sshHost').value)&&safeSshUser($('sshUser').value))}
+function sshBrowserReady(){
+  const host=safeSshHost($('sshHost').value),user=safeSshUser($('sshUser').value);
+  const savedHost=safeSshHost(sshState?.public_hostname),savedUser=safeSshUser(sshState?.ssh_user);
+  return Boolean(sshState?.browser_terminal_local_ready&&host&&user&&host===savedHost&&user===savedUser);
+}
+function formatSshCommandResult(command){
+  const result=command?.result||{},output=String(result.output||'').trim();
+  const rawExit=result.exit_code,hasExit=rawExit!==undefined&&rawExit!==null&&Number.isFinite(Number(rawExit));
+  const exitText=hasExit?'[exit code: '+Number(rawExit)+']':'';
+  if(output)return output+(exitText?'\n'+exitText:'');
+  if(command?.status==='failed')return hasExit?'[command failed · exit code: '+Number(rawExit)+']':'[command failed]';
+  return exitText||'(no output)';
+}
 function renderOperationsSshState(){
-  const node=sshSelectedNode(),host=safeSshHost($('sshHost').value),user=safeSshUser($('sshUser').value),fingerprint=safeSshFingerprint($('sshFingerprint').value),configured=Boolean(host&&user),fingerprintValid=fingerprint!==null,localReady=Boolean(sshState?.browser_terminal_local_ready);
-  $('sshStateBox').classList.toggle('ready',configured&&localReady);
-  $('sshMode').textContent=!sshNodeId?'SELECT NODE':configured&&localReady?'READY':configured?'CONFIGURED':'NOT CONFIGURED';
-  $('sshStateText').textContent=!sshNodeId?'Выберите ноду.':localReady?(configured?'Локальный SSH и cloudflared готовы; Browser SSH можно открыть.':'Нода локально готова; сохраните hostname и username.'):(sshState?.observed_at?'Локальная SSH-готовность не подтверждена. Нажмите «Проверить SSH».':'SSH-состояние этой ноды ещё не получено.');
+  const node=sshSelectedNode(),host=safeSshHost($('sshHost').value),user=safeSshUser($('sshUser').value),fingerprint=safeSshFingerprint($('sshFingerprint').value),configured=Boolean(host&&user),fingerprintValid=fingerprint!==null,localReady=Boolean(sshState?.browser_terminal_local_ready),browserReady=sshBrowserReady();
+  const pendingProbe=sshPendingProbeCommands.get(sshNodeId),pendingInline=sshPendingInlineCommands.get(sshNodeId);
+  $('sshStateBox').classList.toggle('ready',browserReady);
+  $('sshMode').textContent=!sshNodeId?'SELECT NODE':browserReady?'READY':configured&&localReady?'SAVE CHANGES':configured?'CONFIGURED':'NOT CONFIGURED';
+  $('sshStateText').textContent=!sshNodeId?'Выберите ноду.':browserReady?'Локальный SSH и cloudflared готовы; Browser SSH можно открыть.':localReady&&configured?'Hostname/user изменены или ещё не сохранены. Сохраните конфигурацию перед Browser SSH.':localReady?'Нода локально готова; сохраните hostname и username.':(sshState?.observed_at?'Локальная SSH-готовность не подтверждена. Нажмите «Проверить SSH».':'SSH-состояние этой ноды ещё не получено.');
   $('sshRuntime').textContent=!sshNodeId?'Readiness ещё не получена.':'sshd localhost:22: '+(sshState?.sshd_listening_local?'YES':'NO')+' · loopback-only: '+(sshState?.sshd_exposure_verified?(sshState?.sshd_loopback_only?'YES':'NO'):'UNVERIFIED')+' · cloudflared: '+(sshState?.cloudflared_running?'RUNNING':sshState?.cloudflared_installed?'INSTALLED':'NOT FOUND')+' · observed: '+(sshState?.observed_at||'—');
   $('sshPolicy').textContent=!sshNodeId?'Restricted policy: —':'Restricted policy: '+(sshState?.restricted_policy_ready?'READY':'NOT READY')+' · state: '+(sshState?.restricted_bootstrap_state_present?'YES':'NO')+' · console: '+(sshState?.restricted_console_installed?'YES':'NO')+' · CA public key: '+(sshState?.cloudflare_ca_public_key_present?'YES':'NO')+' · ForceCommand: '+(sshState?.sshd_force_command_managed?'YES':'NO');
   $('sshCommand').textContent=configured?'ssh -o ProxyCommand="cloudflared access ssh --hostname %h" '+user+'@'+host:'Cloudflare Access hostname + SSH user are required.';
   $('sshSave').disabled=!sshNodeId||!configured||!fingerprintValid;
-  $('sshProbe').disabled=!sshNodeId;
+  $('sshProbe').disabled=!sshNodeId||sshInlineBusy;
+  $('sshProbe').textContent=pendingProbe?'Получить результат SSH':'Проверить SSH';
   const bootstrapEligible=Boolean(node&&String(node.os_name||'').toLowerCase()==='windows'&&sshNodeCapabilities(node).includes('windows_restricted_ssh_bootstrap'));
   $('sshBootstrap').disabled=!bootstrapEligible;
   $('sshCopy').disabled=!configured;
-  $('sshOpen').disabled=!sshBrowserReady();
-  const inlineReady=Boolean(node&&sshVersionAtLeast(node.agent_version,'0.3.32')&&!sshInlineBusy);
-  $('sshInlineInput').disabled=!inlineReady;
-  $('sshInlineSend').disabled=!inlineReady;
+  $('sshOpen').disabled=!browserReady;
+  const inlineCapable=Boolean(node&&sshVersionAtLeast(node.agent_version,'0.3.32'));
+  $('sshInlineInput').disabled=!inlineCapable||sshInlineBusy||Boolean(pendingInline);
+  $('sshInlineSend').disabled=!inlineCapable||sshInlineBusy;
+  $('sshInlineSend').textContent=pendingInline?'Получить результат':'Выполнить';
 }
 async function loadOperationsSshState(nodeId){
   const nextNodeId=nodeId||'',selectionChanged=nextNodeId!==sshNodeId;
@@ -144,33 +160,43 @@ async function waitForOperationsSshProbe(nodeId,commandId,selectionGeneration,pr
   const current=()=>Boolean($('sshDialog').open&&nodeId===sshNodeId&&sshSelectionGeneration===selectionGeneration&&sshProbeGeneration===probeGeneration);
   for(const delay of delays){
     await new Promise(resolve=>setTimeout(resolve,delay));
-    if(!current())return;
+    if(!current())return false;
     const data=await api('/nodes/'+encodeURIComponent(nodeId)+'/commands/'+encodeURIComponent(commandId));
-    if(!current())return;
+    if(!current())return false;
     const command=data.command||{};
     if(command.status==='completed'||command.status==='failed'){
+      if(sshPendingProbeCommands.get(nodeId)?.commandId===commandId)sshPendingProbeCommands.delete(nodeId);
       await loadOperationsSshState(nodeId);
-      if(!current())return;
+      if(!current())return true;
+      renderOperationsSshState();
       tell(command.status==='completed'?'SSH-проверка завершена; readiness обновлена.':'SSH-проверка завершилась ошибкой; readiness обновлена.',command.status==='failed');
-      return;
+      return true;
     }
   }
   if(current()){
     await loadOperationsSshState(nodeId);
-    if(current())tell('SSH-проверка ещё выполняется; показано последнее readiness-состояние.');
+    if(current()){renderOperationsSshState();tell('SSH-проверка ещё выполняется. Команда сохранена — нажмите «Получить результат SSH» для продолжения.');}
   }
+  return false;
 }
 async function probeOperationsSsh(){
   if(!sshNodeId)return;
   const nodeId=sshNodeId,selectionGeneration=sshSelectionGeneration,probeGeneration=++sshProbeGeneration;
   try{
-    const data=await api('/nodes/'+encodeURIComponent(nodeId)+'/commands',{method:'POST',body:JSON.stringify({command_type:'ssh_probe'})});
-    if(!$('sshDialog').open||sshNodeId!==nodeId||sshSelectionGeneration!==selectionGeneration||sshProbeGeneration!==probeGeneration)return;
-    const commandId=data?.command?.command_id;if(!commandId)throw Error('command_id_missing');
-    tell('SSH-проверка поставлена в очередь.');
-    await waitForOperationsSshProbe(nodeId,commandId,selectionGeneration,probeGeneration);
+    let pending=sshPendingProbeCommands.get(nodeId);
+    if(!pending){
+      const data=await api('/nodes/'+encodeURIComponent(nodeId)+'/commands',{method:'POST',body:JSON.stringify({command_type:'ssh_probe'})});
+      const commandId=data?.command?.command_id;if(!commandId)throw Error('command_id_missing');
+      pending={commandId};sshPendingProbeCommands.set(nodeId,pending);
+      if(!$('sshDialog').open||sshNodeId!==nodeId||sshSelectionGeneration!==selectionGeneration||sshProbeGeneration!==probeGeneration)return;
+      tell('SSH-проверка поставлена в очередь.');
+    }else tell('Продолжаю получать результат предыдущей SSH-проверки.');
+    renderOperationsSshState();
+    await waitForOperationsSshProbe(nodeId,pending.commandId,selectionGeneration,probeGeneration);
   }catch(e){
     if($('sshDialog').open&&sshNodeId===nodeId&&sshSelectionGeneration===selectionGeneration&&sshProbeGeneration===probeGeneration)tell('SSH: '+e.message,true);
+  }finally{
+    if($('sshDialog').open&&sshNodeId===nodeId&&sshSelectionGeneration===selectionGeneration&&sshProbeGeneration===probeGeneration)renderOperationsSshState();
   }
 }
 async function waitForOperationsSshCommand(nodeId,commandId,selectionGeneration,inlineGeneration){
@@ -178,32 +204,47 @@ async function waitForOperationsSshCommand(nodeId,commandId,selectionGeneration,
   const current=()=>Boolean($('sshDialog').open&&nodeId===sshNodeId&&sshSelectionGeneration===selectionGeneration&&sshInlineGeneration===inlineGeneration);
   for(const delay of delays){
     await new Promise(resolve=>setTimeout(resolve,delay));
-    if(!current())return;
+    if(!current())return false;
     const data=await api('/nodes/'+encodeURIComponent(nodeId)+'/commands/'+encodeURIComponent(commandId));
-    if(!current())return;
+    if(!current())return false;
     const command=data.command||{};
-    if(command.status==='completed'){appendSshInline(command.result?.output||'(no output)',nodeId);return}
-    if(command.status==='failed'){appendSshInline('[command failed]',nodeId);return}
+    if(command.status==='completed'||command.status==='failed'){
+      if(sshPendingInlineCommands.get(nodeId)?.commandId===commandId)sshPendingInlineCommands.delete(nodeId);
+      appendSshInline(formatSshCommandResult(command),nodeId);
+      renderOperationsSshState();
+      return true;
+    }
   }
-  if(current())appendSshInline('[still pending after 45s — node may be offline or busy]',nodeId);
+  if(current()){
+    appendSshInline('[still pending after 45s — command ID retained; press «Получить результат» to continue]',nodeId);
+    renderOperationsSshState();
+  }
+  return false;
 }
 async function sendOperationsSshCommand(){
-  if(!sshNodeId||sshInlineBusy)return;const verb=$('sshInlineInput').value.trim();
-  if(!sshAllowedCommands.has(verb)){appendSshInline('citadel> '+(verb||'(empty)')+'\nDENIED: command is not in the CITADEL allow-list. Type help.');return}
-  const node=sshSelectedNode(),nodeId=sshNodeId,selectionGeneration=sshSelectionGeneration,inlineGeneration=++sshInlineGeneration;
+  if(!sshNodeId||sshInlineBusy)return;
+  const node=sshSelectedNode(),nodeId=sshNodeId,pending=sshPendingInlineCommands.get(nodeId);
+  const verb=pending?.verb||$('sshInlineInput').value.trim();
+  if(!pending&&!sshAllowedCommands.has(verb)){appendSshInline('citadel> '+(verb||'(empty)')+'\nDENIED: command is not in the CITADEL allow-list. Type help.');return}
   if(!node||!sshVersionAtLeast(node.agent_version,'0.3.32')){appendSshInline('citadel> '+verb+'\n[agent 0.3.32+ required]');return}
-  sshInlineBusy=true;renderOperationsSshState();$('sshInlineInput').value='';appendSshInline('citadel> '+verb);
+  const selectionGeneration=sshSelectionGeneration,inlineGeneration=++sshInlineGeneration;
+  sshInlineBusy=true;renderOperationsSshState();
+  if(!pending){$('sshInlineInput').value='';appendSshInline('citadel> '+verb)}
+  else appendSshInline('[resuming pending command '+pending.commandId+']',nodeId);
   const current=()=>Boolean($('sshDialog').open&&sshNodeId===nodeId&&sshSelectionGeneration===selectionGeneration&&sshInlineGeneration===inlineGeneration);
   try{
-    const data=await api('/nodes/'+encodeURIComponent(nodeId)+'/commands',{method:'POST',body:JSON.stringify({command_type:'ssh_console',command:verb})});
-    if(!current())return;
-    const commandId=data?.command?.command_id;if(!commandId)throw Error('command_id_missing');
-    await waitForOperationsSshCommand(nodeId,commandId,selectionGeneration,inlineGeneration);
+    let active=pending;
+    if(!active){
+      const data=await api('/nodes/'+encodeURIComponent(nodeId)+'/commands',{method:'POST',body:JSON.stringify({command_type:'ssh_console',command:verb})});
+      const commandId=data?.command?.command_id;if(!commandId)throw Error('command_id_missing');
+      active={commandId,verb};sshPendingInlineCommands.set(nodeId,active);
+      if(!current())return;
+    }
+    renderOperationsSshState();
+    await waitForOperationsSshCommand(nodeId,active.commandId,selectionGeneration,inlineGeneration);
   }catch(e){if(current())appendSshInline('[error: '+e.message+']',nodeId)}
   finally{
-    if(current()){
-      sshInlineBusy=false;renderOperationsSshState();$('sshInlineInput').focus();
-    }
+    if(current()){sshInlineBusy=false;renderOperationsSshState();if(!sshPendingInlineCommands.get(nodeId))$('sshInlineInput').focus()}
   }
 }
 function openOperationsSsh(node){if(!node)return;sshNodeId='';sshState=null;sshDirtyFields.clear();$('sshDialog').showModal();loadOperationsSshState(node.node_id)}
@@ -273,7 +314,7 @@ async function installLmSelected(){if(fleetOperation)return tell('Сейчас �
 async function wake(node){if(!confirm('Разбудить '+(node.hostname||node.node_id)+' через доступную ноду в той же LAN?'))return;try{await api('/nodes/'+encodeURIComponent(node.node_id)+'/wake',{method:'POST',body:'{}'});tell('Wake-команда поставлена в очередь.');setTimeout(refresh,500)}catch(e){tell(e.message,true);$('nodeDetailState').textContent=e.message;$('nodeDetailState').className='status error'}}
 function renderNodes(data){syncGroupFilter();const allNodes=data.nodes||[],filter=$('groupFilter').value,nodes=allNodes.filter(n=>!filter||(filter==='ungrouped'?!n.group_id:n.group_id===filter)),root=$('nodes');$('groupVisibleCount').textContent='Показано: '+nodes.length+' / '+allNodes.length;root.replaceChildren();root.style.setProperty('--node-cols',String(nodes.length<=1?1:nodes.length===2?2:nodes.length===3?3:nodes.length===4?4:5));root.classList.toggle('dense',nodes.length>=5);const online=nodes.filter(n=>n.status==='online').length,paused=nodes.filter(n=>n.status==='paused').length,outdated=nodes.filter(n=>n.update_required).length,aiCount=nodes.filter(n=>Number(n.ai_installed||0)===1).length;$('nodeSummary').textContent='Всего '+nodes.length+' · на связи '+online+(paused?' · пауза '+paused:'')+' · AI '+aiCount+(outdated?' · обновить '+outdated:' · все версии актуальны');for(const n of nodes){const c=el('article',undefined,'card node-card');c.dataset.status=n.status||'unknown';const lmInstalled=Number(n.ai_installed||0)===1,aiRunning=Number(n.ai_server_running||0)===1,aiLive=aiRunning&&['online','paused'].includes(n.status);const lab=el('label',undefined,'node-select'),cb=document.createElement('input');cb.type='checkbox';cb.checked=selectedNodeIds.has(n.node_id);cb.setAttribute('aria-label','Выбрать узел '+(n.hostname||n.node_id));c.classList.toggle('selected',cb.checked);cb.onchange=()=>{if(cb.checked)selectedNodeIds.add(n.node_id);else selectedNodeIds.delete(n.node_id);c.classList.toggle('selected',cb.checked);syncSelectionUI()};lab.append(cb,el('span','Выбрать'));c.append(lab);const head=el('div',undefined,'node-head'),avatar=el('div','🖥️','node-avatar'),title=el('h2',n.hostname||n.node_id);avatar.setAttribute('aria-hidden','true');head.append(avatar,title);if(lmInstalled){const badge=el('span',aiLive?'✦ AI LIVE':aiRunning?'✦ AI · последнее состояние':'✦ AI','ai-badge '+(aiLive?'running':''));badge.title=aiRunning&&!aiLive?'LM Studio был запущен при последней связи с нодой':(n.ai_loaded_model||n.ai_selected_model)?'Модель: '+(n.ai_loaded_model||n.ai_selected_model):'LM Studio установлен';head.append(badge)}c.append(head,state(n.status),el('p','Агент '+(n.agent_version||'—')));const pill=el('span',n.update_required?'↑ Доступна '+(n.latest_agent_version||'новая версия'):'✓ Агент актуален','update-pill '+(n.update_required?'outdated':'current'));c.append(pill);const group=(data.groups||[]).find(g=>g.group_id===n.group_id);if(group){const cat=groupCategories[group.category]||groupCategories.other,tag=el('span',cat[0]+' '+group.name,'group-tag');tag.title=cat[1];c.append(tag)}const m=el('div',undefined,'machine-meta');m.append(metric('CPU',Number.isFinite(Number(n.cpu_percent))?Number(n.cpu_percent).toFixed(0)+'%':'—'),metric('RAM',Number.isFinite(Number(n.memory_percent))?Number(n.memory_percent).toFixed(0)+'%':'—'));c.append(m);if(lmInstalled&&n.ai_loaded_model)c.append(el('small','AI модель: '+n.ai_loaded_model));c.append(el('small','Последний ответ: '+(n.last_seen_at||'не получен')));const commands=(data.commands||[]).filter(x=>x.node_id===n.node_id),current=commands[0];if(current){const active=['pending','accepted'].includes(current.status);if(active){const live=el('div',undefined,'command-live'),labelEl=el('strong');labelEl.append(el('span',undefined,'spin'),el('span','Идёт: '+(commandNames[current.command_type]||current.command_type),'dots'));live.append(labelEl);c.append(live)}else c.append(el('p','Команда: '+(commandNames[current.command_type]||current.command_type)),state(current.status))}const row=el('div',undefined,'row');row.append(button('Подробнее',()=>openNode(n),'primary'));row.append(button('Пауза',()=>command(n,'pause'),'btn-pause'));row.append(button('Продолжить',()=>command(n,'resume'),'btn-resume'));row.append(button('Обновить',()=>command(n,'update'),'btn-update'));if(n.status==='offline')row.append(button('Разбудить',()=>wake(n),'btn-info'));row.append(button('🗑 Удалить',()=>openDeleteDialog([n]),'danger node-delete'));c.append(row);root.append(c)}if(!nodes.length)root.append(el('p',allNodes.length?'В этой группе пока нет узлов.':'Зарегистрированных машин нет.'));syncSelectionUI();updateFleetActivityFromData(data)}
 function renderDetailGrid(target,items){target.replaceChildren();for(const [k,v] of items)target.append(metric(k,v??'—'))}
-function renderNodeDetails(d){const n=d.node||{},net=d.network||{},ai=d.ai||{},hw=d.hardware||{},rec=d.model_recommendation||{};currentNode={...currentNode,...n};$('nodeTitle').textContent=n.hostname||n.node_id||'Нода';renderDetailGrid($('nodeDetailSummary'),[['Статус',label(n.status)],['Система',[n.os_name,n.os_version].filter(Boolean).join(' ')||'—'],['Архитектура',n.architecture||'—'],['Агент',n.agent_version||'—'],['Доступная версия',n.latest_agent_version||'—'],['Обновление',n.update_required?'Требуется':'Версия совпадает'],['Мини-агенты Python',(n.capabilities||[]).includes('project_python')?'Модуль доступен':'Не сообщён'],['Мини-агенты AI',(n.capabilities||[]).includes('project_text')?'Модуль доступен':'Не сообщён'],['CPU',n.cpu_percent==null?'—':n.cpu_percent+'%'],['RAM занято',n.memory_percent==null?'—':n.memory_percent+'%'],['Последний ответ',n.last_seen_at||'—']]);renderDetailGrid($('nodeNetwork'),[['LAN IP',net.lan_ipv4||'—'],['MAC',(net.mac_addresses||[]).join(', ')||'—'],['Сеть обновлена',net.updated_at||'—']]);renderDetailGrid($('nodeHardware'),[['RAM всего',gib(hw.memory_total_bytes)],['CPU потоков',hw.cpu_logical_count||'—'],['GPU / VRAM',gpuText(hw.gpus)],['Профиль обновлён',hw.updated_at||'—']]);$('modelRecommendation').textContent=rec.tier?'Рекомендация Архитектора: '+rec.target_parameters_b+' · '+rec.quantization+' · контекст '+rec.context_length+' · '+rec.reason:'Архитектор ждёт профиль железа от агента.';$('lmControlHint').textContent=lmOperationStartedAt?'LM Studio: выполняется операция…':ai.observed===false?'LM Studio: состояние ещё не получено — выполните проверку.':Number(ai.installed)===1?'LM Studio установлен — доступны обновление, проверка и удаление.':'LM Studio не установлен — доступна установка и проверка.';renderDetailGrid($('nodeAi'),[['LM Studio',ai.observed===false?'◷ Состояние не получено':Number(ai.installed)===1?'✓ Установлен':'× Не установлен'],['Сервер модели',Number(ai.server_running)===1?'✓ Работает':'◷ Не запущен'],['Выбрана модель',ai.selected_model?'✓ '+ai.selected_model:'— Не выбрана'],['Загружена модель',ai.loaded_model?'✓ '+ai.loaded_model:'— Не загружена'],['Последнее действие',ai.last_action||'—'],['AI обновлено',ai.updated_at||ai.runtime_updated_at||'—']]);if(rec.quantization&&!$('modelQuant').value)$('modelQuant').value=rec.quantization;if(ai.selected_model&&!$('modelId').value)$('modelId').value=ai.selected_model;renderAiProgress(ai);const lmInstalled=Number(ai.installed)===1,lmPhase=String(ai.progress_phase||''),lmBusy=Boolean(nodeOperations.get(n.node_id)&&!['completed','failed','cancelled'].includes(nodeOperations.get(n.node_id).status))||(!['','complete','failed','cancelled','download_complete','load_complete','query_complete','completed','completed_partial','ready'].includes(lmPhase)&&/download|install|running|loading|helper|runtime|daemon|upstream/.test(lmPhase));$('lmInstall').hidden=lmInstalled||lmBusy;$('lmUpdate').hidden=!lmInstalled||lmBusy;$('lmRemove').hidden=!lmInstalled||lmBusy;$('lmProbe').hidden=lmBusy;$('lmInstall').disabled=lmBusy;$('lmUpdate').disabled=lmBusy;$('lmRemove').disabled=lmBusy;$('lmProbe').disabled=lmBusy;$('modelGet').hidden=!lmInstalled;$('modelLoad').hidden=!lmInstalled;$('modelGet').disabled=lmBusy;$('modelLoad').disabled=lmBusy;$('detailWake').disabled=n.status!=='offline';$('detailPause').disabled=n.status==='paused'||n.status==='offline';$('detailResume').disabled=n.status!=='paused';$('nodeDetailState').textContent=detailPollTimer?'Проверяю ход операции каждые несколько секунд.':'Сведения этой ноды обновлены.';$('nodeDetailState').className='status'}async function loadNodeDetails(node,quiet=false){if(quiet&&currentNode?.node_id!==node.node_id)return;currentNode=node;const seq=++detailSequence,epoch=generation;if(!quiet){$('nodeDetailState').replaceChildren(el('span',undefined,'spin'),el('span','Загружаю состояние ноды…'));$('nodeDetailState').className='status'}try{const d=await api('/nodes/'+encodeURIComponent(node.node_id)+'/details');if(seq===detailSequence&&epoch===generation&&currentNode?.node_id===node.node_id)renderNodeDetails(d)}catch(e){if(seq===detailSequence&&epoch===generation&&currentNode?.node_id===node.node_id){const op=nodeOperations.get(node.node_id);if(op&&!['completed','failed','cancelled'].includes(op.status)){op.status='disconnected';op.error='Не удалось обновить статус. Повторяю проверку; операцию не запускаю заново.';op.type==='hybrid_query'?renderQueryStatus(op):renderLmLocalStatus()}if(!quiet){$('nodeDetailState').textContent='Подробности не получены: '+e.message;$('nodeDetailState').className='status error'}}}}
+function renderNodeDetails(d){const n=d.node||{},net=d.network||{},ai=d.ai||{},hw=d.hardware||{},rec=d.model_recommendation||{};currentNode={...currentNode,...n};$('nodeTitle').textContent=n.hostname||n.node_id||'Нода';renderDetailGrid($('nodeDetailSummary'),[['Статус',label(n.status)],['Система',[n.os_name,n.os_version].filter(Boolean).join(' ')||'—'],['Архитектура',n.architecture||'—'],['Агент',n.agent_version||'—'],['Доступная версия',n.latest_agent_version||'—'],['Обновление',n.update_required?'Требуется':'Версия совпадает'],['Мини-агенты Python',(n.capabilities||[]).includes('project_python')?'Модуль доступен':'Не сообщён'],['Мини-агенты AI',(n.capabilities||[]).includes('project_text')?'Модуль доступен':'Не сообщён'],['CPU',n.cpu_percent==null?'—':n.cpu_percent+'%'],['RAM занято',n.memory_percent==null?'—':n.memory_percent+'%'],['Последний ответ',n.last_seen_at||'—']]);renderDetailGrid($('nodeNetwork'),[['LAN IP',net.lan_ipv4||'—'],['MAC',(net.mac_addresses||[]).join(', ')||'—'],['Сеть обновлена',net.updated_at||'—']]);renderDetailGrid($('nodeHardware'),[['RAM всего',gib(hw.memory_total_bytes)],['CPU потоков',hw.cpu_logical_count||'—'],['GPU / VRAM',gpuText(hw.gpus)],['Профиль обновлён',hw.updated_at||'—']]);$('modelRecommendation').textContent=rec.tier?'Рекомендация Архитектора: '+rec.target_parameters_b+' · '+rec.quantization+' · контекст '+rec.context_length+' · '+rec.reason:'Архитектор ждёт профиль железа от агента.';$('lmControlHint').textContent=lmOperationStartedAt?'LM Studio: выполняется операция…':ai.observed===false?'LM Studio: состояние ещё не получено — выполните проверку.':Number(ai.installed)===1?'LM Studio установлен — доступны обновление, проверка и удаление.':'LM Studio не установлен — доступна установка и проверка.';renderDetailGrid($('nodeAi'),[['LM Studio',ai.observed===false?'◷ Состояние не получено':Number(ai.installed)===1?'✓ Установлен':'× Не установлен'],['Сервер модели',Number(ai.server_running)===1?'✓ Работает':'◷ Не запущен'],['Выбрана модель',ai.selected_model?'✓ '+ai.selected_model:'— Не выбрана'],['Загружена модель',ai.loaded_model?'✓ '+ai.loaded_model:'— Не загружена'],['Последнее действие',ai.last_action||'—'],['AI обновлено',ai.updated_at||ai.runtime_updated_at||'—']]);if(rec.quantization&&!$('modelQuant').value)$('modelQuant').value=rec.quantization;if(ai.selected_model&&!$('modelId').value)$('modelId').value=ai.selected_model;renderAiProgress(ai);const lmInstalled=Number(ai.installed)===1,lmPhase=String(ai.progress_phase||''),lmBusy=Boolean(nodeOperations.get(n.node_id)&&!['completed','failed','cancelled'].includes(nodeOperations.get(n.node_id).status))||(!['','complete','failed','cancelled','download_complete','load_complete','query_complete','completed','completed_partial','ready'].includes(lmPhase)&&/download|install|running|loading|helper|runtime|daemon|upstream/.test(lmPhase));$('lmInstall').hidden=lmInstalled||lmBusy;$('lmUpdate').hidden=!lmInstalled||lmBusy;$('lmRemove').hidden=!lmInstalled||lmBusy;$('lmProbe').hidden=lmBusy;$('lmInstall').disabled=lmBusy;$('lmUpdate').disabled=lmBusy;$('lmRemove').disabled=lmBusy;$('lmProbe').disabled=lmBusy;$('modelGet').hidden=!lmInstalled;$('modelLoad').hidden=!lmInstalled;$('modelGet').disabled=lmBusy;$('modelLoad').disabled=lmBusy;$('detailWake').disabled=n.status!=='offline';$('detailPause').disabled=n.status==='paused'||n.status==='offline';$('detailResume').disabled=n.status!=='paused';$('nodeDetailState').textContent=detailPollTimer?'Проверяю ход операции каждые несколько секунд.':'Сведения этой ноды обновлены.';$('nodeDetailState').className='status';if($('sshDialog').open&&sshNodeId===n.node_id)renderOperationsSshState()}async function loadNodeDetails(node,quiet=false){if(quiet&&currentNode?.node_id!==node.node_id)return;currentNode=node;const seq=++detailSequence,epoch=generation;if(!quiet){$('nodeDetailState').replaceChildren(el('span',undefined,'spin'),el('span','Загружаю состояние ноды…'));$('nodeDetailState').className='status'}try{const d=await api('/nodes/'+encodeURIComponent(node.node_id)+'/details');if(seq===detailSequence&&epoch===generation&&currentNode?.node_id===node.node_id)renderNodeDetails(d)}catch(e){if(seq===detailSequence&&epoch===generation&&currentNode?.node_id===node.node_id){const op=nodeOperations.get(node.node_id);if(op&&!['completed','failed','cancelled'].includes(op.status)){op.status='disconnected';op.error='Не удалось обновить статус. Повторяю проверку; операцию не запускаю заново.';op.type==='hybrid_query'?renderQueryStatus(op):renderLmLocalStatus()}if(!quiet){$('nodeDetailState').textContent='Подробности не получены: '+e.message;$('nodeDetailState').className='status error'}}}}
 function clearDetailProgressWatch(){if(detailPollTimer){clearTimeout(detailPollTimer);detailPollTimer=null}}
 function startDetailProgressWatch(node,label,options={}){
   clearDetailProgressWatch();const existing=nodeOperations.get(node.node_id);
@@ -384,7 +425,7 @@ $('sshHost').addEventListener('input',()=>{sshDirtyFields.add('host');renderOper
 $('sshUser').addEventListener('input',()=>{sshDirtyFields.add('user');renderOperationsSshState()});
 $('sshFingerprint').addEventListener('input',()=>{sshDirtyFields.add('fingerprint');renderOperationsSshState()});
 $('sshSave').onclick=()=>withButton('sshSave',saveOperationsSshState);
-$('sshProbe').onclick=()=>withButton('sshProbe',probeOperationsSsh);
+$('sshProbe').onclick=()=>withButton('sshProbe',probeOperationsSsh).finally(()=>renderOperationsSshState());
 $('sshBootstrap').onclick=()=>navigator.clipboard.writeText(sshBootstrapCommand).then(()=>tell('Windows SSH bootstrap скопирован.')).catch(e=>tell('Не удалось скопировать bootstrap: '+e.message,true));
 $('sshCopy').onclick=()=>navigator.clipboard.writeText($('sshCommand').textContent).then(()=>tell('SSH-команда скопирована.')).catch(e=>tell('Не удалось скопировать команду: '+e.message,true));
 $('sshOpen').onclick=()=>{const host=safeSshHost($('sshHost').value);if(host&&sshBrowserReady())window.open('https://'+host,'_blank','noopener,noreferrer')};
