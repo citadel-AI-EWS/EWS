@@ -384,6 +384,7 @@ need(hub.includes('versionAtLeast(sshNode.agent_version,"0.3.32")'), "Hub inline
 need(operations.includes('id="sshDialog"') && operations.includes('id="sshInlineOutput"'), "deployed Machines SSH dialog/terminal missing");
 need(operations.includes("const sshAllowedCommands=new Set(['help','status','hostname','uptime','cpu','memory','disk','network','agent-status','agent-logs','lmstudio-status','diagnostics','ping-controller','exit'])"), "deployed Machines SSH allow-list missing or drifted");
 need(operations.includes("sshVersionAtLeast(node.agent_version,'0.3.32')"), "deployed Machines restricted terminal must require agent 0.3.32");
+need(operations.includes("if(Array.isArray(node?.capabilities))return node.capabilities;"), "deployed Machines SSH bootstrap must consume detailed capabilities");
 need(operations.includes("command_type:'ssh_console'") && operations.includes("command_type:'ssh_probe'"), "deployed Machines SSH commands missing");
 need(operations.includes("sshSelectionGeneration") && operations.includes("sshLoadGeneration") && operations.includes("sshSaveGeneration"), "deployed Machines SSH stale-response generations missing");
 need(operations.includes("const sshDirtyFields=new Set();") && operations.includes("applySshServerFields"), "deployed Machines SSH dirty-field protection missing");
