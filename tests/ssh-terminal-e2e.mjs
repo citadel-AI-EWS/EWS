@@ -7,6 +7,15 @@ import {issueSshTicket, verifySshTicket} from '../src/ssh/tickets.js';
 import {sshFixture} from './helpers/ssh-fixture.mjs';
 import {TicketReplayStore} from '../gateway/replay-store.mjs';
 
+const gatewaySource = fs.readFileSync('gateway/server.mjs', 'utf8');
+const caddySource = fs.readFileSync('gateway/Caddyfile.example', 'utf8');
+const deployWorkflow = fs.readFileSync('.github/workflows/deploy-cloudflare.yml', 'utf8');
+const hubSource = fs.readFileSync('operations.html', 'utf8');
+assert.ok(gatewaySource.includes("const loopbackOrigin = origin.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname);"), 'plaintext Hub origin must be loopback-only');
+assert.match(caddySource, /route\s*\{[\s\S]*reverse_proxy @ssh 127\.0\.0\.1:8080[\s\S]*respond 404[\s\S]*\}/, 'Caddy /ssh proxy must run before fallback');
+assert.ok(deployWorkflow.includes('{"SSH_GATEWAY_URL":null,"SSH_GATEWAY_TICKET_SECRET":null}'), 'disabling direct SSH must delete persisted Worker gateway secrets');
+assert.ok(hubSource.includes("window.addEventListener('pagehide',()=>{if($('directSshDialog').open)$('directSshDialog').close();sshTerminal.close();"), 'bfcache pagehide must reset direct SSH terminal');
+
 const f = await sshFixture({assets: process.argv.includes('--browser')});
 const sockets = new Set();
 function connect(ticket, origin = f.origin) {
