@@ -94,9 +94,9 @@ Windows-конфигурация сознательно не используе�
 
 ## Agent / Controller contract
 
-Agent 0.3.31 продолжает capability `ssh_probe_readonly`, отправляет SSH readiness v2 и принимает подписанные/hash-verified assets `CitadelSshConsole.cs` и `configure_restricted_ssh.ps1`. Команда `ssh_probe` остаётся read-only и только заставляет немедленно обновить readiness heartbeat.
+Agent 0.3.32 продолжает capability `ssh_probe_readonly`, отправляет SSH readiness v2 и принимает подписанные/hash-verified assets `CitadelSshConsole.cs` и `configure_restricted_ssh.ps1`. Команда `ssh_probe` остаётся read-only и только заставляет немедленно обновить readiness heartbeat.
 
-Ноды 0.3.29 уже знают эти два asset-имени, поэтому переход на 0.3.31 доставляет обновлённый Cloudflare/bootstrap код обычным signed update без переустановки. Чистые Windows one-click/fixed packages также содержат restricted SSH assets.
+Ноды 0.3.29 уже знают эти два asset-имени, поэтому переход на 0.3.32 доставляет обновлённый Cloudflare/bootstrap код обычным signed update без переустановки. Чистые Windows one-click/fixed packages также содержат restricted SSH assets.
 
 ## Cloudflare Zero Trust provisioning
 
@@ -139,10 +139,20 @@ Dry-run использует настоящий Cloudflare API token тольк�
 
 ## Что остаётся внешней настройкой
 
-После merge 0.3.31 программная цепочка готова к provisioning. Для первого реального Browser SSH всё ещё нужны два значения, которые нельзя безопасно выдумать:
+После merge 0.3.32 программная цепочка готова к provisioning. Для первого реального Browser SSH всё ещё нужны два значения, которые нельзя безопасно выдумать:
 
 - public hostname в домене/zone, управляемом вашим Cloudflare;
 - точный email identity, которому Cloudflare Access разрешит вход.
 
 После запуска protected workflow с этими значениями он выдаёт CA **public** key и создаёт Tunnel/DNS/Access. Tunnel token берётся в Cloudflare для конкретного Tunnel и вводится только локально в скрытом prompt Windows bootstrap. Пока Tunnel connector и restricted SSH readiness не подтверждены агентом, Hub обязан показывать SSH как NOT READY.
 
+
+## Inline Hub terminal
+
+Hub также предоставляет интерактивное окно **INLINE RESTRICTED TERMINAL** для выбранной ноды. Это не универсальный shell и не SSH proxy в Worker. Каждая команда проходит через существующий подписанный CITADEL agent command channel как `ssh_console`, а агент принимает только фиксированный read-only allow-list.
+
+Результат привязан одновременно к `node_id` и `command_id`, ограничен 24 KiB и хранится в D1 не более 24 часов с ограниченной пакетной очисткой. Если оператор переключил выбранную ноду во время выполнения команды, поздний ответ старой ноды не выводится в новое terminal-окно.
+
+Команда `agent-logs` читает `data_dir` из активного config и возвращает только ограниченный хвост файла, а не загружает весь append-only журнал в память.
+
+Inline terminal работает независимо от Cloudflare Browser SSH и полезен для диагностики даже до завершения Tunnel/Access provisioning. Browser SSH остаётся отдельным Zero Trust транспортом для реального OpenSSH-сеанса с тем же ограниченным ForceCommand.
