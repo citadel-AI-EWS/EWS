@@ -874,9 +874,23 @@ async function ensureCommandStorage(env) {
             status TEXT NOT NULL DEFAULT 'pending',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             completed_at TEXT,
-            result_json TEXT,
             FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
           )
+        `),
+        env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS ssh_console_results (
+            command_id TEXT PRIMARY KEY,
+            node_id TEXT NOT NULL,
+            output TEXT NOT NULL,
+            exit_code INTEGER NOT NULL CHECK (exit_code BETWEEN 0 AND 255),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (command_id) REFERENCES commands(command_id) ON DELETE CASCADE,
+            FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+          )
+        `),
+        env.DB.prepare(`
+          CREATE INDEX IF NOT EXISTS idx_ssh_console_results_node_created
+          ON ssh_console_results(node_id, created_at DESC)
         `),
         env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS audit_events (
@@ -926,13 +940,6 @@ async function ensureCommandStorage(env) {
         } catch (error) {
           // Concurrent requests can race the one-time repair. A duplicate-column
           // result means the other request already completed the same safe repair.
-          if (!String(error).toLowerCase().includes("duplicate column")) throw error;
-        }
-      }
-      if (!commandColumnNames.has("result_json")) {
-        try {
-          await env.DB.prepare("ALTER TABLE commands ADD COLUMN result_json TEXT").run();
-        } catch (error) {
           if (!String(error).toLowerCase().includes("duplicate column")) throw error;
         }
       }
@@ -5373,15 +5380,11 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
           completed_at = CASE
             WHEN ? IN ('completed', 'failed') THEN CURRENT_TIMESTAMP
             ELSE completed_at
-          END,
-          result_json = CASE
-            WHEN ? IS NOT NULL THEN ?
-            ELSE result_json
           END
       WHERE command_id = ?
         AND node_id = ?
         AND status = ?
-    `).bind(status, status, commandResultJson, commandResultJson, commandId, nodeId, current.status),
+    `).bind(status, status, commandId, nodeId, current.status),
     env.DB.prepare(`
       INSERT INTO audit_events (
         actor_type, actor_id, action, target_type, target_id, details_json
@@ -5390,6 +5393,18 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
       WHERE changes() = 1
     `).bind(nodeId, commandId, detailsJson)
   ];
+
+  if (commandResult) {
+    statements.push(env.DB.prepare(`
+      INSERT INTO ssh_console_results (
+        command_id, node_id, output, exit_code, created_at
+      ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(command_id) DO UPDATE SET
+        output = excluded.output,
+        exit_code = excluded.exit_code,
+        created_at = CURRENT_TIMESTAMP
+    `).bind(commandId, nodeId, commandResult.output, commandResult.exit_code));
+  }
 
   const nodeStatus = status === "completed"
     ? { pause: "paused", resume: "online", stop: "offline", uninstall: "revoked" }[current.command_type]
@@ -6698,9 +6713,11 @@ async function architectGetCommand(request, env, nodeId, commandId) {
   await authenticateArchitect(request, env);
   await ensureCommandStorage(env);
   const command = await env.DB.prepare(`
-    SELECT command_id, node_id, command_type, status, created_at, completed_at, result_json
-    FROM commands
-    WHERE command_id = ? AND node_id = ?
+    SELECT c.command_id, c.node_id, c.command_type, c.status, c.created_at, c.completed_at,
+      r.output AS result_output, r.exit_code AS result_exit_code
+    FROM commands AS c
+    LEFT JOIN ssh_console_results AS r ON r.command_id = c.command_id
+    WHERE c.command_id = ? AND c.node_id = ?
   `).bind(commandId, nodeId).first();
   if (!command) throw new ApiError(404, "command_not_found");
   return json({
@@ -6712,8 +6729,8 @@ async function architectGetCommand(request, env, nodeId, commandId) {
       status: command.status,
       created_at: command.created_at,
       completed_at: command.completed_at,
-      result: command.command_type === "ssh_console"
-        ? safeJson(command.result_json, null)
+      result: command.command_type === "ssh_console" && typeof command.result_output === "string"
+        ? { output: command.result_output, exit_code: Number(command.result_exit_code || 0) }
         : null
     }
   });
