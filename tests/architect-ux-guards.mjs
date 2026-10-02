@@ -734,6 +734,9 @@ assert.ok(!operations.includes('<a href="/hub/">Открыть Hub SSH</a>'), "d
 assert.ok(operations.includes("sshVersionAtLeast(node.agent_version,'0.3.32')"), "deployed restricted terminal must require agent 0.3.32+");
 assert.ok(operations.includes("if(Array.isArray(node?.capabilities))return node.capabilities;"), "deployed SSH bootstrap must use detailed node capabilities");
 assert.ok(operations.includes("if(currentNode?.node_id===sshNodeId)return currentNode;"), "deployed SSH must prefer detailed selected-node state");
+assert.ok(operations.includes("^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"), "deployed SSH hostname validation must match Controller");
+assert.ok(operations.includes("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"), "deployed SSH user validation must match Controller");
+assert.ok(operations.includes("^SHA256:[A-Za-z0-9+/=]{20,120}$"), "deployed SSH fingerprint validation must match Controller");
 
 
 assert.ok(index.includes("CREATE TABLE IF NOT EXISTS commands"), "runtime command table bootstrap missing");
