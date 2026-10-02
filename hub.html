@@ -769,36 +769,41 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
     }
     async function loadSshState(nodeId){
       sshNodeId=nodeId||"";
+      const requestedNodeId=sshNodeId;
       sshState=null;
-      if(!sshNodeId){$("sshNodeName").textContent="Нода не выбрана";sshHost.value="";sshUser.value="";sshFingerprint.value="";renderSshState();return}
-      const node=(lastOverview?.nodes||[]).find(n=>n.node_id===sshNodeId);
-      $("sshNodeName").textContent=(node?.hostname||sshNodeId)+" · "+sshNodeId;
+      if(!requestedNodeId){$("sshNodeName").textContent="Нода не выбрана";sshHost.value="";sshUser.value="";sshFingerprint.value="";renderSshState();return}
+      const node=(lastOverview?.nodes||[]).find(n=>n.node_id===requestedNodeId);
+      $("sshNodeName").textContent=(node?.hostname||requestedNodeId)+" · "+requestedNodeId;
       resetSshInline(node);
       try{
-        const data=await api(`/api/v1/architect/nodes/${encodeURIComponent(sshNodeId)}/ssh`);
+        const data=await api(`/api/v1/architect/nodes/${encodeURIComponent(requestedNodeId)}/ssh`);
+        if(sshNodeId!==requestedNodeId)return;
         sshState=data.ssh||{};
         sshHost.value=sshState.public_hostname||"";
         sshUser.value=sshState.ssh_user||"";
         sshFingerprint.value=sshState.host_key_fingerprint||"";
-      }catch(e){toast("SSH",e.message,"bad")}
-      renderSshState();
+      }catch(e){if(sshNodeId===requestedNodeId)toast("SSH",e.message,"bad")}
+      if(sshNodeId===requestedNodeId)renderSshState();
     }
     async function saveSshState(){
       if(!sshNodeId)return;
+      const nodeId=sshNodeId;
       const host=safeHost(sshHost.value),user=safeUser(sshUser.value);
       if(!host||!user)return toast("SSH","Укажите корректные Cloudflare hostname и SSH user.","bad");
       try{
-        const data=await api(`/api/v1/architect/nodes/${encodeURIComponent(sshNodeId)}/ssh`,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({public_hostname:host,ssh_user:user,host_key_fingerprint:sshFingerprint.value.trim()||null})});
+        const data=await api(`/api/v1/architect/nodes/${encodeURIComponent(nodeId)}/ssh`,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({public_hostname:host,ssh_user:user,host_key_fingerprint:sshFingerprint.value.trim()||null})});
+        if(sshNodeId!==nodeId)return;
         sshState=data.ssh||sshState;toast("SSH","Публичная SSH-конфигурация сохранена.");renderSshState();
-      }catch(e){toast("SSH",e.message,"bad")}
+      }catch(e){if(sshNodeId===nodeId)toast("SSH",e.message,"bad")}
     }
     async function probeSsh(){
       if(!sshNodeId)return;
+      const nodeId=sshNodeId;
       try{
-        await api(`/api/v1/architect/nodes/${encodeURIComponent(sshNodeId)}/commands`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({command_type:"ssh_probe"})});
-        toast("SSH","Проверка SSH поставлена в очередь.");
-        setTimeout(()=>loadSshState(sshNodeId),2500);
-      }catch(e){toast("SSH",e.message,"bad")}
+        await api(`/api/v1/architect/nodes/${encodeURIComponent(nodeId)}/commands`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({command_type:"ssh_probe"})});
+        if(sshNodeId===nodeId)toast("SSH","Проверка SSH поставлена в очередь.");
+        setTimeout(()=>{if(sshNodeId===nodeId)loadSshState(nodeId)},2500);
+      }catch(e){if(sshNodeId===nodeId)toast("SSH",e.message,"bad")}
     }
     async function waitForSshInlineCommand(nodeId,commandId){
       const delays=[1000,3000,5000,8000,12000,16000];
