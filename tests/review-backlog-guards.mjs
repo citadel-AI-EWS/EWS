@@ -391,6 +391,11 @@ need(operations.includes("sshInlineGeneration") && operations.includes("sshProbe
 need(operations.includes("async function waitForOperationsSshProbe") && operations.includes("command.status==='completed'||command.status==='failed'"), "deployed Machines SSH probe does not wait for queued completion");
 need(operations.includes("sshSelectionGeneration===selectionGeneration&&sshInlineGeneration===inlineGeneration"), "deployed Machines terminal can accept an earlier dialog-session result");
 need(operations.includes("sshSelectionGeneration===selectionGeneration&&sshProbeGeneration===probeGeneration"), "deployed Machines probe can accept an earlier dialog-session result");
+need(operations.includes("host===savedHost&&user===savedUser"), "Browser SSH can open an unsaved target");
+need(operations.includes("sshPendingProbeCommands=new Map()") && operations.includes("sshPendingInlineCommands=new Map()"), "accepted SSH command IDs are not retained");
+need(operations.includes("formatSshCommandResult(command)") && operations.includes("result.output"), "failed SSH console output is discarded");
+need(operations.includes("command ID retained") && operations.includes("Получить результат SSH"), "pending SSH commands cannot be resumed after the initial polling window");
+need(operations.includes("if($('sshDialog').open&&sshNodeId===n.node_id)renderOperationsSshState()"), "SSH bootstrap eligibility is not refreshed after details load");
 need(operations.includes("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"), "deployed Machines SSH user validation drifts from Controller");
 need(operations.includes("command_type:'ssh_console'") && operations.includes("command_type:'ssh_probe'"), "deployed Machines SSH commands missing");
 need(operations.includes("sshSelectionGeneration") && operations.includes("sshLoadGeneration") && operations.includes("sshSaveGeneration"), "deployed Machines SSH stale-response generations missing");
