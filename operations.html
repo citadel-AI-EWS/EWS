@@ -85,7 +85,7 @@ function safeSshHost(value){const host=String(value||'').trim().toLowerCase();re
 function safeSshUser(value){const user=String(value||'').trim();return /^[a-zA-Z0-9._-]{1,64}$/.test(user)?user:''}
 function sshVersionAtLeast(value,minimum){const parse=v=>String(v||'').split('.').slice(0,3).map(x=>Number.parseInt(x,10));const a=parse(value),b=parse(minimum);if(a.length<3||b.length<3||a.some(Number.isNaN)||b.some(Number.isNaN))return false;for(let i=0;i<3;i++){if(a[i]!==b[i])return a[i]>b[i]}return true}
 function sshSelectedNode(){return (lastMachineData.nodes||[]).find(n=>n.node_id===sshNodeId)||(currentNode?.node_id===sshNodeId?currentNode:null)}
-function sshNodeCapabilities(node){try{const value=JSON.parse(node?.capabilities_json||'[]');return Array.isArray(value)?value:[]}catch{return []}}
+function sshNodeCapabilities(node){if(Array.isArray(node?.capabilities))return node.capabilities;try{const value=JSON.parse(node?.capabilities_json||'[]');return Array.isArray(value)?value:[]}catch{return []}}
 function applySshServerFields(state){if(!sshDirtyFields.has('host'))$('sshHost').value=state?.public_hostname||'';if(!sshDirtyFields.has('user'))$('sshUser').value=state?.ssh_user||'';if(!sshDirtyFields.has('fingerprint'))$('sshFingerprint').value=state?.host_key_fingerprint||''}
 function appendSshInline(text,nodeId=sshNodeId){if(nodeId!==sshNodeId||!$('sshDialog').open)return false;const out=$('sshInlineOutput');out.textContent+=(out.textContent?'\n':'')+String(text??'');out.scrollTop=out.scrollHeight;return true}
 function resetSshInline(node){$('sshInlineOutput').textContent='CITADEL restricted terminal · '+(node?.hostname||node?.node_id||'no node')+'\nType help to see the allow-list.'}
