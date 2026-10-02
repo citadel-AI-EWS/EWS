@@ -102,6 +102,10 @@ Agent 0.3.31 продолжает capability `ssh_probe_readonly`, отправ�
 
 Workflow `.github/workflows/provision-ssh-zero-trust.yml` запускается вручную в защищённом environment `cloudflare-test`. По умолчанию это dry-run; реальное изменение Cloudflare выполняется только с input `apply=true`.
 
+SSH username по умолчанию берётся из локальной части разрешённого email и поэтому должен укладываться в лимит локальной Windows-учётной записи: максимум 20 символов. Если нужен другой user, это должно быть задано до apply; provisioner fail-closed не создаёт Cloudflare resources для неподходящего username.
+
+Имя Tunnel по умолчанию выводится из node-id, а если node-id не задан — из public hostname, поэтому один и тот же Access email не заставляет разные ноды делить один dedicated Tunnel.
+
 Workflow через Cloudflare API создаёт или проверяет:
 
 - отдельный remotely-managed Tunnel;
