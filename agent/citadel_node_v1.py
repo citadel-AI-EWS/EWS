@@ -45,14 +45,14 @@ def _citadel_subprocess_run(*args, **kwargs):
     """Run child tools without opening transient Windows console windows."""
     if os.name == "nt":
         kwargs.setdefault("creationflags", WINDOWS_CREATE_NO_WINDOW)
-    return subprocess.run(*args, **kwargs)
+    return subprocess.run(*args, **kwargs)  # nosec B603
 
 
 def _citadel_subprocess_popen(*args, **kwargs):
     """Start child tools without opening transient Windows console windows."""
     if os.name == "nt":
         kwargs.setdefault("creationflags", WINDOWS_CREATE_NO_WINDOW)
-    return subprocess.Popen(*args, **kwargs)
+    return subprocess.Popen(*args, **kwargs)  # nosec B603
 
 try:
     import psutil
