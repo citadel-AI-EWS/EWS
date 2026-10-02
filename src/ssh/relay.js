@@ -72,7 +72,9 @@ export class NodeSshRelay {
     if (role === 'agent') {
       for (const previous of peers) previous.close(4001, 'agent_replaced');
     } else {
-      await this.state.storage.setAlarm(sessionExpires * 1000);
+      const currentAlarm = await this.state.storage.getAlarm();
+      const sessionAlarm = sessionExpires * 1000;
+      if (currentAlarm === null || sessionAlarm < currentAlarm) await this.state.storage.setAlarm(sessionAlarm);
       this.sockets('agent')[0]?.send(JSON.stringify({type: 'start', session_id: jti, expires_at: sessionExpires}));
     }
     return new Response(null, {status: 101, webSocket: client,
@@ -107,9 +109,13 @@ export class NodeSshRelay {
   webSocketError(socket) {this.webSocketClose(socket);}
 
   async alarm() {
-    for (const browser of this.sockets('browser')) browser.close(1000, 'session_expired');
     const now = Date.now() / 1000;
     let next = null;
+    for (const browser of this.sockets('browser')) {
+      const expires = Number(attachment(browser).session_exp);
+      if (Number.isFinite(expires) && expires <= now) browser.close(1000, 'session_expired');
+      else if (Number.isFinite(expires)) next = next === null ? expires : Math.min(next, expires);
+    }
     for (const prefix of ['ticket:', 'nonce:']) {
       const rows = await this.state.storage.list({prefix, limit: 1000});
       for (const [key, value] of rows) {
