@@ -38,7 +38,9 @@ function totals(rows) {
 async function cfJson(url, token, options = {}) {
   let response;
   try {
-    response = await fetch(url, {...options, redirect: 'error', signal: AbortSignal.timeout(12000),
+    // Workerd does not implement redirect: 'error'. Manual mode preserves the
+    // bearer token boundary because a 3xx is handled below without following it.
+    response = await fetch(url, {...options, redirect: 'manual', signal: AbortSignal.timeout(12000),
       headers: {'authorization': 'Bearer ' + token, 'content-type': 'application/json'}});
   } catch {
     throw Error('analytics_fetch_failed');
