@@ -391,6 +391,13 @@ for column in ("report_type", "report_json", "report_sha256", "report_size_bytes
     if column not in columns:
         raise SystemExit(f"fresh migration chain missing results.{column}")
 
+command_columns = {
+    row[1]
+    for row in db.execute("PRAGMA table_info(commands)")
+}
+if "result_json" not in command_columns:
+    raise SystemExit("fresh migration chain missing commands.result_json")
+
 ssh_columns = {
     row[1]
     for row in db.execute("PRAGMA table_info(node_ssh_state)")
