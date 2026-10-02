@@ -132,6 +132,33 @@ jobs:
             echo "Google Drive payload credentials synced."
           fi
 
+      - name: Sync optional direct SSH gateway configuration
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          SSH_GATEWAY_URL: ${{ secrets.SSH_GATEWAY_URL }}
+          SSH_GATEWAY_TICKET_SECRET: ${{ secrets.SSH_GATEWAY_TICKET_SECRET }}
+        run: |
+          if [ -z "$SSH_GATEWAY_URL" ] && [ -z "$SSH_GATEWAY_TICKET_SECRET" ]; then
+            printf '%s\n' '{"SSH_GATEWAY_URL":null,"SSH_GATEWAY_TICKET_SECRET":null}' | npx wrangler secret bulk
+            echo "Direct SSH gateway is disabled; persisted gateway secrets were removed."
+          elif [ -z "$SSH_GATEWAY_URL" ] || [ -z "$SSH_GATEWAY_TICKET_SECRET" ]; then
+            echo "Both SSH gateway secrets are required."
+            exit 1
+          else
+            node --input-type=module <<'NODE'
+          let valid = false;
+          try {
+            const url = new URL(process.env.SSH_GATEWAY_URL);
+            const secret = process.env.SSH_GATEWAY_TICKET_SECRET;
+            valid = url.protocol === 'https:' && url.pathname === '/ssh' && !url.username && !url.password && !url.search && !url.hash &&
+              secret.length >= 32 && secret.length <= 512 && !/\s/.test(secret);
+          } catch {}
+          if (!valid) { console.error('Invalid SSH gateway configuration'); process.exit(1); }
+          NODE
+            printf '%s' "$SSH_GATEWAY_URL" | npx wrangler secret put SSH_GATEWAY_URL
+            printf '%s' "$SSH_GATEWAY_TICKET_SECRET" | npx wrangler secret put SSH_GATEWAY_TICKET_SECRET
+          fi
+
       - name: Deploy TEST site and Worker
         uses: cloudflare/wrangler-action@v4
         with:

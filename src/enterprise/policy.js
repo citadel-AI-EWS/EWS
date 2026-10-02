@@ -113,6 +113,7 @@ export function requiredArchitectPermission(method, pathname) {
 
   if (
     path.startsWith("/api/v1/architect/security/access-tokens") ||
+    (upper === "POST" && /^\/api\/v1\/architect\/nodes\/[^/]+\/ssh\/session$/.test(path)) ||
     path === "/api/v1/architect/enterprise/recovery-manifest"
   ) {
     return "admin";

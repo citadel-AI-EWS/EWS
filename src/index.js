@@ -5,6 +5,7 @@ import { readD1GuardianStatus, runD1Guardian } from "./d1-guardian.js";
 import { openRouterQualityConfig, reviewWithOpenRouter } from "./quality/openrouter.js";
 import { ARCHITECT_ROLE_PERMISSIONS, DEFAULT_ENTERPRISE_POLICY, evaluateEnterpriseNode, normalizeEnterprisePolicy, requiredArchitectPermission, roleHasPermission } from "./enterprise/policy.js";
 import { buildAgentCapabilityContract, buildTaskEnvelope, buildResultEnvelope, verifyProjectResultEnvelope } from "./agent-contracts.js";
+import {issueSshTicket, verifySshTicket} from "./ssh/tickets.js";
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -1180,6 +1181,65 @@ async function nodeSshStateResponse(env, nodeId) {
     browser_url: state.public_hostname ? "https://" + state.public_hostname : null,
     private_keys_stored: false
   };
+}
+
+function sshGatewayConfig(env) {
+  const raw = String(env.SSH_GATEWAY_URL || "").trim();
+  const secret = String(env.SSH_GATEWAY_TICKET_SECRET || "");
+  if (!raw || secret.length < 32 || secret.length > 512 || /\s/.test(secret)) return null;
+  try {
+    const url = new URL(raw);
+    const local = url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+    if ((!local && url.protocol !== "https:") || url.username || url.password || url.search || url.hash || url.pathname !== "/ssh") return null;
+    return {url: url.href, secret};
+  } catch {return null;}
+}
+
+async function architectSshSession(request, env, nodeId) {
+  const actor = await authenticateArchitect(request, env);
+  if (request.method === "POST" && !roleHasPermission(actor.role, "admin")) throw new ApiError(403, "architect_admin_required");
+  const node = await env.DB.prepare("SELECT node_id, hostname FROM nodes WHERE node_id = ? AND status != 'revoked'").bind(nodeId).first();
+  if (!node) throw new ApiError(404, "node_not_found");
+  const config = sshGatewayConfig(env);
+  if (request.method === "GET") return json({ok: true, configured: Boolean(config), can_connect: Boolean(config) && roleHasPermission(actor.role, "admin"), node_id: nodeId});
+  if (!config) throw new ApiError(503, "ssh_gateway_not_configured");
+  const body = parseJsonObject(await readBodyText(request, 256));
+  if (Object.keys(body).length) throw new ApiError(400, "ssh_session_target_override_forbidden");
+  if (!/^[A-Za-z0-9_.-]{1,128}$/.test(nodeId)) throw new ApiError(400, "invalid_node_id");
+  const {ticket, claims} = await issueSshTicket(config.secret, {node_id: nodeId, actor_id: actor.actor_id});
+  await env.DB.prepare(`INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json)
+    VALUES ('architect', ?, 'ssh.session.issued', 'node', ?, ?)`)
+    .bind(actor.actor_id, nodeId, JSON.stringify({session_id: claims.jti, expires_at: claims.session_exp})).run();
+  return json({ok: true, node_id: nodeId, ticket, websocket_path: "/api/v1/architect/ssh/connect", ticket_expires_at: claims.exp * 1000});
+}
+
+async function architectSshConnect(request, env) {
+  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") throw new ApiError(426, "ssh_websocket_required");
+  if (request.headers.get("origin") !== new URL(request.url).origin) throw new ApiError(403, "ssh_origin_denied");
+  const protocols = String(request.headers.get("sec-websocket-protocol") || "").split(",").map(s => s.trim());
+  if (protocols.length !== 2 || protocols[0] !== "citadel-ssh-v1" || !protocols[1].startsWith("ticket.")) throw new ApiError(401, "invalid_ssh_ticket");
+  const config = sshGatewayConfig(env);
+  if (!config) throw new ApiError(503, "ssh_gateway_not_configured");
+  const ticket = protocols[1].slice(7);
+  let claims;
+  try {claims = await verifySshTicket(config.secret, ticket);} catch {throw new ApiError(401, "invalid_ssh_ticket");}
+  const node = await env.DB.prepare("SELECT node_id FROM nodes WHERE node_id = ? AND status != 'revoked'").bind(claims.node_id).first();
+  if (!node) throw new ApiError(404, "node_not_found");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(config.url, {headers: {upgrade: "websocket", origin: new URL(request.url).origin,
+      "sec-websocket-protocol": "citadel-ssh-v1", "x-citadel-ssh-ticket": ticket}, signal: controller.signal, redirect: "manual"});
+    if (response.status !== 101 || !response.webSocket) {
+      console.error("SSH gateway upgrade rejected", {status: response.status});
+      throw new ApiError(503, "ssh_gateway_connection_failed");
+    }
+    return response;
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    console.error("SSH gateway connection failed", {name: String(error?.name || "Error")});
+    throw new ApiError(503, "ssh_gateway_connection_failed");
+  } finally {clearTimeout(timer);}
 }
 
 async function architectNodeSsh(request, env, nodeId) {
@@ -7919,6 +7979,15 @@ async function handleApi(request, env, url, executionCtx = null) {
           decodeURIComponent(architectReportMatch[1])
         )
       : methodNotAllowed(["GET"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/ssh/connect") {
+    return request.method === "GET" ? architectSshConnect(request, env) : methodNotAllowed(["GET"]);
+  }
+  const architectSshSessionMatch = url.pathname.match(/^\/api\/v1\/architect\/nodes\/([^/]+)\/ssh\/session$/);
+  if (architectSshSessionMatch) {
+    return ["GET", "POST"].includes(request.method)
+      ? architectSshSession(request, env, decodeURIComponent(architectSshSessionMatch[1])) : methodNotAllowed(["GET", "POST"]);
   }
 
   const architectNodeSshMatch = url.pathname.match(
