@@ -213,13 +213,26 @@ function constantTimeHexEqual(left, right) {
   return difference === 0;
 }
 
-async function architectExpectedHash(env) {
-  const bootstrapHash = typeof env.ARCHITECT_TOKEN_HASH === "string"
-    ? env.ARCHITECT_TOKEN_HASH.trim().toLowerCase()
-    : "";
-  if (!/^[a-f0-9]{64}$/.test(bootstrapHash)) {
-    throw new TelemetryError(503, "architect_auth_not_configured");
+function telemetryD1ErrorCode(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  if (message.includes("daily row read limit")) return "architect_d1_daily_read_limit_exceeded";
+  if (message.includes("daily row write limit")) return "architect_d1_daily_write_limit_exceeded";
+  if (message.includes("exceeded maximum db size")) return "architect_d1_database_size_exceeded";
+  if (message.includes("overloaded") || message.includes("too many api requests")) {
+    return "architect_d1_overloaded";
   }
+  if (message.includes("d1") || message.includes("sqlite")) return "architect_d1_error";
+  return null;
+}
+
+async function readArchitectExpectedHash(env) {
+  const row = await env.DB.prepare(
+    "SELECT token_hash FROM architect_auth_state WHERE singleton_id = 1"
+  ).first();
+  return String(row?.token_hash || "").trim().toLowerCase();
+}
+
+async function bootstrapArchitectAuthState(env, bootstrapHash) {
   if (!architectAuthSchemaPromise) {
     architectAuthSchemaPromise = env.DB.prepare(`
       CREATE TABLE IF NOT EXISTS architect_auth_state (
@@ -243,10 +256,38 @@ async function architectExpectedHash(env) {
       singleton_id, token_hash, bootstrap_mode, recovery_used
     ) VALUES (1, ?, 1, 1)
   `).bind(bootstrapHash).run();
-  const row = await env.DB.prepare(
-    "SELECT token_hash FROM architect_auth_state WHERE singleton_id = 1"
-  ).first();
-  const activeHash = String(row?.token_hash || "").trim().toLowerCase();
+}
+
+async function architectExpectedHash(env) {
+  const bootstrapHash = typeof env.ARCHITECT_TOKEN_HASH === "string"
+    ? env.ARCHITECT_TOKEN_HASH.trim().toLowerCase()
+    : "";
+  if (!/^[a-f0-9]{64}$/.test(bootstrapHash)) {
+    throw new TelemetryError(503, "architect_auth_not_configured");
+  }
+
+  let activeHash = "";
+  try {
+    activeHash = await readArchitectExpectedHash(env);
+  } catch (error) {
+    if (!/no such table:\s*architect_auth_state/i.test(String(error?.message || error || ""))) {
+      const code = telemetryD1ErrorCode(error);
+      if (code) throw new TelemetryError(503, code);
+      throw error;
+    }
+  }
+
+  if (!activeHash) {
+    try {
+      await bootstrapArchitectAuthState(env, bootstrapHash);
+      activeHash = await readArchitectExpectedHash(env);
+    } catch (error) {
+      const code = telemetryD1ErrorCode(error);
+      if (code) throw new TelemetryError(503, code);
+      throw error;
+    }
+  }
+
   if (!/^[a-f0-9]{64}$/.test(activeHash)) {
     throw new TelemetryError(503, "architect_auth_not_configured");
   }
