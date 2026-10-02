@@ -42,7 +42,7 @@ function Test-TrustedWinGetExecutable([string]$Path) {
   try {
     $FullPath = [System.IO.Path]::GetFullPath($Path)
     $WindowsAppsRoot = [System.IO.Path]::GetFullPath((Join-Path $env:ProgramFiles "WindowsApps")).TrimEnd('\') + '\'
-    if (-not (($FullPath + '\').StartsWith($WindowsAppsRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if (-not (($FullPath + '\').StartsWith($WindowsAppsRoot, [System.StringComparison]::OrdinalIgnoreCase))) {
       return $false
     }
     $Signature = Get-AuthenticodeSignature -FilePath $FullPath
