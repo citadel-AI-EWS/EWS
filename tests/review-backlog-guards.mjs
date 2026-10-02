@@ -366,6 +366,10 @@ need(
   sshSaveBlock.includes("sshSaveGeneration!==saveGeneration"),
   "Hub SSH save can apply a stale response after a selection cycle"
 );
+need(
+  (sshSaveBlock.match(/\+\+sshLoadGeneration;/g)||[]).length >= 2,
+  "Hub SSH save must invalidate loads both when saving starts and after it commits"
+);
 const sshProbeStart = hub.indexOf("async function probeSsh");
 const sshProbeEnd = hub.indexOf("async function waitForSshInlineCommand", sshProbeStart);
 const sshProbeBlock = hub.slice(sshProbeStart, sshProbeEnd);
