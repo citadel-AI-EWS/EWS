@@ -243,13 +243,17 @@ jobs:
             '$Cloudflared service install $PlainTunnelToken',
             'cloudflared_service_created_by_citadel',
             'service uninstall',
-            'Cloudflare.cloudflared'
+            'Cloudflare.cloudflared',
+            'Get-AuthenticodeSignature',
+            'ProgramFilesX86'
           )) {
             if (-not $text.Contains($required)) { throw "Restricted SSH bootstrap invariant missing: $required" }
           }
           if ($text.Contains("-ExecutionPolicy Bypass")) { throw "Restricted SSH bootstrap must not bypass execution policy" }
           if ($text.Contains('[string]$CloudflareTunnelToken')) { throw "Tunnel token must not be accepted as a command-line parameter" }
           if ($text.Contains("tunnel_token =")) { throw "Tunnel token must not be persisted in bootstrap state" }
+          if ($text.Contains("Get-Command cloudflared")) { throw "Elevated SSH bootstrap must not resolve cloudflared from PATH" }
+          if ($text.Contains("Microsoft\\WinGet\\Links\\cloudflared.exe")) { throw "Elevated SSH bootstrap must not execute user-writable WinGet links" }
           if (-not $text.Contains('"RemoteSigned"')) { throw "Restricted SSH bootstrap elevation must use process-only RemoteSigned policy" }
           foreach ($unsupported in @("KbdInteractiveAuthentication", "PermitTunnel", "X11Forwarding")) {
             if ($text.Contains($unsupported)) { throw "Windows OpenSSH unsupported directive returned: $unsupported" }
