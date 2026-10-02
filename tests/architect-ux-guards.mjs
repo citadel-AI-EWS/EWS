@@ -733,6 +733,7 @@ for (const required of [
 assert.ok(!operations.includes('<a href="/hub/">Открыть Hub SSH</a>'), "deployed SSH UI must not redirect to retired Hub route");
 assert.ok(operations.includes("sshVersionAtLeast(node.agent_version,'0.3.32')"), "deployed restricted terminal must require agent 0.3.32+");
 assert.ok(operations.includes("if(Array.isArray(node?.capabilities))return node.capabilities;"), "deployed SSH bootstrap must use detailed node capabilities");
+assert.ok(operations.includes("if(currentNode?.node_id===sshNodeId)return currentNode;"), "deployed SSH must prefer detailed selected-node state");
 
 
 assert.ok(index.includes("CREATE TABLE IF NOT EXISTS commands"), "runtime command table bootstrap missing");
