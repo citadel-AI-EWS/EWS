@@ -3747,6 +3747,27 @@ function normalizeMetrics(value) {
   return serialized;
 }
 
+async function claimSyncReplayNonce(env, nodeId, requestId) {
+  if (!env.SSH_RELAY) return null;
+  try {
+    const expires = Math.floor(Date.now() / 1000) + SIGNATURE_WINDOW_SECONDS + 30;
+    const response = await relayStub(env, nodeId).fetch("https://relay.internal/replay-claim", {
+      method: "POST",
+      headers: {
+        "x-citadel-relay-role": "replay",
+        "x-citadel-request-id": requestId,
+        "x-citadel-request-expires": String(expires)
+      }
+    });
+    if (response.status === 409) return false;
+    if (response.ok) return true;
+  } catch {
+    // If Durable Objects are unavailable, preserve the existing D1-backed
+    // replay store rather than weakening replay protection.
+  }
+  return null;
+}
+
 async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   const headerNodeId = request.headers.get("x-node-id");
   const timestamp = request.headers.get("x-node-timestamp");
@@ -3815,20 +3836,28 @@ async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   if (!verified) throw new ApiError(401, "invalid_signature");
 
   if (requestId) {
-    await ensureNodeRequestNonceStorage(env);
-    const nonce = await env.DB.prepare(
-      "INSERT OR IGNORE INTO node_request_nonces (node_id, request_id) VALUES (?, ?)"
-    ).bind(nodeId, requestId).run();
-    if ((nonce?.meta?.changes || 0) !== 1) {
+    const durableClaim = url.pathname.endsWith("/sync")
+      ? await claimSyncReplayNonce(env, nodeId, requestId)
+      : null;
+    if (durableClaim === false) {
       throw new ApiError(409, "replayed_request");
     }
-    // Replay protection is enforced by the PRIMARY KEY insert above. Cleanup
-    // can be opportunistic: retaining expired nonces longer is safe, while
-    // pruning on every signed poll caused repeated D1 scans.
-    if (requestId.endsWith("0")) {
-      await env.DB.prepare(
-        "DELETE FROM node_request_nonces WHERE received_at < datetime('now', '-10 minutes')"
-      ).run();
+    if (durableClaim !== true) {
+      await ensureNodeRequestNonceStorage(env);
+      const nonce = await env.DB.prepare(
+        "INSERT OR IGNORE INTO node_request_nonces (node_id, request_id) VALUES (?, ?)"
+      ).bind(nodeId, requestId).run();
+      if ((nonce?.meta?.changes || 0) !== 1) {
+        throw new ApiError(409, "replayed_request");
+      }
+      // Replay protection is enforced by the PRIMARY KEY insert above. Cleanup
+      // can be opportunistic: retaining expired nonces longer is safe, while
+      // pruning on every signed poll caused repeated D1 scans.
+      if (requestId.endsWith("0")) {
+        await env.DB.prepare(
+          "DELETE FROM node_request_nonces WHERE received_at < datetime('now', '-10 minutes')"
+        ).run();
+      }
     }
   }
   return node;
@@ -4059,7 +4088,7 @@ async function persistHeartbeat(env, node, body, coalesce = false) {
           status = CASE WHEN status = 'paused' THEN 'paused' ELSE 'online' END,
           last_seen_at = ?
       WHERE node_id = ? AND status != 'revoked'
-        AND (? = 0 OR datetime(last_seen_at) <= datetime(?, '-60 seconds')
+        AND (? = 0 OR datetime(last_seen_at) <= datetime(?, '-240 seconds')
           OR status NOT IN ('online','paused')
           OR agent_version IS NOT COALESCE(?, agent_version)
           OR capabilities_json IS NOT COALESCE(?, capabilities_json))
@@ -4228,6 +4257,8 @@ async function assignmentsForNode(env, node) {
 
 // One authenticated envelope replaces separate command, heartbeat, AI and work
 // polls. Legacy routes retain their existing authentication and response shape.
+// Stable sync heartbeats persist at most once every four minutes; live relay
+// connectivity and 30-second sync reads keep control responsive without D1 write churn.
 async function syncNode(request, env, nodeId, url) {
   const { bytes, text } = await readBody(request, 192 * 1024);
   const node = await authenticateNode(request, env, nodeId, url, bytes);

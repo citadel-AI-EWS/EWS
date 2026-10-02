@@ -1,8 +1,8 @@
 # D1 idle polling budget
 
 The previous 30-second agent cycle issued separate command, heartbeat, AI-state
-and assignment requests. Every signed request inserted a replay nonce; deleting
-expired nonces also consumed the daily write quota. Network, presence and AI
+and assignment requests. Every signed request previously inserted a replay nonce; deleting
+expired nonces also consumed the daily write quota. Stable `/sync` replay IDs now live in the per-node Durable Object instead of D1. Network, presence and AI
 snapshots were rewritten even when their values did not change. The existing
 read-only projection therefore could not establish Free-plan capacity.
 
@@ -20,7 +20,7 @@ sync discovery after five minutes. Authorization, quota and transport failures
 do not trigger additional legacy requests. Service HOLD uses the existing
 heartbeat-only readiness path.
 
-Sync persists heartbeat metrics/liveness at most once per minute for unchanged
+Sync persists heartbeat metrics/liveness at most once every four minutes for unchanged
 online/paused identity and capabilities. Recovery from offline status and
 identity/capability changes persist immediately. Network, hardware and presence
 write only when their observed values change. Their `updated_at` now represents
@@ -34,8 +34,8 @@ its fresh timestamp even when the small AI summary itself is unchanged.
 Long commands retain heartbeat keepalives and refresh correlated runtime state
 at least once per minute, inside the existing two-minute active-command lease.
 
-Telemetry nonce cleanup uses the received-at index and no longer runs on every
-log batch. The existing hourly cron also removes expired nonces. Project-list reads use
+Legacy-route telemetry nonce cleanup uses the received-at index and no longer runs on every
+log batch. The 30-second sync hot path no longer creates D1 nonce rows. The existing hourly cron also removes expired nonces. Project-list reads use
 the read-first path already introduced on main, without schema or cleanup writes
 when storage exists. Planned projects remain in the durable queue until an
 executor is available; this change preserves that behavior. Keeping a nonce longer never weakens replay protection.
@@ -62,13 +62,14 @@ sync node polling every 30 seconds it reserves:
 
 | Source | Written row equivalents per day |
 | --- | ---: |
-| Nonce insert + eventual delete, including PK/time indexes | 17,280 |
-| One persisted heartbeat per minute, including last-seen indexes | 4,320 |
+| Sync replay claims in D1 | 0 |
+| One persisted heartbeat every four minutes, including last-seen indexes | 1,080 |
 | Five-minute AI refresh, two snapshot tables | 576 |
-| Total | 22,176 |
+| Total | 1,656 |
 
-Four stable nodes project 88,704 written rows/day. Twenty project 443,520 and do
-**not** fit Free's daily write limit, even if their read projection fits.
+Twenty-seven stable nodes project about 44,712 written row-equivalents/day. Fifty
+project about 82,800, leaving roughly 17% modeled headroom under the 100,000 daily
+Free write limit before tasks, logs, enrollment and other exceptional writes.
 This estimate excludes startup/schema work, changing network/hardware, browser
 authentication, tasks, command acknowledgements, telemetry and other databases.
 It is a capacity estimate, not measured production usage or a quota guarantee.

@@ -6,7 +6,8 @@ import {Miniflare, convertV4MiniflareOptions} from 'miniflare';
 // The real Worker runtime and local D1 binding; no remote resource is configured.
 const bundle = await build({entryPoints: ['src/worker.js'], bundle: true, format: 'esm', write: false});
 const mf = new Miniflare(convertV4MiniflareOptions({modules: true, script: bundle.outputFiles[0].text,
-  compatibilityDate: '2026-09-05', d1Databases: ['DB']}));
+  compatibilityDate: '2026-09-05', d1Databases: ['DB'],
+  durableObjects: {SSH_RELAY: {className: 'NodeSshRelay', useSQLite: true}}}));
 try {
   const db = await mf.getD1Database('DB');
   for (const file of fs.readdirSync('migrations').filter(f => f.endsWith('.sql')).sort()) {
@@ -42,14 +43,14 @@ try {
   let response = await mf.dispatchFetch('https://local.test' + route, options);
   assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
   assert.deepEqual((await response.json()).assignments, []);
-  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM node_request_nonces').first()).n, 1);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM node_request_nonces').first()).n, 0);
   response = await mf.dispatchFetch('https://local.test' + route, options);
   assert.equal(response.status, 409);
   assert.equal((await response.json()).error, 'replayed_request');
   await db.prepare("UPDATE nodes SET status = 'revoked' WHERE node_id = ?").bind(nodeId).run();
   response = await mf.dispatchFetch('https://local.test' + route, options);
   assert.equal(response.status, 403);
-  console.log('Actual workerd + local D1: signed sync, one nonce, replay rejection and revocation: PASS');
+  console.log('Actual workerd + local D1: signed sync, Durable Object replay rejection, zero D1 nonce writes and revocation: PASS');
 } finally {
   await mf.dispose();
 }
