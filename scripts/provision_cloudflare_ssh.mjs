@@ -36,7 +36,7 @@ function normalizeSession(value) {
 
 function sshUserFromEmail(email) {
   const prefix = email.split("@", 1)[0];
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/.test(prefix)) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$/.test(prefix)) {
     fail("email_prefix_is_not_a_valid_windows_ssh_username");
   }
   return prefix;
@@ -86,7 +86,7 @@ async function listAll(path) {
   const results = [];
   for (let page = 1; page <= 50; page += 1) {
     const join = path.includes("?") ? "&" : "?";
-    const {body} = await cf(`${path}${join}per_page=100&page=${page}`);
+    const {body} = await cf(`${path}${join}per_page=50&page=${page}`);
     const batch = Array.isArray(body?.result) ? body.result : [];
     results.push(...batch);
     const totalPages = Number(body?.result_info?.total_pages || 1);
@@ -321,6 +321,9 @@ function selfTest() {
     try { normalizeSession(bad); } catch { rejected = true; }
     if (!rejected) fail("self_test_bad_session_accepted");
   }
+  let longUserRejected = false;
+  try { sshUserFromEmail("abcdefghijklmnopqrstu@example.com"); } catch { longUserRejected = true; }
+  if (!longUserRejected) fail("self_test_windows_username_too_long_accepted");
   console.log("Cloudflare SSH provisioner self-test: PASS");
 }
 
@@ -332,7 +335,7 @@ async function main() {
   const hostname = normalizeHostname(process.env.CITADEL_SSH_HOSTNAME);
   const allowedEmail = normalizeEmail(process.env.CITADEL_SSH_ALLOWED_EMAIL);
   const sshUser = sshUserFromEmail(allowedEmail);
-  const nodeLabel = String(process.env.CITADEL_SSH_NODE_ID || sshUser).trim().replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 64) || "node";
+  const nodeLabel = String(process.env.CITADEL_SSH_NODE_ID || hostname).trim().replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 64) || "node";
   const tunnelName = normalizeTunnelName(process.env.CITADEL_SSH_TUNNEL_NAME || `citadel-ssh-${nodeLabel}`);
   const sessionDuration = normalizeSession(process.env.CITADEL_SSH_SESSION_DURATION || "1h");
   const accountId = readAccountId();
