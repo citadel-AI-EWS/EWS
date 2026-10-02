@@ -74,14 +74,14 @@ try {
   await stream.waitFor(() => stream.output.join('').includes('CITADEL_REAL_SSH_READY'));
   assert.equal(stream.events[0].node_id, 'node-one');
   stream.socket.send(JSON.stringify({type: 'resize', cols: 110, rows: 35}));
-  stream.socket.send(Buffer.from('echo sentinel\r'));
-  await stream.waitFor(() => stream.output.join('').includes('SSH_RESULT:echo sentinel'));
+  stream.socket.send(Buffer.from('status\r'));
+  await stream.waitFor(() => stream.output.join('').includes('SSH_RESULT:status'));
   assert.ok(f.windows.some(w => w.cols === 110 && w.rows === 35), 'PTY resize reached SSH host');
   assert.equal(await refused(ticket), 503, 'gateway rejects consumed tickets');
   stream.socket.send(Buffer.from('exit\r'));
   await stream.waitFor(() => stream.events.some(e => e.type === 'exit' && e.code === 0));
   await stream.waitFor(() => stream.socket.readyState === WebSocket.CLOSED);
-  for (const [node, expected] of [['bad-pin', 'ssh_connection_failed'], ['unmapped', 'ssh_target_not_configured']]) {
+  for (const [node, expected] of [['bad-pin', 'ssh_connection_failed'], ['unmapped', 'ssh_target_not_configured'], ['unrestricted', 'ssh_restricted_console_required']]) {
     const denied = connect(await f.ticket(node));
     await denied.waitFor(() => denied.events.some(e => e.type === 'error' && e.code === expected));
     assert.ok(!denied.events.some(e => e.type === 'ready'));
@@ -92,7 +92,7 @@ try {
   await f.db.prepare("UPDATE nodes SET status = 'online' WHERE node_id = 'node-two'").run();
   assert.ok(f.upgrades.every(r => r.url === '/ssh' && !r.authorization), 'Architect credential and ticket query are never forwarded');
   assert.ok(f.audit.some(e => e.event === 'ssh.opened') && f.audit.some(e => e.event === 'ssh.closed'));
-  assert.doesNotMatch(JSON.stringify(f.audit), /PRIVATE KEY|sentinel|fixture-owner-token/);
+  assert.doesNotMatch(JSON.stringify(f.audit), /PRIVATE KEY|fixture-owner-token/);
   const events = (await f.db.prepare("SELECT details_json FROM audit_events WHERE action='ssh.session.issued'").all()).results;
   assert.ok(events.length >= 4); assert.ok(events.every(e => !e.details_json.includes('ticket')));
   console.log('SSH E2E: actual Worker/WebSocket/SSH, key pinning, PTY, auth, replay, revocation and audit PASS');
@@ -109,17 +109,17 @@ try {
       await page.locator('#nodes .node-card').filter({has: page.locator('h2', {hasText: 'Хост node-one'})}).getByRole('button', {name: 'SSH', exact: true}).click();
       await page.getByRole('button', {name: 'Подключиться', exact: true}).click();
       await page.locator('#sshStatus').filter({hasText: 'SSH подключён.'}).waitFor();
-      await page.locator('#sshTerminal .xterm-helper-textarea').pressSequentially('browser-one');
+      await page.locator('#sshTerminal .xterm-helper-textarea').pressSequentially('status');
       await page.locator('#sshTerminal .xterm-helper-textarea').press('Enter');
-      await page.waitForFunction(() => document.getElementById('sshTerminal').innerText.includes('SSH_RESULT:browser-one'));
+      await page.waitForFunction(() => document.getElementById('sshTerminal').innerText.includes('SSH_RESULT:status'));
       await page.locator('#sshNodeSelect').selectOption('node-two');
       await page.locator('#sshStatus').filter({hasText: 'Готов к подключению.'}).waitFor();
-      assert.ok(!(await page.locator('#sshTerminal').innerText()).includes('browser-one'), 'switch clears previous node output');
+      assert.ok(!(await page.locator('#sshTerminal').innerText()).includes('SSH_RESULT:status'), 'switch clears previous node output');
       await page.locator('#sshConnect').click();
       await page.locator('#sshStatus').filter({hasText: 'SSH подключён.'}).waitFor();
-      await page.locator('#sshTerminal .xterm-helper-textarea').pressSequentially('browser-two');
+      await page.locator('#sshTerminal .xterm-helper-textarea').pressSequentially('hostname');
       await page.locator('#sshTerminal .xterm-helper-textarea').press('Enter');
-      await page.waitForFunction(() => document.getElementById('sshTerminal').innerText.includes('SSH_RESULT:browser-two'));
+      await page.waitForFunction(() => document.getElementById('sshTerminal').innerText.includes('SSH_RESULT:hostname'));
       await page.locator('#sshDisconnect').click();
       await page.locator('#sshStatus').filter({hasText: 'Сеанс отключён.'}).waitFor();
       assert.equal(await page.locator('#sshConnect').isEnabled(), true, 'manual disconnect permits reconnect');
