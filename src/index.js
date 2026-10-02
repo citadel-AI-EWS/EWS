@@ -5,7 +5,7 @@ import { readD1GuardianStatus, runD1Guardian } from "./d1-guardian.js";
 import { openRouterQualityConfig, reviewWithOpenRouter } from "./quality/openrouter.js";
 import { ARCHITECT_ROLE_PERMISSIONS, DEFAULT_ENTERPRISE_POLICY, evaluateEnterpriseNode, normalizeEnterprisePolicy, requiredArchitectPermission, roleHasPermission } from "./enterprise/policy.js";
 import { buildAgentCapabilityContract, buildTaskEnvelope, buildResultEnvelope, verifyProjectResultEnvelope } from "./agent-contracts.js";
-import {issueSshTicket, verifySshTicket} from "./ssh/tickets.js";
+import {issueSshTicket, verifySshTicket, issueSshRelayTicket, verifySshRelayTicket} from "./ssh/tickets.js";
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -46,17 +46,17 @@ const SSH_CONSOLE_RESULT_CLEANUP_BATCH = 250;
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe", "ssh_console"]);
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.34",
+  version: "0.3.35",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "cf990e2a07f741af9e6690a8aa0680e177e29df5f7a50b14057fb42c22c96efb"
+      sha256: "cd19edfe80741ef6c36a76b7fd86f075666948595aaf9cd884cc955cb9d2be01"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "e96da41ebbce40081273b0c06ab92c1bc28538d25986c33765deea5abdbadcc7"
+      sha256: "02ab30070acc91377a5eb059ca404ac2e687bcad7f61a2673bf1242132ee6cb4"
     },
     {
       path: "CitadelSshConsole.cs",
@@ -1201,16 +1201,74 @@ async function architectSshSession(request, env, nodeId) {
   const node = await env.DB.prepare("SELECT node_id, hostname FROM nodes WHERE node_id = ? AND status != 'revoked'").bind(nodeId).first();
   if (!node) throw new ApiError(404, "node_not_found");
   const config = sshGatewayConfig(env);
-  if (request.method === "GET") return json({ok: true, configured: Boolean(config), can_connect: Boolean(config) && roleHasPermission(actor.role, "admin"), node_id: nodeId});
-  if (!config) throw new ApiError(503, "ssh_gateway_not_configured");
+  const relay = env.SSH_RELAY ? await relayStatus(env, nodeId) : null;
+  const relayConnected = relay?.agent_connected === true;
+  if (request.method === "GET") return json({ok: true, configured: Boolean(config || env.SSH_RELAY),
+    can_connect: Boolean(config || relayConnected) && roleHasPermission(actor.role, "admin"),
+    gateway_configured: Boolean(config), agent_connected: relayConnected, node_id: nodeId});
+  if (!config && !relayConnected) throw new ApiError(503, "ssh_agent_not_connected");
   const body = parseJsonObject(await readBodyText(request, 256));
   if (Object.keys(body).length) throw new ApiError(400, "ssh_session_target_override_forbidden");
   if (!/^[A-Za-z0-9_.-]{1,128}$/.test(nodeId)) throw new ApiError(400, "invalid_node_id");
-  const {ticket, claims} = await issueSshTicket(config.secret, {node_id: nodeId, actor_id: actor.actor_id});
+  const {ticket, claims} = relayConnected
+    ? await issueSshRelayTicket(await relaySecret(env), {node_id: nodeId, actor_id: actor.actor_id})
+    : await issueSshTicket(config.secret, {node_id: nodeId, actor_id: actor.actor_id});
   await env.DB.prepare(`INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json)
     VALUES ('architect', ?, 'ssh.session.issued', 'node', ?, ?)`)
     .bind(actor.actor_id, nodeId, JSON.stringify({session_id: claims.jti, expires_at: claims.session_exp})).run();
-  return json({ok: true, node_id: nodeId, ticket, websocket_path: "/api/v1/architect/ssh/connect", ticket_expires_at: claims.exp * 1000});
+  return json({ok: true, node_id: nodeId, ticket,
+    websocket_path: relayConnected ? "/api/v1/architect/ssh/relay/connect" : "/api/v1/architect/ssh/connect",
+    ticket_expires_at: claims.exp * 1000});
+}
+
+function relayStub(env, nodeId) {
+  if (!env.SSH_RELAY) throw new ApiError(503, 'ssh_relay_unavailable');
+  return env.SSH_RELAY.get(env.SSH_RELAY.idFromName(nodeId));
+}
+
+async function relayStatus(env, nodeId) {
+  try {
+    const response = await relayStub(env, nodeId).fetch('https://relay.internal/status',
+      {headers: {'x-citadel-relay-role': 'status'}});
+    return response.ok ? response.json() : null;
+  } catch {return null;}
+}
+
+async function relaySecret(env) {
+  const state = await architectAuthState(env);
+  return state.token_hash;
+}
+
+async function architectSshRelayConnect(request, env) {
+  if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket' ||
+      request.headers.get('origin') !== new URL(request.url).origin) throw new ApiError(403, 'ssh_origin_denied');
+  const protocols = String(request.headers.get('sec-websocket-protocol') || '').split(',').map(value => value.trim());
+  if (protocols.length !== 2 || protocols[0] !== 'citadel-ssh-v1' || !protocols[1].startsWith('ticket.')) {
+    throw new ApiError(401, 'invalid_ssh_ticket');
+  }
+  let claims;
+  try {claims = await verifySshRelayTicket(await relaySecret(env), protocols[1].slice(7));}
+  catch {throw new ApiError(401, 'invalid_ssh_ticket');}
+  const node = await env.DB.prepare("SELECT node_id FROM nodes WHERE node_id = ? AND status != 'revoked'").bind(claims.node_id).first();
+  if (!node) throw new ApiError(404, 'node_not_found');
+  const response = await relayStub(env, claims.node_id).fetch('https://relay.internal/attach', {headers: {
+    upgrade: 'websocket', 'x-citadel-relay-role': 'browser',
+    'x-citadel-relay-jti': claims.jti, 'x-citadel-relay-ticket-expires': String(claims.exp),
+    'x-citadel-relay-session-expires': String(claims.session_exp)}});
+  if (response.status !== 101) throw new ApiError(503, 'ssh_agent_not_connected');
+  return response;
+}
+
+async function nodeSshRelayConnect(request, env, nodeId, url) {
+  if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket' ||
+      request.headers.get('sec-websocket-protocol') !== 'citadel-ssh-agent-v1') {
+    throw new ApiError(426, 'ssh_websocket_required');
+  }
+  await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
+  const response = await relayStub(env, nodeId).fetch('https://relay.internal/attach', {
+    headers: {upgrade: 'websocket', 'x-citadel-relay-role': 'agent'}});
+  if (response.status !== 101) throw new ApiError(503, 'ssh_relay_unavailable');
+  return response;
 }
 
 async function architectSshConnect(request, env) {
@@ -7984,6 +8042,9 @@ async function handleApi(request, env, url, executionCtx = null) {
   if (url.pathname === "/api/v1/architect/ssh/connect") {
     return request.method === "GET" ? architectSshConnect(request, env) : methodNotAllowed(["GET"]);
   }
+  if (url.pathname === '/api/v1/architect/ssh/relay/connect') {
+    return request.method === 'GET' ? architectSshRelayConnect(request, env) : methodNotAllowed(['GET']);
+  }
   const architectSshSessionMatch = url.pathname.match(/^\/api\/v1\/architect\/nodes\/([^/]+)\/ssh\/session$/);
   if (architectSshSessionMatch) {
     return ["GET", "POST"].includes(request.method)
@@ -8083,6 +8144,10 @@ async function handleApi(request, env, url, executionCtx = null) {
       ? enrollNode(request, env)
       : methodNotAllowed(["POST"]);
   }
+
+  let relayMatch = url.pathname.match(/^\/api\/v1\/nodes\/([^/]+)\/ssh\/relay$/);
+  if (relayMatch) return request.method === 'GET'
+    ? nodeSshRelayConnect(request, env, decodeURIComponent(relayMatch[1]), url) : methodNotAllowed(['GET']);
 
   let match = url.pathname.match(/^\/api\/v1\/nodes\/([^/]+)\/heartbeat$/);
   if (match) {

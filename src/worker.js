@@ -1,4 +1,5 @@
 import baseWorker, { expireStaleCommands, recoverStaleProjectAssignments } from "./index.js";
+export {NodeSshRelay} from './ssh/relay.js';
 import { runD1Guardian } from "./d1-guardian.js";
 import { pruneExpiredD1Bookkeeping } from "./d1-retention.js";
 import { json, pruneNodeRequestNonces } from "./telemetry/common.js";

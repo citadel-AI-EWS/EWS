@@ -82,7 +82,7 @@ actual workerd with local D1. These cover conditional snapshots, liveness refres
 fresh progress timestamps, signatures, nonce replay, revocation, pause, delivery,
 retention and indexed cleanup. `scripts/validate.sh` also runs these regressions.
 
-The Controller/installer pins and Windows/Linux package builders select 0.3.34
+The Controller/installer pins and Windows/Linux package builders select 0.3.35
 (including Windows repair state protection). Release source URLs target main;
 publish matching agent archives before initiating a live update.
 

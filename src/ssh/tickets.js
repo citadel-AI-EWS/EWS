@@ -1,6 +1,7 @@
 const encoder = new TextEncoder();
 const ISSUER = 'citadel-hub';
 const AUDIENCE = 'citadel-ssh-gateway';
+const RELAY_AUDIENCE = 'citadel-ssh-relay';
 export const SSH_TICKET_SECONDS = 60;
 export const SSH_SESSION_SECONDS = 1800;
 
@@ -18,14 +19,20 @@ async function key(secret) {
   }
   return crypto.subtle.importKey('raw', encoder.encode(secret), {name: 'HMAC', hash: 'SHA-256'}, false, ['sign', 'verify']);
 }
-export async function issueSshTicket(secret, {node_id, actor_id}, now = Math.floor(Date.now() / 1000)) {
-  const claims = {v: 1, iss: ISSUER, aud: AUDIENCE, jti: crypto.randomUUID(), node_id, actor_id,
+async function issue(secret, {node_id, actor_id}, now, audience) {
+  const claims = {v: 1, iss: ISSUER, aud: audience, jti: crypto.randomUUID(), node_id, actor_id,
     iat: now, exp: now + SSH_TICKET_SECONDS, session_exp: now + SSH_SESSION_SECONDS};
   const payload = encode(encoder.encode(JSON.stringify(claims)));
   const signature = await crypto.subtle.sign('HMAC', await key(secret), encoder.encode(payload));
   return {ticket: payload + '.' + encode(new Uint8Array(signature)), claims};
 }
-export async function verifySshTicket(secret, ticket, now = Math.floor(Date.now() / 1000)) {
+export function issueSshTicket(secret, claims, now = Math.floor(Date.now() / 1000)) {
+  return issue(secret, claims, now, AUDIENCE);
+}
+export function issueSshRelayTicket(secret, claims, now = Math.floor(Date.now() / 1000)) {
+  return issue(secret, claims, now, RELAY_AUDIENCE);
+}
+async function verify(secret, ticket, now, audience) {
   if (typeof ticket !== 'string' || ticket.length > 2048) throw Error('invalid_ssh_ticket');
   const parts = ticket.split('.');
   if (parts.length !== 2) throw Error('invalid_ssh_ticket');
@@ -34,7 +41,7 @@ export async function verifySshTicket(secret, ticket, now = Math.floor(Date.now(
   let claims;
   try { claims = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(decode(parts[0]))); }
   catch { throw Error('invalid_ssh_ticket'); }
-  if (claims?.v !== 1 || claims.iss !== ISSUER || claims.aud !== AUDIENCE ||
+  if (claims?.v !== 1 || claims.iss !== ISSUER || claims.aud !== audience ||
       !/^[a-f0-9-]{36}$/i.test(claims.jti || '') ||
       !/^[A-Za-z0-9_.-]{1,128}$/.test(claims.node_id || '') ||
       typeof claims.actor_id !== 'string' || !claims.actor_id || claims.actor_id.length > 128 ||
@@ -45,4 +52,10 @@ export async function verifySshTicket(secret, ticket, now = Math.floor(Date.now(
     throw Error('invalid_ssh_ticket');
   }
   return claims;
+}
+export function verifySshTicket(secret, ticket, now = Math.floor(Date.now() / 1000)) {
+  return verify(secret, ticket, now, AUDIENCE);
+}
+export function verifySshRelayTicket(secret, ticket, now = Math.floor(Date.now() / 1000)) {
+  return verify(secret, ticket, now, RELAY_AUDIENCE);
 }

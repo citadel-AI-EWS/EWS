@@ -56,7 +56,10 @@ class CitadelSshTerminal {
       if (epoch !== this.epoch || nodeId !== this.nodeId) return;
       this.canConnect = state.can_connect === true;
       this.status(!state.configured ? 'Интерактивный SSH ещё не настроен администратором.' :
-        !this.canConnect ? 'Для SSH требуется доступ владельца.' : 'Шлюз настроен. Доступность SSH узла проверится при подключении.');
+        !this.canConnect && state.agent_connected === false && !state.gateway_configured
+          ? 'Агент узла ещё не подключился к SSH-каналу.' :
+        !this.canConnect ? 'Для SSH требуется доступ владельца.' :
+        state.agent_connected ? 'Агент узла подключён. Можно открыть SSH.' : 'Шлюз настроен. Доступность SSH узла проверится при подключении.');
       this.buttons();
     } catch (error) {if (epoch === this.epoch) this.status('Подключение недоступно: ' + error.message);}
   }
@@ -76,7 +79,7 @@ class CitadelSshTerminal {
       const session = await this.api('/nodes/' + encodeURIComponent(nodeId) + '/ssh/session', {method: 'POST', body: '{}'});
       if (epoch !== this.epoch || nodeId !== this.nodeId) return;
       const url = new URL(session.websocket_path, location.origin);
-      if (url.origin !== location.origin || url.pathname !== '/api/v1/architect/ssh/connect') throw Error('invalid_ssh_endpoint');
+      if (url.origin !== location.origin || !['/api/v1/architect/ssh/connect', '/api/v1/architect/ssh/relay/connect'].includes(url.pathname)) throw Error('invalid_ssh_endpoint');
       url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const socket = new WebSocket(url, ['citadel-ssh-v1', 'ticket.' + session.ticket]);
       socket.binaryType = 'arraybuffer'; this.socket = socket; this.buttons();
