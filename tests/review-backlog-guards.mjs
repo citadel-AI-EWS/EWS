@@ -330,6 +330,13 @@ need(
   sshLoadBlock.includes("if(sshNodeId!==requestedNodeId)return;"),
   "Hub SSH state loader can apply a stale response after switching nodes"
 );
+const sshLoadClear = 'sshHost.value="";sshUser.value="";sshFingerprint.value="";';
+need(
+  sshLoadBlock.includes(sshLoadClear) &&
+  sshLoadBlock.indexOf(sshLoadClear) < sshLoadBlock.indexOf("await api(") &&
+  sshLoadBlock.indexOf("renderSshState();") < sshLoadBlock.indexOf("await api("),
+  "Hub SSH state loader leaves stale Browser SSH controls active while a new node loads"
+);
 const sshProbeStart = hub.indexOf("async function probeSsh");
 const sshProbeEnd = hub.indexOf("async function waitForSshInlineCommand", sshProbeStart);
 const sshProbeBlock = hub.slice(sshProbeStart, sshProbeEnd);
