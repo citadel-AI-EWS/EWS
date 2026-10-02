@@ -125,6 +125,14 @@ Bootstrap просит локально только SSH username и Cloudflare 
 
 При удалении CITADEL основной Windows uninstaller сначала вызывает SSH cleanup. Он восстанавливает исходный `sshd_config`, удаляет только созданного CITADEL SSH user и CITADEL SSH artifacts, но не удаляет Microsoft OpenSSH feature целиком.
 
+## Cloudflare provisioning safety
+
+GitHub workflow создаёт или переиспользует только dedicated remotely-managed Tunnel с именем `citadel-ssh-*`. Если у найденного Tunnel есть чужие hostname routes, нестандартный catch-all или он locally managed, provisioning останавливается вместо изменения ресурса.
+
+Dry-run использует настоящий Cloudflare API token только для read-only проверки: реальная Zone, существующий Tunnel, DNS, Access app/policy и CA проверяются до apply. Drift `session_duration` и exact-email policy показывается как update-required; запись выполняется только при `apply=true`.
+
+Для browser-rendered SSH CITADEL использует self-hosted Access application и application-specific SSH CA. Cloudflare в 2026 рекомендует Access for Infrastructure для новых native-SSH сценариев с WARP/Gateway и command logging; это отдельный режим и не требуется для выбранного clientless Browser SSH пути.
+
 ## Что остаётся внешней настройкой
 
 После merge 0.3.31 программная цепочка готова к provisioning. Для первого реального Browser SSH всё ещё нужны два значения, которые нельзя безопасно выдумать:
