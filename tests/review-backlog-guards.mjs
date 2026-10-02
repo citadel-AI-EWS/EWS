@@ -79,6 +79,8 @@ need(index.includes("architectGetCommand"), "Architect command-result endpoint m
 need(hub.includes('id="sshInlinePanel"') && hub.includes('id="sshInlineOutput"'), "Hub inline restricted terminal missing");
 need(hub.includes('command_type:"ssh_console"'), "Hub does not dispatch inline SSH command");
 need(hub.includes("appendSshInline(text,nodeId=sshNodeId)") && hub.includes("if(nodeId!==sshNodeId)return false"), "Hub inline SSH node-binding guard missing");
+need(hub.includes("const sshInlineBusyNodes=new Set()"), "Hub inline SSH busy state must be scoped per node");
+need(hub.includes("sshInlineBusyNodes.has(sshNodeId)") && hub.includes("sshInlineBusyNodes.add(nodeId)") && hub.includes("sshInlineBusyNodes.delete(nodeId)"), "Hub inline SSH per-node busy lifecycle missing");
 need(sshConsoleMigration.includes("ssh_console_results"), "inline SSH result migration missing");
 need(!sshConsoleMigration.toLowerCase().includes("private_key"), "inline SSH result migration must not store private keys");
 need(agentV1.includes('"CitadelSshConsole.cs"') && agentV1.includes('"configure_restricted_ssh.ps1"'), "agent update allow-list must accept signed SSH bootstrap assets");
