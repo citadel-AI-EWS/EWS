@@ -126,6 +126,17 @@ need(sshCloudflareProvisioner.includes('Apply Access controls before publishing 
 need(sshCloudflareProvisioner.includes('await findZone(hostname, accountId)'), "Cloudflare dry-run must resolve the real zone");
 need(sshCloudflareProvisioner.includes('await ensureTunnel(accountId, tunnelName, false)'), "Cloudflare preflight must inspect existing tunnels read-only");
 need(sshCloudflareProvisioner.includes('await ensureTunnel(accountId, tunnelName, true)'), "Cloudflare apply phase must reconcile the tunnel only after preflight");
+need(sshCloudflareProvisioner.includes('per_page=50'), "Cloudflare pagination must stay within Zones API limits");
+need(!sshCloudflareProvisioner.includes('per_page=100'), "Cloudflare Zones pagination must not use unsupported page size 100");
+need(sshCloudflareProvisioner.includes('CITADEL_SSH_NODE_ID || hostname'), "default SSH tunnel identity must be unique per hostname/node");
+need(sshCloudflareProvisioner.includes('{0,19}'), "Cloudflare provisioner must enforce the Windows 20-character SSH username limit");
+need(windowsSshBootstrap.includes('{0,19}'), "Windows SSH bootstrap must enforce the 20-character local username limit");
+need(!windowsSshBootstrap.includes("Get-Command winget"), "elevated SSH bootstrap must not resolve WinGet from PATH");
+need(!windowsSshBootstrap.includes('LOCALAPPDATA "Microsoft\\WindowsApps\\winget.exe"'), "elevated SSH bootstrap must not use the per-user WinGet alias");
+need(windowsSshBootstrap.includes("Get-AppxPackage -AllUsers -Name Microsoft.DesktopAppInstaller"), "SSH bootstrap must resolve WinGet from Microsoft App Installer");
+need(windowsSshBootstrap.includes("Test-TrustedWinGetExecutable"), "SSH bootstrap trusted WinGet verification missing");
+need(windowsSshBootstrap.includes("Microsoft Corporation"), "SSH bootstrap must verify the Microsoft WinGet signer");
+need(windowsSshBootstrap.includes('$ExistingCloudflaredService.Status -eq "Running"'), "SkipCloudflared readiness must require a running service");
 need(sshCloudflareWorkflow.includes("environment: cloudflare-test"), "SSH Cloudflare provisioning must use the protected environment");
 need(sshCloudflareWorkflow.includes("FULL_CLOUDFLARE_CONTROL") && sshCloudflareWorkflow.includes("CLOUDFLARE_API_TOKEN"), "SSH workflow Cloudflare secret fallback missing");
 need(!/env:\n\s{6}(?:FULL_CLOUDFLARE_CONTROL|CLOUDFLARE_API_TOKEN):/.test(sshCloudflareWorkflow), "Cloudflare API secrets must not be job-wide environment variables");
