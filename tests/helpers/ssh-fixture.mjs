@@ -35,7 +35,9 @@ export async function sshFixture({assets = false} = {}) {
           for (const line of lines) {
             commands.push(line);
             if (line === 'exit') {stream.exit(0); stream.end();}
-            else stream.write('\r\nSSH_RESULT:' + line + '\r\noperator> ');
+            else if (authenticatedUser === 'operator' && line === 'help') {
+              stream.write('\r\nAllowed commands:\r\n  help\r\n  status\r\n  hostname\r\n  ping-controller\r\n  exit\r\ncitadel> ');
+            } else stream.write('\r\nSSH_RESULT:' + line + '\r\n' + (authenticatedUser === 'operator' ? 'citadel> ' : '$ '));
           }
         });
       });
