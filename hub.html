@@ -774,7 +774,8 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       if(!requestedNodeId){$("sshNodeName").textContent="Нода не выбрана";sshHost.value="";sshUser.value="";sshFingerprint.value="";renderSshState();return}
       const node=(lastOverview?.nodes||[]).find(n=>n.node_id===requestedNodeId);
       $("sshNodeName").textContent=(node?.hostname||requestedNodeId)+" · "+requestedNodeId;
-      resetSshInline(node);
+      sshHost.value="";sshUser.value="";sshFingerprint.value="";
+      resetSshInline(node);renderSshState();
       try{
         const data=await api(`/api/v1/architect/nodes/${encodeURIComponent(requestedNodeId)}/ssh`);
         if(sshNodeId!==requestedNodeId)return;
