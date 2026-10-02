@@ -800,11 +800,11 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
         setTimeout(()=>loadSshState(sshNodeId),2500);
       }catch(e){toast("SSH",e.message,"bad")}
     }
-    async function waitForSshInlineCommand(commandId){
+    async function waitForSshInlineCommand(nodeId,commandId){
       const delays=[450,650,900,1200,1600,2200,3000];
       for(const delay of delays){
         await new Promise(resolve=>setTimeout(resolve,delay));
-        const data=await api(`/api/v1/architect/nodes/${encodeURIComponent(sshNodeId)}/commands/${encodeURIComponent(commandId)}`);
+        const data=await api(`/api/v1/architect/nodes/${encodeURIComponent(nodeId)}/commands/${encodeURIComponent(commandId)}`);
         const command=data.command||{};
         if(command.status==="completed"){
           const result=command.result||{};
@@ -825,7 +825,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
         appendSshInline(`citadel> ${verb||"(empty)"}\nDENIED: command is not in the CITADEL allow-list. Type help.`);
         return;
       }
-      const node=selectedSshNode();
+      const node=selectedSshNode(),nodeId=sshNodeId;
       if(!node||!versionAtLeast(node.agent_version,"0.3.31")){
         appendSshInline(`citadel> ${verb}\n[agent 0.3.31+ required]`);
         return;
@@ -840,7 +840,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
         });
         const commandId=data?.command?.command_id;
         if(!commandId)throw new Error("command_id_missing");
-        await waitForSshInlineCommand(commandId);
+        await waitForSshInlineCommand(nodeId,commandId);
       }catch(e){
         appendSshInline(`[error: ${e.message}]`);
       }finally{
