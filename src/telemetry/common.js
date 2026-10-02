@@ -30,8 +30,8 @@ async function claimDurableReplayNonce(env, nodeId, requestId) {
         "x-citadel-request-expires": String(expires)
       }
     });
-    if (response.status === 201) return true;
     if (response.status === 409) return false;
+    if (response.ok) return true;
   } catch {
     // Fail closed to the existing D1-backed replay store when DO is unavailable.
   }
