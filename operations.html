@@ -186,9 +186,10 @@ async function probeOperationsSsh(){
     let pending=sshPendingProbeCommands.get(nodeId);
     if(!pending){
       const data=await api('/nodes/'+encodeURIComponent(nodeId)+'/commands',{method:'POST',body:JSON.stringify({command_type:'ssh_probe'})});
-      if(!$('sshDialog').open||sshNodeId!==nodeId||sshSelectionGeneration!==selectionGeneration||sshProbeGeneration!==probeGeneration)return;
       const commandId=data?.command?.command_id;if(!commandId)throw Error('command_id_missing');
-      pending={commandId};sshPendingProbeCommands.set(nodeId,pending);tell('SSH-проверка поставлена в очередь.');
+      pending={commandId};sshPendingProbeCommands.set(nodeId,pending);
+      if(!$('sshDialog').open||sshNodeId!==nodeId||sshSelectionGeneration!==selectionGeneration||sshProbeGeneration!==probeGeneration)return;
+      tell('SSH-проверка поставлена в очередь.');
     }else tell('Продолжаю получать результат предыдущей SSH-проверки.');
     renderOperationsSshState();
     await waitForOperationsSshProbe(nodeId,pending.commandId,selectionGeneration,probeGeneration);
@@ -235,9 +236,9 @@ async function sendOperationsSshCommand(){
     let active=pending;
     if(!active){
       const data=await api('/nodes/'+encodeURIComponent(nodeId)+'/commands',{method:'POST',body:JSON.stringify({command_type:'ssh_console',command:verb})});
-      if(!current())return;
       const commandId=data?.command?.command_id;if(!commandId)throw Error('command_id_missing');
       active={commandId,verb};sshPendingInlineCommands.set(nodeId,active);
+      if(!current())return;
     }
     renderOperationsSshState();
     await waitForOperationsSshCommand(nodeId,active.commandId,selectionGeneration,inlineGeneration);
