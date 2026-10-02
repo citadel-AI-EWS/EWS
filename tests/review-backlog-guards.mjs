@@ -102,6 +102,9 @@ need(windowsSshBootstrap.includes("$Cloudflared service install $PlainTunnelToke
 need(windowsSshBootstrap.includes("cloudflared_service_created_by_citadel"), "cloudflared ownership marker missing");
 need(windowsSshBootstrap.includes("service uninstall"), "CITADEL-created cloudflared service cleanup missing");
 need(windowsSshBootstrap.includes("ProgramFilesX86"), "cloudflared x86 Program Files discovery missing");
+need(windowsSshBootstrap.includes("Get-AuthenticodeSignature"), "cloudflared Authenticode verification missing");
+need(!windowsSshBootstrap.includes("Get-Command cloudflared"), "elevated bootstrap must not resolve cloudflared from PATH");
+need(!windowsSshBootstrap.includes("Microsoft\\WinGet\\Links\\cloudflared.exe"), "elevated bootstrap must not use user-writable cloudflared links");
 need(!windowsSshBootstrap.includes("[string]$CloudflareTunnelToken"), "Tunnel token must not be accepted as a command-line parameter");
 need(!windowsSshBootstrap.includes("tunnel_token ="), "Tunnel token must not be persisted in bootstrap state");
 need(sshCloudflareProvisioner.includes('service: "ssh://localhost:22"'), "Cloudflare tunnel SSH ingress missing");
@@ -116,6 +119,10 @@ need(sshCloudflareProvisioner.includes('existing_tunnel_contains_unmanaged_hostn
 need(sshCloudflareProvisioner.includes('existing_tunnel_contains_unmanaged_catch_all_route'), "Cloudflare SSH tunnel must reject unmanaged catch-all routes");
 need(sshCloudflareProvisioner.includes('update_required: durationMismatch'), "Cloudflare Access session-duration drift reporting missing");
 need(sshCloudflareProvisioner.includes('policyUpdateRequired'), "Cloudflare Access policy drift reporting missing");
+need(sshCloudflareProvisioner.includes('duplicate_citadel_ssh_policy'), "duplicate CITADEL Access policies must fail closed");
+need(sshCloudflareProvisioner.includes('...baseConfig, ingress: routes'), "Tunnel top-level configuration must survive ingress reconciliation");
+need(sshCloudflareProvisioner.includes('Preflight every conflict-prone resource before the first write.'), "Cloudflare apply must preflight all conflicts before writes");
+need(sshCloudflareProvisioner.includes('Apply Access controls before publishing SSH routing.'), "Access controls must precede SSH routing publication");
 need(sshCloudflareProvisioner.includes('await findZone(hostname, accountId)'), "Cloudflare dry-run must resolve the real zone");
 need(sshCloudflareProvisioner.includes('await ensureTunnel(accountId, tunnelName, apply)'), "Cloudflare dry-run must inspect existing tunnels");
 need(sshCloudflareWorkflow.includes("environment: cloudflare-test"), "SSH Cloudflare provisioning must use the protected environment");
