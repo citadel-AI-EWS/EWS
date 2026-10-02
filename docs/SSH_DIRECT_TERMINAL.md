@@ -44,7 +44,7 @@ the IP, port, user, fingerprint or key through the session API. A missing target
 produces an explicit not-configured error before any SSH connection is attempted.
 Hosts without a registered CITADEL node are not selectable in this first version.
 
-Existing CITADEL Windows Zero Trust bootstrap binds OpenSSH to loopback and enforces the restricted ForceCommand. Direct gateway routing must expose that same dedicated restricted SSH account to the gateway through a separately reviewed network path. The gateway waits for the exact `CITADEL Restricted SSH Console` banner before enabling browser input; if it sees an ordinary shell instead, the session is terminated. This feature does not remove ForceCommand or grant administrator rights.
+Existing CITADEL Windows Zero Trust bootstrap binds OpenSSH to loopback and enforces the restricted ForceCommand. Direct gateway routing must expose that same dedicated restricted SSH account to the gateway through a separately reviewed network path. The gateway waits for the exact `CITADEL Restricted SSH Console` banner, then sends its own `help` probe and requires an `Allowed commands:` response containing `ping-controller` before enabling browser input. If either proof is missing, the session is terminated. This feature does not remove ForceCommand or grant administrator rights.
 
 ## Run the gateway
 
