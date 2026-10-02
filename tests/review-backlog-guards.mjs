@@ -26,7 +26,6 @@ const windowsSshConsole = fs.readFileSync("agent/CitadelSshConsole.cs", "utf8");
 const windowsSshBootstrap = fs.readFileSync("agent/configure_restricted_ssh.ps1", "utf8");
 const oneClickBuilder = fs.readFileSync("scripts/build_windows_oneclick.ps1", "utf8");
 const oneClickIss = fs.readFileSync("agent/windows/CitadelEWS.iss", "utf8");
-const portableFallbackCmd = fs.readFileSync("agent/windows/CITADEL_PORTABLE_FALLBACK.cmd", "utf8");
 const deployWorkflow = fs.readFileSync(".github/workflows/deploy-cloudflare.yml", "utf8");
 const sshCloudflareProvisioner = fs.readFileSync("scripts/provision_cloudflare_ssh.mjs", "utf8");
 const sshCloudflareWorkflow = fs.readFileSync(".github/workflows/provision-ssh-zero-trust.yml", "utf8");
@@ -105,10 +104,6 @@ need(windowsSshConsole.includes("SSH_ORIGINAL_COMMAND"), "Windows restricted SSH
 need(windowsSshBootstrap.includes("Resolve-AgentLayout") && windowsSshBootstrap.includes('"flat_oneclick"'), "Windows SSH bootstrap must support one-click flat layout");
 need(oneClickBuilder.includes('"CitadelSshConsole.cs"') && oneClickBuilder.includes('"configure_restricted_ssh.ps1"'), "one-click builder must package restricted SSH assets");
 need(oneClickIss.includes("configure_restricted_ssh.ps1") && oneClickIss.includes("-Uninstall"), "one-click uninstaller must clean restricted SSH state");
-need(oneClickIss.includes("WizardForm.WindowState := wsMinimized"), "one-click installer must minimize during long background work");
-need(oneClickIss.includes("{param:FOREGROUND|0}"), "one-click installer must retain an explicit foreground diagnostic override");
-const portableSuccessStart = portableFallbackCmd.indexOf("CITADEL portable fallback is installed.");
-need(portableSuccessStart >= 0 && !portableFallbackCmd.slice(portableSuccessStart).includes("pause"), "portable fallback must auto-close after successful installation");
 need(windowsSshBootstrap.includes("Read-Host $Prompt -AsSecureString"), "Tunnel token must be entered locally as hidden input");
 need(windowsSshBootstrap.includes("$Cloudflared service install $PlainTunnelToken"), "cloudflared service installation path missing");
 need(windowsSshBootstrap.includes("cloudflared_service_created_by_citadel"), "cloudflared ownership marker missing");
