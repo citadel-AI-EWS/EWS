@@ -743,6 +743,12 @@ assert.ok(operations.includes("sshSelectionGeneration===selectionGeneration&&ssh
 assert.ok(operations.includes("sshSelectionGeneration===selectionGeneration&&sshProbeGeneration===probeGeneration"), "deployed SSH probe must reject earlier dialog-session polls");
 assert.ok(operations.includes("host===savedHost&&user===savedUser"), "Browser SSH must require saved hostname/user");
 assert.ok(operations.includes("sshPendingProbeCommands=new Map()") && operations.includes("sshPendingInlineCommands=new Map()"), "pending SSH command IDs must be retained");
+const sshProbeStore = operations.indexOf("pending={commandId};sshPendingProbeCommands.set(nodeId,pending);");
+const sshProbeGuard = operations.indexOf("if(!$('sshDialog').open||sshNodeId!==nodeId", sshProbeStore);
+assert.ok(sshProbeStore >= 0 && sshProbeGuard > sshProbeStore, "probe command ID must be retained before dialog-session guard");
+const sshInlineStore = operations.indexOf("active={commandId,verb};sshPendingInlineCommands.set(nodeId,active);");
+const sshInlineGuard = operations.indexOf("if(!current())return;", sshInlineStore);
+assert.ok(sshInlineStore >= 0 && sshInlineGuard > sshInlineStore, "terminal command ID must be retained before dialog-session guard");
 assert.ok(operations.includes("command ID retained") && operations.includes("Получить результат"), "pending terminal commands need a resumable retrieval path");
 assert.ok(operations.includes("formatSshCommandResult(command)"), "failed SSH command output must be rendered");
 assert.ok(operations.includes("if($('sshDialog').open&&sshNodeId===n.node_id)renderOperationsSshState()"), "SSH bootstrap eligibility must refresh after node details load");
