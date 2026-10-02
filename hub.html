@@ -801,7 +801,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       }catch(e){toast("SSH",e.message,"bad")}
     }
     async function waitForSshInlineCommand(nodeId,commandId){
-      const delays=[450,650,900,1200,1600,2200,3000];
+      const delays=[1000,3000,5000,8000,12000,16000];
       for(const delay of delays){
         await new Promise(resolve=>setTimeout(resolve,delay));
         const data=await api(`/api/v1/architect/nodes/${encodeURIComponent(nodeId)}/commands/${encodeURIComponent(commandId)}`);
@@ -816,7 +816,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
           return;
         }
       }
-      appendSshInline("[still pending — use the node only after it is online]");
+      appendSshInline("[still pending after 45s — node may be offline or busy]");
     }
     async function sendSshInlineCommand(){
       if(!sshNodeId||sshInlineBusy)return;
