@@ -13,7 +13,7 @@ const fingerprint = key => 'SHA256:' + createHash('sha256').update(key).digest('
 function targetConfig(target) {
   if (!target || typeof target.host !== 'string' || !/^[A-Za-z0-9.:-]{1,253}$/.test(target.host) ||
       !Number.isInteger(target.port) || target.port < 1 || target.port > 65535 ||
-      typeof target.username !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(target.username) ||
+      typeof target.username !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(target.username) || target.mode !== 'citadel-restricted' ||
       !/^SHA256:[A-Za-z0-9+/]{43}$/.test(target.hostKeySha256 || '') || !target.privateKey) {
     throw Error('invalid_gateway_target');
   }
