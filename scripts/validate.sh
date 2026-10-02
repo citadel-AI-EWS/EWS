@@ -391,12 +391,18 @@ for column in ("report_type", "report_json", "report_sha256", "report_size_bytes
     if column not in columns:
         raise SystemExit(f"fresh migration chain missing results.{column}")
 
-command_columns = {
+if db.execute(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ssh_console_results'"
+).fetchone() is None:
+    raise SystemExit("fresh migration chain missing ssh_console_results")
+
+ssh_result_columns = {
     row[1]
-    for row in db.execute("PRAGMA table_info(commands)")
+    for row in db.execute("PRAGMA table_info(ssh_console_results)")
 }
-if "result_json" not in command_columns:
-    raise SystemExit("fresh migration chain missing commands.result_json")
+for column in ("command_id", "node_id", "output", "exit_code", "created_at"):
+    if column not in ssh_result_columns:
+        raise SystemExit(f"fresh migration chain missing ssh_console_results.{column}")
 
 ssh_columns = {
     row[1]
