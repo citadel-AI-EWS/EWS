@@ -42,6 +42,29 @@ jobs:
       - run: node --check scripts/smoke_test.mjs
       - run: node --check scripts/synthetic_user.mjs
 
+  ssh-terminal-browser:
+    name: SSH terminal browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm install --no-save --package-lock=false @playwright/test@1.63.0
+      - run: npx playwright install --with-deps chromium
+      - run: scripts/build_site.sh
+      - run: node tests/ssh-terminal-e2e.mjs --browser
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ssh-terminal-browser-${{ github.run_id }}
+          path: /tmp/citadel-ssh-terminal-mobile.png
+          if-no-files-found: ignore
+          retention-days: 14
+
   agent-package:
     name: Agent packages integrity
     runs-on: ubuntu-latest
@@ -333,7 +356,7 @@ jobs:
   gate:
     name: CI gate
     if: always()
-    needs: [validate-linux, agent-package, windows-agent]
+    needs: [validate-linux, agent-package, windows-agent, ssh-terminal-browser]
     runs-on: ubuntu-latest
     steps:
       - name: Require every CI job to pass
@@ -341,4 +364,5 @@ jobs:
           test "${{ needs.validate-linux.result }}" = "success"
           test "${{ needs.agent-package.result }}" = "success"
           test "${{ needs.windows-agent.result }}" = "success"
+          test "${{ needs.ssh-terminal-browser.result }}" = "success"
           echo "All CI gates passed."
