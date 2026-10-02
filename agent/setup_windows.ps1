@@ -14,15 +14,15 @@ Set-StrictMode -Version Latest
 $ServiceName = "CitadelEWSNode"
 $ServiceDisplayName = "CITADEL EWS Node"
 $PythonWingetId = "Python.Python.3.14"
-$ReleaseVersion = "0.3.30"
-$ExpectedV1Sha256 = "6a444c3f2810090ac2d5b497b3ca29d35497d788de8dbb584c6ee22409f6cc07"
-$ExpectedV2Sha256 = "980968a9dca52a82f05c41ba8cf25b648a77c0008eb4612c8295e88d28024fac"
+$ReleaseVersion = "0.3.31"
+$ExpectedV1Sha256 = "f2d4ee4c7c03110c5aafc3417230080bf79765bcc9a870099b19a8d116bfb99c"
+$ExpectedV2Sha256 = "6baa6eb28487789cb9ba32747d0e870cb72c2f8b67304411a49148dd21fe712d"
 $ExpectedServiceHostSha256 = "892c5f388f9b54c0bcbb2956381dd601dfa8065b0e9258ba673e9505c2f81cad"
 $ExpectedServiceHelperSha256 = "e0e66f5a27018a283c65d42e6ead93e382706a163da682e6bd49f2b1fb9b0f99"
 $ExpectedEnterpriseProbeSha256 = "0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
 $ExpectedSshConsoleSha256 = "10050339a74cad33410aca0e109d800d29b01a8f3238d8ff7ce016fbd099dc8c"
 $ExpectedRestrictedSshConsoleSourceSha256 = "026d1d59420ce4a480bfd7d4027a4b54dd178600e08ae85acfd7f6f8bff4e96b"
-$ExpectedRestrictedSshBootstrapSha256 = "9c2db2d5cbf42dc3c6df1e6df6cb94b5f45e0998f1772c4071d8445241d291d9"
+$ExpectedRestrictedSshBootstrapSha256 = "22c1364150ec10c2868ae2e5adf5e633d251a5b6324cee7de1383db4f4f274b2"
 
 function Get-Sha256([string]$Path) {
   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
