@@ -326,24 +326,54 @@ const sshLoadEnd = hub.indexOf("async function saveSshState", sshLoadStart);
 const sshLoadBlock = hub.slice(sshLoadStart, sshLoadEnd);
 need(sshLoadStart >= 0 && sshLoadEnd > sshLoadStart, "Hub SSH state loader missing");
 need(
-  sshLoadBlock.includes("const requestedNodeId=sshNodeId;") &&
-  sshLoadBlock.includes("if(sshNodeId!==requestedNodeId)return;"),
-  "Hub SSH state loader can apply a stale response after switching nodes"
+  sshLoadBlock.includes("const selectionGeneration=sshSelectionGeneration;") &&
+  sshLoadBlock.includes("const loadGeneration=++sshLoadGeneration;") &&
+  sshLoadBlock.includes("sshSelectionGeneration!==selectionGeneration") &&
+  sshLoadBlock.includes("sshLoadGeneration!==loadGeneration"),
+  "Hub SSH state loader does not reject stale same-node selection responses"
 );
+const sshSelectedPathStart = sshLoadBlock.indexOf("const node=");
+const sshSelectedPath = sshLoadBlock.slice(sshSelectedPathStart);
 const sshLoadClear = 'sshHost.value="";sshUser.value="";sshFingerprint.value="";';
+const sshSelectedClearIndex = sshSelectedPath.indexOf(sshLoadClear);
+const sshSelectedRenderIndex = sshSelectedPath.indexOf("renderSshState();");
+const sshSelectedAwaitIndex = sshSelectedPath.indexOf("await api(");
 need(
-  sshLoadBlock.includes(sshLoadClear) &&
-  sshLoadBlock.indexOf(sshLoadClear) < sshLoadBlock.indexOf("await api(") &&
-  sshLoadBlock.indexOf("renderSshState();") < sshLoadBlock.indexOf("await api("),
-  "Hub SSH state loader leaves stale Browser SSH controls active while a new node loads"
+  sshSelectedPathStart >= 0 &&
+  sshSelectedClearIndex >= 0 &&
+  sshSelectedRenderIndex >= 0 &&
+  sshSelectedAwaitIndex >= 0 &&
+  sshSelectedClearIndex < sshSelectedAwaitIndex &&
+  sshSelectedRenderIndex < sshSelectedAwaitIndex,
+  "Hub SSH selected-node path leaves stale Browser SSH controls active while a new node loads"
+);
+need(
+  hub.includes('const sshDirtyFields=new Set();') &&
+  hub.includes('if(!sshDirtyFields.has("host"))sshHost.value=state?.public_hostname||"";') &&
+  hub.includes('if(!sshDirtyFields.has("user"))sshUser.value=state?.ssh_user||"";') &&
+  hub.includes('if(!sshDirtyFields.has("fingerprint"))sshFingerprint.value=state?.host_key_fingerprint||"";') &&
+  sshLoadBlock.includes("if(selectionChanged)") &&
+  sshLoadBlock.includes("sshDirtyFields.clear();"),
+  "Hub SSH refresh does not preserve dirty fields or clear them on node selection changes"
+);
+const sshSaveStart = hub.indexOf("async function saveSshState");
+const sshSaveEnd = hub.indexOf("async function probeSsh", sshSaveStart);
+const sshSaveBlock = hub.slice(sshSaveStart, sshSaveEnd);
+need(
+  sshSaveBlock.includes("const selectionGeneration=sshSelectionGeneration;") &&
+  sshSaveBlock.includes("const saveGeneration=++sshSaveGeneration;") &&
+  sshSaveBlock.includes("sshSelectionGeneration!==selectionGeneration") &&
+  sshSaveBlock.includes("sshSaveGeneration!==saveGeneration"),
+  "Hub SSH save can apply a stale response after a selection cycle"
 );
 const sshProbeStart = hub.indexOf("async function probeSsh");
 const sshProbeEnd = hub.indexOf("async function waitForSshInlineCommand", sshProbeStart);
 const sshProbeBlock = hub.slice(sshProbeStart, sshProbeEnd);
 need(
   sshProbeBlock.includes("const nodeId=sshNodeId;") &&
-  sshProbeBlock.includes("setTimeout(()=>{if(sshNodeId===nodeId)loadSshState(nodeId)},2500);"),
-  "Hub SSH probe can switch back to a previously selected node"
+  sshProbeBlock.includes("const selectionGeneration=sshSelectionGeneration;") &&
+  sshProbeBlock.includes("setTimeout(()=>{if(sshNodeId===nodeId&&sshSelectionGeneration===selectionGeneration)loadSshState(nodeId)},2500);"),
+  "Hub SSH probe can refresh a previously selected node or ignore selection generation"
 );
 need(hub.includes('command_type:"ssh_console"'), "Hub inline terminal does not dispatch signed restricted commands");
 need(hub.includes('versionAtLeast(sshNode.agent_version,"0.3.32")'), "Hub inline terminal must require agent 0.3.32");
