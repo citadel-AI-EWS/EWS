@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 import {WebSocket} from 'ws';
 import {issueSshTicket, verifySshTicket} from '../src/ssh/tickets.js';
 import {sshFixture} from './helpers/ssh-fixture.mjs';
@@ -45,6 +47,19 @@ try {
   assert.deepEqual(doctor.nodes.map(node => node.code),
     ['ready', 'ssh_connection_failed', 'ssh_restricted_console_required', 'ssh_target_not_configured']);
   assert.equal(doctor.ok, false);
+  const doctorDir = fs.mkdtempSync(path.join(os.tmpdir(), 'citadel-ssh-doctor-'));
+  try {
+    const keyFile = path.join(doctorDir, 'key');
+    fs.writeFileSync(keyFile, f.targets.get('node-one').privateKey, {mode: 0o600});
+    const targetsFile = path.join(doctorDir, 'targets.json');
+    const {privateKey, ...target} = f.targets.get('node-one');
+    fs.writeFileSync(targetsFile, JSON.stringify({'node-one': {...target, privateKeyFile: keyFile}}), {mode: 0o600});
+    const {stdout} = await promisify(execFile)(process.execPath, ['gateway/doctor.mjs', '--node', 'node-one'], {
+      encoding: 'utf8', timeout: 20000, env: {...process.env, CITADEL_HUB_ORIGIN: f.origin,
+        CITADEL_SSH_TARGETS_FILE: targetsFile, SSH_GATEWAY_TICKET_SECRET: f.secret}});
+    assert.deepEqual(JSON.parse(stdout), {ok: true, nodes: [{node_id: 'node-one', status: 'ready', code: 'ready'}]});
+    assert.ok(!stdout.includes(privateKey), 'doctor must not print SSH private keys');
+  } finally {fs.rmSync(doctorDir, {recursive: true, force: true});}
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'citadel-replay-'));
   try {
     const filename = path.join(directory, 'replay.sqlite');
