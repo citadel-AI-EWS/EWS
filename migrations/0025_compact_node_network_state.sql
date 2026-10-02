@@ -3,7 +3,7 @@
 
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE node_network_state_compact (
+CREATE TABLE IF NOT EXISTS node_network_state_compact (
   node_id TEXT PRIMARY KEY,
   lan_ipv4 TEXT,
   mac_addresses_json TEXT NOT NULL DEFAULT '[]',
