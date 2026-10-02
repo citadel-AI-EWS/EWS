@@ -5368,7 +5368,6 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
   } else if (current.command_type === "ssh_console" && status === "completed") {
     throw new ApiError(400, "ssh_console_result_required");
   }
-  const commandResultJson = commandResult ? JSON.stringify(commandResult) : null;
   const detailsJson = JSON.stringify({
     status,
     result_bytes: commandResult ? new TextEncoder().encode(commandResult.output).length : 0
