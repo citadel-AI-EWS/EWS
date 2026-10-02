@@ -163,8 +163,10 @@ const twenty = fleetProjection(20);
 const FREE_DAILY_ROWS_WRITTEN = 100_000;
 function writeProjection(nodes, sync = true) {
   const requests = POLLS_PER_DAY * (sync ? 1 : 4);
-  const nonceWrites = requests * 2 * 3;
-  const heartbeatWrites = (86_400 / (sync ? 60 : 30)) * 3;
+  // Sync replay IDs are claimed in the per-node Durable Object. Legacy signed
+  // routes keep the D1 nonce table as a conservative fallback.
+  const nonceWrites = sync ? 0 : requests * 2 * 3;
+  const heartbeatWrites = (86_400 / (sync ? 240 : 30)) * 3;
   const aiWrites = (86_400 / (sync ? 300 : 30)) * 2;
   const legacySnapshots = sync ? 0 : POLLS_PER_DAY * 3; // network + presence table/index
   const total = nodes * (nonceWrites + heartbeatWrites + aiWrites + legacySnapshots);
@@ -173,10 +175,12 @@ function writeProjection(nodes, sync = true) {
     within_free_daily_write_limit: total <= FREE_DAILY_ROWS_WRITTEN};
 }
 const syncFour = writeProjection(4);
-assert.ok(syncFour.projected_rows_written <= FREE_DAILY_ROWS_WRITTEN * 0.9,
-  'four idle sync nodes must retain at least 10% daily write headroom');
-assert.equal(writeProjection(20).within_free_daily_write_limit, false,
-  'read headroom must never imply that twenty nodes fit the daily write quota');
+assert.ok(syncFour.projected_rows_written <= FREE_DAILY_ROWS_WRITTEN * 0.1,
+  'four idle sync nodes must use <=10% of the daily D1 write limit');
+assert.equal(writeProjection(50).within_free_daily_write_limit, true,
+  'fifty stable sync nodes should fit the modeled Free daily D1 write limit');
+assert.ok(writeProjection(50).projected_rows_written <= FREE_DAILY_ROWS_WRITTEN * 0.85,
+  'fifty stable sync nodes must keep at least 15% modeled D1 write headroom');
 
 assert.ok(four.headroom_x >= 10, "4-node projection must keep >=10x D1 read headroom");
 assert.ok(twenty.headroom_x >= 10, "20-node projection must keep >=10x D1 read headroom");
@@ -190,9 +194,9 @@ console.log(JSON.stringify({
     public_hub_refresh_seconds: PUBLIC_HUB_REFRESH_SECONDS,
     machine_row_equivalents_per_node: MACHINE_ROW_EQUIVALENTS_PER_NODE,
     presence_row_equivalents_per_node: PRESENCE_ROW_EQUIVALENTS_PER_NODE,
-    note: "Read projection retains the legacy three-poll estimate for comparison. Write projection covers stable 30s sync polling with 60s persisted heartbeat, unchanged network/presence/hardware, 5m AI refresh and nonce index writes. It excludes tasks, logs, startup, browser auth and other databases. Production Cloudflare Analytics is authoritative; 20 nodes do not fit the Free daily write quota."
+    note: "Read projection retains the legacy three-poll estimate for comparison. Write projection covers stable 30s sync polling with replay IDs in the node Durable Object, 4m persisted heartbeat, unchanged network/presence/hardware and 5m AI refresh. It excludes tasks, logs, startup, browser auth and other databases. Production Cloudflare Analytics remains authoritative."
   },
   fleets: [four, twenty],
   writes: {legacy_four_nodes: writeProjection(4, false), sync_four_nodes: syncFour,
-    sync_twenty_nodes: writeProjection(20)}
+    sync_twenty_nodes: writeProjection(20), sync_fifty_nodes: writeProjection(50)}
 }, null, 2));
