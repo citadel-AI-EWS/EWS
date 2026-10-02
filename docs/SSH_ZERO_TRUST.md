@@ -119,3 +119,24 @@ CITADEL не может сам создать Cloudflare Zero Trust application/
 - ForceCommand policy для CITADEL SSH user.
 
 Пока эти внешние зависимости не подтверждены, Hub обязан показывать SSH как not ready и не заявлять о работающем соединении.
+
+## Inline Restricted Terminal in Hub
+
+Agent 0.3.31 adds an on-demand terminal-like UI inside Hub that does **not** require Cloudflare Tunnel or an exposed SSH transport. It uses the existing signed Controller → node command channel:
+
+```text
+Hub → authenticated Architect API → signed ssh_console command → node agent
+    → hash-pinned ssh_restricted_console.py → bounded result_json → Hub
+```
+
+This is intentionally not a general-purpose shell. The Controller and agent both independently enforce the same fixed read-only command allow-list. Unknown commands and shell syntax are rejected before execution. The agent calls the restricted console's `execute()` function directly; it does not start `cmd.exe`, PowerShell, Bash, or an arbitrary subprocess.
+
+Results are stored only for the individual `ssh_console` command, are limited to 24 KiB, and Hub polls only that command ID until it reaches `completed` or `failed`. The regular node-details polling path does not read terminal results.
+
+The inline terminal and Browser SSH are complementary:
+
+- **Inline Restricted Terminal** — works over the signed CITADEL agent channel and is useful for safe diagnostics before Cloudflare SSH is configured.
+- **Browser SSH** — real SSH through Cloudflare Access/Tunnel to loopback-only OpenSSH with the restricted ForceCommand policy.
+
+Neither path stores SSH private keys, passwords, Cloudflare Access tokens, or CA private keys in Hub/D1.
+
