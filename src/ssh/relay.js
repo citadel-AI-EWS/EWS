@@ -36,9 +36,14 @@ export class NodeSshRelay {
         return false;
       });
       if (used) return new Response(null, {status: 409});
-      const currentAlarm = await this.state.storage.getAlarm();
-      const targetAlarm = expires * 1000;
-      if (currentAlarm === null || targetAlarm < currentAlarm) await this.state.storage.setAlarm(targetAlarm);
+      try {
+        const currentAlarm = await this.state.storage.getAlarm();
+        const targetAlarm = expires * 1000;
+        if (currentAlarm === null || targetAlarm < currentAlarm) await this.state.storage.setAlarm(targetAlarm);
+      } catch {
+        // Replay protection has already been committed atomically. Cleanup is
+        // best-effort and must never force the caller back onto D1.
+      }
       return new Response(null, {status: 201});
     }
     if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket' || !['agent', 'browser'].includes(role)) {
