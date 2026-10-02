@@ -13,10 +13,11 @@ export async function sshFixture({assets = false} = {}) {
   const hash = key => 'SHA256:' + createHash('sha256').update(key).digest('base64').replace(/=+$/, '');
   const clients = new Set(), commands = [], windows = [], audit = [], upgrades = [];
   const ssh = new Server({hostKeys: [hostKeys.private]}, client => {
+    let authenticatedUser = '';
     clients.add(client); client.on('error', () => {}); client.on('close', () => clients.delete(client));
     client.on('authentication', ctx => {
-      if (ctx.username === 'operator' && ctx.method === 'publickey' &&
-          ctx.key.data.equals(publicKey.getPublicSSH()) && (!ctx.signature || publicKey.verify(ctx.blob, ctx.signature, ctx.hashAlgo))) ctx.accept();
+      if (['operator', 'unrestricted'].includes(ctx.username) && ctx.method === 'publickey' &&
+          ctx.key.data.equals(publicKey.getPublicSSH()) && (!ctx.signature || publicKey.verify(ctx.blob, ctx.signature, ctx.hashAlgo))) {authenticatedUser = ctx.username; ctx.accept();}
       else ctx.reject();
     });
     client.on('ready', () => client.on('session', accept => {
@@ -26,7 +27,7 @@ export async function sshFixture({assets = false} = {}) {
       session.on('shell', accept => {
         const stream = accept();
         stream.on('error', () => {});
-        stream.write('\u001b[32mCITADEL_REAL_SSH_READY\u001b[0m\r\noperator> ');
+        stream.write(authenticatedUser === 'operator' ? '\u001b[32mCITADEL Restricted SSH Console\u001b[0m\r\nCITADEL_REAL_SSH_READY\r\ncitadel> ' : 'UNRESTRICTED_SHELL_READY\r\n$ ');
         let input = '';
         stream.on('data', data => {
           input += data.toString('utf8'); stream.write(data);
@@ -50,7 +51,8 @@ export async function sshFixture({assets = false} = {}) {
   const target = {host: '127.0.0.1', port: ssh.address().port, username: 'operator',
     privateKey: userKeys.private, hostKeySha256: hash(utils.parseKey(hostKeys.private).getPublicSSH())};
   const gateway = createSshGateway({secret, hubOrigin: origin, targets: new Map([
-    ['node-one', target], ['node-two', target], ['bad-pin', {...target, hostKeySha256: 'SHA256:' + 'A'.repeat(43)}]
+    ['node-one', target], ['node-two', target], ['bad-pin', {...target, hostKeySha256: 'SHA256:' + 'A'.repeat(43)}],
+    ['unrestricted', {...target, username: 'unrestricted'}]
   ]), audit: event => audit.push(event)});
   gateway.server.prependListener('upgrade', req => upgrades.push({url: req.url, authorization: req.headers.authorization, origin: req.headers.origin}));
   await new Promise(resolve => gateway.server.listen(0, '127.0.0.1', resolve));
@@ -67,7 +69,7 @@ export async function sshFixture({assets = false} = {}) {
   for (const file of fs.readdirSync('migrations').filter(f => f.endsWith('.sql')).sort()) {
     for (const sql of fs.readFileSync('migrations/' + file, 'utf8').replace(/--[^\n]*/g, '').split(';').map(s => s.trim()).filter(Boolean)) await db.prepare(sql).run();
   }
-  for (const id of ['node-one', 'node-two', 'bad-pin', 'unmapped']) {
+  for (const id of ['node-one', 'node-two', 'bad-pin', 'unmapped', 'unrestricted']) {
     await db.prepare("INSERT INTO nodes (node_id, public_key, hostname, os_name, agent_version, status) VALUES (?, ?, ?, 'Linux', '0.3.32', 'online')").bind(id, 'fixture-key-' + id, 'Хост ' + id).run();
   }
   for (const [id, credential, role] of [['operator', operator, 'operator'], ['viewer', viewer, 'viewer']]) {
