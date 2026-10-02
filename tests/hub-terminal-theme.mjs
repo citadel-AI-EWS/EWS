@@ -18,6 +18,16 @@ for (const required of [
   "ИСТОРИЯ ПОМНИТ ПОБЕДИТЕЛЕЙ. ЛОГИ ПОМНЯТ ВСЕХ.",
   "Math.floor(Math.random()*terminalPhrases.length)",
   "CITADEL CYBER ART LAYER v1",
+  "CITADEL CHROME 80S APPROVED MOCKUP v2",
+  'id="chromeSubbrand"',
+  'id="chromeStats"',
+  'id="chromeLogsPreview"',
+  'id="chromeSshQuick"',
+  'id="chromeAiQuick"',
+  'id="taskExecution"',
+  'class="chrome-global"',
+  "AUTHORIZED PERSONNEL ONLY // ALL ACTIVITY MONITORED",
+  "BLACK ARMY / RED ARMY / SHADOW ARMY",
   'id="cyberArt"',
   "art-mask-left",
   "art-network-bottom",
@@ -39,3 +49,8 @@ console.log("hub terminal theme guards: ok");
 
 assert.match(hub, /<svg class="login-only art-mask-left[\s\S]*CONTROL IS AN ILLUSION\./);
 assert.match(hub, /<svg class="hub-only art-globe-left[\s\S]*BLACK ARMY \/ RED ARMY \/ SHADOW ARMY/);
+
+assert.match(hub, /class="brand-lockup"[\s\S]*CITADEL[\s\S]*chromeSubbrand/);
+assert.match(hub, /id="auth"[\s\S]*ACCESS KEY[\s\S]*LOGIN/);
+assert.match(hub, /chrome-upper-grid[\s\S]*id="nodes"[\s\S]*SYSTEM LOGS/);
+assert.match(hub, /chrome-lower-grid[\s\S]*SSH ACCESS[\s\S]*AI \/ LM STUDIO[\s\S]*id="d1Overview"[\s\S]*id="taskExecution"/);

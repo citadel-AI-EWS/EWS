@@ -107,6 +107,109 @@ body:not(.authenticated) .terminal-line::before{color:#ff4055}
 }
 @media(prefers-reduced-motion:reduce){.cyber-art svg,.cyber-glitch,.cyber-pulse{animation:none!important;transition:none!important}}
 
+
+/* CITADEL CHROME 80S APPROVED MOCKUP v2 */
+:root{--chrome-red:#ff263f;--chrome-cyan:#1ee9ff;--chrome-green:#00f3a5;--chrome-ice:#dffbff;--chrome-bg:#020607;--chrome-panel:#050b0d;--chrome-line:#5b7478}
+body{background:#010405!important;color:#d8e8ea;font-family:"Cascadia Mono","SFMono-Regular",Consolas,monospace}
+main{max-width:1440px!important;padding:12px 18px 28px!important}
+header{display:grid!important;grid-template-columns:1fr auto 1fr;grid-template-areas:"nav brand tools";align-items:start!important;gap:18px;border:0!important;padding:10px 0 4px!important;min-height:118px}
+.brand-lockup{grid-area:brand;display:grid;justify-items:center;align-content:start;min-width:min(58vw,760px);pointer-events:none}
+.brand{font-family:Impact,"Arial Black","Segoe UI Black",sans-serif!important;font-size:clamp(52px,8vw,102px)!important;line-height:.84!important;letter-spacing:.035em!important;font-style:italic;font-weight:950!important;color:transparent!important;background:linear-gradient(180deg,#ffffff 0%,#9caeb7 13%,#f8ffff 23%,#30373d 36%,#f4fbff 48%,#6b767d 57%,#181d21 68%,#eef7f9 81%,#818d94 91%,#ffffff 100%);-webkit-background-clip:text;background-clip:text;filter:drop-shadow(0 2px 0 #fff7) drop-shadow(0 7px 0 #111) drop-shadow(0 9px 0 #ff1734) drop-shadow(0 0 15px #e9ffff42);transform:skewX(-7deg);text-shadow:none!important}
+.brand::after{color:#ff1f3c!important;mix-blend-mode:screen}
+.chrome-subbrand{margin-top:12px;color:#d7e6e8;font-size:clamp(13px,1.9vw,24px);letter-spacing:.58em;text-indent:.58em;text-transform:uppercase;text-shadow:0 0 10px #b9f8ff33}
+header nav{grid-area:nav;align-self:center}
+.header-tools{grid-area:tools;justify-self:end;align-self:center}
+header nav .tab,.header-tools button,.clock{border-radius:0!important;background:#03090b!important;border-color:#465f63!important;font-size:11px!important;letter-spacing:.08em!important}
+body:not(.authenticated) header{grid-template-columns:1fr;grid-template-areas:"brand";min-height:150px}
+body:not(.authenticated) header nav,body:not(.authenticated) .header-tools{display:none!important}
+body:not(.authenticated) .brand-lockup{min-width:min(82vw,900px)}
+body:not(.authenticated) .chrome-subbrand{font-size:clamp(15px,2.1vw,26px)}
+.terminal-strip{border-radius:0!important;background:#020708e8!important;border:1px solid #42585d!important}
+body:not(.authenticated) .terminal-strip{position:fixed;z-index:5;right:2.5vw;top:44vh;width:min(31vw,500px);grid-template-columns:1fr!important;border-color:#5b6c70!important;box-shadow:0 0 0 1px #000,0 0 24px #ff1f3215!important}
+body:not(.authenticated) .terminal-strip .terminal-stats{display:none}
+body:not(.authenticated) .terminal-line{font-size:13px;color:#ff4a5d!important;white-space:normal!important;min-height:42px}
+body:not(.authenticated) .terminal-line::before{content:"// ";color:#e8f8f8!important}
+#auth{max-width:650px!important;margin:clamp(20px,6vh,72px) auto 130px!important;padding:30px 36px 28px!important;border-radius:0!important;border:1px solid #819196!important;background:linear-gradient(180deg,#04090bd9,#020506f3)!important;box-shadow:0 0 0 1px #071114,0 24px 80px #000c,0 0 28px #ff233619!important}
+#auth::before{content:"ACCESS SYSTEM";color:#b9c9cc!important;text-align:center;font-size:13px!important;letter-spacing:.24em!important;margin:0 0 22px!important}
+#auth h2{display:none}
+#auth form{gap:14px!important}
+#auth label{font-size:12px;letter-spacing:.14em;color:#c9d6d8}
+#auth .row{display:grid!important;grid-template-columns:1fr!important;gap:18px!important}
+#auth input{height:58px!important;border-radius:0!important;border:1px solid #819196!important;background:linear-gradient(90deg,#060b0d,#020506)!important;color:#e9ffff!important;padding:0 18px 0 58px!important;font-size:16px!important;box-shadow:inset 4px 0 var(--chrome-red),0 0 16px #000!important}
+#auth form .row::before{content:"⚿";position:absolute;margin:14px 0 0 20px;color:#d8f5f8;font-size:27px;z-index:1}
+#auth .primary{height:58px!important;border-radius:0!important;border:1px solid #ff4054!important;background:linear-gradient(180deg,#9a0718,#4e050e)!important;color:white!important;font-size:20px!important;letter-spacing:.18em!important;text-shadow:0 0 8px #fff7;box-shadow:inset 0 0 0 2px #ff172e66,0 0 20px #ff183388!important}
+#auth .primary::after{content:"  →";font-size:28px}
+.auth-monitor-note{margin:18px 0 0;text-align:center;color:#73888c;font-size:10px;letter-spacing:.12em;text-transform:uppercase}
+.auth-monitor-note::before,.auth-monitor-note::after{content:"";display:inline-block;width:48px;border-top:1px solid #6c1b26;margin:0 13px 3px}
+.login-boot{position:fixed;z-index:4;left:2vw;bottom:5.5vh;display:grid;gap:6px;color:#93b7bd;font-size:11px;letter-spacing:.06em}
+.login-boot strong{color:#00f4ab;font-weight:700}
+body.authenticated .login-boot{display:none}
+#notice{position:relative;z-index:4;text-align:center;font-size:12px;margin:-100px auto 80px;max-width:650px}
+body.authenticated #notice{text-align:left;margin:6px 0 0;max-width:none}
+body:not(.authenticated) .cyber-art .login-only{opacity:.52!important}
+body:not(.authenticated) .art-mask-left{width:min(37vw,560px)!important;left:-8vw!important;top:4vh!important;transform:none!important}
+body:not(.authenticated) .art-network-bottom{width:min(41vw,620px)!important;right:-5vw!important;bottom:2vh!important;transform:none!important}
+body:not(.authenticated) .art-mask-right{opacity:.33!important;width:min(30vw,440px)!important;right:-8vw!important;top:2vh!important}
+body.authenticated .cyber-art .art-mask-left{opacity:.26!important;width:min(27vw,420px)!important;left:-10vw!important;top:5vh!important}
+body.authenticated .cyber-art .art-mask-right{opacity:.27!important;width:min(25vw,390px)!important;right:-9vw!important;top:3vh!important}
+body.authenticated .cyber-art .art-network-bottom{opacity:.27!important;width:min(44vw,660px)!important;right:22vw!important;bottom:-12vh!important}
+body.authenticated .cyber-art .art-globe-left{opacity:.18!important}
+body.authenticated .cyber-art .art-hood-right{opacity:.14!important}
+body.authenticated header{position:relative;z-index:3}
+body.authenticated .brand{font-size:clamp(44px,6vw,78px)!important}
+body.authenticated .chrome-subbrand{font-size:13px;margin-top:9px}
+body.authenticated .terminal-strip{margin:4px 0 12px!important;background:#020607d9!important}
+#machines>h1{display:none}
+.chrome-page-head{display:flex;align-items:end;justify-content:space-between;gap:16px;margin:8px 0 10px;padding:0 4px}
+.chrome-page-head h1{display:block!important;margin:0!important;font-size:18px!important;letter-spacing:.08em;color:#e9f5f6}
+.chrome-page-head small{font-size:10px;letter-spacing:.12em;color:#66868c}
+.chrome-page-head p{margin:0;font-size:11px}
+.chrome-page-head button{border-radius:0!important}
+.chrome-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:10px 0 12px}
+.chrome-stat{position:relative;overflow:hidden;display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:center;min-height:76px;padding:12px 16px;background:#03090bde;border:1px solid #5a7378;box-shadow:inset 3px 0 var(--accent,#24e5ff),0 8px 28px #0008}
+.chrome-stat b{font-size:31px;line-height:1;color:var(--accent,#55f2ff);text-shadow:0 0 14px color-mix(in srgb,var(--accent,#55f2ff) 45%,transparent)}
+.chrome-stat span{font-size:11px;letter-spacing:.08em;color:#d7e5e7}.chrome-stat small{display:block;color:#7e969a;font-size:9px;margin-top:4px}
+.chrome-stat.red{--accent:#ff3148}.chrome-stat.green{--accent:#0cf3a7}.chrome-stat.blue{--accent:#2bc9ff}
+#machines>.bulkbar,#machines>.group-tools{border:1px solid #394e52;background:#020709c7;padding:9px 10px!important;margin:8px 0!important}
+#machines>.bulkbar button,#machines>.group-tools select{border-radius:0!important;font-size:10px!important;padding:7px 9px!important}
+#stamp{display:block;margin:7px 0;color:#70888d}
+.chrome-upper-grid{display:grid;grid-template-columns:minmax(0,1.75fr) minmax(300px,1fr);gap:12px;align-items:start}
+.chrome-panel,#machinePanel,#chromeLogsPreview,#chromeSshQuick,#chromeAiQuick,#d1Overview,#taskExecution,.chrome-global{border-radius:0!important;border:1px solid #536a6e!important;background:linear-gradient(180deg,#040a0cdf,#020607ed)!important;box-shadow:0 12px 28px #0008!important;margin:0!important;padding:12px!important}
+.chrome-panel-head{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #26383b;padding:0 0 8px;margin:0 0 10px;color:#e6f2f4;font-weight:800;letter-spacing:.06em}
+.chrome-panel-head small,.chrome-panel-head a{color:#ff334b;font-size:9px;letter-spacing:.08em}
+#nodes{--node-cols:3!important;display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:8px!important;max-height:480px;overflow:auto;padding-right:3px}
+.node-card{border-radius:0!important;padding:10px!important;background:#03090bdc!important;border-color:#40595e!important;box-shadow:none!important;animation:none!important}
+.node-card .node-select{top:7px;right:7px;border-radius:0!important;padding:2px 4px;background:#020607ed}
+.node-card .node-select span{display:none}
+.node-head{margin:0 0 5px}.node-avatar{width:34px!important;height:34px!important;flex-basis:34px!important;border-radius:0!important;font-size:15px!important;background:#010607!important}
+.node-card h2{font-size:12px!important}.node-card p,.node-card small{font-size:9px!important;margin:3px 0!important}.node-card .machine-meta{gap:4px!important;margin:6px 0!important}.node-card .metric{border-radius:0!important;padding:4px!important;background:#020607!important}.node-card .metric b,.node-card .metric span{font-size:9px!important}
+.node-card .row{gap:4px!important}.node-card .row button{padding:5px 6px!important;font-size:9px!important;border-radius:0!important}.node-card .update-pill,.node-card .group-tag,.node-card .ai-badge{font-size:8px!important;border-radius:0!important;padding:2px 4px!important;margin:2px 0!important}
+#chromeLogsPreview{min-height:100%}.chrome-log-lines{display:grid;gap:4px;max-height:440px;overflow:auto;font-size:10px}.chrome-log-line{display:grid;grid-template-columns:58px 54px 1fr;gap:8px;color:#b8cacc}.chrome-log-line time{color:#80979b}.chrome-log-line b{font-weight:700;color:#20d9ff}.chrome-log-line.warn b{color:#ffc23f}.chrome-log-line.bad b{color:#ff354c}.chrome-log-line.ok b{color:#00efa4}
+.chrome-lower-grid{display:grid;grid-template-columns:1.1fr 1.1fr .9fr 1.25fr;gap:12px;margin-top:12px;align-items:stretch}
+.chrome-lower-grid>section{min-width:0}
+.chrome-mini-title{font-size:14px;letter-spacing:.07em;margin:0 0 4px;color:#e7f4f5}.chrome-mini-sub{font-size:9px;letter-spacing:.08em;color:#53a2ac;margin-bottom:12px}
+.chrome-terminal-box{background:#010506;border:1px solid #31474b;min-height:120px;padding:10px;color:#a8d1d6;font-size:10px;white-space:pre-line;overflow:hidden}.chrome-terminal-box strong{color:#00f2a6}
+.chrome-quick-value{font-size:34px;color:#20dcff;line-height:1;margin:8px 0;text-shadow:0 0 15px #20dcff44}
+.chrome-quick-link{display:block;margin-top:9px;border-top:1px solid #26383c;padding-top:8px;color:#ff3d50;font-size:9px;text-align:right}
+#d1Overview .row h2{font-size:14px!important;letter-spacing:.06em;margin:0}#d1Overview .row button{border-radius:0!important;font-size:9px!important;padding:6px!important}
+#d1Overview .d1-percent{font-size:35px!important}.d1-simple,.guardian-box{border-radius:0!important;background:#020708!important}
+#taskExecution h2{font-size:14px!important;letter-spacing:.06em;margin:0 0 12px}#taskExecution h2 small{display:block;color:#53a2ac;font-size:9px;font-weight:400;margin-top:4px}
+#taskExecution textarea{min-height:68px!important;border-radius:0!important;background:#010506!important;font-size:10px!important}
+#taskExecution select,#taskExecution button{border-radius:0!important;font-size:9px!important;padding:6px!important}
+#taskExecution .primary{width:100%;background:linear-gradient(#980619,#4a050d)!important;border-color:#ff3c50!important;color:white!important;box-shadow:0 0 14px #ff263f55!important}
+#modeHelp{font-size:9px!important;margin-bottom:0}.profession-fab{border-radius:0!important;animation:none!important}
+.chrome-global{margin-top:12px!important;display:grid;grid-template-columns:minmax(0,2fr) minmax(240px,1fr);gap:14px;min-height:150px;overflow:hidden;position:relative}
+.chrome-map{position:relative;min-height:130px;background:radial-gradient(ellipse at 50% 70%,#06342d44,transparent 60%)}
+.chrome-map svg{width:100%;height:130px;display:block}.chrome-map path{fill:none;stroke:#64787a;stroke-width:1}.chrome-map .route{stroke:#ff2b42;stroke-width:1.2}.chrome-map circle{fill:#ff263f;filter:drop-shadow(0 0 4px #ff263f)}
+.chrome-global-copy{display:grid;align-content:center;gap:6px;color:#91a8ac;font-size:10px}.chrome-global-copy strong{color:#d6e7e9;font-size:12px}.chrome-global-copy .secure{color:#00f1a5}
+#projects{margin-top:12px}.project-retention-note{font-size:10px!important}
+#logs{position:relative}#logs>h1{font-family:Impact,"Arial Black",sans-serif;font-style:italic;font-size:36px!important;letter-spacing:.08em;color:#e8f5f7;text-shadow:2px 3px #ff203a}#logs .card,#logs section{border-radius:0!important;background:#03090bdd!important;border-color:#486065!important}
+button,input,textarea,select,dialog,.card,section{border-radius:0!important}
+button:hover,a.tab[aria-current=page]{transform:none!important;box-shadow:0 0 14px #16f3d324!important}
+dialog{background:#03090c!important;border-color:#61777c!important}
+@media(max-width:1050px){.chrome-lower-grid{grid-template-columns:1fr 1fr}.chrome-upper-grid{grid-template-columns:1fr}.chrome-stat b{font-size:26px}#nodes{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+@media(max-width:700px){main{padding:8px 10px 18px!important}header{grid-template-columns:1fr;grid-template-areas:"brand" "nav" "tools";min-height:auto}.brand-lockup{min-width:0}.brand{font-size:48px!important}.chrome-subbrand{font-size:10px!important;letter-spacing:.32em!important;text-indent:.32em!important}header nav,.header-tools{justify-self:stretch}.header-tools{justify-content:space-between}body:not(.authenticated) header{min-height:110px}.login-boot{position:relative;left:auto;bottom:auto;margin:20px 6px 40px}.terminal-strip{position:relative!important;right:auto!important;top:auto!important;width:auto!important}#auth{margin:12px 4px 20px!important;padding:22px 16px!important}#notice{margin:0 6px 18px!important}body:not(.authenticated) .art-mask-left{width:88vw!important;left:-48vw!important;top:12vh!important}.art-network-bottom{width:96vw!important;right:-55vw!important}.chrome-stats{grid-template-columns:1fr 1fr}.chrome-page-head{display:grid}.chrome-lower-grid{grid-template-columns:1fr}.chrome-global{grid-template-columns:1fr}#nodes{grid-template-columns:1fr!important;max-height:620px}.chrome-stat{min-height:66px;padding:10px}.chrome-stat b{font-size:24px}}
+
 </style></head><body><div id="activityBar" class="activity-bar" aria-hidden="true"></div><div id="cyberArt" class="cyber-art" aria-hidden="true">
 <svg class="login-only art-mask-left cyber-glitch" viewBox="0 0 360 620" role="presentation">
 <defs><pattern id="gridA" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" class="cyber-grid"/></pattern><clipPath id="faceClip"><path d="M82 104Q180 42 278 104L312 208 286 416Q266 500 180 552Q94 500 74 416L48 208Z"/></clipPath></defs>
@@ -151,13 +254,19 @@ body:not(.authenticated) .terminal-line::before{color:#ff4055}
 <text x="92" y="500" class="cyber-text cyber-cyan" font-size="12">THE NETWORK NEVER FORGETS.</text><text x="126" y="520" class="cyber-text cyber-red" font-size="11">CITADEL // WATCHING</text>
 </svg>
 </div><main>
-<header><span class="brand glitch" data-text="CITADEL">CITADEL</span><nav aria-label="Навигация"><a class="tab" href="#machines">Машины</a><a class="tab" href="#logs">Логи</a></nav><div class="header-tools"><time id="clock" class="clock" aria-label="Локальное время">--:--:--</time><button id="logout" hidden>Выйти</button></div></header>
+<header><div class="brand-lockup"><span class="brand glitch" data-text="CITADEL">CITADEL</span><span id="chromeSubbrand" class="chrome-subbrand">SECURE ACCESS</span></div><nav aria-label="Навигация"><a class="tab" href="#machines">MACHINES</a><a class="tab" href="#logs">LOGS</a></nav><div class="header-tools"><time id="clock" class="clock" aria-label="Локальное время">--:--:--</time><button id="logout" hidden>LOGOUT</button></div></header>
 <aside class="terminal-strip" aria-label="Системный терминал"><div class="terminal-line"><span id="terminalPhrase">HELLO, FRIEND.</span><span class="terminal-cursor" aria-hidden="true"></span></div><div class="terminal-stats"><span class="terminal-chip">NODES <strong id="terminalNodes">0</strong></span><span class="terminal-chip">ONLINE <strong id="terminalOnline">0</strong></span><span class="terminal-chip">AI <strong id="terminalAi">0</strong></span><span class="terminal-chip">SYSTEM <strong id="terminalSystem">LOCKED</strong></span></div></aside>
-<section id="auth"><h2>Вход в управление</h2><form id="login"><label for="token">Ключ доступа</label><div class="row"><input id="token" type="password" autocomplete="current-password" required><button class="primary">Войти</button></div></form></section>
+<section id="auth"><h2>SECURE ACCESS</h2><form id="login"><label for="token">ACCESS KEY <span style="float:right;color:#ff3048">REQUIRED</span></label><div class="row"><input id="token" type="password" autocomplete="current-password" placeholder="Enter access key..." required><button class="primary">LOGIN</button></div></form><p class="auth-monitor-note">AUTHORIZED PERSONNEL ONLY // ALL ACTIVITY MONITORED</p></section><div class="login-boot" aria-hidden="true"><span>[ ] INITIALIZING SECURE CHANNEL...</span><span>[ ] VERIFYING CREDENTIALS...</span><span>[ ] LOADING CITADEL CORE...</span><span>[ ] ESTABLISHING ENCRYPTED SESSION...</span><strong>[✓] CONNECTION SECURE.</strong></div>
 <p id="notice" role="status" aria-live="polite">Войдите, чтобы получить состояние машин.</p>
-<div id="machines" hidden><h1>Управление машинами</h1><div class="row"><p>Актуальное состояние · обновление раз в минуту</p><button id="refresh" class="btn-refresh">↻ Обновить</button></div><div class="bulkbar"><span id="nodeSummary" class="summary">Ноды ещё не загружены.</span><span id="selectionCount" class="selection-count">Выбрано: 0</span><button id="selectLmAll" class="btn-info">☑ Выбрать доступные</button><button id="selectAllNodes" class="btn-info">☑ Выбрать все</button><button id="groupSelected" class="btn-rollback" disabled>◈ Группировать</button><button id="deleteSelected" class="danger" disabled>🗑 Удалить</button><button id="clearLmSelection">Снять выбор</button><button id="installLmSelected" class="btn-resume" disabled>✦ Установить LM Studio: 0</button><button id="updateAll" class="btn-update">↑ Автообновить все</button><button id="rollbackAll" class="btn-rollback">↶ Откатить все</button></div><div id="fleetActivity" class="fleet-activity" role="status" aria-live="polite" hidden><div class="fleet-line"><span class="spin" aria-hidden="true"></span><strong id="fleetActivityTitle">Операция по нодам</strong><span id="fleetActivityText">Подготовка…</span></div><progress id="fleetProgress" max="1" value="0"></progress></div><div class="row group-tools"><label for="groupFilter">Группа</label><select id="groupFilter"><option value="">Все узлы</option></select><span id="groupVisibleCount" class="muted"></span></div><small id="stamp"></small><div id="nodes" class="node-grid"></div>
+<div id="machines" hidden><div class="chrome-page-head"><div><h1>MACHINES</h1><small>INFRASTRUCTURE NODES</small></div><div class="row"><p>REAL-TIME · AUTO REFRESH</p><button id="refresh" class="btn-refresh">↻ REFRESH</button></div></div><div id="chromeStats" class="chrome-stats" aria-label="Сводка CITADEL"><div class="chrome-stat"><b id="chromeTotal">0</b><span>NODES<small>TOTAL MACHINES</small></span></div><div class="chrome-stat green"><b id="chromeOnline">0</b><span>ONLINE<small>OPERATIONAL</small></span></div><div class="chrome-stat blue"><b id="chromeAi">0</b><span>AI<small>READY / INSTALLED</small></span></div><div class="chrome-stat red"><b id="chromeAlerts">0</b><span>SYSTEM<small>ALERTS / OFFLINE</small></span></div></div><div class="bulkbar"><span id="nodeSummary" class="summary">Ноды ещё не загружены.</span><span id="selectionCount" class="selection-count">Выбрано: 0</span><button id="selectLmAll" class="btn-info">☑ Выбрать доступные</button><button id="selectAllNodes" class="btn-info">☑ Выбрать все</button><button id="groupSelected" class="btn-rollback" disabled>◈ Группировать</button><button id="deleteSelected" class="danger" disabled>🗑 Удалить</button><button id="clearLmSelection">Снять выбор</button><button id="installLmSelected" class="btn-resume" disabled>✦ Установить LM Studio: 0</button><button id="updateAll" class="btn-update">↑ Автообновить все</button><button id="rollbackAll" class="btn-rollback">↶ Откатить все</button></div><div id="fleetActivity" class="fleet-activity" role="status" aria-live="polite" hidden><div class="fleet-line"><span class="spin" aria-hidden="true"></span><strong id="fleetActivityTitle">Операция по нодам</strong><span id="fleetActivityText">Подготовка…</span></div><progress id="fleetProgress" max="1" value="0"></progress></div><div class="row group-tools"><label for="groupFilter">Группа</label><select id="groupFilter"><option value="">Все узлы</option></select><span id="groupVisibleCount" class="muted"></span></div><small id="stamp"></small><div class="chrome-upper-grid"><section id="machinePanel" class="chrome-panel"><div class="chrome-panel-head"><span>MACHINES</span><small>INFRASTRUCTURE NODES</small></div><div id="nodes" class="node-grid"></div></section><section id="chromeLogsPreview" class="chrome-panel"><div class="chrome-panel-head"><span>SYSTEM LOGS</span><a href="#logs">VIEW ALL →</a></div><div id="chromeLogLines" class="chrome-log-lines"><div class="chrome-log-line ok"><time>--:--:--</time><b>[SYS]</b><span>Waiting for node telemetry...</span></div></div></section></div>
+<div class="chrome-lower-grid"><section id="chromeSshQuick"><h2 class="chrome-mini-title">SSH ACCESS</h2><div class="chrome-mini-sub">SECURE TERMINAL</div><div class="chrome-terminal-box"><strong>● TERMINAL READY</strong>
+Select a machine above.
+Open node details → SSH.
+Real session controls remain unchanged.</div><a class="chrome-quick-link" href="#machines">SELECT NODE →</a></section><section id="chromeAiQuick"><h2 class="chrome-mini-title">AI / LM STUDIO</h2><div class="chrome-mini-sub">LOCAL MODELS & INFERENCE</div><div id="chromeAiReady" class="chrome-quick-value">0</div><div class="chrome-terminal-box">LM Studio nodes detected.
+Models and inference are managed per host.
+<span id="chromeAiNote">Waiting for telemetry...</span></div><a class="chrome-quick-link" href="#machines">MANAGE PER NODE →</a></section>
 <section id="d1Overview"><div class="row"><h2>Cloudflare D1 · расход</h2><button id="d1Refresh">Проверить расход</button></div><div id="d1Gauge" class="d1-simple" data-level="normal"><div class="row"><strong id="d1Percent" class="d1-percent">—%</strong><span class="d1-caption">Использовано сегодня</span></div><progress id="d1Progress" class="d1-bar" max="100" value="0" aria-label="Использование дневного лимита D1"></progress></div><small id="d1Status" role="status">Ещё не обновлено.</small><div class="guardian-box"><div class="row"><strong>D1 Guardian</strong><span id="guardianState" class="guardian-state" data-state="unknown">Ждёт первой проверки</span><button id="guardianRun" class="btn-info">Проверить сейчас</button></div><small id="guardianMeta">Автоконтроль запускается каждые 5 минут.</small><details><summary>Последние исправления</summary><div id="guardianActions" class="guardian-actions"><small>Исправлений ещё нет.</small></div></details></div></section>
-<section><h2>Что нужно сделать?</h2><form id="taskForm"><label for="prompt">Задание для нод</label><textarea id="prompt" maxlength="20000" placeholder="Опишите задачу и ожидаемый результат…" required></textarea><div class="row"><label for="executionMode">Исполнитель</label><select id="executionMode"><option value="ee">EE · экспертный исполнитель</option><option value="python">Python · расчёты и данные</option></select><button id="professionFab" type="button" class="profession-fab">🎓 Профессия: авто</button><label for="workerTarget">Хостов</label><select id="workerTarget"><option value="auto">Auto</option><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="10">10</option><option value="20">20</option><option value="50">50</option><option value="all">Все готовые</option></select><button id="submitTask" class="primary">Запустить работу</button></div></form><div id="taskSubmissionStatus" hidden></div><p id="modeHelp">EE работает через локальную AI-модель и выбранную экспертную профессию. Auto подбирает число исполнителей; число 1–50 означает столько разных READY-хостов.</p></section><p class="project-retention-note">Ожидающие проекты сохраняются, пока не появится подходящий исполнитель.</p><div id="projects"></div></div>
+<section id="taskExecution"><h2>TASK EXECUTION <small>RUN COMMANDS & AUTOMATE</small></h2><form id="taskForm"><label for="prompt">Задание для нод</label><textarea id="prompt" maxlength="20000" placeholder="Опишите задачу и ожидаемый результат…" required></textarea><div class="row"><label for="executionMode">Исполнитель</label><select id="executionMode"><option value="ee">EE · экспертный исполнитель</option><option value="python">Python · расчёты и данные</option></select><button id="professionFab" type="button" class="profession-fab">🎓 Профессия: авто</button><label for="workerTarget">Хостов</label><select id="workerTarget"><option value="auto">Auto</option><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="10">10</option><option value="20">20</option><option value="50">50</option><option value="all">Все готовые</option></select><button id="submitTask" class="primary">Запустить работу</button></div></form><div id="taskSubmissionStatus" hidden></div><p id="modeHelp">EE работает через локальную AI-модель и выбранную экспертную профессию. Auto подбирает число исполнителей; число 1–50 означает столько разных READY-хостов.</p></section></div><section class="chrome-global" aria-label="Глобальная сеть CITADEL"><div class="chrome-map"><svg viewBox="0 0 760 150" role="presentation"><path d="M35 72C94 26 146 26 202 55S302 116 365 78 485 23 543 61 642 117 725 68"/><path d="M53 93C110 60 155 66 216 88s124 31 188 1 133-49 204-17 87 29 121 8"/><path class="route" d="M95 70Q210 18 328 79T548 63Q644 45 702 88"/><path class="route" d="M148 91Q278 40 397 92T630 75"/><circle cx="95" cy="70" r="5"/><circle cx="328" cy="79" r="5"/><circle cx="548" cy="63" r="5"/><circle cx="702" cy="88" r="5"/><circle cx="148" cy="91" r="4"/><circle cx="397" cy="92" r="4"/><circle cx="630" cy="75" r="4"/></svg></div><div class="chrome-global-copy"><strong>// GLOBAL NODES</strong><span>NEW YORK · LONDON · TEL AVIV · TOKYO · SYDNEY</span><span>BLACK ARMY / RED ARMY / SHADOW ARMY</span><span class="secure">[✓] OPS // SECURE</span></div></section><p class="project-retention-note">Ожидающие проекты сохраняются, пока не появится подходящий исполнитель.</p><div id="projects"></div></div>
 <div id="logs" hidden><h1>Логи и отчёты</h1><p>Завершённая работа и ошибки. История обычных опросов машин не сохраняется.</p><div id="events"></div><h2>Отчёты о заданиях</h2><div id="reports"></div></div>
 <dialog id="professionDialog"><div class="row" style="justify-content:space-between"><h2>Выбор профессии</h2><button id="closeProfession">Закрыть</button></div><p id="professionModeText">Роль определяет специализацию исполнителя.</p><div id="professionGrid" class="profession-grid"></div><div class="row" style="margin-top:12px"><button id="professionAuto" class="btn-info">Авто</button><button id="professionDone" class="primary">Готово</button></div><p id="professionSummary" class="profession-summary">Профессия выбирается автоматически.</p></dialog>
 <dialog id="groupDialog" class="management-dialog" aria-labelledby="groupTitle"><form id="groupForm"><div class="row" style="justify-content:space-between"><h2 id="groupTitle">Группировка узлов</h2><button id="closeGroup" type="button">Закрыть</button></div><p id="groupSelectionSummary"></p><label for="groupName">Название группы</label><input id="groupName" type="text" maxlength="120" placeholder="Например: Москва · разработчики" required><fieldset><legend>Как сгруппировать?</legend><div class="group-choices">
@@ -402,7 +511,7 @@ function updateProfessionFab(){const b=$('professionFab'),ids=[...selectedProfes
 async function ensureWorkRoles(){if(workRoles.length)return workRoles;const d=await api('/work-roles');workRoles=(d.roles||[]).filter(r=>r.kind==='worker');return workRoles}
 async function openProfessionPicker(){try{await ensureWorkRoles();const grid=$('professionGrid');grid.replaceChildren();const mode=$('executionMode').value;$('professionModeText').textContent=mode==='python'?'Python выполнит работу без LLM, но отчёт и назначение будут помечены выбранной профессией.':'EE выполнит задачу в выбранной экспертной роли.';for(const role of workRoles){const labelEl=el('label',undefined,'profession-choice'),box=document.createElement('input');box.type='checkbox';box.checked=selectedProfessionIds.has(role.id);box.onchange=()=>{if(box.checked)selectedProfessionIds.add(role.id);else selectedProfessionIds.delete(role.id);updateProfessionFab()};const copy=el('div');copy.append(el('strong',professionLabel(role.id)),el('small',role.id));labelEl.append(box,copy);grid.append(labelEl)}updateProfessionFab();$('professionDialog').showModal()}catch(e){tell('Профессии не загружены: '+e.message,true)}}
 
-function route(){const logs=location.hash==='#logs';document.body.classList.toggle('authenticated',Boolean(token));$('machines').hidden=!token||logs;$('logs').hidden=!token||!logs;$('auth').hidden=!!token;$('logout').hidden=!token;document.querySelectorAll('a.tab').forEach(a=>a.setAttribute('aria-current',a.hash===(logs?'#logs':'#machines')?'page':'false'));if($('terminalSystem'))$('terminalSystem').textContent=token?'STANDBY':'LOCKED'}
+function route(){const logs=location.hash==='#logs';document.body.classList.toggle('authenticated',Boolean(token));$('machines').hidden=!token||logs;$('logs').hidden=!token||!logs;$('auth').hidden=!!token;$('logout').hidden=!token;if($('chromeSubbrand'))$('chromeSubbrand').textContent=token?'OPERATIONS HUB':'SECURE ACCESS';document.querySelectorAll('a.tab').forEach(a=>a.setAttribute('aria-current',a.hash===(logs?'#logs':'#machines')?'page':'false'));if($('terminalSystem'))$('terminalSystem').textContent=token?'STANDBY':'LOCKED'}
 function metric(title,value){const x=el('div',undefined,'metric'),v=el('span',value??'—');if(String(value||'').startsWith('✓'))v.className='installed-mark';else if(String(value||'').startsWith('×'))v.className='missing-mark';x.append(el('b',title),v);return x}
 function gib(bytes){const n=Number(bytes||0);return n>0?(n/1073741824).toFixed(1)+' GiB':'—'}
 function gpuText(gpus){return Array.isArray(gpus)&&gpus.length?gpus.map(g=>g.name+(g.vram_total_bytes?' · '+gib(g.vram_total_bytes):'')).join('; '):'Не обнаружена / не сообщена'}
@@ -639,10 +748,31 @@ function updateTerminalHud(data){
   const nodes=Array.isArray(data?.nodes)?data.nodes:[];
   const online=nodes.filter(n=>n.status==='online').length;
   const ai=nodes.filter(n=>Number(n.ai_installed||0)===1).length;
+  const alerts=nodes.filter(n=>n.status==='offline'||n.status==='revoked').length;
   if($('terminalNodes'))$('terminalNodes').textContent=String(nodes.length);
   if($('terminalOnline'))$('terminalOnline').textContent=String(online);
   if($('terminalAi'))$('terminalAi').textContent=String(ai);
-  if($('terminalSystem'))$('terminalSystem').textContent=token?(online?'ONLINE':'STANDBY'):'LOCKED';
+  if($('terminalSystem'))$('terminalSystem').textContent=token?(alerts?'ELEVATED':online?'ONLINE':'STANDBY'):'LOCKED';
+  if($('chromeTotal'))$('chromeTotal').textContent=String(nodes.length);
+  if($('chromeOnline'))$('chromeOnline').textContent=String(online);
+  if($('chromeAi'))$('chromeAi').textContent=String(ai);
+  if($('chromeAlerts'))$('chromeAlerts').textContent=String(alerts);
+  if($('chromeAiReady'))$('chromeAiReady').textContent=String(ai);
+  if($('chromeAiNote'))$('chromeAiNote').textContent=ai?ai+' host'+(ai===1?'':'s')+' reporting LM Studio.':'No AI host telemetry yet.';
+  const root=$('chromeLogLines');
+  if(root){
+    root.replaceChildren();
+    const commands=Array.isArray(data?.commands)?data.commands.slice(0,12):[];
+    const rows=commands.length?commands:[{status:online?'completed':'pending',command_type:'system',node_id:online?online+' nodes online':'waiting for nodes',updated_at:new Date().toISOString()}];
+    for(const item of rows){
+      const row=el('div',undefined,'chrome-log-line '+(item.status==='failed'?'bad':['pending','accepted'].includes(item.status)?'warn':'ok'));
+      const stamp=item.updated_at||item.created_at||'',time=document.createElement('time');
+      time.textContent=stamp?new Date(stamp).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'--:--:--';
+      const level=el('b',item.status==='failed'?'[ERROR]':['pending','accepted'].includes(item.status)?'[WARN]':'[INFO]');
+      row.append(time,level,el('span',(commandNames[item.command_type]||item.command_type||'system')+' · '+(item.node_id||'hub')));
+      root.append(row);
+    }
+  }
 }
 setInterval(rotateTerminalPhrase,6500);
 
