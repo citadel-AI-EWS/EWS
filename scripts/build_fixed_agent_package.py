@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
-PACKAGE_NAME = "CITADEL_FIXED_AGENT_0.3.32_2026-10-02"
+PACKAGE_NAME = "CITADEL_FIXED_AGENT_0.3.33_2026-10-02"
 STAGE = DIST / PACKAGE_NAME
 ZIP_PATH = DIST / f"{PACKAGE_NAME}.zip"
 
@@ -61,7 +61,6 @@ def patch_v1(path: Path) -> None:
     )
 
     network_helper = textwrap.dedent('''
-        TAILSCALE_INTERFACE_TOKEN = "tailscale"
         VIRTUAL_INTERFACE_TOKENS = (
             "loopback",
             "docker",
@@ -70,13 +69,14 @@ def patch_v1(path: Path) -> None:
             "vmware",
             "virtualbox",
             "wsl",
+            "tailscale",
         )
+        SHARED_IPV4_NETWORK = ipaddress.ip_network("100.64.0.0/10")
 
 
         def local_network_addresses() -> dict[str, Any]:
-            """Discover current host LAN/Tailscale IPv4 addresses without hard-coding DHCP data."""
+            """Discover current physical/private LAN IPv4 addresses without hard-coding DHCP data."""
             lan: list[str] = []
-            tailscale: list[str] = []
             interfaces: list[dict[str, str]] = []
             try:
                 stats = psutil.net_if_stats()
@@ -84,7 +84,6 @@ def patch_v1(path: Path) -> None:
             except Exception:
                 return {
                     "lan_ipv4": None,
-                    "tailscale_ipv4": None,
                     "private_ipv4": [],
                     "interfaces": [],
                 }
@@ -94,7 +93,8 @@ def patch_v1(path: Path) -> None:
                 if state is not None and not state.isup:
                     continue
                 lowered = interface_name.lower()
-                is_virtual = any(token in lowered for token in VIRTUAL_INTERFACE_TOKENS)
+                if any(token in lowered for token in VIRTUAL_INTERFACE_TOKENS):
+                    continue
                 for item in items:
                     if item.family != socket.AF_INET:
                         continue
@@ -107,20 +107,17 @@ def patch_v1(path: Path) -> None:
                         or address.is_link_local
                         or address.is_multicast
                         or address.is_unspecified
+                        or address in SHARED_IPV4_NETWORK
                     ):
                         continue
-                    value = str(address)
-                    interfaces.append({"name": interface_name[:120], "ipv4": value})
-                    if TAILSCALE_INTERFACE_TOKEN in lowered:
-                        tailscale.append(value)
-                    elif address.is_private and not is_virtual:
+                    if address.is_private:
+                        value = str(address)
                         lan.append(value)
+                        interfaces.append({"name": interface_name[:120], "ipv4": value})
 
             lan = list(dict.fromkeys(lan))
-            tailscale = list(dict.fromkeys(tailscale))
             return {
                 "lan_ipv4": lan[0] if lan else None,
-                "tailscale_ipv4": tailscale[0] if tailscale else None,
                 "private_ipv4": lan,
                 "interfaces": interfaces[:32],
             }
@@ -200,7 +197,7 @@ def patch_v1(path: Path) -> None:
     text = must_replace(
         text,
         '                "capabilities": self.capabilities,\n            },\n        )\n        self.last_heartbeat = time.monotonic()',
-        '                "capabilities": self.capabilities,\n                "network": {\n                    "lan_ipv4": network.get("lan_ipv4"),\n                    "tailscale_ipv4": network.get("tailscale_ipv4"),\n                },\n            },\n        )\n        self.last_heartbeat = time.monotonic()',
+        '                "capabilities": self.capabilities,\n                "network": {\n                    "lan_ipv4": network.get("lan_ipv4"),\n                },\n            },\n        )\n        self.last_heartbeat = time.monotonic()',
         "heartbeat network payload",
     )
 
@@ -210,7 +207,7 @@ def patch_v1(path: Path) -> None:
         require_test(load_json(bom_json, {}).get("ok") is True, "UTF-8 BOM JSON rejected")
         network = local_network_addresses()
         require_test(
-            set(network) == {"lan_ipv4", "tailscale_ipv4", "private_ipv4", "interfaces"},
+            set(network) == {"lan_ipv4", "private_ipv4", "interfaces"},
             "network discovery returned an unexpected shape",
         )
     ''')
