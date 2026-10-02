@@ -5424,6 +5424,24 @@ function constantTimeHexEqual(left, right) {
   return difference === 0;
 }
 
+function d1ServiceErrorCode(error, scope = "controller") {
+  const message = String(error?.message || error || "").toLowerCase();
+  if (message.includes("daily row read limit")) return `${scope}_d1_daily_read_limit_exceeded`;
+  if (message.includes("daily row write limit")) return `${scope}_d1_daily_write_limit_exceeded`;
+  if (message.includes("exceeded maximum db size")) return `${scope}_d1_database_size_exceeded`;
+  if (message.includes("overloaded") || message.includes("too many api requests")) {
+    return `${scope}_d1_overloaded`;
+  }
+  if (message.includes("d1") || message.includes("sqlite")) return `${scope}_d1_error`;
+  return null;
+}
+
+function throwScopedD1Error(error, scope = "controller") {
+  const code = d1ServiceErrorCode(error, scope);
+  if (code) throw new ApiError(503, code);
+  throw error;
+}
+
 async function ensureEnterpriseStorage(env) {
   if (!enterpriseSchemaPromise) {
     enterpriseSchemaPromise = env.DB.batch([
@@ -5564,13 +5582,41 @@ function randomArchitectSecret(prefix) {
   return prefix + bytesToBase64Url(bytes);
 }
 
-async function architectAuthState(env) {
-  await ensureArchitectAuthStorage(env);
-  const row = await env.DB.prepare(`
+async function readArchitectAuthState(env) {
+  return env.DB.prepare(`
     SELECT token_hash, bootstrap_mode, recovery_hash, recovery_used,
       token_rotated_at, recovery_created_at, updated_at
     FROM architect_auth_state WHERE singleton_id = 1
   `).first();
+}
+
+function architectAuthStorageMissing(error) {
+  return /no such table:\s*architect_auth_state/i.test(String(error?.message || error || ""));
+}
+
+async function architectAuthState(env) {
+  let row;
+  try {
+    row = await readArchitectAuthState(env);
+  } catch (error) {
+    if (!architectAuthStorageMissing(error)) throwScopedD1Error(error, "architect");
+    try {
+      await ensureArchitectAuthStorage(env);
+      row = await readArchitectAuthState(env);
+    } catch (bootstrapError) {
+      throwScopedD1Error(bootstrapError, "architect");
+    }
+  }
+
+  if (!row) {
+    try {
+      await ensureArchitectAuthStorage(env);
+      row = await readArchitectAuthState(env);
+    } catch (bootstrapError) {
+      throwScopedD1Error(bootstrapError, "architect");
+    }
+  }
+
   if (!row || !/^[a-f0-9]{64}$/.test(String(row.token_hash || ""))) {
     throw new ApiError(503, "architect_auth_not_configured");
   }
@@ -5591,13 +5637,20 @@ async function authenticateArchitect(request, env) {
   if (constantTimeHexEqual(actualHash, String(state.token_hash).toLowerCase())) {
     actor = { actor_id: "primary", role: "owner", token_id: null };
   } else {
-    await ensureEnterpriseStorage(env);
-    const delegated = await env.DB.prepare(`
-      SELECT token_id, role
-      FROM architect_access_tokens
-      WHERE token_hash = ? AND enabled = 1 AND revoked_at IS NULL
-      LIMIT 1
-    `).bind(actualHash).first();
+    let delegated = null;
+    try {
+      delegated = await env.DB.prepare(`
+        SELECT token_id, role
+        FROM architect_access_tokens
+        WHERE token_hash = ? AND enabled = 1 AND revoked_at IS NULL
+        LIMIT 1
+      `).bind(actualHash).first();
+    } catch (error) {
+      const message = String(error?.message || error || "");
+      if (!/no such table:\s*architect_access_tokens/i.test(message)) {
+        throwScopedD1Error(error, "architect");
+      }
+    }
     if (!delegated || !ARCHITECT_ROLE_PERMISSIONS[delegated.role]) {
       throw new ApiError(401, "invalid_architect_token");
     }
@@ -6410,6 +6463,88 @@ function publicHubQueryErrorCode(error) {
   if (message.includes("no such column")) return "hub_nodes_schema_mismatch";
   if (message.includes("d1")) return "hub_nodes_d1_error";
   return "hub_nodes_query_failed";
+}
+
+
+async function queryArchitectMachines(env) {
+  const [nodes, commands, groups] = await Promise.all([
+    env.DB.prepare(`SELECT n.node_id, nn.node_number, n.hostname, n.os_name, n.os_version, n.architecture,
+      n.agent_version, n.cpu_percent, n.memory_percent, n.last_seen_at,
+      CASE WHEN n.status = 'online' AND
+      (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-2 minutes'))
+      THEN 'offline' ELSE n.status END AS status,
+      net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json,
+      COALESCE(ai.installed, 0) AS ai_installed,
+      COALESCE(ai.server_running, 0) AS ai_server_running,
+      ai.selected_model AS ai_selected_model,
+      ai.loaded_model AS ai_loaded_model,
+      ai.updated_at AS ai_updated_at,
+      air.state_json AS ai_runtime_json, scope.group_id
+      FROM nodes AS n
+      LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id
+      LEFT JOIN node_network_state AS net ON net.node_id = n.node_id
+      LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
+      LEFT JOIN node_ai_runtime_state AS air ON air.node_id = n.node_id
+      LEFT JOIN enterprise_node_scope AS scope ON scope.node_id = n.node_id
+      WHERE n.status != 'revoked' ORDER BY n.node_id LIMIT 500`).all(),
+    env.DB.prepare(`SELECT command_id, node_id, command_type, status, created_at, completed_at
+      FROM commands
+      WHERE status IN ('pending','accepted')
+        OR datetime(created_at) >= datetime('now', '-30 minutes')
+      ORDER BY created_at DESC LIMIT 500`).all(),
+    env.DB.prepare(`SELECT g.group_id, g.name, COALESCE(c.category, 'other') AS category
+      FROM enterprise_node_groups AS g
+      LEFT JOIN node_group_categories AS c ON c.group_id = g.group_id
+      ORDER BY g.name`).all()
+  ]);
+  return { nodes, commands, groups };
+}
+
+async function repairArchitectMachinesStorage(env, error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  const repairs = [];
+  if (/no such table:\s*(node_ai_state|node_ai_runtime_state)/i.test(message)) {
+    repairs.push(ensureNodeAiStorage(env));
+  }
+  if (/no such table:\s*node_network_state/i.test(message)) {
+    repairs.push(ensureNodeNetworkStorage(env));
+  }
+  if (/no such table:\s*(node_numbers|auto_enrollment_windows)/i.test(message)) {
+    repairs.push(ensureAutoEnrollmentStorage(env));
+  }
+  if (/no such table:\s*(enterprise_node_scope|enterprise_node_groups|node_group_categories)/i.test(message)) {
+    repairs.push(ensureEnterpriseStorage(env));
+  }
+  if (/no such table:\s*commands/i.test(message) || /no such column:\s*completed_at/i.test(message)) {
+    repairs.push(ensureCommandStorage(env));
+  }
+  if (!repairs.length) return false;
+  await Promise.all(repairs);
+  return true;
+}
+
+async function readArchitectMachines(env) {
+  try {
+    return await queryArchitectMachines(env);
+  } catch (error) {
+    const message = String(error?.message || error || "");
+    if (!/no such (table|column):/i.test(message)) {
+      throwScopedD1Error(error, "architect");
+    }
+
+    try {
+      if (!await repairArchitectMachinesStorage(env, error)) {
+        throw new ApiError(503, "architect_storage_schema_mismatch");
+      }
+      return await queryArchitectMachines(env);
+    } catch (repairError) {
+      if (repairError instanceof ApiError) throw repairError;
+      const code = d1ServiceErrorCode(repairError, "architect");
+      if (code) throw new ApiError(503, code);
+      console.error("Architect machines storage repair failed", String(repairError));
+      throw new ApiError(503, "architect_storage_unavailable");
+    }
+  }
 }
 
 async function publicHubNodes(env) {
@@ -7516,43 +7651,7 @@ async function handleApi(request, env, url, executionCtx = null) {
   if (url.pathname === "/api/v1/architect/machines") {
     if (request.method !== "GET") return methodNotAllowed(["GET"]);
     await authenticateArchitect(request, env);
-    await Promise.all([
-      ensureNodeAiStorage(env),
-      ensureNodeNetworkStorage(env),
-      ensureAutoEnrollmentStorage(env),
-      ensureEnterpriseStorage(env),
-      ensureCommandReadIndexes(env)
-    ]);
-    const [nodes, commands, groups] = await Promise.all([
-      env.DB.prepare(`SELECT n.node_id, nn.node_number, n.hostname, n.os_name, n.os_version, n.architecture,
-        n.agent_version, n.cpu_percent, n.memory_percent, n.last_seen_at,
-        CASE WHEN n.status = 'online' AND
-        (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-2 minutes'))
-        THEN 'offline' ELSE n.status END AS status,
-        net.lan_ipv4, net.tailscale_ipv4, net.mac_addresses_json,
-        COALESCE(ai.installed, 0) AS ai_installed,
-        COALESCE(ai.server_running, 0) AS ai_server_running,
-        ai.selected_model AS ai_selected_model,
-        ai.loaded_model AS ai_loaded_model,
-        ai.updated_at AS ai_updated_at,
-        air.state_json AS ai_runtime_json, scope.group_id
-        FROM nodes AS n
-        LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id
-        LEFT JOIN node_network_state AS net ON net.node_id = n.node_id
-        LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
-        LEFT JOIN node_ai_runtime_state AS air ON air.node_id = n.node_id
-        LEFT JOIN enterprise_node_scope AS scope ON scope.node_id = n.node_id
-        WHERE n.status != 'revoked' ORDER BY n.node_id LIMIT 500`).all(),
-      env.DB.prepare(`SELECT command_id, node_id, command_type, status, created_at, completed_at
-        FROM commands
-        WHERE status IN ('pending','accepted')
-          OR datetime(created_at) >= datetime('now', '-30 minutes')
-        ORDER BY created_at DESC LIMIT 500`).all(),
-      env.DB.prepare(`SELECT g.group_id, g.name, COALESCE(c.category, 'other') AS category
-        FROM enterprise_node_groups AS g
-        LEFT JOIN node_group_categories AS c ON c.group_id = g.group_id
-        ORDER BY g.name`).all()
-    ]);
+    const { nodes, commands, groups } = await readArchitectMachines(env);
     const commandRows = commands.results || [];
     const latestCommands = new Map();
     for (const command of commandRows) {
@@ -7867,11 +7966,15 @@ export default {
       }
 
       const requestId = crypto.randomUUID();
-      console.error("Unhandled API error", {
+      const d1Code = d1ServiceErrorCode(error, "controller");
+      console.error(d1Code ? "Unhandled D1 API error" : "Unhandled API error", {
         request_id: requestId,
         method: request.method,
         pathname: url.pathname
       }, error);
+      if (d1Code) {
+        return json({ ok: false, error: d1Code, request_id: requestId }, 503);
+      }
       return json({ ok: false, error: "internal_error", request_id: requestId }, 500);
     }
   }

@@ -186,6 +186,23 @@ assert.equal(projects.find(p => p.project_id === 'empty').finished_work_items, 0
 assert.equal(projects.find(p => p.project_id === 'old').work_item_count, 1);
 assert.equal(db.prepare("SELECT status FROM architect_projects WHERE project_id = 'old'").get().status, 'planned',
   'reading the project list must not perform maintenance writes');
+
+// Architect login/fleet refresh is a read path on an already-migrated database.
+// Repeated UI opens must not execute runtime DDL or INSERT OR IGNORE writes.
+const architectMachinesStart = operations.length;
+response = await worker.fetch(new Request('https://local.test/api/v1/architect/machines',
+  {headers: {authorization: 'Bearer ' + architectToken}}), env);
+assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+assert.equal(operations.length, architectMachinesStart,
+  'Architect machines GET must not write to D1 on a healthy schema');
+
+const invalidArchitectStart = operations.length;
+response = await worker.fetch(new Request('https://local.test/api/v1/architect/machines',
+  {headers: {authorization: 'Bearer synthetic-invalid-token'}}), env);
+assert.equal(response.status, 401);
+assert.equal((await response.json()).error, 'invalid_architect_token');
+assert.equal(operations.length, invalidArchitectStart,
+  'invalid Architect authentication must not bootstrap or mutate D1');
 db.prepare("INSERT INTO node_request_nonces VALUES (?, 'expired', datetime('now', '-11 minutes'))").run(nodeId);
 await worker.scheduled({cron: "17 * * * *"}, env);
 assert.equal(db.prepare("SELECT COUNT(*) AS n FROM node_request_nonces WHERE request_id = 'expired'").get().n, 0);
