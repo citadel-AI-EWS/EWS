@@ -737,6 +737,10 @@ assert.ok(operations.includes("if(currentNode?.node_id===sshNodeId)return curren
 assert.ok(operations.includes("^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"), "deployed SSH hostname validation must match Controller");
 assert.ok(operations.includes("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"), "deployed SSH user validation must match Controller");
 assert.ok(operations.includes("^SHA256:[A-Za-z0-9+/=]{20,120}$"), "deployed SSH fingerprint validation must match Controller");
+assert.ok(operations.includes("sshInlineGeneration") && operations.includes("sshProbeGeneration"), "deployed SSH async work must be bound to dialog generations");
+assert.ok(operations.includes("async function waitForOperationsSshProbe"), "deployed SSH probe must poll queued command completion");
+assert.ok(operations.includes("sshSelectionGeneration===selectionGeneration&&sshInlineGeneration===inlineGeneration"), "deployed SSH terminal must reject earlier dialog-session polls");
+assert.ok(operations.includes("sshSelectionGeneration===selectionGeneration&&sshProbeGeneration===probeGeneration"), "deployed SSH probe must reject earlier dialog-session polls");
 
 
 assert.ok(index.includes("CREATE TABLE IF NOT EXISTS commands"), "runtime command table bootstrap missing");
