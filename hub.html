@@ -144,6 +144,23 @@
             <button id="copySshButton" class="btn" type="button" disabled data-i18n="copyCommand">Копировать команду</button>
             <button id="openSshButton" class="btn cyan" type="button" disabled data-i18n="browserSsh">Открыть интерактивный SSH</button>
           </div>
+          <div id="sshInlinePanel" class="cmd" style="margin-top:10px;padding:10px;min-height:210px;display:flex;flex-direction:column;gap:8px">
+            <div class="micro">INLINE RESTRICTED TERMINAL · signed agent channel · no shell</div>
+            <pre id="sshInlineOutput" style="margin:0;min-height:130px;max-height:320px;overflow:auto;white-space:pre-wrap;word-break:break-word">CITADEL restricted terminal.
+Select a node, then type help.</pre>
+            <div style="display:flex;gap:7px;align-items:center">
+              <span class="mono">citadel&gt;</span>
+              <input id="sshInlineInput" list="sshInlineCommands" autocomplete="off" spellcheck="false" placeholder="status" style="flex:1">
+              <button id="sshInlineSend" class="btn good" type="button" disabled>Run</button>
+            </div>
+            <datalist id="sshInlineCommands">
+              <option value="help"></option><option value="status"></option><option value="hostname"></option>
+              <option value="uptime"></option><option value="cpu"></option><option value="memory"></option>
+              <option value="disk"></option><option value="network"></option><option value="agent-status"></option>
+              <option value="agent-logs"></option><option value="lmstudio-status"></option><option value="diagnostics"></option>
+              <option value="ping-controller"></option><option value="exit"></option>
+            </datalist>
+          </div>
           <div id="sshNotice" class="notice warn">Hub хранит только hostname, username, fingerprints и readiness. Приватные SSH-ключи, пароли, Access tokens и CA private keys здесь не сохраняются.</div>
         </section>
 
@@ -723,7 +740,11 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
     exportButton.addEventListener("click",()=>{if(!lastOverview)return;const snapshot={exported_at:new Date().toISOString(),counts:lastOverview.counts,nodes:lastOverview.nodes,presence:lastPresence,release_version:releaseVersion};const blob=new Blob([JSON.stringify(snapshot,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`citadel-hub-${new Date().toISOString().replace(/[:.]/g,"-")}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);toast("Snapshot exported","Real controller data only")});
 
     const sshHost=$("sshHost"),sshUser=$("sshUser"),sshFingerprint=$("sshFingerprint");
-    let sshNodeId="",sshState=null;
+    const sshInlineCommands=new Set(["help","status","hostname","uptime","cpu","memory","disk","network","agent-status","agent-logs","lmstudio-status","diagnostics","ping-controller","exit"]);
+    let sshNodeId="",sshState=null,sshInlineBusy=false;
+    function versionAtLeast(value,minimum){const parse=v=>String(v||"").split(".").slice(0,3).map(x=>Number.parseInt(x,10));const a=parse(value),b=parse(minimum);if(a.length<3||b.length<3||a.some(Number.isNaN)||b.some(Number.isNaN))return false;for(let i=0;i<3;i++){if(a[i]!==b[i])return a[i]>b[i]}return true}
+    function appendSshInline(text){const out=$("sshInlineOutput");out.textContent+=(out.textContent?"\n":"")+String(text??"");out.scrollTop=out.scrollHeight}
+    function resetSshInline(node){$("sshInlineOutput").textContent=`CITADEL restricted terminal · ${node?.hostname||node?.node_id||"no node"}\nType help to see the allow-list.`;}
     const sshBootstrapCommand='powershell -NoLogo -NoProfile -ExecutionPolicy RemoteSigned -Command "$r=Join-Path $env:ProgramData \'CitadelEWS\\agent\';$p=Join-Path $r \'configure_restricted_ssh.ps1\';if(!(Test-Path -LiteralPath $p)){$s=Get-Content (Join-Path $r \'install-state.json\') -Raw|ConvertFrom-Json;$p=Join-Path $s.release_root \'configure_restricted_ssh.ps1\'};& $p"';
     function selectedSshNode(){return (lastOverview?.nodes||[]).find(n=>n.node_id===sshNodeId)||null}
     function nodeCapabilities(node){try{const value=JSON.parse(node?.capabilities_json||"[]");return Array.isArray(value)?value:[]}catch{return []}}
@@ -742,6 +763,9 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       $("copySshBootstrapButton").disabled=!bootstrapEligible;
       $("copySshButton").disabled=!configured;
       $("openSshButton").disabled=!sshReadyForBrowser();
+      const inlineReady=Boolean(sshNode&&architectToken&&versionAtLeast(sshNode.agent_version,"0.3.31")&&!sshInlineBusy);
+      $("sshInlineInput").disabled=!inlineReady;
+      $("sshInlineSend").disabled=!inlineReady;
     }
     async function loadSshState(nodeId){
       sshNodeId=nodeId||"";
@@ -749,6 +773,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       if(!sshNodeId){$("sshNodeName").textContent="Нода не выбрана";sshHost.value="";sshUser.value="";sshFingerprint.value="";renderSshState();return}
       const node=(lastOverview?.nodes||[]).find(n=>n.node_id===sshNodeId);
       $("sshNodeName").textContent=(node?.hostname||sshNodeId)+" · "+sshNodeId;
+      resetSshInline(node);
       try{
         const data=await api(`/api/v1/architect/nodes/${encodeURIComponent(sshNodeId)}/ssh`);
         sshState=data.ssh||{};
@@ -775,9 +800,58 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
         setTimeout(()=>loadSshState(sshNodeId),2500);
       }catch(e){toast("SSH",e.message,"bad")}
     }
+    async function waitForSshInlineCommand(commandId){
+      const delays=[450,650,900,1200,1600,2200,3000];
+      for(const delay of delays){
+        await new Promise(resolve=>setTimeout(resolve,delay));
+        const data=await api(`/api/v1/architect/nodes/${encodeURIComponent(sshNodeId)}/commands/${encodeURIComponent(commandId)}`);
+        const command=data.command||{};
+        if(command.status==="completed"){
+          const result=command.result||{};
+          appendSshInline(result.output||"(no output)");
+          return;
+        }
+        if(command.status==="failed"){
+          appendSshInline("[command failed]");
+          return;
+        }
+      }
+      appendSshInline("[still pending — use the node only after it is online]");
+    }
+    async function sendSshInlineCommand(){
+      if(!sshNodeId||sshInlineBusy)return;
+      const verb=$("sshInlineInput").value.trim();
+      if(!sshInlineCommands.has(verb)){
+        appendSshInline(`citadel> ${verb||"(empty)"}\nDENIED: command is not in the CITADEL allow-list. Type help.`);
+        return;
+      }
+      const node=selectedSshNode();
+      if(!node||!versionAtLeast(node.agent_version,"0.3.31")){
+        appendSshInline(`citadel> ${verb}\n[agent 0.3.31+ required]`);
+        return;
+      }
+      sshInlineBusy=true;renderSshState();
+      $("sshInlineInput").value="";
+      appendSshInline(`citadel> ${verb}`);
+      try{
+        const data=await api(`/api/v1/architect/nodes/${encodeURIComponent(sshNodeId)}/commands`,{
+          method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify({command_type:"ssh_console",command:verb})
+        });
+        const commandId=data?.command?.command_id;
+        if(!commandId)throw new Error("command_id_missing");
+        await waitForSshInlineCommand(commandId);
+      }catch(e){
+        appendSshInline(`[error: ${e.message}]`);
+      }finally{
+        sshInlineBusy=false;renderSshState();$("sshInlineInput").focus();
+      }
+    }
     sshHost.addEventListener("input",renderSshState);sshUser.addEventListener("input",renderSshState);sshFingerprint.addEventListener("input",renderSshState);
     $("saveSshButton").addEventListener("click",saveSshState);
     $("probeSshButton").addEventListener("click",probeSsh);
+    $("sshInlineSend").addEventListener("click",sendSshInlineCommand);
+    $("sshInlineInput").addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();sendSshInlineCommand()}});
     $("copySshBootstrapButton").addEventListener("click",()=>navigator.clipboard.writeText(sshBootstrapCommand).then(()=>toast("SSH","Windows bootstrap command copied")));
     $("copySshButton").addEventListener("click",()=>navigator.clipboard.writeText($("sshCommand").textContent).then(()=>toast("SSH","Command copied")));
     $("openSshButton").addEventListener("click",()=>{const host=safeHost(sshHost.value);if(host&&sshReadyForBrowser())window.open(`https://${host}`,"_blank","noopener,noreferrer")});
