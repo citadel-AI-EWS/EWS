@@ -35,7 +35,12 @@ const ALLOWED_REPORT_SENSITIVITIES = new Set([
 ]);
 const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
-const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe"]);
+const SSH_CONSOLE_COMMANDS = new Set([
+  "help", "status", "hostname", "uptime", "cpu", "memory", "disk", "network",
+  "agent-status", "agent-logs", "lmstudio-status", "diagnostics", "ping-controller", "exit"
+]);
+const MAX_SSH_CONSOLE_OUTPUT_BYTES = 24 * 1024;
+const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe", "ssh_console"]);
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
   version: "0.3.30",
@@ -135,6 +140,36 @@ function requireString(value, field, maxLength) {
     throw new ApiError(400, `invalid_${field}`);
   }
   return normalized;
+}
+
+function normalizeSshConsoleCommand(value) {
+  const command = requireString(value, "ssh_console_command", 32);
+  if (!SSH_CONSOLE_COMMANDS.has(command)) {
+    throw new ApiError(400, "ssh_console_command_not_allowed");
+  }
+  return command;
+}
+
+function normalizeSshConsoleResult(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ApiError(400, "invalid_ssh_console_result");
+  }
+  const keys = Object.keys(value);
+  if (keys.some((key) => !["output", "exit_code"].includes(key))) {
+    throw new ApiError(400, "invalid_ssh_console_result");
+  }
+  if (typeof value.output !== "string") {
+    throw new ApiError(400, "invalid_ssh_console_output");
+  }
+  const outputBytes = new TextEncoder().encode(value.output).length;
+  if (outputBytes > MAX_SSH_CONSOLE_OUTPUT_BYTES) {
+    throw new ApiError(413, "ssh_console_output_too_large");
+  }
+  const exitCode = Number(value.exit_code);
+  if (!Number.isInteger(exitCode) || exitCode < 0 || exitCode > 255) {
+    throw new ApiError(400, "invalid_ssh_console_exit_code");
+  }
+  return { output: value.output, exit_code: exitCode };
 }
 
 function optionalString(value, field, maxLength) {
@@ -839,6 +874,7 @@ async function ensureCommandStorage(env) {
             status TEXT NOT NULL DEFAULT 'pending',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             completed_at TEXT,
+            result_json TEXT,
             FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
           )
         `),
@@ -890,6 +926,13 @@ async function ensureCommandStorage(env) {
         } catch (error) {
           // Concurrent requests can race the one-time repair. A duplicate-column
           // result means the other request already completed the same safe repair.
+          if (!String(error).toLowerCase().includes("duplicate column")) throw error;
+        }
+      }
+      if (!commandColumnNames.has("result_json")) {
+        try {
+          await env.DB.prepare("ALTER TABLE commands ADD COLUMN result_json TEXT").run();
+        } catch (error) {
           if (!String(error).toLowerCase().includes("duplicate column")) throw error;
         }
       }
@@ -5285,7 +5328,7 @@ async function commandsForNode(env, node) {
 }
 
 async function acknowledgeCommand(request, env, nodeId, commandId, url) {
-  const { bytes: bodyBytes, text: bodyText } = await readBody(request, 8 * 1024);
+  const { bytes: bodyBytes, text: bodyText } = await readBody(request, 32 * 1024);
   const node = await authenticateNode(request, env, nodeId, url, bodyBytes);
   const body = parseJsonObject(bodyText);
   const status = requireString(body.status, "status", 16);
@@ -5309,7 +5352,20 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
     throw new ApiError(409, "invalid_command_transition");
   }
 
-  const detailsJson = JSON.stringify({ status });
+  let commandResult = null;
+  if (body.result !== undefined) {
+    if (current.command_type !== "ssh_console" || !["completed", "failed"].includes(status)) {
+      throw new ApiError(400, "command_result_not_allowed");
+    }
+    commandResult = normalizeSshConsoleResult(body.result);
+  } else if (current.command_type === "ssh_console" && status === "completed") {
+    throw new ApiError(400, "ssh_console_result_required");
+  }
+  const commandResultJson = commandResult ? JSON.stringify(commandResult) : null;
+  const detailsJson = JSON.stringify({
+    status,
+    result_bytes: commandResult ? new TextEncoder().encode(commandResult.output).length : 0
+  });
   const statements = [
     env.DB.prepare(`
       UPDATE commands
@@ -5317,11 +5373,15 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
           completed_at = CASE
             WHEN ? IN ('completed', 'failed') THEN CURRENT_TIMESTAMP
             ELSE completed_at
+          END,
+          result_json = CASE
+            WHEN ? IS NOT NULL THEN ?
+            ELSE result_json
           END
       WHERE command_id = ?
         AND node_id = ?
         AND status = ?
-    `).bind(status, status, commandId, nodeId, current.status),
+    `).bind(status, status, commandResultJson, commandResultJson, commandId, nodeId, current.status),
     env.DB.prepare(`
       INSERT INTO audit_events (
         actor_type, actor_id, action, target_type, target_id, details_json
@@ -6521,6 +6581,9 @@ async function architectCreateCommand(request, env, nodeId) {
   if ((commandType.startsWith("lmstudio_") || commandType === "hybrid_query") && !agentVersionAtLeast(node.agent_version, "0.3.19")) {
     throw new ApiError(409, "agent_update_required");
   }
+  if (commandType === "ssh_console" && !agentVersionAtLeast(node.agent_version, "0.3.31")) {
+    throw new ApiError(409, "agent_update_required");
+  }
   if (commandType === "pause" && node.status === "paused") {
     throw new ApiError(409, "node_already_paused");
   }
@@ -6546,6 +6609,8 @@ async function architectCreateCommand(request, env, nodeId) {
     payload = { purge_data: body.purge_data === true };
   } else if (commandType === "lmstudio_probe" || commandType === "ssh_probe") {
     payload = {};
+  } else if (commandType === "ssh_console") {
+    payload = { command: normalizeSshConsoleCommand(body.command) };
   } else if (commandType === "lmstudio_model_get" || commandType === "lmstudio_model_load") {
     await ensureNodeAiStorage(env);
     const aiState = await env.DB.prepare(
@@ -6627,6 +6692,31 @@ async function architectCreateCommand(request, env, nodeId) {
       created_at: createdAt
     }
   }, 201);
+}
+
+async function architectGetCommand(request, env, nodeId, commandId) {
+  await authenticateArchitect(request, env);
+  await ensureCommandStorage(env);
+  const command = await env.DB.prepare(`
+    SELECT command_id, node_id, command_type, status, created_at, completed_at, result_json
+    FROM commands
+    WHERE command_id = ? AND node_id = ?
+  `).bind(commandId, nodeId).first();
+  if (!command) throw new ApiError(404, "command_not_found");
+  return json({
+    ok: true,
+    command: {
+      command_id: command.command_id,
+      node_id: command.node_id,
+      command_type: command.command_type,
+      status: command.status,
+      created_at: command.created_at,
+      completed_at: command.completed_at,
+      result: command.command_type === "ssh_console"
+        ? safeJson(command.result_json, null)
+        : null
+    }
+  });
 }
 
 async function nodeUpdateAiState(request, env, nodeId, url) {
@@ -7747,6 +7837,20 @@ async function handleApi(request, env, url, executionCtx = null) {
     return request.method === "POST"
       ? architectWakeNode(request, env, decodeURIComponent(architectWakeMatch[1]))
       : methodNotAllowed(["POST"]);
+  }
+
+  const architectCommandStatusMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/nodes\/([^/]+)\/commands\/([^/]+)$/
+  );
+  if (architectCommandStatusMatch) {
+    return request.method === "GET"
+      ? architectGetCommand(
+          request,
+          env,
+          decodeURIComponent(architectCommandStatusMatch[1]),
+          decodeURIComponent(architectCommandStatusMatch[2])
+        )
+      : methodNotAllowed(["GET"]);
   }
 
   const architectMatch = url.pathname.match(
