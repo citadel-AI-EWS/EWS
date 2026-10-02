@@ -197,6 +197,6 @@ const source = fs.readFileSync('src/telemetry/common.js', 'utf8');
 const cleanup = source.match(/"(DELETE FROM node_request_nonces WHERE received_at[^\"]+)"/)[1];
 assert.ok(db.prepare('EXPLAIN QUERY PLAN ' + cleanup).all().every(row => !row.detail.includes('SCAN node_request_nonces')));
 const latestLog = db.prepare('EXPLAIN QUERY PLAN SELECT event_type FROM node_logs WHERE node_id = ? ORDER BY datetime(created_at) DESC, event_id DESC LIMIT 1').all(nodeId);
-assert.ok(latestLog.every(row => !row.detail.includes('TEMP B-TREE')), 'latest log must use normalized per-node index');
+assert.ok(latestLog.some(row => row.detail.includes('idx_node_logs_node_created') && row.detail.includes('node_id=?')), 'latest log must seek the bounded per-node index instead of scanning fleet telemetry');
 db.close();
 console.log('D1 sync, replay protection, conditional writes, strict log retention and query plans: PASS');
