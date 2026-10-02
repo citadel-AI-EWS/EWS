@@ -19,6 +19,13 @@ for (const required of [
   "Math.floor(Math.random()*terminalPhrases.length)",
   "CITADEL CYBER ART LAYER v1",
   "CITADEL CHROME 80S APPROVED MOCKUP v2",
+  "CITADEL EXACT CONCEPT LOGIN + OS NODE ICONS v3",
+  "function nodeOsKind",
+  "function nodeOsAvatar",
+  "function nodeOsBadge",
+  "os-windows",
+  "os-linux",
+  "RED ARMY   ·   BLACK ARMY   ·   SHADOW ARMY",
   'id="chromeSubbrand"',
   'id="chromeStats"',
   'id="chromeLogsPreview"',
@@ -36,7 +43,6 @@ for (const required of [
   "art-hood-right",
   "document.body.classList.toggle('authenticated',Boolean(token))",
   "prefers-reduced-motion:reduce",
-  "avatar=el('div','>_','node-avatar')",
 ]) {
   assert.ok(hub.includes(required), `missing terminal-theme marker: ${required}`);
 }
@@ -54,3 +60,9 @@ assert.match(hub, /class="brand-lockup"[\s\S]*CITADEL[\s\S]*chromeSubbrand/);
 assert.match(hub, /id="auth"[\s\S]*ACCESS KEY[\s\S]*LOGIN/);
 assert.match(hub, /chrome-upper-grid[\s\S]*id="nodes"[\s\S]*SYSTEM LOGS/);
 assert.match(hub, /chrome-lower-grid[\s\S]*SSH ACCESS[\s\S]*AI \/ LM STUDIO[\s\S]*id="d1Overview"[\s\S]*id="taskExecution"/);
+
+assert.ok(!hub.includes("avatar=el('div','>_','node-avatar')"), "legacy terminal-only node avatar returned");
+assert.match(hub, /function nodeOsKind\(n\)[\s\S]*windows[\s\S]*linux/);
+assert.match(hub, /function nodeOsAvatar\(n\)[\s\S]*os-avatar[\s\S]*viewBox/);
+assert.match(hub, /nodeOsBadge\(n\)[\s\S]*WINDOWS[\s\S]*LINUX/);
+assert.match(hub, /body:not\(\.authenticated\) \.art-hood-right[\s\S]*body:not\(\.authenticated\) \.art-globe-left/);
