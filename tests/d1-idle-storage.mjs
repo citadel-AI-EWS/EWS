@@ -88,13 +88,13 @@ assert.equal(response.status, 400);
 response = await signed('sync', {ai: []});
 assert.equal(response.status, 400);
 
-// Changed state persists immediately; liveness/metrics refresh after one minute.
+// Changed snapshots persist immediately; unchanged liveness/metrics refresh after four minutes.
 response = await signed('sync', {...payload, ai: {installed: true, server_running: true, loaded_model: 'test-model'},
   heartbeat: {...payload.heartbeat, network: {lan_ipv4: '192.168.1.11'}}});
 assert.equal(response.status, 200);
 assert.equal(db.prepare('SELECT lan_ipv4 FROM node_network_state').get().lan_ipv4, '192.168.1.11');
 assert.equal(db.prepare('SELECT loaded_model FROM node_ai_state').get().loaded_model, 'test-model');
-db.prepare("UPDATE nodes SET last_seen_at = datetime('now', '-61 seconds') WHERE node_id = ?").run(nodeId);
+db.prepare("UPDATE nodes SET last_seen_at = datetime('now', '-241 seconds') WHERE node_id = ?").run(nodeId);
 response = await signed('sync', {heartbeat: {...payload.heartbeat, cpu_percent: 42}});
 assert.equal(response.status, 200);
 assert.equal(db.prepare('SELECT cpu_percent FROM nodes').get().cpu_percent, 42);
