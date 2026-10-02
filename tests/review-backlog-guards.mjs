@@ -36,8 +36,8 @@ need(index.includes("LEFT JOIN node_numbers AS nn"), "Architect node number join
 need(!readme.includes("-EnrollmentToken"), "README still documents EnrollmentToken");
 need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_token");
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
-need(agentV1.includes('VERSION = "0.3.30"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.30"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.31"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.31"'), "v2 release not bumped");
 need(agentV1.includes("hardware_snapshot"), "node hardware snapshot missing");
 need(agentV1.includes("gpu_inventory"), "GPU/VRAM discovery missing");
 need(agentV1.includes('"hardware"'), "hardware heartbeat payload missing");
@@ -65,6 +65,17 @@ need(!sshMigration.toLowerCase().includes("private_key"), "SSH migration must no
 need(sshConsole.includes("ALLOWED_COMMANDS"), "restricted SSH allow-list missing");
 need(!sshConsole.includes("import subprocess"), "restricted SSH console must not import subprocess");
 need(!sshConsole.includes("shell=True"), "restricted SSH console must never enable a shell");
+need(agentV1.includes('"ssh_console"'), "signed inline SSH console command missing");
+need(agentV1.includes("validate_ssh_console_payload"), "agent inline SSH allow-list validation missing");
+need(agentV1.includes("execute_ssh_console_command"), "agent inline SSH execution missing");
+need(index.includes("SSH_CONSOLE_COMMANDS"), "Controller inline SSH allow-list missing");
+need(index.includes("MAX_SSH_CONSOLE_OUTPUT_BYTES = 24 * 1024"), "inline SSH result bound missing");
+need(index.includes("ssh_console_result_required"), "Controller must require inline SSH command results");
+need(index.includes("result_json TEXT"), "runtime command result storage missing");
+need(hub.includes('id="sshInlinePanel"') && hub.includes('id="sshInlineInput"'), "Hub inline restricted terminal missing");
+need(hub.includes('command_type:"ssh_console"'), "Hub does not dispatch signed inline SSH commands");
+need(hub.includes('versionAtLeast(node.agent_version,"0.3.31")'), "Hub inline SSH must require agent 0.3.31+");
+need(!hub.includes('command_type:"shell"'), "Hub must not dispatch arbitrary shell commands");
 need(agentV1.includes('"CitadelSshConsole.cs"') && agentV1.includes('"configure_restricted_ssh.ps1"'), "agent update allow-list must accept signed SSH bootstrap assets");
 need(agentV1.includes('"windows_restricted_ssh_bootstrap"'), "Windows SSH bootstrap capability missing");
 need(index.includes("restricted_policy_ready"), "Controller restricted SSH policy gate missing");
@@ -257,9 +268,9 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.30"'), "Controller release not bumped");
-need(index.includes('path: "CitadelSshConsole.cs"'), "0.3.30 release must deliver the restricted SSH console source");
-need(index.includes('path: "configure_restricted_ssh.ps1"'), "0.3.30 release must deliver the restricted SSH bootstrap");
+need(index.includes('version: "0.3.31"'), "Controller release not bumped");
+need(index.includes('path: "CitadelSshConsole.cs"'), "0.3.31 release must deliver the restricted SSH console source");
+need(index.includes('path: "configure_restricted_ssh.ps1"'), "0.3.31 release must deliver the restricted SSH bootstrap");
 console.log("Review backlog guards: PASS");
 
 need(agentV1.includes("lmstudio_heartbeat_probe_failed"), "routine heartbeat does not refresh LM Studio readiness");
