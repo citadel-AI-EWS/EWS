@@ -119,7 +119,7 @@ export function createSshGateway({secret, targets, hubOrigin, idleMs = 600000, m
         if (error) return fail('ssh_shell_unavailable');
         if (done) return stream.destroy();
         const preface = [];
-        let prefaceBytes = 0, restrictedVerified = false;
+        let prefaceBytes = 0, handshakeStage = 'banner';
         const forward = data => {
           if (done || ws.readyState !== WebSocket.OPEN) return;
           lastActivity = Date.now();
@@ -128,15 +128,21 @@ export function createSshGateway({secret, targets, hubOrigin, idleMs = 600000, m
           if (channel && ws.bufferedAmount > 512 * 1024) channel.pause();
         };
         const verifyOutput = data => {
-          if (restrictedVerified) return forward(data);
+          if (handshakeStage === 'ready') return forward(data);
           preface.push(Buffer.from(data)); prefaceBytes += data.length;
-          if (prefaceBytes > 16 * 1024) return fail('ssh_restricted_console_required');
+          if (prefaceBytes > 24 * 1024) return fail('ssh_restricted_console_required');
           const text = Buffer.concat(preface).toString('utf8');
-          if (!text.includes(RESTRICTED_CONSOLE_BANNER)) return;
-          restrictedVerified = true; if (handshakeTimer) clearTimeout(handshakeTimer); handshakeTimer = null;
+          if (handshakeStage === 'banner' && text.includes(RESTRICTED_CONSOLE_BANNER)) {
+            handshakeStage = 'help';
+            stream.write('help\r');
+            return;
+          }
+          if (handshakeStage !== 'help' || !text.includes('Allowed commands:') || !text.includes('ping-controller')) return;
+          handshakeStage = 'ready'; if (handshakeTimer) clearTimeout(handshakeTimer); handshakeTimer = null;
           channel = stream;
           forward(Buffer.concat(preface));
-          audit({event: 'ssh.opened', node_id: claims.node_id, actor_id: claims.actor_id, session_id: claims.jti, restricted_console: true});
+          audit({event: 'ssh.opened', node_id: claims.node_id, actor_id: claims.actor_id, session_id: claims.jti,
+            restricted_console: true, restricted_probe: 'help'});
           send({type: 'ready', node_id: claims.node_id, session_id: claims.jti, expires_at: new Date(claims.session_exp * 1000).toISOString()});
         };
         handshakeTimer = setTimeout(() => fail('ssh_restricted_console_required'), 5000);
