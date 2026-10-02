@@ -16,7 +16,7 @@ on:
         required: false
         type: string
       tunnel_name:
-        description: "Optional dedicated Cloudflare Tunnel name"
+        description: "Optional dedicated Tunnel name; must start with citadel-ssh-"
         required: false
         type: string
       session_duration:
