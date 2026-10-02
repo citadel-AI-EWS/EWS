@@ -321,6 +321,64 @@ need(index.includes("WHERE changes() = 1") && index.includes("INSERT INTO ssh_co
 need(sshConsoleResultsMigration.includes("CREATE TABLE IF NOT EXISTS ssh_console_results"), "inline SSH results migration missing");
 need(hub.includes('id="sshInlinePanel"'), "Hub inline restricted terminal missing");
 need(hub.includes("appendSshInline(text,nodeId=sshNodeId)") && hub.includes("if(nodeId!==sshNodeId)return false"), "Hub inline terminal stale-node result guard missing");
+const sshLoadStart = hub.indexOf("async function loadSshState");
+const sshLoadEnd = hub.indexOf("async function saveSshState", sshLoadStart);
+const sshLoadBlock = hub.slice(sshLoadStart, sshLoadEnd);
+need(sshLoadStart >= 0 && sshLoadEnd > sshLoadStart, "Hub SSH state loader missing");
+need(
+  sshLoadBlock.includes("const selectionGeneration=sshSelectionGeneration;") &&
+  sshLoadBlock.includes("const loadGeneration=++sshLoadGeneration;") &&
+  sshLoadBlock.includes("sshSelectionGeneration!==selectionGeneration") &&
+  sshLoadBlock.includes("sshLoadGeneration!==loadGeneration"),
+  "Hub SSH state loader does not reject stale same-node selection responses"
+);
+const sshSelectedPathStart = sshLoadBlock.indexOf("const node=");
+const sshSelectedPath = sshLoadBlock.slice(sshSelectedPathStart);
+const sshLoadClear = 'sshHost.value="";sshUser.value="";sshFingerprint.value="";';
+const sshSelectedClearIndex = sshSelectedPath.indexOf(sshLoadClear);
+const sshSelectedRenderIndex = sshSelectedPath.indexOf("renderSshState();");
+const sshSelectedAwaitIndex = sshSelectedPath.indexOf("await api(");
+need(
+  sshSelectedPathStart >= 0 &&
+  sshSelectedClearIndex >= 0 &&
+  sshSelectedRenderIndex >= 0 &&
+  sshSelectedAwaitIndex >= 0 &&
+  sshSelectedClearIndex < sshSelectedAwaitIndex &&
+  sshSelectedRenderIndex < sshSelectedAwaitIndex,
+  "Hub SSH selected-node path leaves stale Browser SSH controls active while a new node loads"
+);
+need(
+  hub.includes('const sshDirtyFields=new Set();') &&
+  hub.includes('if(!sshDirtyFields.has("host"))sshHost.value=state?.public_hostname||"";') &&
+  hub.includes('if(!sshDirtyFields.has("user"))sshUser.value=state?.ssh_user||"";') &&
+  hub.includes('if(!sshDirtyFields.has("fingerprint"))sshFingerprint.value=state?.host_key_fingerprint||"";') &&
+  sshLoadBlock.includes("if(selectionChanged)") &&
+  sshLoadBlock.includes("sshDirtyFields.clear();"),
+  "Hub SSH refresh does not preserve dirty fields or clear them on node selection changes"
+);
+const sshSaveStart = hub.indexOf("async function saveSshState");
+const sshSaveEnd = hub.indexOf("async function probeSsh", sshSaveStart);
+const sshSaveBlock = hub.slice(sshSaveStart, sshSaveEnd);
+need(
+  sshSaveBlock.includes("const selectionGeneration=sshSelectionGeneration;") &&
+  sshSaveBlock.includes("const saveGeneration=++sshSaveGeneration;") &&
+  sshSaveBlock.includes("sshSelectionGeneration!==selectionGeneration") &&
+  sshSaveBlock.includes("sshSaveGeneration!==saveGeneration"),
+  "Hub SSH save can apply a stale response after a selection cycle"
+);
+need(
+  (sshSaveBlock.match(/\+\+sshLoadGeneration;/g)||[]).length >= 2,
+  "Hub SSH save must invalidate loads both when saving starts and after it commits"
+);
+const sshProbeStart = hub.indexOf("async function probeSsh");
+const sshProbeEnd = hub.indexOf("async function waitForSshInlineCommand", sshProbeStart);
+const sshProbeBlock = hub.slice(sshProbeStart, sshProbeEnd);
+need(
+  sshProbeBlock.includes("const nodeId=sshNodeId;") &&
+  sshProbeBlock.includes("const selectionGeneration=sshSelectionGeneration;") &&
+  sshProbeBlock.includes("setTimeout(()=>{if(sshNodeId===nodeId&&sshSelectionGeneration===selectionGeneration)loadSshState(nodeId)},2500);"),
+  "Hub SSH probe can refresh a previously selected node or ignore selection generation"
+);
 need(hub.includes('command_type:"ssh_console"'), "Hub inline terminal does not dispatch signed restricted commands");
 need(hub.includes('versionAtLeast(sshNode.agent_version,"0.3.32")'), "Hub inline terminal must require agent 0.3.32");
 need(sshConsole.includes("configured_dir = config.get(\"data_dir\")"), "restricted agent-logs must honor configured data_dir");

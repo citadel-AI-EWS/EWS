@@ -741,7 +741,13 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
 
     const sshHost=$("sshHost"),sshUser=$("sshUser"),sshFingerprint=$("sshFingerprint");
     const sshInlineCommands=new Set(["help","status","hostname","uptime","cpu","memory","disk","network","agent-status","agent-logs","lmstudio-status","diagnostics","ping-controller","exit"]);
-    let sshNodeId="",sshState=null,sshInlineBusy=false;
+    let sshNodeId="",sshState=null,sshInlineBusy=false,sshSelectionGeneration=0,sshLoadGeneration=0,sshSaveGeneration=0;
+    const sshDirtyFields=new Set();
+    function applySshServerFields(state){
+      if(!sshDirtyFields.has("host"))sshHost.value=state?.public_hostname||"";
+      if(!sshDirtyFields.has("user"))sshUser.value=state?.ssh_user||"";
+      if(!sshDirtyFields.has("fingerprint"))sshFingerprint.value=state?.host_key_fingerprint||"";
+    }
     function versionAtLeast(value,minimum){const parse=v=>String(v||"").split(".").slice(0,3).map(x=>Number.parseInt(x,10));const a=parse(value),b=parse(minimum);if(a.length<3||b.length<3||a.some(Number.isNaN)||b.some(Number.isNaN))return false;for(let i=0;i<3;i++){if(a[i]!==b[i])return a[i]>b[i]}return true}
     function appendSshInline(text,nodeId=sshNodeId){if(nodeId!==sshNodeId)return false;const out=$("sshInlineOutput");out.textContent+=(out.textContent?"\n":"")+String(text??"");out.scrollTop=out.scrollHeight;return true}
     function resetSshInline(node){$("sshInlineOutput").textContent=`CITADEL restricted terminal · ${node?.hostname||node?.node_id||"no node"}\nType help to see the allow-list.`;}
@@ -768,37 +774,68 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       $("sshInlineSend").disabled=!inlineReady;
     }
     async function loadSshState(nodeId){
-      sshNodeId=nodeId||"";
-      sshState=null;
-      if(!sshNodeId){$("sshNodeName").textContent="Нода не выбрана";sshHost.value="";sshUser.value="";sshFingerprint.value="";renderSshState();return}
-      const node=(lastOverview?.nodes||[]).find(n=>n.node_id===sshNodeId);
-      $("sshNodeName").textContent=(node?.hostname||sshNodeId)+" · "+sshNodeId;
-      resetSshInline(node);
-      try{
-        const data=await api(`/api/v1/architect/nodes/${encodeURIComponent(sshNodeId)}/ssh`);
-        sshState=data.ssh||{};
-        sshHost.value=sshState.public_hostname||"";
-        sshUser.value=sshState.ssh_user||"";
-        sshFingerprint.value=sshState.host_key_fingerprint||"";
-      }catch(e){toast("SSH",e.message,"bad")}
+      const nextNodeId=nodeId||"";
+      const selectionChanged=nextNodeId!==sshNodeId;
+      if(selectionChanged){
+        sshNodeId=nextNodeId;
+        sshSelectionGeneration+=1;
+        sshState=null;
+        sshDirtyFields.clear();
+      }
+      const requestedNodeId=sshNodeId;
+      const selectionGeneration=sshSelectionGeneration;
+      const loadGeneration=++sshLoadGeneration;
+      if(!requestedNodeId){$("sshNodeName").textContent="Нода не выбрана";sshHost.value="";sshUser.value="";sshFingerprint.value="";renderSshState();return}
+      const node=(lastOverview?.nodes||[]).find(n=>n.node_id===requestedNodeId);
+      $("sshNodeName").textContent=(node?.hostname||requestedNodeId)+" · "+requestedNodeId;
+      if(selectionChanged){
+        sshHost.value="";sshUser.value="";sshFingerprint.value="";
+        resetSshInline(node);
+      }
       renderSshState();
+      try{
+        const data=await api(`/api/v1/architect/nodes/${encodeURIComponent(requestedNodeId)}/ssh`);
+        if(sshNodeId!==requestedNodeId||sshSelectionGeneration!==selectionGeneration||sshLoadGeneration!==loadGeneration)return;
+        sshState=data.ssh||{};
+        applySshServerFields(sshState);
+      }catch(e){
+        if(sshNodeId===requestedNodeId&&sshSelectionGeneration===selectionGeneration&&sshLoadGeneration===loadGeneration)toast("SSH",e.message,"bad");
+      }
+      if(sshNodeId===requestedNodeId&&sshSelectionGeneration===selectionGeneration&&sshLoadGeneration===loadGeneration)renderSshState();
     }
     async function saveSshState(){
       if(!sshNodeId)return;
-      const host=safeHost(sshHost.value),user=safeUser(sshUser.value);
-      if(!host||!user)return toast("SSH","Укажите корректные Cloudflare hostname и SSH user.","bad");
+      const nodeId=sshNodeId;
+      const selectionGeneration=sshSelectionGeneration;
+      const saveGeneration=++sshSaveGeneration;
+      ++sshLoadGeneration;
+      const submittedHost=safeHost(sshHost.value),submittedUser=safeUser(sshUser.value),submittedFingerprint=sshFingerprint.value.trim();
+      if(!submittedHost||!submittedUser)return toast("SSH","Укажите корректные Cloudflare hostname и SSH user.","bad");
       try{
-        const data=await api(`/api/v1/architect/nodes/${encodeURIComponent(sshNodeId)}/ssh`,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({public_hostname:host,ssh_user:user,host_key_fingerprint:sshFingerprint.value.trim()||null})});
-        sshState=data.ssh||sshState;toast("SSH","Публичная SSH-конфигурация сохранена.");renderSshState();
-      }catch(e){toast("SSH",e.message,"bad")}
+        const data=await api(`/api/v1/architect/nodes/${encodeURIComponent(nodeId)}/ssh`,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({public_hostname:submittedHost,ssh_user:submittedUser,host_key_fingerprint:submittedFingerprint||null})});
+        if(sshNodeId!==nodeId||sshSelectionGeneration!==selectionGeneration||sshSaveGeneration!==saveGeneration)return;
+        ++sshLoadGeneration;
+        sshState=data.ssh||sshState;
+        if(safeHost(sshHost.value)===submittedHost)sshDirtyFields.delete("host");
+        if(safeUser(sshUser.value)===submittedUser)sshDirtyFields.delete("user");
+        if(sshFingerprint.value.trim()===submittedFingerprint)sshDirtyFields.delete("fingerprint");
+        applySshServerFields(sshState);
+        toast("SSH","Публичная SSH-конфигурация сохранена.");renderSshState();
+      }catch(e){
+        if(sshNodeId===nodeId&&sshSelectionGeneration===selectionGeneration&&sshSaveGeneration===saveGeneration)toast("SSH",e.message,"bad");
+      }
     }
     async function probeSsh(){
       if(!sshNodeId)return;
+      const nodeId=sshNodeId;
+      const selectionGeneration=sshSelectionGeneration;
       try{
-        await api(`/api/v1/architect/nodes/${encodeURIComponent(sshNodeId)}/commands`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({command_type:"ssh_probe"})});
-        toast("SSH","Проверка SSH поставлена в очередь.");
-        setTimeout(()=>loadSshState(sshNodeId),2500);
-      }catch(e){toast("SSH",e.message,"bad")}
+        await api(`/api/v1/architect/nodes/${encodeURIComponent(nodeId)}/commands`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({command_type:"ssh_probe"})});
+        if(sshNodeId===nodeId&&sshSelectionGeneration===selectionGeneration)toast("SSH","Проверка SSH поставлена в очередь.");
+        setTimeout(()=>{if(sshNodeId===nodeId&&sshSelectionGeneration===selectionGeneration)loadSshState(nodeId)},2500);
+      }catch(e){
+        if(sshNodeId===nodeId&&sshSelectionGeneration===selectionGeneration)toast("SSH",e.message,"bad");
+      }
     }
     async function waitForSshInlineCommand(nodeId,commandId){
       const delays=[1000,3000,5000,8000,12000,16000];
@@ -847,7 +884,9 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
         sshInlineBusy=false;renderSshState();if(sshNodeId===nodeId)$("sshInlineInput").focus();
       }
     }
-    sshHost.addEventListener("input",renderSshState);sshUser.addEventListener("input",renderSshState);sshFingerprint.addEventListener("input",renderSshState);
+    sshHost.addEventListener("input",()=>{sshDirtyFields.add("host");renderSshState()});
+    sshUser.addEventListener("input",()=>{sshDirtyFields.add("user");renderSshState()});
+    sshFingerprint.addEventListener("input",()=>{sshDirtyFields.add("fingerprint");renderSshState()});
     $("saveSshButton").addEventListener("click",saveSshState);
     $("probeSshButton").addEventListener("click",probeSsh);
     $("sshInlineSend").addEventListener("click",sendSshInlineCommand);

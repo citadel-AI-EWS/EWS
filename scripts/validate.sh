@@ -44,7 +44,7 @@ for required in (
     "cloudflared access ssh --hostname %h",
     "browser_terminal_local_ready",
     "sshReadyForBrowser",
-    "/api/v1/architect/nodes/${encodeURIComponent(sshNodeId)}/ssh",
+    "/api/v1/architect/nodes/${encodeURIComponent(requestedNodeId)}/ssh",
     "prefers-reduced-motion",
     "system_inventory",
     "/api/v1/architect/nodes/${encodeURIComponent(node.node_id)}/wake",
