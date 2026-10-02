@@ -108,7 +108,13 @@ async function ensureTunnel(accountId, tunnelName, apply) {
   const tunnels = await listAll(`/accounts/${accountId}/cfd_tunnel?is_deleted=false`);
   const exact = tunnels.filter(t => t?.name === tunnelName);
   if (exact.length > 1) fail("duplicate_tunnel_name");
-  if (exact.length === 1) return {tunnel: exact[0], created: false};
+  if (exact.length === 1) {
+    const existing = exact[0];
+    if (String(existing?.config_src || "") !== "cloudflare") {
+      fail("existing_tunnel_is_not_remotely_managed");
+    }
+    return {tunnel: existing, created: false};
+  }
   if (!apply) return {tunnel: {id: "<planned>", name: tunnelName, config_src: "cloudflare"}, created: true};
   const {body} = await cf(`/accounts/${accountId}/cfd_tunnel`, {
     method: "POST",
@@ -138,12 +144,13 @@ async function ensureTunnelIngress(accountId, tunnelId, hostname, apply) {
 }
 
 async function ensureDns(zoneId, hostname, tunnelId, apply) {
+  const records = await listAll(`/zones/${zoneId}/dns_records?name=${encodeURIComponent(hostname)}`);
+  if (records.length > 1) fail("multiple_dns_records_for_ssh_hostname");
   if (tunnelId === "<planned>") {
+    if (records.length === 1) fail("ssh_hostname_dns_record_conflicts_with_existing_record");
     return {id: "<planned>", type: "CNAME", name: hostname, content: "<tunnel-id>.cfargotunnel.com", proxied: true};
   }
-  const records = await listAll(`/zones/${zoneId}/dns_records?name=${encodeURIComponent(hostname)}`);
   const desired = `${tunnelId}.cfargotunnel.com`;
-  if (records.length > 1) fail("multiple_dns_records_for_ssh_hostname");
   if (records.length === 1) {
     const record = records[0];
     if (record.type !== "CNAME" || String(record.content).toLowerCase() !== desired.toLowerCase() || record.proxied !== true) {
@@ -160,16 +167,6 @@ async function ensureDns(zoneId, hostname, tunnelId, apply) {
 }
 
 async function ensureAccessApp(accountId, hostname, nodeLabel, sessionDuration, apply) {
-  const apps = await listAll(`/accounts/${accountId}/access/apps`);
-  const matches = apps.filter(app => String(app?.domain || "").toLowerCase() === hostname);
-  if (matches.length > 1) fail("multiple_access_apps_for_ssh_hostname");
-  if (matches.length === 1) {
-    if (matches[0].type !== "ssh") fail("existing_access_app_for_hostname_is_not_browser_ssh");
-    if (!String(matches[0].name || "").startsWith("CITADEL SSH ")) {
-      fail("existing_access_app_for_hostname_is_not_owned_by_citadel");
-    }
-    return {app: matches[0], created: false};
-  }
   const desired = {
     name: `CITADEL SSH ${nodeLabel}`,
     domain: hostname,
@@ -177,13 +174,33 @@ async function ensureAccessApp(accountId, hostname, nodeLabel, sessionDuration, 
     session_duration: sessionDuration,
     app_launcher_visible: false
   };
-  if (!apply) return {app: {id: "<planned>", ...desired}, created: true};
+  const apps = await listAll(`/accounts/${accountId}/access/apps`);
+  const matches = apps.filter(app => String(app?.domain || "").toLowerCase() === hostname);
+  if (matches.length > 1) fail("multiple_access_apps_for_ssh_hostname");
+  if (matches.length === 1) {
+    const existing = matches[0];
+    if (existing.type !== "ssh") fail("existing_access_app_for_hostname_is_not_browser_ssh");
+    if (!String(existing.name || "").startsWith("CITADEL SSH ")) {
+      fail("existing_access_app_for_hostname_is_not_owned_by_citadel");
+    }
+    const durationMismatch = String(existing.session_duration || "") !== sessionDuration;
+    if (!durationMismatch || !apply) {
+      return {app: existing, created: false, updated: false, update_required: durationMismatch};
+    }
+    const {body} = await cf(`/accounts/${accountId}/access/apps/${existing.id}`, {
+      method: "PUT",
+      body: JSON.stringify(desired)
+    });
+    if (!body?.result?.id) fail("updated_access_app_missing_id");
+    return {app: body.result, created: false, updated: true, update_required: false};
+  }
+  if (!apply) return {app: {id: "<planned>", ...desired}, created: true, updated: false, update_required: false};
   const {body} = await cf(`/accounts/${accountId}/access/apps`, {
     method: "POST",
     body: JSON.stringify(desired)
   });
   if (!body?.result?.id) fail("created_access_app_missing_id");
-  return {app: body.result, created: true};
+  return {app: body.result, created: true, updated: false, update_required: false};
 }
 
 function desiredPolicy(hostname, email) {
@@ -278,15 +295,14 @@ async function main() {
   const sessionDuration = normalizeSession(process.env.CITADEL_SSH_SESSION_DURATION || "1h");
   const accountId = readAccountId();
 
-  if (apply) token();
+  token();
 
-  const zone = apply ? await findZone(hostname, accountId) : {id: "<planned>", name: hostname.split(".").slice(-2).join(".")};
-  const {tunnel, created: tunnelCreated} = apply
-    ? await ensureTunnel(accountId, tunnelName, true)
-    : {tunnel: {id: "<planned>", name: tunnelName, config_src: "cloudflare"}, created: true};
+  const zone = await findZone(hostname, accountId);
+  const {tunnel, created: tunnelCreated} = await ensureTunnel(accountId, tunnelName, apply);
   const ingress = await ensureTunnelIngress(accountId, tunnel.id, hostname, apply);
   const dns = await ensureDns(zone.id, hostname, tunnel.id, apply);
-  const {app, created: appCreated} = await ensureAccessApp(accountId, hostname, nodeLabel, sessionDuration, apply);
+  const {app, created: appCreated, updated: appUpdated, update_required: appUpdateRequired} =
+    await ensureAccessApp(accountId, hostname, nodeLabel, sessionDuration, apply);
   const policy = await ensurePolicy(accountId, app.id, hostname, allowedEmail, apply);
   const ca = await ensureCa(accountId, app.id, apply);
 
@@ -298,7 +314,15 @@ async function main() {
     tunnel: {id: tunnel.id, name: tunnel.name, status: tunnel.status || "unknown", created: tunnelCreated},
     ingress,
     dns: {id: dns?.id || null, name: hostname, target: tunnel.id === "<planned>" ? "<tunnel-id>.cfargotunnel.com" : `${tunnel.id}.cfargotunnel.com`},
-    access_app: {id: app.id, domain: hostname, type: app.type || "ssh", created: appCreated},
+    access_app: {
+      id: app.id,
+      domain: hostname,
+      type: app.type || "ssh",
+      created: appCreated,
+      updated: appUpdated,
+      update_required: appUpdateRequired,
+      session_duration: app.session_duration || sessionDuration
+    },
     access_policy: {id: policy?.id || null, decision: "allow", allowed_email: allowedEmail},
     ssh_user: sshUser,
     ca: {id: ca?.id || null, public_key: ca?.public_key || null},
