@@ -5328,7 +5328,7 @@ async function commandsForNode(env, node) {
 }
 
 async function acknowledgeCommand(request, env, nodeId, commandId, url) {
-  const { bytes: bodyBytes, text: bodyText } = await readBody(request, 32 * 1024);
+  const { bytes: bodyBytes, text: bodyText } = await readBody(request, 128 * 1024);
   const node = await authenticateNode(request, env, nodeId, url, bodyBytes);
   const body = parseJsonObject(bodyText);
   const status = requireString(body.status, "status", 16);
