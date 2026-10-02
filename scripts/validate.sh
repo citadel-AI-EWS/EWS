@@ -356,6 +356,8 @@ python tests/ssh-restricted-console.py
 node scripts/provision_cloudflare_ssh.mjs --self-test
 node tests/ssh-provisioning.mjs
 node tests/ssh-terminal-e2e.mjs
+node tests/ssh-relay-workerd.mjs
+python tests/ssh-relay-agent.py
 node --check ui/ssh-terminal.js
 node --check gateway/server.mjs
 node --check gateway/doctor.mjs

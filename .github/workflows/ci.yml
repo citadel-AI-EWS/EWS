@@ -57,6 +57,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: scripts/build_site.sh
       - run: node tests/ssh-terminal-e2e.mjs --browser
+      - run: node tests/ssh-relay-workerd.mjs --browser
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -169,6 +170,8 @@ jobs:
           python -m py_compile agent/citadel_node_v1.py agent/citadel_node_v2.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python agent/citadel_node_v2.py self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/ssh-relay-agent.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Validate Windows Enterprise Probe and legacy-upgrade bootstrap
         shell: pwsh

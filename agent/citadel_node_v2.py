@@ -8,15 +8,23 @@ or any new command capability.
 from __future__ import annotations
 
 import argparse
+import asyncio
+import contextlib
 import hashlib
 import json
+import os
+import sys
 import tempfile
+import threading
+import time
+import urllib.parse
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
 import citadel_node_v1 as v1
 
-VERSION = "0.3.34"
+VERSION = "0.3.35"
 v1.VERSION = VERSION
 v1.USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 
@@ -192,6 +200,16 @@ class Agent(v1.Agent):
             config.data_dir / "agent.jsonl",
             config.data_dir / "telemetry-cursor.json",
         )
+        self._ssh_relay_stop = threading.Event()
+        self._ssh_relay_thread: threading.Thread | None = None
+        self._ssh_relay_enabled = False
+
+    def run(self, once: bool = False) -> int:
+        self._ssh_relay_enabled = not once
+        try:
+            return super().run(once=once)
+        finally:
+            self._ssh_relay_stop.set()
 
     def submit_telemetry(self, payload: dict[str, Any]) -> None:
         node_id = self.require_node_id()
@@ -200,7 +218,162 @@ class Agent(v1.Agent):
     def cycle(self) -> None:
         super().cycle()
         node_id = self.require_node_id()
+        if self._ssh_relay_enabled and (not self._ssh_relay_thread or not self._ssh_relay_thread.is_alive()):
+            self._ssh_relay_thread = threading.Thread(target=self._ssh_relay_worker,
+                args=(node_id,), name="citadel-ssh-relay", daemon=True)
+            self._ssh_relay_thread.start()
         self.telemetry.flush(node_id, self.submit_telemetry)
+
+    def _ssh_relay_worker(self, node_id: str) -> None:
+        try:
+            try:
+                import asyncssh
+                import websockets
+            except ImportError:
+                # Existing nodes receive the core self-update before the installer
+                # can refresh the venv. Install only the fixed, pinned relay runtime.
+                result = v1._citadel_subprocess_run([sys.executable, "-m", "pip", "install",
+                    "--disable-pip-version-check", "asyncssh==2.24.0", "websockets==16.0"],
+                    capture_output=True, text=True, timeout=180, check=False, shell=False)
+                if result.returncode:
+                    raise RuntimeError("ssh_relay_dependency_install_failed")
+                import asyncssh
+                import websockets
+            asyncio.run(self._ssh_relay_loop(node_id, asyncssh, websockets))
+        except Exception as error:
+            self.log.write("ssh_relay_error", error=type(error).__name__ + ": " + str(error)[:160])
+            self._ssh_relay_stop.wait(60)
+
+    async def _ssh_relay_loop(self, node_id, asyncssh, websockets) -> None:
+        from ssh_restricted_console import execute
+
+        host_key = asyncssh.generate_private_key("ssh-ed25519")
+        client_key = asyncssh.generate_private_key("ssh-ed25519")
+        host_public = host_key.export_public_key()
+        client_public = client_key.export_public_key()
+        config_path = self.config_path
+
+        class LocalServer(asyncssh.SSHServer):
+            def begin_auth(self, username):
+                return True
+
+            def public_key_auth_supported(self):
+                return True
+
+            def validate_public_key(self, username, key):
+                return username == "citadel" and key.export_public_key() == client_public
+
+        async def console(process):
+            if process.command:
+                process.exit(2)
+                return
+            process.stdout.write("CITADEL Restricted SSH Console\r\nType 'help'.\r\ncitadel> ")
+            while True:
+                line = await process.stdin.readline()
+                if not line:
+                    break
+                output, done = await asyncio.to_thread(execute, line, config_path)
+                if output:
+                    process.stdout.write(output.replace("\n", "\r\n") + "\r\n")
+                if done:
+                    break
+                process.stdout.write("citadel> ")
+            process.exit(0)
+
+        server = await asyncssh.listen("127.0.0.1", 0, server_host_keys=[host_key],
+            server_factory=LocalServer, process_factory=console)
+        port = server.sockets[0].getsockname()[1]
+        known_hosts = asyncssh.import_known_hosts(
+            f"[127.0.0.1]:{port} {host_public.decode('ascii').strip()}")
+        self.log.write("ssh_relay_local_ready", bind="127.0.0.1", platform=os.name)
+        try:
+            delay = 2
+            while not self._ssh_relay_stop.is_set():
+                path = f"/api/v1/nodes/{node_id}/ssh/relay"
+                route = self.api.base_path + path
+                parsed = urllib.parse.urlsplit(self.config.controller_url)
+                url = urllib.parse.urlunsplit(("wss" if parsed.scheme == "https" else "ws",
+                    parsed.netloc, route, "", ""))
+                stamp, request_id = str(int(time.time())), str(uuid.uuid4())
+                canonical = "\n".join(("GET", route, stamp, request_id, v1.sha256_text("")))
+                headers = {"x-node-id": node_id, "x-node-timestamp": stamp,
+                    "x-node-request-id": request_id,
+                    "x-node-signature": self.identity.sign(canonical.encode("utf-8"))}
+                try:
+                    async with websockets.connect(url, additional_headers=headers,
+                        subprotocols=["citadel-ssh-agent-v1"], max_size=8192,
+                        ping_interval=20, ping_timeout=20, open_timeout=15) as socket:
+                        if socket.subprotocol != "citadel-ssh-agent-v1":
+                            raise RuntimeError("ssh_relay_protocol_mismatch")
+                        self.log.write("ssh_relay_connected")
+                        delay = 2
+                        await self._ssh_relay_session(socket, node_id, port, client_key, known_hosts, asyncssh)
+                except Exception as error:
+                    self.log.write("ssh_relay_disconnected", reason=type(error).__name__)
+                await asyncio.to_thread(self._ssh_relay_stop.wait, delay)
+                delay = min(60, delay * 2)
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    async def _ssh_relay_session(self, socket, node_id, port, client_key, known_hosts, asyncssh) -> None:
+        active = None
+        reader = None
+        async def stop():
+            nonlocal active, reader
+            if reader:
+                reader.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await reader
+                reader = None
+            if active:
+                connection, process = active
+                process.close()
+                connection.close()
+                await connection.wait_closed()
+                active = None
+
+        async def output_loop(process):
+            try:
+                while chunk := await process.stdout.read(8192):
+                    await socket.send(chunk)
+                await socket.send(json.dumps({"type": "exit", "code": process.exit_status}))
+            except (asyncio.CancelledError, Exception):
+                return
+
+        try:
+            async for message in socket:
+                if isinstance(message, bytes):
+                    if active and len(message) <= 8192:
+                        active[1].stdin.write(message)
+                    continue
+                try:
+                    command = json.loads(message)
+                except (ValueError, TypeError):
+                    continue
+                if command.get("type") == "stop":
+                    await stop()
+                elif command.get("type") == "resize" and active:
+                    cols, rows = command.get("cols"), command.get("rows")
+                    if isinstance(cols, int) and isinstance(rows, int) and 20 <= cols <= 300 and 5 <= rows <= 150:
+                        active[1].change_terminal_size(cols, rows)
+                elif command.get("type") == "start" and not active:
+                    expires = command.get("expires_at")
+                    if not isinstance(expires, int) or not 0 < expires - time.time() <= 1800:
+                        continue
+                    try:
+                        connection = await asyncssh.connect("127.0.0.1", port, username="citadel",
+                            client_keys=[client_key], known_hosts=known_hosts,
+                            agent_path=None, connect_timeout=10)
+                        process = await connection.create_process(term_type="xterm", encoding=None)
+                        active = (connection, process)
+                        await socket.send(json.dumps({"type": "ready", "node_id": node_id}))
+                        reader = asyncio.create_task(output_loop(process))
+                    except Exception:
+                        await socket.send(json.dumps({"type": "error", "code": "ssh_connection_failed"}))
+                        await stop()
+        finally:
+            await stop()
 
 
 def self_test() -> int:
