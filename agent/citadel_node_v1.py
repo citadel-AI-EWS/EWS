@@ -50,7 +50,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.32"
+VERSION = "0.3.33"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -567,7 +567,6 @@ MissionHandler = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 
-TAILSCALE_INTERFACE_MARKER = "tailscale"
 VIRTUAL_INTERFACE_TOKENS = (
     "loopback",
     "docker",
@@ -576,7 +575,9 @@ VIRTUAL_INTERFACE_TOKENS = (
     "vmware",
     "virtualbox",
     "wsl",
+    "tailscale",
 )
+SHARED_IPV4_NETWORK = ipaddress.ip_network("100.64.0.0/10")
 
 
 def _normalize_mac(value: str) -> str | None:
@@ -589,9 +590,8 @@ def _normalize_mac(value: str) -> str | None:
 
 
 def local_network_addresses() -> dict[str, Any]:
-    """Discover current physical LAN/Tailscale IPv4 and MAC addresses."""
+    """Discover current physical/private LAN IPv4 and MAC addresses."""
     lan: list[str] = []
-    tailscale: list[str] = []
     mac_addresses: list[str] = []
     interfaces: list[dict[str, str]] = []
     try:
@@ -600,7 +600,6 @@ def local_network_addresses() -> dict[str, Any]:
     except Exception:
         return {
             "lan_ipv4": None,
-            "tailscale_ipv4": None,
             "private_ipv4": [],
             "mac_addresses": [],
             "interfaces": [],
@@ -612,7 +611,8 @@ def local_network_addresses() -> dict[str, Any]:
         if state is not None and not state.isup:
             continue
         lowered = interface_name.lower()
-        is_virtual = any(token in lowered for token in VIRTUAL_INTERFACE_TOKENS)
+        if any(token in lowered for token in VIRTUAL_INTERFACE_TOKENS):
+            continue
         interface_ipv4: str | None = None
         interface_mac: str | None = None
         for item in items:
@@ -626,33 +626,28 @@ def local_network_addresses() -> dict[str, Any]:
                     or address.is_link_local
                     or address.is_multicast
                     or address.is_unspecified
+                    or address in SHARED_IPV4_NETWORK
                 ):
                     continue
-                value = str(address)
-                interface_ipv4 = interface_ipv4 or value
-                if TAILSCALE_INTERFACE_MARKER in lowered:
-                    tailscale.append(value)
-                elif address.is_private and not is_virtual:
+                if address.is_private:
+                    value = str(address)
+                    interface_ipv4 = interface_ipv4 or value
                     lan.append(value)
-            elif link_family is not None and item.family == link_family and not is_virtual:
+            elif link_family is not None and item.family == link_family:
                 normalized = _normalize_mac(item.address)
                 if normalized:
                     interface_mac = normalized
-                    mac_addresses.append(normalized)
-        if interface_ipv4 or interface_mac:
-            entry = {"name": interface_name[:120]}
-            if interface_ipv4:
-                entry["ipv4"] = interface_ipv4
+        if interface_ipv4:
+            entry = {"name": interface_name[:120], "ipv4": interface_ipv4}
             if interface_mac:
                 entry["mac"] = interface_mac
+                mac_addresses.append(interface_mac)
             interfaces.append(entry)
 
     lan = list(dict.fromkeys(lan))
-    tailscale = list(dict.fromkeys(tailscale))
     mac_addresses = list(dict.fromkeys(mac_addresses))
     return {
         "lan_ipv4": lan[0] if lan else None,
-        "tailscale_ipv4": tailscale[0] if tailscale else None,
         "private_ipv4": lan,
         "mac_addresses": mac_addresses[:16],
         "interfaces": interfaces[:32],
@@ -708,9 +703,7 @@ def _doctor_local_interfaces() -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for name, items in addresses.items():
         lowered = name.lower()
-        if TAILSCALE_INTERFACE_MARKER in lowered or any(
-            token in lowered for token in VIRTUAL_INTERFACE_TOKENS
-        ):
+        if any(token in lowered for token in VIRTUAL_INTERFACE_TOKENS):
             continue
         state = stats.get(name)
         row: dict[str, Any] = {
@@ -861,9 +854,7 @@ def _doctor_linux_network_devices() -> list[dict[str, Any]]:
     sys_net = Path("/sys/class/net")
     for name in names[:64]:
         lowered = name.lower()
-        if TAILSCALE_INTERFACE_MARKER in lowered or any(
-            token in lowered for token in VIRTUAL_INTERFACE_TOKENS
-        ):
+        if any(token in lowered for token in VIRTUAL_INTERFACE_TOKENS):
             continue
         device_link = sys_net / name / "device"
         if not device_link.exists():
@@ -1562,7 +1553,6 @@ class Agent:
             "capabilities": self.capabilities,
             "network": {
                 "lan_ipv4": network.get("lan_ipv4"),
-                "tailscale_ipv4": network.get("tailscale_ipv4"),
                 "mac_addresses": network.get("mac_addresses") or [],
             },
         }
@@ -4178,7 +4168,7 @@ def self_test() -> int:
         require_test(load_json(bom_json, {}).get("ok") is True, "UTF-8 BOM JSON rejected")
         network = local_network_addresses()
         require_test(
-            set(network) == {"lan_ipv4", "tailscale_ipv4", "private_ipv4", "mac_addresses", "interfaces"},
+            set(network) == {"lan_ipv4", "private_ipv4", "mac_addresses", "interfaces"},
             "network discovery returned an unexpected shape",
         )
 
