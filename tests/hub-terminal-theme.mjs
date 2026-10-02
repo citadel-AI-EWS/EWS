@@ -21,6 +21,11 @@ for (const required of [
   "CITADEL CHROME 80S APPROVED MOCKUP v2",
   "CITADEL EXACT CONCEPT LOGIN + OS NODE ICONS v3",
   "CITADEL MOBILE CONCEPT REALIGN v4",
+  "CITADEL CONCEPT ART CLEANUP v5",
+  "faceClipV5",
+  "hoodV5",
+  "globeFogV5",
+  "body:not(.authenticated) .cyber-art::after{content:none!important}",
   "top:58svh",
   "width:118vw",
   "GLOBAL NODES  ·  OBSERVE  ·  ROUTE  ·  VERIFY",
@@ -70,3 +75,7 @@ assert.match(hub, /function nodeOsKind\(n\)[\s\S]*windows[\s\S]*linux/);
 assert.match(hub, /function nodeOsAvatar\(n\)[\s\S]*os-avatar[\s\S]*viewBox/);
 assert.match(hub, /nodeOsBadge\(n\)[\s\S]*WINDOWS[\s\S]*LINUX/);
 assert.match(hub, /body:not\(\.authenticated\) \.art-hood-right[\s\S]*body:not\(\.authenticated\) \.art-globe-left/);
+
+assert.match(hub, /art-mask-left[\s\S]*faceClipV5[\s\S]*CONTROL IS AN ILLUSION/);
+assert.match(hub, /art-network-bottom[\s\S]*globeFogV5[\s\S]*GLOBAL NODES/);
+assert.match(hub, /art-hood-right[\s\S]*hoodV5[\s\S]*SHADOW CHANNEL/);

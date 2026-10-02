@@ -369,28 +369,74 @@ body:not(.authenticated) .art-network-bottom{width:min(45vw,680px)!important;rig
  }
 }
 
+
+/* CITADEL CONCEPT ART CLEANUP v5 */
+@media(max-width:700px){
+ body:not(.authenticated) .cyber-art::after{content:none!important}
+ body:not(.authenticated) .art-mask-left{width:104vw!important;left:-44vw!important;top:15vh!important;opacity:.94!important;filter:drop-shadow(0 0 18px #64ffe018)!important}
+ body:not(.authenticated) .art-hood-right{display:block!important;width:76vw!important;right:-34vw!important;top:18vh!important;bottom:auto!important;opacity:.88!important;filter:drop-shadow(0 0 20px #ff263f18)!important}
+ body:not(.authenticated) .art-network-bottom{width:108vw!important;right:-33vw!important;bottom:-1vh!important;opacity:.78!important}
+ body:not(.authenticated) .art-globe-left{display:none!important}
+ body:not(.authenticated) .art-mask-right{display:none!important}
+ body:not(.authenticated) .login-boot{top:67svh!important;left:4vw!important;width:45vw!important;padding:10px 11px!important;font-size:7.6px!important;line-height:1.5!important}
+ body:not(.authenticated) #auth{background:linear-gradient(180deg,#020608f2,#020405fa)!important;box-shadow:0 0 0 1px #000,0 24px 72px #000e,0 0 34px #ff263f20!important}
+}
+@media(min-width:701px){
+ body:not(.authenticated) .art-mask-left{width:min(40vw,610px)!important;left:-9vw!important;top:5vh!important;opacity:.84!important}
+ body:not(.authenticated) .art-hood-right{display:block!important;width:min(29vw,440px)!important;right:-6vw!important;top:8vh!important;bottom:auto!important;opacity:.76!important}
+ body:not(.authenticated) .art-network-bottom{width:min(39vw,610px)!important;right:-5vw!important;bottom:1vh!important;opacity:.68!important}
+ body:not(.authenticated) .art-globe-left,body:not(.authenticated) .art-mask-right{display:none!important}
+}
+
 </style></head><body><div id="activityBar" class="activity-bar" aria-hidden="true"></div><div id="cyberArt" class="cyber-art" aria-hidden="true">
-<svg class="login-only art-mask-left cyber-glitch" viewBox="0 0 360 620" role="presentation">
-<defs><pattern id="gridA" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" class="cyber-grid"/></pattern><clipPath id="faceClip"><path d="M82 104Q180 42 278 104L312 208 286 416Q266 500 180 552Q94 500 74 416L48 208Z"/></clipPath></defs>
-<rect width="360" height="620" fill="url(#gridA)"/><g clip-path="url(#faceClip)" class="cyber-text" font-size="12">
-<text x="38" y="92" class="cyber-dim">01001011 00110101 11001100 01010110</text><text x="18" y="116" class="cyber-cyan">SYSTEM // OBSERVE // VERIFY // RECORD</text>
-<text x="28" y="142" class="cyber-red">11010010 10100110 00101101 11100100</text><text x="20" y="168" class="cyber-cyan">000111010011100010010100110101100101</text>
-<text x="16" y="194" class="cyber-cyan">001011000101011001001110010101100110</text><text x="36" y="220" class="cyber-red">0110011011000100101100010111001001</text>
-<text x="24" y="246" class="cyber-cyan">0101010011010010010010110010110100</text><text x="20" y="272" class="cyber-cyan">0010011101011010010110100101101101</text>
-<text x="34" y="298" class="cyber-red">1100101101001001010011000110100110</text><text x="14" y="324" class="cyber-cyan">0101100100101101001100101010011011</text>
-<text x="28" y="350" class="cyber-cyan">0011010010110100101010011010010110</text><text x="22" y="376" class="cyber-red">1010010011010100110101010011010100</text>
-<text x="34" y="402" class="cyber-cyan">0011011010010101010011010010110110</text><text x="18" y="428" class="cyber-cyan">0101001101101001011010010100110101</text>
-<text x="20" y="454" class="cyber-red">1011010011010110010101101001010011</text><text x="32" y="480" class="cyber-cyan">0011010101100101010010110100101101</text>
-</g><path d="M82 104Q180 42 278 104L312 208 286 416Q266 500 180 552Q94 500 74 416L48 208Z" class="cyber-stroke" opacity=".55"/>
-<path d="M86 242Q126 214 158 242M202 242Q234 214 274 242M138 410Q180 432 222 410" class="cyber-red-stroke" opacity=".9"/>
-<rect x="0" y="186" width="168" height="7" class="cyber-red" opacity=".7"/><rect x="216" y="352" width="144" height="5" class="cyber-red" opacity=".8"/>
-<text x="20" y="582" class="cyber-text cyber-cyan" font-size="13">CONTROL IS AN ILLUSION.</text><text x="20" y="603" class="cyber-text cyber-red" font-size="11">CITADEL // AUTH CHANNEL</text>
+<svg class="login-only art-mask-left cyber-glitch" viewBox="0 0 440 620" role="presentation">
+<defs>
+  <clipPath id="faceClipV5"><path d="M95 112Q220 34 345 112L372 212 340 438Q323 515 220 572Q117 515 100 438L68 212Z"/></clipPath>
+  <linearGradient id="maskGlowV5" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#d8ffff" stop-opacity=".18"/><stop offset=".55" stop-color="#65e8da" stop-opacity=".06"/><stop offset="1" stop-color="#ff334c" stop-opacity=".03"/></linearGradient>
+</defs>
+<path d="M95 112Q220 34 345 112L372 212 340 438Q323 515 220 572Q117 515 100 438L68 212Z" fill="url(#maskGlowV5)" stroke="#8fffe0" stroke-width="2" opacity=".92"/>
+<g clip-path="url(#faceClipV5)" class="cyber-text" font-size="15" font-weight="700">
+  <text x="48" y="118" fill="#dffcf6">010011 110101 001101 110010 101101</text>
+  <text x="35" y="146" fill="#79e7d1">101101 001011 111000 010101 011010</text>
+  <text x="42" y="174" fill="#dffcf6">011010 110100 001101 101011 001101</text>
+  <text x="28" y="202" fill="#ff4258">110010 001101 010110 111001 001011</text>
+  <text x="34" y="230" fill="#dffcf6">001011 101100 011010 010011 110100</text>
+  <text x="26" y="258" fill="#89f5de">101100 011010 010101 001101 101011</text>
+  <text x="30" y="286" fill="#dffcf6">011001 110010 101011 001101 011010</text>
+  <text x="22" y="314" fill="#ff4258">101010 001101 110100 010110 001011</text>
+  <text x="28" y="342" fill="#dffcf6">001101 011010 101100 010011 110010</text>
+  <text x="34" y="370" fill="#7ee7d0">110100 001011 011010 101101 001101</text>
+  <text x="26" y="398" fill="#dffcf6">011010 101100 001101 110010 010101</text>
+  <text x="36" y="426" fill="#ff4258">101101 001011 011010 110100 001101</text>
+  <text x="42" y="454" fill="#dffcf6">001011 110010 101101 011010 001101</text>
+  <text x="50" y="482" fill="#8fffe0">110100 001101 011010 101011 001101</text>
+</g>
+<path d="M112 238Q152 202 191 237L177 280Q149 297 120 277Z" fill="#020506" stroke="#ff3b52" stroke-width="3"/>
+<path d="M249 237Q288 202 328 238L320 277Q290 298 263 280Z" fill="#020506" stroke="#ff3b52" stroke-width="3"/>
+<path d="M205 298L220 348 238 298" fill="none" stroke="#b9fff0" stroke-width="3" opacity=".7"/>
+<path d="M148 405Q220 456 292 405" fill="none" stroke="#ff3b52" stroke-width="4"/>
+<path d="M160 427Q220 451 280 427" fill="none" stroke="#8fffe0" stroke-width="2" opacity=".72"/>
+<rect x="2" y="194" width="154" height="9" fill="#ff263f" opacity=".9"/><rect x="275" y="334" width="165" height="8" fill="#ff263f" opacity=".78"/>
+<rect x="40" y="510" width="214" height="3" fill="#8fffe0" opacity=".52"/>
+<text x="50" y="550" class="cyber-text" fill="#dffcf6" font-size="12" letter-spacing="2">CONTROL IS AN ILLUSION.</text>
+<text x="50" y="574" class="cyber-text" fill="#ff4055" font-size="10" letter-spacing="2">CITADEL // AUTH CHANNEL</text>
 </svg>
-<svg class="login-only art-network-bottom cyber-pulse" viewBox="0 0 560 300" role="presentation">
-<rect width="560" height="300" fill="#020708" opacity=".48"/><g class="cyber-stroke" opacity=".48"><path d="M34 92L91 64 142 76 181 52 239 84 294 62 354 90 411 58 518 78"/><path d="M46 204L96 172 151 190 212 154 276 184 338 144 396 174 462 136 526 166"/></g>
-<g class="cyber-red-stroke" opacity=".8"><path d="M91 64L212 154M181 52L338 144M294 62L462 136M142 76L396 174"/></g>
-<g class="cyber-red cyber-pulse"><circle cx="91" cy="64" r="6"/><circle cx="181" cy="52" r="5"/><circle cx="212" cy="154" r="6"/><circle cx="338" cy="144" r="5"/><circle cx="462" cy="136" r="6"/></g>
-<text x="34" y="252" class="cyber-text cyber-cyan" font-size="14">GLOBAL NODES // REAL CONTROL</text><text x="34" y="275" class="cyber-text cyber-dim" font-size="11">RED / BLACK / SHADOW / OBSERVERS</text>
+<svg class="login-only art-network-bottom cyber-pulse" viewBox="0 0 620 420" role="presentation">
+<defs><radialGradient id="globeFogV5"><stop offset="0" stop-color="#0e5a50" stop-opacity=".2"/><stop offset="1" stop-color="#020708" stop-opacity="0"/></radialGradient></defs>
+<circle cx="430" cy="232" r="184" fill="url(#globeFogV5)" stroke="#67b9ae" stroke-width="1.6" opacity=".66"/>
+<ellipse cx="430" cy="232" rx="108" ry="184" fill="none" stroke="#497e78" stroke-width="1" opacity=".5"/>
+<ellipse cx="430" cy="232" rx="54" ry="184" fill="none" stroke="#345f5a" stroke-width="1" opacity=".38"/>
+<ellipse cx="430" cy="232" rx="184" ry="78" fill="none" stroke="#497e78" stroke-width="1" opacity=".42"/>
+<ellipse cx="430" cy="232" rx="184" ry="132" fill="none" stroke="#345f5a" stroke-width="1" opacity=".32"/>
+<path d="M246 232H614M268 146H592M268 318H592M430 48V416" fill="none" stroke="#4f8d85" stroke-width="1" opacity=".36"/>
+<path d="M282 128Q362 72 432 142T572 114M262 282Q352 214 431 286T602 250M312 344Q404 290 498 346" fill="none" stroke="#ff3149" stroke-width="2.2" opacity=".9"/>
+<path d="M322 114L430 142 520 106M308 290L431 286 560 244M350 348L498 346" fill="none" stroke="#8fffe0" stroke-width="1.1" opacity=".45"/>
+<g fill="#ff3149">
+<circle cx="282" cy="128" r="6"/><circle cx="432" cy="142" r="7"/><circle cx="572" cy="114" r="6"/>
+<circle cx="262" cy="282" r="6"/><circle cx="431" cy="286" r="7"/><circle cx="602" cy="250" r="6"/><circle cx="498" cy="346" r="6"/>
+</g>
+<g fill="#8fffe0"><circle cx="322" cy="114" r="3"/><circle cx="520" cy="106" r="3"/><circle cx="308" cy="290" r="3"/><circle cx="560" cy="244" r="3"/></g>
+<text x="282" y="392" class="cyber-text" fill="#9de8df" font-size="11" letter-spacing="2">GLOBAL NODES // ROUTE // VERIFY</text>
 </svg>
 <svg class="hub-only art-mask-right cyber-glitch" viewBox="0 0 360 520" role="presentation">
 <defs><pattern id="gridB" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M20 0H0V20" class="cyber-grid"/></pattern></defs><rect width="360" height="520" fill="url(#gridB)"/>
@@ -404,13 +450,20 @@ body:not(.authenticated) .art-network-bottom{width:min(45vw,680px)!important;rig
 <g class="cyber-red-stroke"><path d="M104 130L178 96 252 142 318 105M112 216L186 180 274 226 336 184"/></g><g class="cyber-red cyber-pulse"><circle cx="104" cy="130" r="5"/><circle cx="178" cy="96" r="5"/><circle cx="252" cy="142" r="6"/><circle cx="318" cy="105" r="5"/><circle cx="186" cy="180" r="5"/><circle cx="274" cy="226" r="6"/></g>
 <text x="92" y="326" class="cyber-text cyber-cyan" font-size="13">BLACK ARMY / RED ARMY / SHADOW ARMY</text><text x="120" y="347" class="cyber-text cyber-dim" font-size="11">OBSERVE. ROUTE. VERIFY.</text>
 </svg>
-<svg class="hub-only art-hood-right cyber-glitch" viewBox="0 0 400 540" role="presentation">
-<path d="M64 466Q90 336 118 218 132 88 200 58 268 88 282 218 310 336 336 466Z" fill="#010607" stroke="#21554a" stroke-width="1.3"/>
-<path d="M118 218Q200 146 282 218L256 378Q232 422 200 442 168 422 144 378Z" fill="#06100f" stroke="#73ddc1" stroke-width="1" opacity=".8"/>
-<path d="M150 274Q174 256 190 274M210 274Q226 256 250 274" class="cyber-red-stroke"/>
-<g class="cyber-text" font-size="10" opacity=".82"><text x="84" y="132" class="cyber-cyan">0101 1010 0011 1110</text><text x="70" y="158" class="cyber-red">SHADOW CHANNEL ACTIVE</text><text x="86" y="184" class="cyber-cyan">1100 0101 1010 0011</text></g>
-<rect x="18" y="320" width="170" height="5" class="cyber-red" opacity=".8"/><rect x="220" y="392" width="160" height="4" class="cyber-red" opacity=".7"/>
-<text x="92" y="500" class="cyber-text cyber-cyan" font-size="12">THE NETWORK NEVER FORGETS.</text><text x="126" y="520" class="cyber-text cyber-red" font-size="11">CITADEL // WATCHING</text>
+<svg class="hub-only art-hood-right cyber-glitch" viewBox="0 0 420 560" role="presentation">
+<defs><linearGradient id="hoodV5" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#081312"/><stop offset=".65" stop-color="#010405"/><stop offset="1" stop-color="#000"/></linearGradient><linearGradient id="faceV5" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#efffff" stop-opacity=".78"/><stop offset=".55" stop-color="#8ed6cb" stop-opacity=".42"/><stop offset="1" stop-color="#d9ffff" stop-opacity=".62"/></linearGradient></defs>
+<path d="M38 520Q60 365 98 205 112 92 210 38 308 92 322 205 360 365 382 520Z" fill="url(#hoodV5)" stroke="#2a6d64" stroke-width="2"/>
+<path d="M85 234Q210 132 335 234L304 448Q272 505 210 530 148 505 116 448Z" fill="#020607" opacity=".86"/>
+<path d="M128 230Q210 158 292 230L276 390Q255 444 210 466 165 444 144 390Z" fill="url(#faceV5)" stroke="#9ff9e5" stroke-width="1.8"/>
+<path d="M150 286Q178 260 199 286L188 319Q168 330 150 312Z" fill="#020506" stroke="#ff3b52" stroke-width="3"/>
+<path d="M221 286Q242 260 270 286L270 312Q252 330 232 319Z" fill="#020506" stroke="#ff3b52" stroke-width="3"/>
+<path d="M197 331L210 365 224 331" fill="none" stroke="#183431" stroke-width="4"/>
+<path d="M165 395Q210 424 255 395" fill="none" stroke="#ff334b" stroke-width="4"/>
+<path d="M174 412Q210 427 246 412" fill="none" stroke="#153e39" stroke-width="2"/>
+<rect x="6" y="184" width="150" height="8" fill="#ff263f" opacity=".85"/><rect x="279" y="350" width="140" height="7" fill="#ff263f" opacity=".75"/>
+<path d="M94 172L44 150M324 176L388 146M92 458L36 484M324 456L390 486" stroke="#6be4d2" stroke-width="1" opacity=".45"/>
+<text x="250" y="112" class="cyber-text" fill="#ff4055" font-size="10" letter-spacing="2">SHADOW CHANNEL</text>
+<text x="257" y="132" class="cyber-text" fill="#8fffe0" font-size="8" letter-spacing="2">SIGNAL ACTIVE</text>
 </svg>
 </div><main>
 <header><div class="brand-lockup"><span class="brand glitch" data-text="CITADEL">CITADEL</span><span id="chromeSubbrand" class="chrome-subbrand">SECURE ACCESS</span></div><nav aria-label="Навигация"><a class="tab" href="#machines">MACHINES</a><a class="tab" href="#logs">LOGS</a></nav><div class="header-tools"><time id="clock" class="clock" aria-label="Локальное время">--:--:--</time><button id="logout" hidden>LOGOUT</button></div></header>
