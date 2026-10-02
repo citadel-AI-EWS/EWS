@@ -99,7 +99,8 @@ class CitadelSshTerminal {
           const errors = {ssh_target_not_configured: 'SSH для этого узла ещё не настроен.',
             ssh_connection_failed: 'Не удалось подключиться к SSH хоста. Проверьте адрес, ключ и fingerprint.',
             session_expired: 'Время сеанса истекло.', session_idle_timeout: 'Сеанс закрыт из-за отсутствия ввода.',
-            ssh_shell_unavailable: 'Хост не разрешил интерактивный терминал.'};
+            ssh_shell_unavailable: 'Хост не разрешил интерактивный терминал.',
+            ssh_restricted_console_required: 'Отклонено: на хосте не подтверждена CITADEL Restricted SSH Console.'};
           this.status(errors[message.code] || 'SSH-сеанс завершён: ' + message.code);
         } else if (message.type === 'exit') {failed = true; this.status('SSH завершён' + (message.code === null ? '.' : ' · код ' + message.code));}
       };
