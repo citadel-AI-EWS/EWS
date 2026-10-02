@@ -36,8 +36,8 @@ need(index.includes("LEFT JOIN node_numbers AS nn"), "Architect node number join
 need(!readme.includes("-EnrollmentToken"), "README still documents EnrollmentToken");
 need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_token");
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
-need(agentV1.includes('VERSION = "0.3.29"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.29"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.30"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.30"'), "v2 release not bumped");
 need(agentV1.includes("hardware_snapshot"), "node hardware snapshot missing");
 need(agentV1.includes("gpu_inventory"), "GPU/VRAM discovery missing");
 need(agentV1.includes('"hardware"'), "hardware heartbeat payload missing");
@@ -99,6 +99,8 @@ need(setup.includes('ServiceName = "CitadelEWSNode"'), "Windows Core Service nam
 need(setup.includes('LegacyUserSid'), "original user SID preservation missing");
 need(setup.includes('Set-CitadelDirectoryAcl'), "Windows clean ACL reconstruction missing");
 need(setup.includes('"PAUSED"'), "paused-state migration missing");
+need(setup.includes('$LegacyMigrationRequired -and $LegacyStateMatchesNode'), "legacy final state migration is not limited to initial cutover");
+need(setup.includes('LEGACY_MIGRATION_COMPLETE'), "legacy migration completion marker missing");
 need(setup.includes('Set-CitadelServiceDefinition'), "verified SCM service configuration missing");
 need(setup.includes('Restore-CitadelServiceDefinition'), "service rollback path missing");
 need(setup.includes('-Uninstall'), "Windows service uninstall flow missing");
@@ -255,9 +257,9 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.29"'), "Controller release not bumped");
-need(index.includes('path: "CitadelSshConsole.cs"'), "0.3.29 release must deliver the restricted SSH console source");
-need(index.includes('path: "configure_restricted_ssh.ps1"'), "0.3.29 release must deliver the restricted SSH bootstrap");
+need(index.includes('version: "0.3.30"'), "Controller release not bumped");
+need(index.includes('path: "CitadelSshConsole.cs"'), "0.3.30 release must deliver the restricted SSH console source");
+need(index.includes('path: "configure_restricted_ssh.ps1"'), "0.3.30 release must deliver the restricted SSH bootstrap");
 console.log("Review backlog guards: PASS");
 
 need(agentV1.includes("lmstudio_heartbeat_probe_failed"), "routine heartbeat does not refresh LM Studio readiness");

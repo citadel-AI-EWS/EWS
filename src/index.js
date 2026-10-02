@@ -38,17 +38,17 @@ const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe"]);
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.29",
+  version: "0.3.30",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "6b9ca8e5dd704e8dab52a96e97155143ce97465e7050d5bf9ca94af355f3e1a2"
+      sha256: "6a444c3f2810090ac2d5b497b3ca29d35497d788de8dbb584c6ee22409f6cc07"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "be54e0d62fa0eb09696d2abb58a99601c9c85919cfe5034f8e96c791bb76e710"
+      sha256: "980968a9dca52a82f05c41ba8cf25b648a77c0008eb4612c8295e88d28024fac"
     },
     {
       path: "CitadelSshConsole.cs",
@@ -876,6 +876,24 @@ async function ensureCommandStorage(env) {
         `)
       ]);
 
+      // CREATE TABLE IF NOT EXISTS does not upgrade an already-existing legacy
+      // commands table. Some early TEST databases predate completed_at, while
+      // stale-command expiry and ACK handling both write that column. Repair
+      // that schema drift in place before touching stale rows.
+      const commandColumns = await env.DB.prepare("PRAGMA table_info(commands)").all();
+      const commandColumnNames = new Set(
+        (commandColumns.results || []).map((row) => String(row.name || ""))
+      );
+      if (!commandColumnNames.has("completed_at")) {
+        try {
+          await env.DB.prepare("ALTER TABLE commands ADD COLUMN completed_at TEXT").run();
+        } catch (error) {
+          // Concurrent requests can race the one-time repair. A duplicate-column
+          // result means the other request already completed the same safe repair.
+          if (!String(error).toLowerCase().includes("duplicate column")) throw error;
+        }
+      }
+
       // Existing TEST databases may contain an old pending/accepted command.
       // Drain stale rows before creating the partial UNIQUE index; otherwise
       // SQLite can reject index creation and surface an opaque internal_error.
@@ -883,18 +901,55 @@ async function ensureCommandStorage(env) {
       do {
         expiredBatchSize = await expireStaleCommands(env);
       } while (expiredBatchSize === 250);
+      const createIndex = () => env.DB.prepare(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_one_active_per_node
+        ON commands(node_id)
+        WHERE status IN ('pending', 'accepted')
+      `).run();
+
       try {
-        await env.DB.prepare(`
-          CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_one_active_per_node
-          ON commands(node_id)
-          WHERE status IN ('pending', 'accepted')
-        `).run();
+        await createIndex();
       } catch (error) {
-        const message = String(error);
-        if (message.includes("UNIQUE") || message.includes("idx_commands_one_active_per_node")) {
-          throw new ApiError(409, "command_already_pending");
+        const message = String(error).toLowerCase();
+        if (!message.includes("unique") && !message.includes("commands.node_id")) {
+          throw error;
         }
-        throw error;
+
+        // Older deployments could contain more than one active command for the
+        // same node before this invariant existed. Keep the newest active
+        // command and mark older duplicates failed so the queue can recover
+        // automatically instead of returning an opaque internal_error forever.
+        await env.DB.prepare(`
+          UPDATE commands
+          SET status = 'failed',
+              completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)
+          WHERE status IN ('pending', 'accepted')
+            AND EXISTS (
+              SELECT 1
+              FROM commands AS newer
+              WHERE newer.node_id = commands.node_id
+                AND newer.status IN ('pending', 'accepted')
+                AND (
+                  datetime(newer.created_at) > datetime(commands.created_at)
+                  OR (
+                    datetime(newer.created_at) = datetime(commands.created_at)
+                    AND newer.command_id > commands.command_id
+                  )
+                )
+            )
+        `).run();
+
+        await createIndex();
+        await env.DB.prepare(`
+          INSERT INTO audit_events (
+            actor_type, actor_id, action, target_type, target_id, details_json
+          ) VALUES (
+            'controller', 'command-storage-repair',
+            'commands.active_duplicates_repaired',
+            'commands', 'active',
+            '{"policy":"keep_newest_active_per_node"}'
+          )
+        `).run();
       }
     })().catch((error) => {
       commandIndexPromise = undefined;
@@ -1676,6 +1731,56 @@ async function qualityGateResultFromRow(env, row, rawText) {
     };
   }
   return null;
+}
+
+
+async function projectQualityGateSnapshot(env, projectId, originalTask, rawText) {
+  const draft = String(rawText || "").trim();
+  if (!draft) {
+    return {
+      ready: false,
+      status: "empty",
+      content: null,
+      reviewed: false,
+      model: null,
+      error_code: "empty_project_result"
+    };
+  }
+  const config = openRouterQualityConfig(env);
+  if (!config.configured) {
+    return {
+      ready: true,
+      status: "unconfigured",
+      content: draft,
+      reviewed: false,
+      model: null,
+      error_code: null
+    };
+  }
+
+  await ensureQualityGateStorage(env);
+  const sourceSha256 = await sha256Hex(
+    `${config.model}\n${config.fusionPreset}\n${String(originalTask || "")}\n\u0000${draft}`
+  );
+  const row = await env.DB.prepare(`
+    SELECT project_id, source_sha256, status, requested_model, resolved_model,
+      fusion_preset, final_text, error_code, claim_id, updated_at
+    FROM project_quality_gates
+    WHERE project_id = ?
+  `).bind(projectId).first();
+
+  if (row?.source_sha256 === sourceSha256) {
+    const cached = await qualityGateResultFromRow(env, row, draft);
+    if (cached) return cached;
+  }
+  return {
+    ready: true,
+    status: "deferred",
+    content: draft,
+    reviewed: false,
+    model: config.model,
+    error_code: null
+  };
 }
 
 async function finalizeProjectAnswer(env, projectId, originalTask, rawText) {
@@ -2834,7 +2939,7 @@ async function architectListProjects(request, env) {
   return json({ ok: true, projects: rows.results || [] });
 }
 
-async function architectGetProject(request, env, projectId) {
+async function architectGetProject(request, env, projectId, executionCtx = null) {
   await authenticateArchitect(request, env);
   await Promise.all([
     ensureProjectStorage(env),
@@ -3049,7 +3154,7 @@ async function architectGetProject(request, env, projectId) {
   const workComplete = total > 0 && finished === total;
   const rawResultText = workComplete ? projectFinalText(finalSections) : null;
   const qualityConfig = openRouterQualityConfig(env);
-  const qualityGate = workComplete && executionMode === "python"
+  let qualityGate = workComplete && executionMode === "python"
     ? {
         ready: true,
         status: "not_applicable_python",
@@ -3058,25 +3163,42 @@ async function architectGetProject(request, env, projectId) {
         model: null,
         error_code: null
       }
-    : workComplete && !qualityConfig.configured
-      ? await finalizeProjectAnswer(env, project.project_id, projectTaskText, rawResultText)
-      : workComplete
-        ? {
-            ready: true,
-            status: "deferred",
-            content: rawResultText,
-            reviewed: false,
-            model: qualityConfig.model || null,
-            error_code: null
-          }
-        : {
-            ready: false,
-            status: "waiting_for_workers",
-            content: null,
-            reviewed: false,
-            model: null,
-            error_code: null
-          };
+    : workComplete
+      ? await projectQualityGateSnapshot(env, project.project_id, projectTaskText, rawResultText)
+      : {
+          ready: false,
+          status: "waiting_for_workers",
+          content: null,
+          reviewed: false,
+          model: null,
+          error_code: null
+        };
+
+  if (
+    workComplete &&
+    executionMode !== "python" &&
+    qualityConfig.configured &&
+    !qualityGate.reviewed &&
+    qualityGate.status !== "degraded" &&
+    executionCtx &&
+    typeof executionCtx.waitUntil === "function"
+  ) {
+    const backgroundReview = finalizeProjectAnswer(
+      env,
+      project.project_id,
+      projectTaskText,
+      rawResultText
+    ).catch((error) => {
+      console.error("Background OpenRouter quality gate failed", error);
+    });
+    executionCtx.waitUntil(backgroundReview);
+    if (qualityGate.status === "deferred") {
+      qualityGate = {
+        ...qualityGate,
+        status: "processing"
+      };
+    }
+  }
   // A completed local worker result is the baseline answer. OpenRouter may
   // enrich it, but a slow/processing quality gate must never hide it.
   const finalResultText = workComplete ? (qualityGate.content || rawResultText || null) : null;
@@ -7103,7 +7225,7 @@ function apiDescription() {
   });
 }
 
-async function handleApi(request, env, url) {
+async function handleApi(request, env, url, executionCtx = null) {
   if (url.pathname === "/api/health") {
     if (request.method !== "GET") {
       return methodNotAllowed(["GET"]);
@@ -7504,7 +7626,7 @@ async function handleApi(request, env, url) {
   );
   if (architectProjectMatch) {
     return request.method === "GET"
-      ? architectGetProject(request, env, decodeURIComponent(architectProjectMatch[1]))
+      ? architectGetProject(request, env, decodeURIComponent(architectProjectMatch[1]), executionCtx)
       : methodNotAllowed(["GET"]);
   }
 
@@ -7731,14 +7853,14 @@ export {
 };
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, executionCtx) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith("/api/")) {
       return env.ASSETS.fetch(request);
     }
 
     try {
-      return await handleApi(request, env, url);
+      return await handleApi(request, env, url, executionCtx);
     } catch (error) {
       if (error instanceof ApiError) {
         return json({ ok: false, error: error.code }, error.status);

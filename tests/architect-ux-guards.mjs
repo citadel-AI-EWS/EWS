@@ -173,6 +173,8 @@ assert.match(index, /architectCreateAccessToken/);
 assert.match(index, /architectSetEnterprisePolicy/);
 assert.match(index, /architectEnterpriseRecoveryManifest/);
 assert.match(index, /requiredArchitectPermission/);
+assert.match(index, /commands\.active_duplicates_repaired/);
+assert.match(index, /keep_newest_active_per_node/);
 assert.doesNotMatch(index, /command_type\s*[:=]\s*["']shell["']/);
 assert.match(index, /async function architectNodeDetails/);
 assert.ok(index.includes("/details$"), "node details route missing");

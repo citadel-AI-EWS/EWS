@@ -265,6 +265,9 @@ jobs:
           & $out --self-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Host "Windows service host compile/self-test: OK"
+      - name: Verify one-time legacy state migration on repair
+        shell: pwsh
+        run: ./tests/windows-repair-migration.ps1
       - name: Validate installer AST and real SCM configuration
         shell: pwsh
         run: |

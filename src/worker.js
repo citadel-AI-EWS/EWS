@@ -34,7 +34,7 @@ export default {
     }
   },
 
-  async fetch(request, env) {
+  async fetch(request, env, executionCtx) {
     const url = new URL(request.url);
     if (isTelemetryPath(url.pathname)) {
       return handleTelemetryRequest(request, env, url);
@@ -54,7 +54,7 @@ export default {
           .then(() => "ready")
           .catch(() => "unavailable")
       ]);
-      const response = await baseWorker.fetch(request, env);
+      const response = await baseWorker.fetch(request, env, executionCtx);
       let body;
       try {
         body = await response.json();
@@ -72,7 +72,7 @@ export default {
       return json(body, response.status);
     }
 
-    const response = await baseWorker.fetch(request, env);
+    const response = await baseWorker.fetch(request, env, executionCtx);
     const heartbeatMatch = url.pathname.match(/^\/api\/v1\/nodes\/([^/]+)\/(?:heartbeat|sync)$/);
     if (request.method === "POST" && heartbeatMatch && response.ok) {
       const nodeId = decodeURIComponent(heartbeatMatch[1]);
