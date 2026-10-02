@@ -121,6 +121,13 @@ async function closeChecked(page, entry, route, screenshotName) {
       if (await page.locator(selector).count() !== 1) addFinding("missing_control", "/", selector);
     }
 
+    for (const selector of ["#sshDialog", "#sshHost", "#sshUser", "#sshProbe", "#sshOpen", "#sshInlineInput", "#sshInlineSend"]) {
+      if (await page.locator(selector).count() !== 1) addFinding("missing_ssh_control", "/", selector);
+    }
+    if (await page.locator('#sshDialog a[href="/hub/"]').count()) {
+      addFinding("legacy_ssh_redirect", "/", "deployed Machines console still sends SSH users to the retired /hub/ route");
+    }
+
     entry.auth_probe_active = true;
     const invalidAuthStatus = await page.evaluate(async () => {
       const response = await fetch("/api/v1/architect/machines", {

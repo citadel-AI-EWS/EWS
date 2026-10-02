@@ -381,6 +381,22 @@ need(
 );
 need(hub.includes('command_type:"ssh_console"'), "Hub inline terminal does not dispatch signed restricted commands");
 need(hub.includes('versionAtLeast(sshNode.agent_version,"0.3.32")'), "Hub inline terminal must require agent 0.3.32");
+need(operations.includes('id="sshDialog"') && operations.includes('id="sshInlineOutput"'), "deployed Machines SSH dialog/terminal missing");
+need(operations.includes("const sshAllowedCommands=new Set(['help','status','hostname','uptime','cpu','memory','disk','network','agent-status','agent-logs','lmstudio-status','diagnostics','ping-controller','exit'])"), "deployed Machines SSH allow-list missing or drifted");
+need(operations.includes("sshVersionAtLeast(node.agent_version,'0.3.32')"), "deployed Machines restricted terminal must require agent 0.3.32");
+need(operations.includes("if(Array.isArray(node?.capabilities))return node.capabilities;"), "deployed Machines SSH bootstrap must consume detailed capabilities");
+need(operations.includes("if(currentNode?.node_id===sshNodeId)return currentNode;"), "deployed Machines SSH must prefer detailed node state");
+need(operations.includes("safeSshFingerprint") && operations.includes("submittedFingerprint===null"), "deployed Machines SSH fingerprint validation missing");
+need(operations.includes("sshInlineGeneration") && operations.includes("sshProbeGeneration"), "deployed Machines SSH dialog generations missing");
+need(operations.includes("async function waitForOperationsSshProbe") && operations.includes("command.status==='completed'||command.status==='failed'"), "deployed Machines SSH probe does not wait for queued completion");
+need(operations.includes("sshSelectionGeneration===selectionGeneration&&sshInlineGeneration===inlineGeneration"), "deployed Machines terminal can accept an earlier dialog-session result");
+need(operations.includes("sshSelectionGeneration===selectionGeneration&&sshProbeGeneration===probeGeneration"), "deployed Machines probe can accept an earlier dialog-session result");
+need(operations.includes("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"), "deployed Machines SSH user validation drifts from Controller");
+need(operations.includes("command_type:'ssh_console'") && operations.includes("command_type:'ssh_probe'"), "deployed Machines SSH commands missing");
+need(operations.includes("sshSelectionGeneration") && operations.includes("sshLoadGeneration") && operations.includes("sshSaveGeneration"), "deployed Machines SSH stale-response generations missing");
+need(operations.includes("const sshDirtyFields=new Set();") && operations.includes("applySshServerFields"), "deployed Machines SSH dirty-field protection missing");
+need(!operations.includes('<a href="/hub/">Открыть Hub SSH</a>'), "deployed Machines SSH still redirects to retired Hub route");
+
 need(sshConsole.includes("configured_dir = config.get(\"data_dir\")"), "restricted agent-logs must honor configured data_dir");
 need(sshConsole.includes("def _bounded_tail_lines") && sshConsole.includes("max_bytes: int = 64 * 1024"), "restricted agent-logs must use a bounded tail");
 console.log("Review backlog guards: PASS");

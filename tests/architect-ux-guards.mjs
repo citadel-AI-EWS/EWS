@@ -710,6 +710,39 @@ assert.ok(operations.includes("lmRemove').hidden=!lmInstalled||lmBusy"), "LM Stu
 assert.ok(operations.includes("modelGet').hidden=!lmInstalled"), "model actions must hide until LM Studio is installed");
 assert.ok(operations.includes("LM Studio установлен — доступны обновление"), "dynamic LM Studio hint missing");
 
+for (const required of [
+  'id="sshDialog"',
+  'id="sshHost"',
+  'id="sshUser"',
+  'id="sshFingerprint"',
+  'id="sshProbe"',
+  'id="sshOpen"',
+  'id="sshInlineOutput"',
+  'id="sshInlineInput"',
+  'id="sshInlineSend"',
+  "loadOperationsSshState",
+  "saveOperationsSshState",
+  "sendOperationsSshCommand",
+  "command_type:'ssh_console'",
+  "command_type:'ssh_probe'",
+  "sshSelectionGeneration",
+  "sshDirtyFields"
+]) {
+  assert.ok(operations.includes(required), "deployed Machines SSH UX missing: " + required);
+}
+assert.ok(!operations.includes('<a href="/hub/">Открыть Hub SSH</a>'), "deployed SSH UI must not redirect to retired Hub route");
+assert.ok(operations.includes("sshVersionAtLeast(node.agent_version,'0.3.32')"), "deployed restricted terminal must require agent 0.3.32+");
+assert.ok(operations.includes("if(Array.isArray(node?.capabilities))return node.capabilities;"), "deployed SSH bootstrap must use detailed node capabilities");
+assert.ok(operations.includes("if(currentNode?.node_id===sshNodeId)return currentNode;"), "deployed SSH must prefer detailed selected-node state");
+assert.ok(operations.includes("^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"), "deployed SSH hostname validation must match Controller");
+assert.ok(operations.includes("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"), "deployed SSH user validation must match Controller");
+assert.ok(operations.includes("^SHA256:[A-Za-z0-9+/=]{20,120}$"), "deployed SSH fingerprint validation must match Controller");
+assert.ok(operations.includes("sshInlineGeneration") && operations.includes("sshProbeGeneration"), "deployed SSH async work must be bound to dialog generations");
+assert.ok(operations.includes("async function waitForOperationsSshProbe"), "deployed SSH probe must poll queued command completion");
+assert.ok(operations.includes("sshSelectionGeneration===selectionGeneration&&sshInlineGeneration===inlineGeneration"), "deployed SSH terminal must reject earlier dialog-session polls");
+assert.ok(operations.includes("sshSelectionGeneration===selectionGeneration&&sshProbeGeneration===probeGeneration"), "deployed SSH probe must reject earlier dialog-session polls");
+
+
 assert.ok(index.includes("CREATE TABLE IF NOT EXISTS commands"), "runtime command table bootstrap missing");
 assert.ok(index.includes("CREATE TABLE IF NOT EXISTS audit_events"), "runtime audit table bootstrap missing");
 assert.ok(index.includes("lmstudio_command_storage_unavailable"), "LM Studio command storage error mapping missing");
