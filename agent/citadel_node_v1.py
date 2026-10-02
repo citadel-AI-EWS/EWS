@@ -38,6 +38,22 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+WINDOWS_CREATE_NO_WINDOW = 0x08000000
+
+
+def _citadel_subprocess_run(*args, **kwargs):
+    """Run child tools without opening transient Windows console windows."""
+    if os.name == "nt":
+        kwargs.setdefault("creationflags", WINDOWS_CREATE_NO_WINDOW)
+    return subprocess.run(*args, **kwargs)
+
+
+def _citadel_subprocess_popen(*args, **kwargs):
+    """Start child tools without opening transient Windows console windows."""
+    if os.name == "nt":
+        kwargs.setdefault("creationflags", WINDOWS_CREATE_NO_WINDOW)
+    return subprocess.Popen(*args, **kwargs)
+
 try:
     import psutil
     from cryptography.hazmat.primitives import serialization
@@ -662,7 +678,7 @@ def _doctor_powershell_json(command: str, timeout: int = 12) -> Any:
     if not powershell:
         return None
     try:
-        result = subprocess.run(  # nosec B603
+        result = _citadel_subprocess_run(  # nosec B603
             [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
             timeout=timeout,
             capture_output=True,
@@ -784,7 +800,7 @@ def _doctor_ethtool_driver(interface_name: str) -> dict[str, str]:
     if not executable:
         return {}
     try:
-        result = subprocess.run(  # nosec B603
+        result = _citadel_subprocess_run(  # nosec B603
             [executable, "-i", interface_name],
             timeout=5,
             capture_output=True,
@@ -815,7 +831,7 @@ def _doctor_linux_vpd(pci_address: str) -> dict[str, str]:
     if not executable or not pci_address:
         return {}
     try:
-        result = subprocess.run(  # nosec B603
+        result = _citadel_subprocess_run(  # nosec B603
             [executable, "-s", pci_address, "-vv"],
             timeout=6,
             capture_output=True,
@@ -1282,7 +1298,7 @@ def windows_enterprise_probe() -> dict[str, Any]:
         powershell = Path(fallback)
 
     try:
-        result = subprocess.run(  # nosec B603
+        result = _citadel_subprocess_run(  # nosec B603
             [
                 str(powershell),
                 "-NoLogo",
@@ -1341,7 +1357,7 @@ def gpu_inventory() -> list[dict[str, Any]]:
     nvidia_smi = shutil.which("nvidia-smi")
     if nvidia_smi:
         try:
-            result = subprocess.run(  # nosec B603
+            result = _citadel_subprocess_run(  # nosec B603
                 [
                     nvidia_smi,
                     "--query-gpu=name,memory.total",
@@ -1371,7 +1387,7 @@ def gpu_inventory() -> list[dict[str, Any]]:
     if not powershell:
         return rows
     try:
-        result = subprocess.run(  # nosec B603
+        result = _citadel_subprocess_run(  # nosec B603
             [
                 powershell,
                 "-NoLogo",
@@ -2328,7 +2344,7 @@ class Agent:
         executable = self.find_lms()
         if not executable:
             raise RuntimeError("lmstudio_not_installed")
-        result = subprocess.run(  # nosec B603
+        result = _citadel_subprocess_run(  # nosec B603
             [executable, *args],
             timeout=timeout,
             capture_output=True,
@@ -2575,7 +2591,7 @@ class Agent:
                 progress_phase="upstream_installer", progress_current=2, progress_total=5,
                 progress_detail="Official LM Studio / llmster installer is running",
             )
-            result = subprocess.run(  # nosec B603
+            result = _citadel_subprocess_run(  # nosec B603
                 argv,
                 timeout=1800,
                 capture_output=True,
@@ -3130,7 +3146,7 @@ class Agent:
             entrypoint = staging / "citadel_node_v2.py"
             if entrypoint.exists():
                 # The argv is fixed and the shell remains disabled.
-                result = subprocess.run(  # nosec B603
+                result = _citadel_subprocess_run(  # nosec B603
                     [sys.executable, str(entrypoint), "self-test"],
                     cwd=staging,
                     timeout=120,
@@ -3155,7 +3171,7 @@ class Agent:
                 replaced.append(name)
             if CORE_UPDATE_FILE_NAMES.intersection(replaced):
                 installed_entrypoint = install_root / "citadel_node_v2.py"
-                result = subprocess.run(  # nosec B603
+                result = _citadel_subprocess_run(  # nosec B603
                     [
                         sys.executable,
                         str(installed_entrypoint),
@@ -3205,7 +3221,7 @@ class Agent:
             for name in sorted(rollback_names):
                 shutil.copy2(backup / name, staging / name)
             entrypoint = staging / "citadel_node_v2.py"
-            result = subprocess.run(  # nosec B603
+            result = _citadel_subprocess_run(  # nosec B603
                 [sys.executable, str(entrypoint), "self-test"],
                 cwd=staging,
                 timeout=120,
@@ -3271,7 +3287,7 @@ class Agent:
         else:
             raise RuntimeError("system power control unsupported on this OS")
 
-        result = subprocess.run(  # nosec B603
+        result = _citadel_subprocess_run(  # nosec B603
             argv,
             timeout=15,
             capture_output=True,
@@ -3420,7 +3436,7 @@ class Agent:
                         raise SystemExit(SERVICE_RESTART_EXIT_CODE)
                     entrypoint = Path(__file__).resolve().parent / "citadel_node_v2.py"
                     # The argv is fixed and the shell remains disabled.
-                    subprocess.Popen(  # nosec B603
+                    _citadel_subprocess_popen(  # nosec B603
                         [sys.executable, str(entrypoint), "run", "--config", str(self.config_path)],
                         cwd=entrypoint.parent,
                         shell=False,
@@ -3504,7 +3520,7 @@ class Agent:
                         "}; "
                         "$profiles | ConvertTo-Json -Compress"
                     )
-                    result = subprocess.run(  # nosec B603
+                    result = _citadel_subprocess_run(  # nosec B603
                         [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
                         timeout=20, capture_output=True, text=True, shell=False,
                     )
@@ -3534,7 +3550,7 @@ class Agent:
             elif os.name == "posix":
                 nmcli = shutil.which("nmcli")
                 if nmcli:
-                    result = subprocess.run(  # nosec B603
+                    result = _citadel_subprocess_run(  # nosec B603
                         [nmcli, "-t", "-f", "NAME,TYPE", "connection", "show", "--active"],
                         timeout=20, capture_output=True, text=True, shell=False,
                     )
@@ -3578,7 +3594,7 @@ class Agent:
 
         if netsh and preferred:
             for retry_index in range(NETWORK_PRIMARY_PROFILE_RETRIES):
-                result = subprocess.run(  # nosec B603
+                result = _citadel_subprocess_run(  # nosec B603
                     [netsh, "wlan", "connect", f"name={preferred}"],
                     timeout=30, capture_output=True, text=True, shell=False,
                 )
@@ -3587,7 +3603,7 @@ class Agent:
                 )
                 if result.returncode == 0:
                     if ipconfig and retry_index == 0:
-                        subprocess.run(  # nosec B603
+                        _citadel_subprocess_run(  # nosec B603
                             [ipconfig, "/renew"],
                             timeout=60, capture_output=True, text=True, shell=False,
                         )
@@ -3598,7 +3614,7 @@ class Agent:
                         return True
 
         if ipconfig and not preferred:
-            subprocess.run(  # nosec B603
+            _citadel_subprocess_run(  # nosec B603
                 [ipconfig, "/renew"], timeout=60, capture_output=True, text=True, shell=False,
             )
             attempts.append("dhcp_renew")
@@ -3609,7 +3625,7 @@ class Agent:
             for profile in profiles[:16]:
                 if profile == preferred:
                     continue
-                result = subprocess.run(  # nosec B603
+                result = _citadel_subprocess_run(  # nosec B603
                     [netsh, "wlan", "connect", f"name={profile}"],
                     timeout=30, capture_output=True, text=True, shell=False,
                 )
@@ -3640,7 +3656,7 @@ class Agent:
             elif os.name == "posix":
                 nmcli = shutil.which("nmcli")
                 if nmcli:
-                    subprocess.run(  # nosec B603
+                    _citadel_subprocess_run(  # nosec B603
                         [nmcli, "networking", "on"], timeout=20, capture_output=True, text=True, shell=False,
                     )
                     linux_profiles: list[str] = []
@@ -3662,7 +3678,7 @@ class Agent:
 
                     if preferred:
                         for retry_index in range(NETWORK_PRIMARY_PROFILE_RETRIES):
-                            result = subprocess.run(  # nosec B603
+                            result = _citadel_subprocess_run(  # nosec B603
                                 [nmcli, "connection", "up", preferred],
                                 timeout=60, capture_output=True, text=True, shell=False,
                             )
@@ -3680,7 +3696,7 @@ class Agent:
                         for name in linux_profiles[:8]:
                             if name == preferred:
                                 continue
-                            result = subprocess.run(  # nosec B603
+                            result = _citadel_subprocess_run(  # nosec B603
                                 [nmcli, "connection", "up", name],
                                 timeout=60, capture_output=True, text=True, shell=False,
                             )
