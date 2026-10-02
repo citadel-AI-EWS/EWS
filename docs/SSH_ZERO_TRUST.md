@@ -94,11 +94,32 @@ Windows-конфигурация сознательно не используе�
 
 ## Agent / Controller contract
 
-Agent 0.3.27 продолжает capability `ssh_probe_readonly`, отправляет SSH readiness v2 и умеет принимать два новых подписанных update-asset: `CitadelSshConsole.cs` и `configure_restricted_ssh.ps1`. Команда `ssh_probe` остаётся read-only и только заставляет немедленно обновить readiness heartbeat.
+Agent 0.3.31 продолжает capability `ssh_probe_readonly`, отправляет SSH readiness v2 и принимает подписанные/hash-verified assets `CitadelSshConsole.cs` и `configure_restricted_ssh.ps1`. Команда `ssh_probe` остаётся read-only и только заставляет немедленно обновить readiness heartbeat.
 
-`0.3.27` — совместимый bridge-релиз: существующий `0.3.26` принимает его через старый набор v1/v2. Windows installer `0.3.27+` уже содержит SSH assets при чистой установке.
+Ноды 0.3.29 уже знают эти два asset-имени, поэтому переход на 0.3.31 доставляет обновлённый Cloudflare/bootstrap код обычным signed update без переустановки. Чистые Windows one-click/fixed packages также содержат restricted SSH assets.
 
-`0.3.28` — asset-delivery релиз: Controller включает `CitadelSshConsole.cs` и `configure_restricted_ssh.ps1` в обычный подписанный/hash-verified update payload вместе с v1/v2. Поэтому нода, уже перешедшая с `0.3.26` на bridge `0.3.27`, получает недостающие SSH assets удалённо без переустановки. После применения assets Windows-нода публикует capability `windows_restricted_ssh_bootstrap`; только после этого Hub разрешает копирование локальной elevated bootstrap-команды.
+## Cloudflare Zero Trust provisioning
+
+Workflow `.github/workflows/provision-ssh-zero-trust.yml` запускается вручную в защищённом environment `cloudflare-test`. По умолчанию это dry-run; реальное изменение Cloudflare выполняется только с input `apply=true`.
+
+SSH username по умолчанию берётся из локальной части разрешённого email и поэтому должен укладываться в лимит локальной Windows-учётной записи: максимум 20 символов. Если нужен другой user, это должно быть задано до apply; provisioner fail-closed не создаёт Cloudflare resources для неподходящего username.
+
+Имя Tunnel по умолчанию выводится из node-id, а если node-id не задан — из public hostname, поэтому один и тот же Access email не заставляет разные ноды делить один dedicated Tunnel.
+
+Workflow через Cloudflare API создаёт или проверяет:
+
+- отдельный remotely-managed Tunnel;
+- ingress `ssh://localhost:22`;
+- proxied CNAME `<public hostname> -> <tunnel UUID>.cfargotunnel.com`;
+- Access application типа Browser SSH;
+- Allow policy для **одного точного email**;
+- app-specific short-lived SSH CA и её **public key**.
+
+Cloudflare API bearer token берётся только из protected GitHub secret (`FULL_CLOUDFLARE_CONTROL`, с fallback на `CLOUDFLARE_API_TOKEN`). Provisioner сознательно **не запрашивает Tunnel token** и не пишет его в Actions output/artifacts.
+
+На Windows `configure_restricted_ssh.ps1` по умолчанию также подготавливает локальный `cloudflared`: при необходимости восстанавливает WinGet, ставит официальный пакет `Cloudflare.cloudflared`, затем в уже elevated локальном окне просит Tunnel token через скрытый `Read-Host -AsSecureString` и выполняет `cloudflared service install`. Token не принимается параметром командной строки и не сохраняется в CITADEL state/D1/Hub. Сам Windows service `cloudflared` хранит необходимые локальные connector credentials по штатной модели Cloudflare; они остаются на управляемом компьютере.
+
+Если на машине уже существует неизвестный service `cloudflared`, bootstrap fail-closed и не перезаписывает его. Явный `-SkipCloudflared` оставляет внешний connector без изменений. При uninstall CITADEL удаляет `cloudflared` service только если bootstrap-state подтверждает, что его создал CITADEL.
 
 ## Windows bootstrap security model
 
@@ -108,14 +129,20 @@ Bootstrap просит локально только SSH username и Cloudflare 
 
 При удалении CITADEL основной Windows uninstaller сначала вызывает SSH cleanup. Он восстанавливает исходный `sshd_config`, удаляет только созданного CITADEL SSH user и CITADEL SSH artifacts, но не удаляет Microsoft OpenSSH feature целиком.
 
+## Cloudflare provisioning safety
+
+GitHub workflow создаёт или переиспользует только dedicated remotely-managed Tunnel с именем `citadel-ssh-*`. Если у найденного Tunnel есть чужие hostname routes, нестандартный catch-all или он locally managed, provisioning останавливается вместо изменения ресурса.
+
+Dry-run использует настоящий Cloudflare API token только для read-only проверки: реальная Zone, существующий Tunnel, DNS, Access app/policy и CA проверяются до apply. Drift `session_duration` и exact-email policy показывается как update-required; запись выполняется только при `apply=true`.
+
+Для browser-rendered SSH CITADEL использует self-hosted Access application и application-specific SSH CA. Cloudflare в 2026 рекомендует Access for Infrastructure для новых native-SSH сценариев с WARP/Gateway и command logging; это отдельный режим и не требуется для выбранного clientless Browser SSH пути.
+
 ## Что остаётся внешней настройкой
 
-CITADEL не может сам создать Cloudflare Zero Trust application/tunnel без авторизованного Cloudflare management connection. Перед первым реальным Browser SSH должны существовать:
+После merge 0.3.31 программная цепочка готова к provisioning. Для первого реального Browser SSH всё ещё нужны два значения, которые нельзя безопасно выдумать:
 
-- Cloudflare Tunnel для конкретной ноды;
-- public hostname;
-- Access application/policy для разрешённых пользователей;
-- работающий OpenSSH server на компьютере;
-- ForceCommand policy для CITADEL SSH user.
+- public hostname в домене/zone, управляемом вашим Cloudflare;
+- точный email identity, которому Cloudflare Access разрешит вход.
 
-Пока эти внешние зависимости не подтверждены, Hub обязан показывать SSH как not ready и не заявлять о работающем соединении.
+После запуска protected workflow с этими значениями он выдаёт CA **public** key и создаёт Tunnel/DNS/Access. Tunnel token берётся в Cloudflare для конкретного Tunnel и вводится только локально в скрытом prompt Windows bootstrap. Пока Tunnel connector и restricted SSH readiness не подтверждены агентом, Hub обязан показывать SSH как NOT READY.
+
