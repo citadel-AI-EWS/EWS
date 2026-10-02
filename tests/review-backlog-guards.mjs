@@ -393,6 +393,12 @@ need(operations.includes("sshSelectionGeneration===selectionGeneration&&sshInlin
 need(operations.includes("sshSelectionGeneration===selectionGeneration&&sshProbeGeneration===probeGeneration"), "deployed Machines probe can accept an earlier dialog-session result");
 need(operations.includes("host===savedHost&&user===savedUser"), "Browser SSH can open an unsaved target");
 need(operations.includes("sshPendingProbeCommands=new Map()") && operations.includes("sshPendingInlineCommands=new Map()"), "accepted SSH command IDs are not retained");
+const probeStoreIndex = operations.indexOf("pending={commandId};sshPendingProbeCommands.set(nodeId,pending);");
+const probeSessionGuardIndex = operations.indexOf("if(!$('sshDialog').open||sshNodeId!==nodeId", probeStoreIndex);
+need(probeStoreIndex >= 0 && probeSessionGuardIndex > probeStoreIndex, "probe command ID can be lost when the dialog closes during POST");
+const inlineStoreIndex = operations.indexOf("active={commandId,verb};sshPendingInlineCommands.set(nodeId,active);");
+const inlineSessionGuardIndex = operations.indexOf("if(!current())return;", inlineStoreIndex);
+need(inlineStoreIndex >= 0 && inlineSessionGuardIndex > inlineStoreIndex, "terminal command ID can be lost when the dialog closes during POST");
 need(operations.includes("formatSshCommandResult(command)") && operations.includes("result.output"), "failed SSH console output is discarded");
 need(operations.includes("command ID retained") && operations.includes("Получить результат SSH"), "pending SSH commands cannot be resumed after the initial polling window");
 need(operations.includes("if($('sshDialog').open&&sshNodeId===n.node_id)renderOperationsSshState()"), "SSH bootstrap eligibility is not refreshed after details load");
