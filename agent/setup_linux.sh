@@ -6,8 +6,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_ROOT="${CITADEL_INSTALL_ROOT:-$HOME/.local/share/citadel-node}"
 STATE_ROOT="${CITADEL_STATE_ROOT:-$HOME/.local/state/citadel-node}"
 SERVICE_NAME="citadel-node.service"
-EXPECTED_V1_SHA256="ab238de8bb24bece329db602fedd3b394aea902b71251268af0d168c421520c8"
-EXPECTED_V2_SHA256="f4c3892870b139a0e3c59317420e01249f9310314b1b9c9186991d06155b1f41"
+EXPECTED_V1_SHA256="46f39136d3f1b3418d2b7c8d31aabd6cef93447ef8182da0f0991152be90bc0d"
+EXPECTED_V2_SHA256="7977c4f259c57ad120770c6ec8ee45406527ed69f2fd33e6ba02952a2face95a"
 EXPECTED_ENTERPRISE_PROBE_SHA256="0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
 EXPECTED_SSH_CONSOLE_SHA256="94f3dc3fbc8545792345d551db12cbe694e9a51545f22655486acc5217c42eec"
 CONTROLLER_PUBLIC_X="erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
@@ -160,7 +160,7 @@ path, node_id, controller = sys.argv[1:]
 payload = {
     "node_id": node_id,
     "controller_url": controller.rstrip("/"),
-    "agent_version": "0.3.32",
+    "agent_version": "0.3.33",
     "platform": "linux",
     "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
 }
