@@ -24,6 +24,7 @@ function normalizeEmail(value) {
 function normalizeTunnelName(value) {
   const name = String(value || "").trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(name)) fail("invalid_tunnel_name");
+  if (!name.toLowerCase().startsWith("citadel-ssh-")) fail("tunnel_name_must_use_citadel_ssh_prefix");
   return name;
 }
 
@@ -130,10 +131,24 @@ async function ensureTunnelIngress(accountId, tunnelId, hostname, apply) {
     const current = await cf(`/accounts/${accountId}/cfd_tunnel/${tunnelId}/configurations`, {}, [404]);
     ingress = Array.isArray(current.body?.result?.config?.ingress) ? current.body.result.config.ingress : [];
   }
-  const routes = ingress.filter(item => item && item.hostname && item.hostname !== hostname);
-  routes.push({hostname, service: "ssh://localhost:22"});
-  const catchAll = ingress.find(item => item && !item.hostname) || {service: "http_status:404"};
-  routes.push(catchAll);
+
+  const foreignRoutes = ingress.filter(item => item && item.hostname && item.hostname !== hostname);
+  if (foreignRoutes.length) fail("existing_tunnel_contains_unmanaged_hostname_routes");
+
+  const targetRoutes = ingress.filter(item => item && item.hostname === hostname);
+  if (targetRoutes.length > 1) fail("existing_tunnel_contains_duplicate_ssh_routes");
+  if (targetRoutes.some(item => item.path)) fail("existing_tunnel_contains_path_scoped_ssh_route");
+
+  const catchAllRoutes = ingress.filter(item => item && !item.hostname);
+  if (catchAllRoutes.length > 1) fail("existing_tunnel_contains_multiple_catch_all_routes");
+  if (catchAllRoutes.length === 1 && catchAllRoutes[0].service !== "http_status:404") {
+    fail("existing_tunnel_contains_unmanaged_catch_all_route");
+  }
+
+  const routes = [
+    {hostname, service: "ssh://localhost:22"},
+    catchAllRoutes[0] || {service: "http_status:404"}
+  ];
   if (apply && tunnelId !== "<planned>") {
     await cf(`/accounts/${accountId}/cfd_tunnel/${tunnelId}/configurations`, {
       method: "PUT",
@@ -214,28 +229,45 @@ function desiredPolicy(hostname, email) {
 }
 
 async function ensurePolicy(accountId, appId, hostname, email, apply) {
-  if (appId === "<planned>") return {id: "<planned>", ...desiredPolicy(hostname, email)};
+  const wanted = desiredPolicy(hostname, email);
+  if (appId === "<planned>") {
+    return {policy: {id: "<planned>", ...wanted}, created: true, updated: false, update_required: false};
+  }
   const policies = await listAll(`/accounts/${accountId}/access/apps/${appId}/policies`);
   const incompatible = policies.filter(p => !["allow", "deny"].includes(String(p?.decision || "")));
   if (incompatible.length) fail("browser_ssh_app_contains_unsupported_bypass_or_service_auth_policy");
-  const wanted = desiredPolicy(hostname, email);
   const unexpected = policies.filter(p => p?.name !== wanted.name);
   if (unexpected.length) fail("browser_ssh_app_contains_additional_policy");
   const existing = policies.find(p => p?.name === wanted.name);
   if (existing && existing.decision !== "allow") fail("citadel_ssh_policy_has_wrong_decision");
-  if (!apply) return existing || {id: "<planned>", ...wanted};
+
+  const include = Array.isArray(existing?.include) ? existing.include : [];
+  const exclude = Array.isArray(existing?.exclude) ? existing.exclude : [];
+  const requireRules = Array.isArray(existing?.require) ? existing.require : [];
+  const exactEmail = include.length === 1 &&
+    String(include[0]?.email?.email || "").trim().toLowerCase() === email;
+  const updateRequired = Boolean(existing) && !(exactEmail && exclude.length === 0 && requireRules.length === 0);
+
+  if (existing && (!updateRequired || !apply)) {
+    return {policy: existing, created: false, updated: false, update_required: updateRequired};
+  }
+  if (!existing && !apply) {
+    return {policy: {id: "<planned>", ...wanted}, created: true, updated: false, update_required: false};
+  }
   if (existing?.id) {
     const {body} = await cf(`/accounts/${accountId}/access/apps/${appId}/policies/${existing.id}`, {
       method: "PUT",
       body: JSON.stringify(wanted)
     });
-    return body.result;
+    if (!body?.result?.id) fail("updated_access_policy_missing_id");
+    return {policy: body.result, created: false, updated: true, update_required: false};
   }
   const {body} = await cf(`/accounts/${accountId}/access/apps/${appId}/policies`, {
     method: "POST",
     body: JSON.stringify(wanted)
   });
-  return body.result;
+  if (!body?.result?.id) fail("created_access_policy_missing_id");
+  return {policy: body.result, created: true, updated: false, update_required: false};
 }
 
 async function ensureCa(accountId, appId, apply) {
@@ -303,7 +335,8 @@ async function main() {
   const dns = await ensureDns(zone.id, hostname, tunnel.id, apply);
   const {app, created: appCreated, updated: appUpdated, update_required: appUpdateRequired} =
     await ensureAccessApp(accountId, hostname, nodeLabel, sessionDuration, apply);
-  const policy = await ensurePolicy(accountId, app.id, hostname, allowedEmail, apply);
+  const {policy, created: policyCreated, updated: policyUpdated, update_required: policyUpdateRequired} =
+    await ensurePolicy(accountId, app.id, hostname, allowedEmail, apply);
   const ca = await ensureCa(accountId, app.id, apply);
 
   writeOutput({
@@ -323,7 +356,14 @@ async function main() {
       update_required: appUpdateRequired,
       session_duration: app.session_duration || sessionDuration
     },
-    access_policy: {id: policy?.id || null, decision: "allow", allowed_email: allowedEmail},
+    access_policy: {
+      id: policy?.id || null,
+      decision: "allow",
+      allowed_email: allowedEmail,
+      created: policyCreated,
+      updated: policyUpdated,
+      update_required: policyUpdateRequired
+    },
     ssh_user: sshUser,
     ca: {id: ca?.id || null, public_key: ca?.public_key || null},
     tunnel_token_stored: false,
