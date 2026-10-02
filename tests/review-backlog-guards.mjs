@@ -124,7 +124,8 @@ need(sshCloudflareProvisioner.includes('...baseConfig, ingress: routes'), "Tunne
 need(sshCloudflareProvisioner.includes('Preflight every conflict-prone resource before the first write.'), "Cloudflare apply must preflight all conflicts before writes");
 need(sshCloudflareProvisioner.includes('Apply Access controls before publishing SSH routing.'), "Access controls must precede SSH routing publication");
 need(sshCloudflareProvisioner.includes('await findZone(hostname, accountId)'), "Cloudflare dry-run must resolve the real zone");
-need(sshCloudflareProvisioner.includes('await ensureTunnel(accountId, tunnelName, apply)'), "Cloudflare dry-run must inspect existing tunnels");
+need(sshCloudflareProvisioner.includes('await ensureTunnel(accountId, tunnelName, false)'), "Cloudflare preflight must inspect existing tunnels read-only");
+need(sshCloudflareProvisioner.includes('await ensureTunnel(accountId, tunnelName, true)'), "Cloudflare apply phase must reconcile the tunnel only after preflight");
 need(sshCloudflareWorkflow.includes("environment: cloudflare-test"), "SSH Cloudflare provisioning must use the protected environment");
 need(sshCloudflareWorkflow.includes("FULL_CLOUDFLARE_CONTROL") && sshCloudflareWorkflow.includes("CLOUDFLARE_API_TOKEN"), "SSH workflow Cloudflare secret fallback missing");
 need(!/env:\n\s{6}(?:FULL_CLOUDFLARE_CONTROL|CLOUDFLARE_API_TOKEN):/.test(sshCloudflareWorkflow), "Cloudflare API secrets must not be job-wide environment variables");
