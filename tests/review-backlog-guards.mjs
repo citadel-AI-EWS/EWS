@@ -321,6 +321,23 @@ need(index.includes("WHERE changes() = 1") && index.includes("INSERT INTO ssh_co
 need(sshConsoleResultsMigration.includes("CREATE TABLE IF NOT EXISTS ssh_console_results"), "inline SSH results migration missing");
 need(hub.includes('id="sshInlinePanel"'), "Hub inline restricted terminal missing");
 need(hub.includes("appendSshInline(text,nodeId=sshNodeId)") && hub.includes("if(nodeId!==sshNodeId)return false"), "Hub inline terminal stale-node result guard missing");
+const sshLoadStart = hub.indexOf("async function loadSshState");
+const sshLoadEnd = hub.indexOf("async function saveSshState", sshLoadStart);
+const sshLoadBlock = hub.slice(sshLoadStart, sshLoadEnd);
+need(sshLoadStart >= 0 && sshLoadEnd > sshLoadStart, "Hub SSH state loader missing");
+need(
+  sshLoadBlock.includes("const requestedNodeId=sshNodeId;") &&
+  sshLoadBlock.includes("if(sshNodeId!==requestedNodeId)return;"),
+  "Hub SSH state loader can apply a stale response after switching nodes"
+);
+const sshProbeStart = hub.indexOf("async function probeSsh");
+const sshProbeEnd = hub.indexOf("async function waitForSshInlineCommand", sshProbeStart);
+const sshProbeBlock = hub.slice(sshProbeStart, sshProbeEnd);
+need(
+  sshProbeBlock.includes("const nodeId=sshNodeId;") &&
+  sshProbeBlock.includes("setTimeout(()=>{if(sshNodeId===nodeId)loadSshState(nodeId)},2500);"),
+  "Hub SSH probe can switch back to a previously selected node"
+);
 need(hub.includes('command_type:"ssh_console"'), "Hub inline terminal does not dispatch signed restricted commands");
 need(hub.includes('versionAtLeast(sshNode.agent_version,"0.3.32")'), "Hub inline terminal must require agent 0.3.32");
 need(sshConsole.includes("configured_dir = config.get(\"data_dir\")"), "restricted agent-logs must honor configured data_dir");
