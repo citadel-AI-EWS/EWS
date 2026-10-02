@@ -710,6 +710,30 @@ assert.ok(operations.includes("lmRemove').hidden=!lmInstalled||lmBusy"), "LM Stu
 assert.ok(operations.includes("modelGet').hidden=!lmInstalled"), "model actions must hide until LM Studio is installed");
 assert.ok(operations.includes("LM Studio установлен — доступны обновление"), "dynamic LM Studio hint missing");
 
+for (const required of [
+  'id="sshDialog"',
+  'id="sshHost"',
+  'id="sshUser"',
+  'id="sshFingerprint"',
+  'id="sshProbe"',
+  'id="sshOpen"',
+  'id="sshInlineOutput"',
+  'id="sshInlineInput"',
+  'id="sshInlineSend"',
+  "loadOperationsSshState",
+  "saveOperationsSshState",
+  "sendOperationsSshCommand",
+  "command_type:'ssh_console'",
+  "command_type:'ssh_probe'",
+  "sshSelectionGeneration",
+  "sshDirtyFields"
+]) {
+  assert.ok(operations.includes(required), "deployed Machines SSH UX missing: " + required);
+}
+assert.ok(!operations.includes('<a href="/hub/">Открыть Hub SSH</a>'), "deployed SSH UI must not redirect to retired Hub route");
+assert.ok(operations.includes("sshVersionAtLeast(node.agent_version,'0.3.32')"), "deployed restricted terminal must require agent 0.3.32+");
+
+
 assert.ok(index.includes("CREATE TABLE IF NOT EXISTS commands"), "runtime command table bootstrap missing");
 assert.ok(index.includes("CREATE TABLE IF NOT EXISTS audit_events"), "runtime audit table bootstrap missing");
 assert.ok(index.includes("lmstudio_command_storage_unavailable"), "LM Studio command storage error mapping missing");
