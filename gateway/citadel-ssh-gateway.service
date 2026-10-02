@@ -1,0 +1,25 @@
+[Unit]
+Description=CITADEL interactive SSH gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=citadel-ssh
+Group=citadel-ssh
+WorkingDirectory=/opt/citadel/EWS
+EnvironmentFile=/etc/citadel-ssh/gateway.env
+ExecStart=/usr/bin/node gateway/server.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/citadel-ssh
+StateDirectory=citadel-ssh
+ReadWritePaths=/var/lib/citadel-ssh
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
