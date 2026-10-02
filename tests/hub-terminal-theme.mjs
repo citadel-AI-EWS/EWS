@@ -14,6 +14,9 @@ for (const required of [
   "function updateTerminalHud",
   "function rotateTerminalPhrase",
   "CONTROL / DEPLOY / MONITOR / SURVIVE.",
+  "MAFIA IS NOT CHAOS. IT IS ORDER WITH PRIVATE RULES.",
+  "ИСТОРИЯ ПОМНИТ ПОБЕДИТЕЛЕЙ. ЛОГИ ПОМНЯТ ВСЕХ.",
+  "Math.floor(Math.random()*terminalPhrases.length)",
   "prefers-reduced-motion:reduce",
   "avatar=el('div','>_','node-avatar')",
 ]) {
