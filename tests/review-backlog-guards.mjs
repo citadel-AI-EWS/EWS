@@ -41,6 +41,8 @@ need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_tok
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
 need(agentV1.includes('VERSION = "0.3.33"'), "v1 release not bumped");
 need(agentV2.includes('VERSION = "0.3.33"'), "v2 release not bumped");
+need(!agentV1.includes("tailscale_ipv4"), "agent must not report Tailscale telemetry");
+need(!index.includes("tailscale_ipv4"), "Controller must not store or expose Tailscale telemetry");
 need(agentV1.includes("hardware_snapshot"), "node hardware snapshot missing");
 need(agentV1.includes("gpu_inventory"), "GPU/VRAM discovery missing");
 need(agentV1.includes('"hardware"'), "hardware heartbeat payload missing");
