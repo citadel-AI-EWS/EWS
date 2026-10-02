@@ -814,6 +814,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       try{
         const data=await api(`/api/v1/architect/nodes/${encodeURIComponent(nodeId)}/ssh`,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({public_hostname:submittedHost,ssh_user:submittedUser,host_key_fingerprint:submittedFingerprint||null})});
         if(sshNodeId!==nodeId||sshSelectionGeneration!==selectionGeneration||sshSaveGeneration!==saveGeneration)return;
+        ++sshLoadGeneration;
         sshState=data.ssh||sshState;
         if(safeHost(sshHost.value)===submittedHost)sshDirtyFields.delete("host");
         if(safeUser(sshUser.value)===submittedUser)sshDirtyFields.delete("user");
