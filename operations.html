@@ -71,7 +71,85 @@ progress{accent-color:#63f0c4}
 @media(max-width:700px){.terminal-strip{grid-template-columns:1fr}.terminal-stats{justify-content:flex-start}.terminal-line{white-space:normal}.terminal-chip{font-size:10px}}
 @media(prefers-reduced-motion:reduce){body::after,.terminal-strip::before,.terminal-cursor,.node-card[data-status="offline"]::after,.brand::after{animation:none!important}.terminal-cursor{opacity:1}}
 
-</style></head><body><div id="activityBar" class="activity-bar" aria-hidden="true"></div><main>
+
+/* CITADEL CYBER ART LAYER v1 */
+body{overflow-x:hidden}
+main{position:relative;z-index:2}
+.cyber-art{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+.cyber-art svg{position:absolute;filter:drop-shadow(0 0 24px #00ffb514);transition:opacity .35s ease,transform .5s ease}
+.cyber-art .login-only{opacity:.30}.cyber-art .hub-only{opacity:0}
+body.authenticated .cyber-art .login-only{opacity:0}
+body.authenticated .cyber-art .hub-only{opacity:.24}
+.art-mask-left{width:min(31vw,390px);height:auto;left:-9vw;top:12vh;transform:rotate(-1.5deg)}
+.art-network-bottom{width:min(43vw,560px);height:auto;right:-15vw;bottom:-7vh;transform:rotate(1deg)}
+.art-mask-right{width:min(29vw,380px);height:auto;right:-11vw;top:13vh}
+.art-globe-left{width:min(34vw,440px);height:auto;left:-15vw;bottom:-8vh}
+.art-hood-right{width:min(31vw,400px);height:auto;right:-13vw;bottom:11vh}
+.cyber-svg-bg{fill:#020708}.cyber-grid{stroke:#0e4037;stroke-width:1;opacity:.45}.cyber-cyan{fill:#8fffe0}.cyber-dim{fill:#5f998b}.cyber-red{fill:#ff3249}.cyber-stroke{fill:none;stroke:#74e8c8;stroke-width:1.4}.cyber-red-stroke{fill:none;stroke:#ff334c;stroke-width:1.5}.cyber-text{font-family:"Cascadia Mono",Consolas,monospace;letter-spacing:.08em}.cyber-glitch{animation:artGlitch 8s steps(1,end) infinite}.cyber-pulse{animation:artPulse 3.4s ease-in-out infinite}
+#auth{position:relative;isolation:isolate;max-width:560px;margin:clamp(34px,9vh,100px) auto;padding:28px 28px 30px;background:linear-gradient(180deg,#050b0de8,#07100feF);border-color:#27675a;box-shadow:0 30px 90px #000c,0 0 42px #00ffc817}
+#auth::before{content:"[ SECURE ACCESS ]";display:block;color:#70ffd5;font:700 11px/1.3 "Cascadia Mono",Consolas,monospace;letter-spacing:.18em;margin-bottom:20px}
+#auth h2{font-size:clamp(24px,4vw,38px);margin:0 0 20px;letter-spacing:.12em;text-transform:uppercase}
+#auth form{display:grid;gap:10px}
+#auth .row{display:grid;grid-template-columns:minmax(0,1fr) auto}
+#auth input{width:100%;background:#020808e8;border-color:#24584f;min-height:46px}
+#auth .primary{min-width:120px;border-color:#00c98f;background:#06261e;color:#8fffe0;text-transform:uppercase}
+body:not(.authenticated) header nav{opacity:.33;pointer-events:none}
+body:not(.authenticated) .terminal-strip{border-color:#64212b;box-shadow:inset 0 0 34px #ff314513}
+body:not(.authenticated) .terminal-line{color:#d8fff5}
+body:not(.authenticated) .terminal-line::before{color:#ff4055}
+@keyframes artPulse{0%,100%{opacity:.62}50%{opacity:1}}
+@keyframes artGlitch{0%,91%,100%{transform:translate(0)}92%{transform:translate(3px,-1px)}93%{transform:translate(-2px,1px)}94%{transform:translate(0)}}
+@media(max-width:760px){
+  .cyber-art .login-only{opacity:.18}.art-mask-left{width:72vw;left:-38vw;top:18vh}.art-network-bottom{width:78vw;right:-40vw;bottom:-2vh}
+  body.authenticated .cyber-art .hub-only{opacity:.14}.art-mask-right{width:68vw;right:-42vw;top:16vh}.art-globe-left{width:72vw;left:-47vw;bottom:-4vh}.art-hood-right{width:68vw;right:-43vw;bottom:15vh}
+  #auth{margin:34px 6px;padding:22px 18px}#auth .row{grid-template-columns:1fr}#auth .primary{width:100%}
+}
+@media(prefers-reduced-motion:reduce){.cyber-art svg,.cyber-glitch,.cyber-pulse{animation:none!important;transition:none!important}}
+
+</style></head><body><div id="activityBar" class="activity-bar" aria-hidden="true"></div><div id="cyberArt" class="cyber-art" aria-hidden="true">
+<svg class="login-only art-mask-left cyber-glitch" viewBox="0 0 360 620" role="presentation">
+<defs><pattern id="gridA" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" class="cyber-grid"/></pattern><clipPath id="faceClip"><path d="M82 104Q180 42 278 104L312 208 286 416Q266 500 180 552Q94 500 74 416L48 208Z"/></clipPath></defs>
+<rect width="360" height="620" fill="url(#gridA)"/><g clip-path="url(#faceClip)" class="cyber-text" font-size="12">
+<text x="38" y="92" class="cyber-dim">01001011 00110101 11001100 01010110</text><text x="18" y="116" class="cyber-cyan">SYSTEM // OBSERVE // VERIFY // RECORD</text>
+<text x="28" y="142" class="cyber-red">11010010 10100110 00101101 11100100</text><text x="20" y="168" class="cyber-cyan">000111010011100010010100110101100101</text>
+<text x="16" y="194" class="cyber-cyan">001011000101011001001110010101100110</text><text x="36" y="220" class="cyber-red">0110011011000100101100010111001001</text>
+<text x="24" y="246" class="cyber-cyan">0101010011010010010010110010110100</text><text x="20" y="272" class="cyber-cyan">0010011101011010010110100101101101</text>
+<text x="34" y="298" class="cyber-red">1100101101001001010011000110100110</text><text x="14" y="324" class="cyber-cyan">0101100100101101001100101010011011</text>
+<text x="28" y="350" class="cyber-cyan">0011010010110100101010011010010110</text><text x="22" y="376" class="cyber-red">1010010011010100110101010011010100</text>
+<text x="34" y="402" class="cyber-cyan">0011011010010101010011010010110110</text><text x="18" y="428" class="cyber-cyan">0101001101101001011010010100110101</text>
+<text x="20" y="454" class="cyber-red">1011010011010110010101101001010011</text><text x="32" y="480" class="cyber-cyan">0011010101100101010010110100101101</text>
+</g><path d="M82 104Q180 42 278 104L312 208 286 416Q266 500 180 552Q94 500 74 416L48 208Z" class="cyber-stroke" opacity=".55"/>
+<path d="M86 242Q126 214 158 242M202 242Q234 214 274 242M138 410Q180 432 222 410" class="cyber-red-stroke" opacity=".9"/>
+<rect x="0" y="186" width="168" height="7" class="cyber-red" opacity=".7"/><rect x="216" y="352" width="144" height="5" class="cyber-red" opacity=".8"/>
+<text x="20" y="582" class="cyber-text cyber-cyan" font-size="13">CONTROL IS AN ILLUSION.</text><text x="20" y="603" class="cyber-text cyber-red" font-size="11">CITADEL // AUTH CHANNEL</text>
+</svg>
+<svg class="login-only art-network-bottom cyber-pulse" viewBox="0 0 560 300" role="presentation">
+<rect width="560" height="300" fill="#020708" opacity=".48"/><g class="cyber-stroke" opacity=".48"><path d="M34 92L91 64 142 76 181 52 239 84 294 62 354 90 411 58 518 78"/><path d="M46 204L96 172 151 190 212 154 276 184 338 144 396 174 462 136 526 166"/></g>
+<g class="cyber-red-stroke" opacity=".8"><path d="M91 64L212 154M181 52L338 144M294 62L462 136M142 76L396 174"/></g>
+<g class="cyber-red cyber-pulse"><circle cx="91" cy="64" r="6"/><circle cx="181" cy="52" r="5"/><circle cx="212" cy="154" r="6"/><circle cx="338" cy="144" r="5"/><circle cx="462" cy="136" r="6"/></g>
+<text x="34" y="252" class="cyber-text cyber-cyan" font-size="14">GLOBAL NODES // REAL CONTROL</text><text x="34" y="275" class="cyber-text cyber-dim" font-size="11">RED / BLACK / SHADOW / OBSERVERS</text>
+</svg>
+<svg class="hub-only art-mask-right cyber-glitch" viewBox="0 0 360 520" role="presentation">
+<defs><pattern id="gridB" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M20 0H0V20" class="cyber-grid"/></pattern></defs><rect width="360" height="520" fill="url(#gridB)"/>
+<path d="M180 44C100 48 66 124 78 204l24 176c12 70 50 98 78 112 28-14 66-42 78-112l24-176c12-80-22-156-102-160Z" class="cyber-stroke" opacity=".48"/>
+<g class="cyber-text" font-size="11"><text x="42" y="90" class="cyber-cyan">00110011 01100101 10110101 00101100</text><text x="32" y="118" class="cyber-red">SYSTEM / MASK / SIGNAL / MEMORY</text><text x="36" y="146" class="cyber-cyan">10100110 00101110 11001001 01001010</text><text x="24" y="174" class="cyber-cyan">011001010010101101101010010101101</text><text x="38" y="202" class="cyber-red">00110100110110100101001101001011</text><text x="28" y="230" class="cyber-cyan">01010110010101101001010011010110</text><text x="40" y="258" class="cyber-cyan">10110010011010100110101001010010</text><text x="30" y="286" class="cyber-red">00110101011010010100101011001010</text><text x="42" y="314" class="cyber-cyan">01001011010100110110100101001011</text><text x="26" y="342" class="cyber-cyan">11010100110100101011010010110100</text></g>
+<path d="M106 224Q140 198 162 226M198 226Q220 198 254 224M144 376Q180 394 216 376" class="cyber-red-stroke"/>
+<text x="86" y="470" class="cyber-text cyber-red" font-size="13">SAME SYSTEM.</text><text x="86" y="490" class="cyber-text cyber-cyan" font-size="13">DIFFERENT MASKS.</text>
+</svg>
+<svg class="hub-only art-globe-left cyber-pulse" viewBox="0 0 440 360" role="presentation">
+<ellipse cx="220" cy="178" rx="150" ry="116" class="cyber-stroke" opacity=".5"/><ellipse cx="220" cy="178" rx="88" ry="116" class="cyber-stroke" opacity=".35"/><path d="M70 178H370M91 124H349M91 232H349M220 62V294" class="cyber-stroke" opacity=".28"/>
+<g class="cyber-red-stroke"><path d="M104 130L178 96 252 142 318 105M112 216L186 180 274 226 336 184"/></g><g class="cyber-red cyber-pulse"><circle cx="104" cy="130" r="5"/><circle cx="178" cy="96" r="5"/><circle cx="252" cy="142" r="6"/><circle cx="318" cy="105" r="5"/><circle cx="186" cy="180" r="5"/><circle cx="274" cy="226" r="6"/></g>
+<text x="92" y="326" class="cyber-text cyber-cyan" font-size="13">BLACK ARMY / RED ARMY / SHADOW ARMY</text><text x="120" y="347" class="cyber-text cyber-dim" font-size="11">OBSERVE. ROUTE. VERIFY.</text>
+</svg>
+<svg class="hub-only art-hood-right cyber-glitch" viewBox="0 0 400 540" role="presentation">
+<path d="M64 466Q90 336 118 218 132 88 200 58 268 88 282 218 310 336 336 466Z" fill="#010607" stroke="#21554a" stroke-width="1.3"/>
+<path d="M118 218Q200 146 282 218L256 378Q232 422 200 442 168 422 144 378Z" fill="#06100f" stroke="#73ddc1" stroke-width="1" opacity=".8"/>
+<path d="M150 274Q174 256 190 274M210 274Q226 256 250 274" class="cyber-red-stroke"/>
+<g class="cyber-text" font-size="10" opacity=".82"><text x="84" y="132" class="cyber-cyan">0101 1010 0011 1110</text><text x="70" y="158" class="cyber-red">SHADOW CHANNEL ACTIVE</text><text x="86" y="184" class="cyber-cyan">1100 0101 1010 0011</text></g>
+<rect x="18" y="320" width="170" height="5" class="cyber-red" opacity=".8"/><rect x="220" y="392" width="160" height="4" class="cyber-red" opacity=".7"/>
+<text x="92" y="500" class="cyber-text cyber-cyan" font-size="12">THE NETWORK NEVER FORGETS.</text><text x="126" y="520" class="cyber-text cyber-red" font-size="11">CITADEL // WATCHING</text>
+</svg>
+</div><main>
 <header><span class="brand glitch" data-text="CITADEL">CITADEL</span><nav aria-label="Навигация"><a class="tab" href="#machines">Машины</a><a class="tab" href="#logs">Логи</a></nav><div class="header-tools"><time id="clock" class="clock" aria-label="Локальное время">--:--:--</time><button id="logout" hidden>Выйти</button></div></header>
 <aside class="terminal-strip" aria-label="Системный терминал"><div class="terminal-line"><span id="terminalPhrase">HELLO, FRIEND.</span><span class="terminal-cursor" aria-hidden="true"></span></div><div class="terminal-stats"><span class="terminal-chip">NODES <strong id="terminalNodes">0</strong></span><span class="terminal-chip">ONLINE <strong id="terminalOnline">0</strong></span><span class="terminal-chip">AI <strong id="terminalAi">0</strong></span><span class="terminal-chip">SYSTEM <strong id="terminalSystem">LOCKED</strong></span></div></aside>
 <section id="auth"><h2>Вход в управление</h2><form id="login"><label for="token">Ключ доступа</label><div class="row"><input id="token" type="password" autocomplete="current-password" required><button class="primary">Войти</button></div></form></section>
@@ -320,7 +398,7 @@ function updateProfessionFab(){const b=$('professionFab'),ids=[...selectedProfes
 async function ensureWorkRoles(){if(workRoles.length)return workRoles;const d=await api('/work-roles');workRoles=(d.roles||[]).filter(r=>r.kind==='worker');return workRoles}
 async function openProfessionPicker(){try{await ensureWorkRoles();const grid=$('professionGrid');grid.replaceChildren();const mode=$('executionMode').value;$('professionModeText').textContent=mode==='python'?'Python выполнит работу без LLM, но отчёт и назначение будут помечены выбранной профессией.':'EE выполнит задачу в выбранной экспертной роли.';for(const role of workRoles){const labelEl=el('label',undefined,'profession-choice'),box=document.createElement('input');box.type='checkbox';box.checked=selectedProfessionIds.has(role.id);box.onchange=()=>{if(box.checked)selectedProfessionIds.add(role.id);else selectedProfessionIds.delete(role.id);updateProfessionFab()};const copy=el('div');copy.append(el('strong',professionLabel(role.id)),el('small',role.id));labelEl.append(box,copy);grid.append(labelEl)}updateProfessionFab();$('professionDialog').showModal()}catch(e){tell('Профессии не загружены: '+e.message,true)}}
 
-function route(){const logs=location.hash==='#logs';$('machines').hidden=!token||logs;$('logs').hidden=!token||!logs;$('auth').hidden=!!token;$('logout').hidden=!token;document.querySelectorAll('a.tab').forEach(a=>a.setAttribute('aria-current',a.hash===(logs?'#logs':'#machines')?'page':'false'));if($('terminalSystem'))$('terminalSystem').textContent=token?'STANDBY':'LOCKED'}
+function route(){const logs=location.hash==='#logs';document.body.classList.toggle('authenticated',Boolean(token));$('machines').hidden=!token||logs;$('logs').hidden=!token||!logs;$('auth').hidden=!!token;$('logout').hidden=!token;document.querySelectorAll('a.tab').forEach(a=>a.setAttribute('aria-current',a.hash===(logs?'#logs':'#machines')?'page':'false'));if($('terminalSystem'))$('terminalSystem').textContent=token?'STANDBY':'LOCKED'}
 function metric(title,value){const x=el('div',undefined,'metric'),v=el('span',value??'—');if(String(value||'').startsWith('✓'))v.className='installed-mark';else if(String(value||'').startsWith('×'))v.className='missing-mark';x.append(el('b',title),v);return x}
 function gib(bytes){const n=Number(bytes||0);return n>0?(n/1073741824).toFixed(1)+' GiB':'—'}
 function gpuText(gpus){return Array.isArray(gpus)&&gpus.length?gpus.map(g=>g.name+(g.vram_total_bytes?' · '+gib(g.vram_total_bytes):'')).join('; '):'Не обнаружена / не сообщена'}
