@@ -126,12 +126,12 @@ Agent 0.3.31 adds an on-demand terminal-like UI inside Hub that does **not** req
 
 ```text
 Hub → authenticated Architect API → signed ssh_console command → node agent
-    → hash-pinned ssh_restricted_console.py → bounded result_json → Hub
+    → hash-pinned ssh_restricted_console.py → bounded ssh_console_results row → Hub
 ```
 
 This is intentionally not a general-purpose shell. The Controller and agent both independently enforce the same fixed read-only command allow-list. Unknown commands and shell syntax are rejected before execution. The agent calls the restricted console's `execute()` function directly; it does not start `cmd.exe`, PowerShell, Bash, or an arbitrary subprocess.
 
-Results are stored only for the individual `ssh_console` command, are limited to 24 KiB, and Hub polls only that command ID until it reaches `completed` or `failed`. The regular node-details polling path does not read terminal results.
+Results are stored in the separate `ssh_console_results` table only for the individual `ssh_console` command, are limited to 24 KiB, and are deleted automatically with the parent command. Hub polls only that command ID until it reaches `completed` or `failed`. The hot `commands` row and regular node-details polling path do not carry terminal output.
 
 The inline terminal and Browser SSH are complementary:
 
