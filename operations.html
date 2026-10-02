@@ -425,7 +425,7 @@ $('sshHost').addEventListener('input',()=>{sshDirtyFields.add('host');renderOper
 $('sshUser').addEventListener('input',()=>{sshDirtyFields.add('user');renderOperationsSshState()});
 $('sshFingerprint').addEventListener('input',()=>{sshDirtyFields.add('fingerprint');renderOperationsSshState()});
 $('sshSave').onclick=()=>withButton('sshSave',saveOperationsSshState);
-$('sshProbe').onclick=()=>withButton('sshProbe',probeOperationsSsh);
+$('sshProbe').onclick=()=>withButton('sshProbe',probeOperationsSsh).finally(()=>renderOperationsSshState());
 $('sshBootstrap').onclick=()=>navigator.clipboard.writeText(sshBootstrapCommand).then(()=>tell('Windows SSH bootstrap скопирован.')).catch(e=>tell('Не удалось скопировать bootstrap: '+e.message,true));
 $('sshCopy').onclick=()=>navigator.clipboard.writeText($('sshCommand').textContent).then(()=>tell('SSH-команда скопирована.')).catch(e=>tell('Не удалось скопировать команду: '+e.message,true));
 $('sshOpen').onclick=()=>{const host=safeSshHost($('sshHost').value);if(host&&sshBrowserReady())window.open('https://'+host,'_blank','noopener,noreferrer')};
