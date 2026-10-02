@@ -78,7 +78,7 @@ async function withButton(id,fn){const b=$(id);if(b.disabled)return;b.disabled=t
 function tell(text,error=false){$('notice').textContent=text;$('notice').className=error?'error':''}
 async function api(path,options={}){const r=await fetch(base+path,{...options,cache:'no-store',headers:{'content-type':'application/json',authorization:'Bearer '+token,...options.headers},signal:options.signal||AbortSignal.timeout(20000)});const d=await r.json().catch(()=>({}));if(!r.ok){const ref=typeof d.request_id==='string'&&/^[\w-]{1,80}$/.test(d.request_id)?d.request_id:'';const message=(errors[d.error]||d.error||'HTTP '+r.status)+(ref?' · Код ошибки: '+ref:'');const error=Error(message);error.status=r.status;error.requestId=ref;throw error}return d}
 const sshAllowedCommands=new Set(['help','status','hostname','uptime','cpu','memory','disk','network','agent-status','agent-logs','lmstudio-status','diagnostics','ping-controller','exit']);
-let sshNodeId='',sshState=null,sshInlineBusy=false,sshSelectionGeneration=0,sshLoadGeneration=0,sshSaveGeneration=0;
+let sshNodeId='',sshState=null,sshInlineBusy=false,sshSelectionGeneration=0,sshLoadGeneration=0,sshSaveGeneration=0,sshInlineGeneration=0,sshProbeGeneration=0;
 const sshDirtyFields=new Set();
 const sshBootstrapCommand='powershell -NoLogo -NoProfile -ExecutionPolicy RemoteSigned -Command "$r=Join-Path $env:ProgramData \'CitadelEWS\\agent\';$p=Join-Path $r \'configure_restricted_ssh.ps1\';if(!(Test-Path -LiteralPath $p)){$s=Get-Content (Join-Path $r \'install-state.json\') -Raw|ConvertFrom-Json;$p=Join-Path $s.release_root \'configure_restricted_ssh.ps1\'};& $p"';
 function safeSshHost(value){const host=String(value||'').trim().toLowerCase();return /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host)?host:''}
@@ -139,41 +139,75 @@ async function saveOperationsSshState(){
     applySshServerFields(sshState);renderOperationsSshState();tell('SSH-конфигурация сохранена.');
   }catch(e){if(sshNodeId===nodeId&&sshSelectionGeneration===selectionGeneration&&sshSaveGeneration===saveGeneration)tell('SSH: '+e.message,true)}
 }
-async function probeOperationsSsh(){
-  if(!sshNodeId)return;const nodeId=sshNodeId,selectionGeneration=sshSelectionGeneration;
-  try{
-    await api('/nodes/'+encodeURIComponent(nodeId)+'/commands',{method:'POST',body:JSON.stringify({command_type:'ssh_probe'})});
-    if(sshNodeId===nodeId&&sshSelectionGeneration===selectionGeneration)tell('SSH-проверка поставлена в очередь.');
-    setTimeout(()=>{if($('sshDialog').open&&sshNodeId===nodeId&&sshSelectionGeneration===selectionGeneration)loadOperationsSshState(nodeId)},2500);
-  }catch(e){if(sshNodeId===nodeId&&sshSelectionGeneration===selectionGeneration)tell('SSH: '+e.message,true)}
-}
-async function waitForOperationsSshCommand(nodeId,commandId){
+async function waitForOperationsSshProbe(nodeId,commandId,selectionGeneration,probeGeneration){
   const delays=[1000,3000,5000,8000,12000,16000];
+  const current=()=>Boolean($('sshDialog').open&&nodeId===sshNodeId&&sshSelectionGeneration===selectionGeneration&&sshProbeGeneration===probeGeneration);
   for(const delay of delays){
     await new Promise(resolve=>setTimeout(resolve,delay));
-    if(!$('sshDialog').open||nodeId!==sshNodeId)return;
+    if(!current())return;
     const data=await api('/nodes/'+encodeURIComponent(nodeId)+'/commands/'+encodeURIComponent(commandId));
+    if(!current())return;
+    const command=data.command||{};
+    if(command.status==='completed'||command.status==='failed'){
+      await loadOperationsSshState(nodeId);
+      if(!current())return;
+      tell(command.status==='completed'?'SSH-проверка завершена; readiness обновлена.':'SSH-проверка завершилась ошибкой; readiness обновлена.',command.status==='failed');
+      return;
+    }
+  }
+  if(current()){
+    await loadOperationsSshState(nodeId);
+    if(current())tell('SSH-проверка ещё выполняется; показано последнее readiness-состояние.');
+  }
+}
+async function probeOperationsSsh(){
+  if(!sshNodeId)return;
+  const nodeId=sshNodeId,selectionGeneration=sshSelectionGeneration,probeGeneration=++sshProbeGeneration;
+  try{
+    const data=await api('/nodes/'+encodeURIComponent(nodeId)+'/commands',{method:'POST',body:JSON.stringify({command_type:'ssh_probe'})});
+    if(!$('sshDialog').open||sshNodeId!==nodeId||sshSelectionGeneration!==selectionGeneration||sshProbeGeneration!==probeGeneration)return;
+    const commandId=data?.command?.command_id;if(!commandId)throw Error('command_id_missing');
+    tell('SSH-проверка поставлена в очередь.');
+    await waitForOperationsSshProbe(nodeId,commandId,selectionGeneration,probeGeneration);
+  }catch(e){
+    if($('sshDialog').open&&sshNodeId===nodeId&&sshSelectionGeneration===selectionGeneration&&sshProbeGeneration===probeGeneration)tell('SSH: '+e.message,true);
+  }
+}
+async function waitForOperationsSshCommand(nodeId,commandId,selectionGeneration,inlineGeneration){
+  const delays=[1000,3000,5000,8000,12000,16000];
+  const current=()=>Boolean($('sshDialog').open&&nodeId===sshNodeId&&sshSelectionGeneration===selectionGeneration&&sshInlineGeneration===inlineGeneration);
+  for(const delay of delays){
+    await new Promise(resolve=>setTimeout(resolve,delay));
+    if(!current())return;
+    const data=await api('/nodes/'+encodeURIComponent(nodeId)+'/commands/'+encodeURIComponent(commandId));
+    if(!current())return;
     const command=data.command||{};
     if(command.status==='completed'){appendSshInline(command.result?.output||'(no output)',nodeId);return}
     if(command.status==='failed'){appendSshInline('[command failed]',nodeId);return}
   }
-  appendSshInline('[still pending after 45s — node may be offline or busy]',nodeId);
+  if(current())appendSshInline('[still pending after 45s — node may be offline or busy]',nodeId);
 }
 async function sendOperationsSshCommand(){
   if(!sshNodeId||sshInlineBusy)return;const verb=$('sshInlineInput').value.trim();
   if(!sshAllowedCommands.has(verb)){appendSshInline('citadel> '+(verb||'(empty)')+'\nDENIED: command is not in the CITADEL allow-list. Type help.');return}
-  const node=sshSelectedNode(),nodeId=sshNodeId;
+  const node=sshSelectedNode(),nodeId=sshNodeId,selectionGeneration=sshSelectionGeneration,inlineGeneration=++sshInlineGeneration;
   if(!node||!sshVersionAtLeast(node.agent_version,'0.3.32')){appendSshInline('citadel> '+verb+'\n[agent 0.3.32+ required]');return}
   sshInlineBusy=true;renderOperationsSshState();$('sshInlineInput').value='';appendSshInline('citadel> '+verb);
+  const current=()=>Boolean($('sshDialog').open&&sshNodeId===nodeId&&sshSelectionGeneration===selectionGeneration&&sshInlineGeneration===inlineGeneration);
   try{
     const data=await api('/nodes/'+encodeURIComponent(nodeId)+'/commands',{method:'POST',body:JSON.stringify({command_type:'ssh_console',command:verb})});
+    if(!current())return;
     const commandId=data?.command?.command_id;if(!commandId)throw Error('command_id_missing');
-    await waitForOperationsSshCommand(nodeId,commandId);
-  }catch(e){appendSshInline('[error: '+e.message+']',nodeId)}
-  finally{sshInlineBusy=false;if($('sshDialog').open&&sshNodeId===nodeId){renderOperationsSshState();$('sshInlineInput').focus()}}
+    await waitForOperationsSshCommand(nodeId,commandId,selectionGeneration,inlineGeneration);
+  }catch(e){if(current())appendSshInline('[error: '+e.message+']',nodeId)}
+  finally{
+    if(current()){
+      sshInlineBusy=false;renderOperationsSshState();$('sshInlineInput').focus();
+    }
+  }
 }
 function openOperationsSsh(node){if(!node)return;sshNodeId='';sshState=null;sshDirtyFields.clear();$('sshDialog').showModal();loadOperationsSshState(node.node_id)}
-function resetOperationsSshDialog(){sshSelectionGeneration++;sshLoadGeneration++;sshSaveGeneration++;sshNodeId='';sshState=null;sshInlineBusy=false;sshDirtyFields.clear()}
+function resetOperationsSshDialog(){sshSelectionGeneration++;sshLoadGeneration++;sshSaveGeneration++;sshInlineGeneration++;sshProbeGeneration++;sshNodeId='';sshState=null;sshInlineBusy=false;sshDirtyFields.clear()}
 
 function state(s){const n=el('div',undefined,'status'),busyStates=['running','accepted','pending','assigned','queued'];if(busyStates.includes(s)){const icon=el('span',undefined,'spin');icon.setAttribute('aria-hidden','true');n.append(icon)}else{const ok=['completed','online'].includes(s),warn=['planned','paused'].includes(s),bad=['failed','offline','revoked','completed_with_failures'].includes(s);const icon=el('span',ok?'✓':warn?'◷':bad?'×':'•','status-icon '+(ok?'status-ok':warn?'status-warn':bad?'status-bad':'status-neutral'));icon.setAttribute('aria-hidden','true');n.append(icon)}n.append(el('span',label(s)));return n}
 function button(text,fn,cls=''){const b=el('button',text,cls);b.type='button';b.onclick=fn;return b}function professionLabel(id){const ru={planner:'Планировщик',verifier:'Проверяющий',researcher:'Исследователь',reporter:'Автор отчёта',metrics:'Аналитик метрик',recovery:'Инженер восстановления',programmer:'Программист',mathematician:'Математик',security_analyst:'Аналитик безопасности',engineer:'Инженер',scientist:'Учёный'};return ru[id]||workRoles.find(r=>r.id===id)?.label||id}
