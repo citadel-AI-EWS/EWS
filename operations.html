@@ -388,6 +388,45 @@ body:not(.authenticated) .art-network-bottom{width:min(45vw,680px)!important;rig
  body:not(.authenticated) .art-globe-left,body:not(.authenticated) .art-mask-right{display:none!important}
 }
 
+
+/* CITADEL MOBILE CONCEPT BALANCE v6 */
+@media(max-width:700px){
+ body:not(.authenticated) #auth{
+   width:88vw!important;
+   background:linear-gradient(180deg,#020608e8,#020405f2)!important;
+   backdrop-filter:blur(4px)!important
+ }
+ body:not(.authenticated) .art-mask-left{
+   width:102vw!important;
+   left:-42vw!important;
+   top:14vh!important;
+   opacity:.96!important
+ }
+ body:not(.authenticated) .art-hood-right{
+   display:block!important;
+   width:64vw!important;
+   right:-8vw!important;
+   top:48svh!important;
+   bottom:auto!important;
+   opacity:.96!important;
+   z-index:4!important;
+   filter:drop-shadow(0 0 18px #8fffe018) drop-shadow(0 0 12px #ff263f18)!important
+ }
+ body:not(.authenticated) .art-network-bottom{
+   width:100vw!important;
+   right:-28vw!important;
+   bottom:-1.5vh!important;
+   opacity:.58!important;
+   z-index:1!important
+ }
+ body:not(.authenticated) .login-boot{
+   top:66svh!important;
+   left:4vw!important;
+   width:43vw!important;
+   z-index:8!important
+ }
+}
+
 </style></head><body><div id="activityBar" class="activity-bar" aria-hidden="true"></div><div id="cyberArt" class="cyber-art" aria-hidden="true">
 <svg class="login-only art-mask-left cyber-glitch" viewBox="0 0 440 620" role="presentation">
 <defs>
