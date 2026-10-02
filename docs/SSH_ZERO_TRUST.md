@@ -137,9 +137,21 @@ Dry-run использует настоящий Cloudflare API token тольк�
 
 Для browser-rendered SSH CITADEL использует self-hosted Access application и application-specific SSH CA. Cloudflare в 2026 рекомендует Access for Infrastructure для новых native-SSH сценариев с WARP/Gateway и command logging; это отдельный режим и не требуется для выбранного clientless Browser SSH пути.
 
+## Inline restricted terminal в Hub
+
+Agent 0.3.32 добавляет второй интерактивный путь управления, который не заменяет Browser SSH: **INLINE RESTRICTED TERMINAL** внутри Hub. Он использует существующий подписанный Controller → agent command channel, поэтому для его работы не требуется открывать shell, порт 22 или передавать SSH credentials в Hub.
+
+Inline terminal принимает тот же фиксированный read-only allow-list: `help`, `status`, `hostname`, `uptime`, `cpu`, `memory`, `disk`, `network`, `agent-status`, `agent-logs`, `lmstudio-status`, `diagnostics`, `ping-controller`, `exit`. Произвольные команды, аргументы, shell metacharacters, `cmd.exe`, PowerShell и Bash не поддерживаются.
+
+Результат команды ограничен 24 KiB и хранится отдельно от hot `commands` row в `ssh_console_results`. Результаты очищаются через 24 часа bounded batch-очисткой. Hub опрашивает только конкретный `command_id`, а вывод дополнительно связан с исходным `node_id`, поэтому поздний ответ одной ноды не может появиться в терминале другой после переключения выбора.
+
+Команда `agent-logs` читает только ограниченный хвост файла и сначала учитывает `data_dir` из активной конфигурации агента. Это исключает загрузку целого append-only лога в память.
+
+Browser SSH через Cloudflare остаётся отдельным real-SSH transport. Inline terminal предназначен для безопасной повседневной диагностики из Hub; Browser SSH — для реальной SSH-сессии, когда Tunnel/Access/sshd готовы.
+
 ## Что остаётся внешней настройкой
 
-После merge 0.3.31 программная цепочка готова к provisioning. Для первого реального Browser SSH всё ещё нужны два значения, которые нельзя безопасно выдумать:
+После merge 0.3.32 программная цепочка готова к provisioning и к restricted inline terminal из Hub. Для первого реального Browser SSH всё ещё нужны два значения, которые нельзя безопасно выдумать:
 
 - public hostname в домене/zone, управляемом вашим Cloudflare;
 - точный email identity, которому Cloudflare Access разрешит вход.
