@@ -387,6 +387,10 @@ need(operations.includes("sshVersionAtLeast(node.agent_version,'0.3.32')"), "dep
 need(operations.includes("if(Array.isArray(node?.capabilities))return node.capabilities;"), "deployed Machines SSH bootstrap must consume detailed capabilities");
 need(operations.includes("if(currentNode?.node_id===sshNodeId)return currentNode;"), "deployed Machines SSH must prefer detailed node state");
 need(operations.includes("safeSshFingerprint") && operations.includes("submittedFingerprint===null"), "deployed Machines SSH fingerprint validation missing");
+need(operations.includes("sshInlineGeneration") && operations.includes("sshProbeGeneration"), "deployed Machines SSH dialog generations missing");
+need(operations.includes("async function waitForOperationsSshProbe") && operations.includes("command.status==='completed'||command.status==='failed'"), "deployed Machines SSH probe does not wait for queued completion");
+need(operations.includes("sshSelectionGeneration===selectionGeneration&&sshInlineGeneration===inlineGeneration"), "deployed Machines terminal can accept an earlier dialog-session result");
+need(operations.includes("sshSelectionGeneration===selectionGeneration&&sshProbeGeneration===probeGeneration"), "deployed Machines probe can accept an earlier dialog-session result");
 need(operations.includes("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"), "deployed Machines SSH user validation drifts from Controller");
 need(operations.includes("command_type:'ssh_console'") && operations.includes("command_type:'ssh_probe'"), "deployed Machines SSH commands missing");
 need(operations.includes("sshSelectionGeneration") && operations.includes("sshLoadGeneration") && operations.includes("sshSaveGeneration"), "deployed Machines SSH stale-response generations missing");
