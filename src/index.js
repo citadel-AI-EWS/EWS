@@ -58,7 +58,7 @@ const LATEST_NODE_RELEASE = Object.freeze({
     {
       path: "configure_restricted_ssh.ps1",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/configure_restricted_ssh.ps1",
-      sha256: "22c1364150ec10c2868ae2e5adf5e633d251a5b6324cee7de1383db4f4f274b2"
+      sha256: "8891693ca8ed37da39a7a6a455e5bdcb75f878517eaea83cf178a17ddb616ee2"
     }
   ]
 });
