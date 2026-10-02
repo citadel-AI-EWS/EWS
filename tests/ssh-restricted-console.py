@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import json
 import tempfile
 from pathlib import Path
 
@@ -55,6 +56,25 @@ with tempfile.TemporaryDirectory() as temp:
         output, should_exit = module.execute(unsafe, config)
         require(output.startswith("DENIED:"), f"unsafe command accepted: {unsafe}")
         require(should_exit is False, f"unsafe command closed session: {unsafe}")
+    state_dir = Path(temp) / "custom-state"
+    state_dir.mkdir()
+    log_path = state_dir / "agent.jsonl"
+    log_path.write_text(
+        "old-secret-must-not-survive-bounded-tail\n"
+        + ("x" * 100 + "\n") * 1000
+        + "tail-one\ntail-two\n",
+        encoding="utf-8",
+    )
+    config.write_text(
+        json.dumps({"controller_url": "https://127.0.0.1:9", "data_dir": str(state_dir)}) + "\n",
+        encoding="utf-8",
+    )
+    output, should_exit = module.execute("agent-logs", config)
+    require(should_exit is False, "agent-logs unexpectedly closed the session")
+    require("tail-two" in output, "agent-logs did not read the configured data_dir")
+    require("old-secret-must-not-survive-bounded-tail" not in output, "agent-logs read beyond the bounded tail")
+    require(len(output.encode("utf-8")) <= 64 * 1024, "agent-logs exceeded the bounded read budget")
+
     output, should_exit = module.execute("exit", config)
     require(should_exit is True, "exit did not close the session")
 

@@ -166,19 +166,45 @@ def command_agent_status() -> str:
     return json.dumps({"running": bool(matches), "processes": matches[:8]}, ensure_ascii=False)
 
 
-def command_agent_logs() -> str:
-    candidates = [
-        default_state_dir() / "agent.jsonl",
-        Path.home() / ".local" / "state" / "citadel-ews" / "agent.jsonl",
-    ]
-    path = next((candidate for candidate in candidates if candidate.is_file()), None)
-    if not path:
-        return "agent log not found"
+def _bounded_tail_lines(path: Path, max_bytes: int = 64 * 1024, max_lines: int = 40) -> str:
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        size = path.stat().st_size
+        with path.open("rb") as stream:
+            truncated = size > max_bytes
+            if truncated:
+                stream.seek(-max_bytes, os.SEEK_END)
+            raw = stream.read(max_bytes)
     except OSError:
         return "agent log unavailable"
-    return "\n".join(lines[-40:]) or "(empty log)"
+    if truncated:
+        split_at = raw.find(b"\n")
+        raw = raw[split_at + 1 :] if split_at >= 0 else b""
+    lines = raw.decode("utf-8", errors="replace").splitlines()
+    return "\n".join(lines[-max_lines:]) or "(empty log)"
+
+
+def command_agent_logs(config_path: Path) -> str:
+    config = load_config(config_path)
+    configured_dir = config.get("data_dir")
+    candidates: list[Path] = []
+    if isinstance(configured_dir, str) and configured_dir.strip():
+        candidates.append(Path(configured_dir).expanduser())
+    candidates.extend(
+        [
+            default_state_dir(),
+            Path.home() / ".local" / "state" / "citadel-ews",
+        ]
+    )
+    seen: set[str] = set()
+    for root in candidates:
+        path = root / "agent.jsonl"
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        if path.is_file():
+            return _bounded_tail_lines(path)
+    return "agent log not found"
 
 
 def command_lmstudio_status() -> str:
@@ -253,10 +279,11 @@ def execute(command: str, config_path: Path) -> tuple[str, bool]:
         "disk": command_disk,
         "network": command_network,
         "agent-status": command_agent_status,
-        "agent-logs": command_agent_logs,
         "lmstudio-status": command_lmstudio_status,
         "diagnostics": command_diagnostics,
     }
+    if verb == "agent-logs":
+        return command_agent_logs(config_path), False
     if verb == "ping-controller":
         return command_ping_controller(config_path), False
     return handlers[verb](), False

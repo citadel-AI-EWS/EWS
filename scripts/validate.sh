@@ -372,7 +372,7 @@ required = {
     "architect_auth_state", "architect_recovery_attempts",
     "architect_access_tokens", "enterprise_sites", "enterprise_node_groups",
     "enterprise_node_scope", "enterprise_desired_state",
-    "d1_guardian_state", "d1_guardian_actions", "node_ssh_state",
+    "d1_guardian_state", "d1_guardian_actions", "node_ssh_state", "ssh_console_results",
 }
 tables = {
     row[0]
