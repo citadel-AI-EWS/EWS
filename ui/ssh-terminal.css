@@ -1,0 +1,7 @@
+#directSshDialog {width:min(1000px,calc(100% - 24px));max-width:1000px;padding:18px}
+#directSshDialog h2 {margin:0}
+#sshNodeSelect {max-width:100%;flex:1;min-width:160px}
+#sshStatus {min-height:24px;margin:10px 0;color:#b8d3dc}
+#sshTerminal {height:min(58vh,560px);min-height:220px;background:#071018;border:1px solid #34475c;border-radius:10px;padding:10px;overflow:hidden}
+#sshTerminal .xterm {height:100%}
+@media(max-width:480px) {#directSshDialog{padding:12px}#sshTerminal{padding:6px;height:55vh}}
