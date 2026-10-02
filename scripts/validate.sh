@@ -353,6 +353,7 @@ python tests/mini-agents.py
 python tests/lmstudio-progress.py
 python tests/ssh-restricted-console.py
 node scripts/provision_cloudflare_ssh.mjs --self-test
+node tests/ssh-provisioning.mjs
 node tests/openrouter-quality-gate.mjs
 
 python - <<'PY'
