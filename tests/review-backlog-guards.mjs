@@ -225,6 +225,14 @@ need(agentV1.includes("validate_lmstudio_model_payload"), "LM Studio model valid
 need(agentV1.includes("windows_sleep_hibernate_inhibit"), "sleep/hibernate inhibition missing");
 need(telemetryCommon.includes("replayed_request"), "telemetry replay rejection missing");
 need(index.includes("node_request_nonces"), "Controller request nonce storage missing");
+need(index.includes("const durableClaim = await claimSyncReplayNonce(env, nodeId, requestId);"),
+  "Controller signed routes must prefer the per-node Durable Object replay store");
+need(!index.includes('url.pathname.endsWith("/sync")\n      ? await claimSyncReplayNonce'),
+  "Controller durable replay protection must not be limited to /sync");
+need(telemetryCommon.includes("const durableClaim = await claimDurableReplayNonce(env, nodeId, requestId);"),
+  "telemetry signed routes must prefer the per-node Durable Object replay store");
+need(!telemetryCommon.includes('url.pathname.endsWith("/sync")'),
+  "telemetry durable replay protection must not be limited to /sync");
 need(index.includes("agentRequiresRequestId"), "Controller compatibility gate for replay protection missing");
 need(index.includes("replayed_request"), "Controller replay rejection missing");
 need(index.includes('requestId.endsWith("0")'), "nonce cleanup must be opportunistic instead of every signed poll");
