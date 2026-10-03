@@ -1,0 +1,111 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: "en-US"
+early_access: false
+
+tone_instructions: "Be concise and evidence-driven. Prioritize confirmed correctness, security, concurrency, data-loss, deployment, Windows-agent, SSH, D1, authentication, retry/idempotency, supply-chain, and release-integrity issues."
+
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  commit_status: true
+  fail_commit_status: true
+  collapse_walkthrough: true
+  changed_files_summary: false
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  suggested_labels: false
+  auto_apply_labels: false
+  suggested_reviewers: false
+  auto_assign_reviewers: false
+  abort_on_close: true
+
+  path_filters:
+    - "!**/*.png"
+    - "!**/*.jpg"
+    - "!**/*.jpeg"
+    - "!**/*.gif"
+    - "!**/*.webp"
+    - "!releases/**"
+    - "!docs/**"
+    - "!knowledge/**"
+
+  path_instructions:
+    - path: "**"
+      instructions: |
+        Focus on issues introduced by the current change.
+        Prefer confirmed P0, P1, and P2 findings with a reproducible failure
+        scenario and the smallest safe fix. Skip cosmetic style, formatting,
+        naming, and subjective refactors unless they create a concrete defect.
+
+    - path: "src/**"
+      instructions: |
+        Check D1 read and write amplification, replay protection,
+        idempotency, stale-node detection, leases, retries, assignment
+        fencing, race conditions, bounded queries, and migration
+        compatibility. Verify server and Hub freshness assumptions stay
+        consistent.
+
+    - path: "agent/**"
+      instructions: |
+        Focus on Windows and Linux service lifecycle, privilege boundaries,
+        subprocess execution, trusted executable resolution, signed updates,
+        dependency integrity, reboot persistence, headless behavior, LM Studio
+        integration, reconnect logic, and safe rollback. Flag any path that can
+        execute user-controlled or untrusted binaries with elevated privileges.
+
+    - path: "gateway/**"
+      instructions: |
+        Focus on SSH and WebSocket authentication, ticket replay, secret
+        exposure, origin validation, TLS and plaintext boundaries, session
+        isolation, cleanup, host-key verification, and command restrictions.
+
+    - path: ".github/workflows/**"
+      instructions: |
+        Check permissions, secrets handling, artifact integrity, deployment
+        SHA correctness, concurrency behavior, provenance, release pinning,
+        and any path that can bypass required validation or deploy stale code.
+
+    - path: "migrations/**"
+      instructions: |
+        Check forward compatibility, idempotency, index coverage, bounded
+        reads and writes, rollback assumptions, and whether migrations remain
+        safe on existing D1 data.
+
+    - path: "controller_app.py"
+      instructions: |
+        Focus on authentication, request identity, retries, error propagation,
+        LM Studio readiness, command/result correlation, and unsafe process or
+        network behavior.
+
+    - path: "hub.html"
+      instructions: |
+        Focus on node freshness, per-node state isolation, destructive bulk
+        action scope, SSH terminal concurrency, stale asynchronous UI updates,
+        and whether visible state matches Controller semantics.
+
+    - path: "operations.html"
+      instructions: |
+        Focus on SSH and node-operation safety, stale asynchronous state,
+        destructive-action targeting, authentication, readiness, and progress
+        reporting. Do not report purely visual issues unless they break an
+        operation or hide an error.
+
+    - path: "tests/**"
+      instructions: |
+        Check whether tests can pass while production behavior is still broken,
+        especially for timing, retries, mixed timestamp formats, D1 behavior,
+        Windows lifecycle, SSH, LM Studio, and multi-node concurrency. Flag
+        tests that accidentally validate a mock-only path as real E2E.
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: false
+    drafts: false
+    base_branches:
+      - "main"
+    ignore_title_keywords:
+      - "WIP"
