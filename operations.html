@@ -246,7 +246,7 @@ body:not(.authenticated) #auth label{display:flex;justify-content:space-between;
 body:not(.authenticated) #auth input{height:56px!important;background:#010405ed!important;border-color:#4d747a!important;box-shadow:inset 4px 0 #ff263f,0 0 22px #000!important}
 body:not(.authenticated) #auth .primary{height:58px!important;background:linear-gradient(180deg,#9d071a,#4f050d)!important;border-color:#ff4055!important;box-shadow:inset 0 0 0 2px #ff172e55,0 0 28px #ff173366!important}
 body:not(.authenticated) .auth-monitor-note{color:#53c7d4!important}
-body:not(.authenticated) #notice{display:none!important}
+body:not(.authenticated) #notice:not(.error){display:none!important}\nbody:not(.authenticated) #notice.error{display:block!important;width:min(88vw,620px);max-width:620px;margin:12px auto 18px!important;padding:10px 12px;border:1px solid #ff4055;background:#21080cee;color:#ffd7db;text-align:center;font-size:11px;line-height:1.45;box-shadow:0 0 18px #ff173344;z-index:12}
 
 body:not(.authenticated) .login-boot{position:fixed!important;z-index:9;left:18px!important;bottom:18px!important;width:min(330px,42vw);margin:0!important;padding:10px 12px;border:1px solid #315b60;background:#020708c9;color:#62d9e6;font-size:9px!important;line-height:1.45;box-shadow:0 0 24px #000a}
 body:not(.authenticated) .login-boot strong{color:#00f3a5!important}
