@@ -213,6 +213,22 @@ for (const route of ["/hub/", "/architect/"]) {
     await page.locator("#login").waitFor({ state: "visible", timeout });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     if (overflow > 20) addFinding("mobile_horizontal_overflow", "/", `horizontal overflow ${overflow}px at 390px viewport`);
+    entry.auth_probe_active = true;
+    await page.locator("#token").fill("synthetic-invalid-token");
+    await page.locator("#loginButton").click();
+    await page.waitForTimeout(50);
+    if ((await page.locator("#loginButton").textContent()) !== "VERIFYING…") {
+      addFinding("mobile_login_no_progress", "/", "LOGIN tap produced no immediate progress state");
+    }
+    await page.waitForFunction(() => {
+      const notice = document.querySelector("#notice");
+      const button = document.querySelector("#loginButton");
+      return notice?.classList.contains("error") && button && !button.disabled;
+    }, { timeout });
+    entry.auth_probe_active = false;
+    if (!(await page.locator("#notice").isVisible())) {
+      addFinding("mobile_login_error_hidden", "/", "mobile invalid login produced no visible error");
+    }
     await page.screenshot({ path: path.join(outDir, "root-mobile.png"), fullPage: true });
   } catch (error) {
     addFinding("mobile_scenario_failure", "/", String(error).slice(0, 1600));
