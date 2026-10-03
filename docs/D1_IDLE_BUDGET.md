@@ -2,7 +2,7 @@
 
 The previous 30-second agent cycle issued separate command, heartbeat, AI-state
 and assignment requests. Every signed request previously inserted a replay nonce; deleting
-expired nonces also consumed the daily write quota. Modern signed node-request replay IDs now live in the per-node Durable Object instead of D1 on every route; D1 remains a fail-closed fallback when that binding is unavailable. Repeated identical `cycle_error` and `operation_heartbeat_failed` telemetry is also coalesced per node for five minutes in the Durable Object; unique errors, command failures, security events and results are never coalesced by this rule. Network, presence and AI
+expired nonces also consumed the daily write quota. Modern signed node-request replay IDs now live in the per-node Durable Object instead of D1 on every route. D1-only deployments remain supported when no DO binding is configured. A configured DO outage (including a lost response after a committed claim) returns HTTP 503 `node_replay_store_unavailable`: automatically switching to an independent D1 store could accept the same request twice. Before a DO claim, one indexed read checks any legacy D1 nonce, preserving rejection when transitioning from D1 to DO. Do not remove a configured binding during signed traffic; drain the signature window before reverting to D1-only operation. Nonces outlive the entire accepted signature window, including future clock skew. Repeated identical `cycle_error` and `operation_heartbeat_failed` telemetry is also coalesced per node for five minutes in the Durable Object; unique errors, command failures, security events and results are never coalesced by this rule. Network, presence and AI
 snapshots were rewritten even when their values did not change. The existing
 read-only projection therefore could not establish Free-plan capacity.
 
@@ -66,6 +66,10 @@ See <https://developers.cloudflare.com/d1/platform/pricing/>.
 `tests/d1-poll-budget.mjs` separately projects reads and writes. For one stable
 sync node polling every 30 seconds it reserves:
 
+The compatibility nonce lookup adds one indexed D1 read per signed request and
+no D1 writes. For 50 stable sync nodes that is 144,000 additional reads/day.
+The conservative three-route read model includes this lookup on all three routes.
+
 | Source | Written row equivalents per day |
 | --- | ---: |
 | Sync replay claims in D1 | 0 |
@@ -92,7 +96,8 @@ authoritative. Retention does not undo writes already charged that day.
 The D1 Capacity Check now runs after a successful main TEST deployment as well as
 on its existing daily schedule/manual trigger. In addition to account/database UTC
 daily totals, it reads Cloudflare `d1QueriesAdaptiveGroups`, sorted by written rows,
-for the UTC day so far and the previous complete UTC hour. Each window is explicit.
+for the UTC day so far, the previous complete UTC hour and the current partial
+UTC hour. Each window is explicit; the partial hour is not a full-hour rate.
 Only allowlisted table labels, query hashes and numeric counters are published;
 raw SQL, literals, node identifiers, IPs and credentials are never printed.
 This diagnostic adds no operational D1 queries/writes. Query insights are adaptive
@@ -104,6 +109,13 @@ The 2026-10-03 07:01 UTC run on `9a3e5d9` reported 226,352 account writes and
 on October 2. These approximate totals establish continued load, but do not
 attribute all of it to SSH, legacy routes, AI state or any other single source.
 Use the new query attribution before making that claim.
+
+After #277/#278, capacity runs at 12:47:06 and 13:22:49 UTC on October 3 both
+reported 267,902 writes, while reads rose from 1,368,630 to 1,380,079. The nonce
+INSERT counter stayed at 34,247 executions / 102,741 writes; retained log INSERTs
+stayed at 16,146 executions / 96,876 writes. This is a measured 35-minute plateau,
+not proof of a full clean UTC day or 50 active physical hosts. The daily warning
+remains because already-counted writes do not disappear after a fix.
 
 ## Verification and rollout
 

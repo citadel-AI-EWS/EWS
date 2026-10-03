@@ -26,7 +26,7 @@ export class NodeSshRelay {
       const expires = Number(request.headers.get('x-citadel-request-expires'));
       const now = Math.floor(Date.now() / 1000);
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId || '') ||
-          !Number.isInteger(expires) || expires <= now || expires - now > 600) {
+          !Number.isInteger(expires) || expires <= now || expires - now > 630) {
         return new Response(null, {status: 403});
       }
       const used = await this.state.storage.transaction(async tx => {

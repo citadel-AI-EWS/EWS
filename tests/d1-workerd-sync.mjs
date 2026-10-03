@@ -9,6 +9,22 @@ const bundle = await build({stdin: {resolveDir: process.cwd(), contents: `
   export {NodeSshRelay} from './src/worker.js';
   export default {async fetch(request, env, ctx) {
     let writes = 0;
+    let replayExpires = null;
+    const mode = request.headers.get('x-test-relay-mode');
+    const relay = env.SSH_RELAY;
+    const SSH_RELAY = mode === 'absent' ? undefined : {
+      idFromName: name => relay.idFromName(name),
+      get: id => ({async fetch(input, options) {
+        if (mode === 'unavailable') throw Error('test relay outage');
+        const req = new Request(input, options);
+        if (req.headers.get('x-citadel-relay-role') === 'replay') {
+          replayExpires = Number(req.headers.get('x-citadel-request-expires'));
+        }
+        const result = await relay.get(id).fetch(input, options);
+        if (mode === 'response-lost') throw Error('test response lost after committed claim');
+        return result;
+      }})
+    };
     const record = result => {writes += Number(result?.meta?.rows_written || 0); return result;};
     class Statement {
       constructor(inner) {this.inner = inner;}
@@ -19,9 +35,10 @@ const bundle = await build({stdin: {resolveDir: process.cwd(), contents: `
     }
     const DB = {prepare: sql => new Statement(env.DB.prepare(sql)),
       batch: async statements => (await env.DB.batch(statements.map(s => s.inner))).map(record)};
-    const response = await worker.fetch(request, {...env, DB}, ctx);
+    const response = await worker.fetch(request, {...env, DB, SSH_RELAY}, ctx);
     const output = new Response(response.body, response);
     output.headers.set('x-test-d1-writes', String(writes));
+    if (replayExpires !== null) output.headers.set('x-test-replay-expires', String(replayExpires));
     return output;
   }};
 `}, bundle: true, format: 'esm', write: false});
@@ -171,6 +188,54 @@ try {
       `${name} budget must include all modified table/index rows`);
     console.log(`${name} refresh actual local D1 rows_written: ${refreshed.headers.get('x-test-d1-writes')}`);
   }
+  // Replay stores must not form independent acceptance domains during outages
+  // or migration. These use real signatures and the real Durable Object/D1.
+  async function signedOptions(suffix, stamp = String(Math.floor(Date.now() / 1000))) {
+    const path = `/api/v1/nodes/${nodeId}/${suffix}`;
+    const method = suffix === 'logs' ? 'POST' : 'GET';
+    const body = method === 'GET' ? '' : JSON.stringify({events: [{
+      event_id: crypto.randomUUID(), level: 'info', event_type: 'command_completed',
+      message: 'replay failover regression', created_at: new Date().toISOString()
+    }]});
+    const requestId = crypto.randomUUID();
+    const digest = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body))).toString('hex');
+    const signature = await crypto.subtle.sign('Ed25519', keys.privateKey,
+      new TextEncoder().encode([method, path, stamp, requestId, digest].join('\n')));
+    return {path, options: {method, ...(body ? {body} : {}), headers: {
+      'content-type': 'application/json', 'x-node-id': nodeId, 'x-node-timestamp': stamp,
+      'x-node-request-id': requestId, 'x-node-signature': Buffer.from(signature).toString('base64url')
+    }}};
+  }
+  function send(fixture, mode) {
+    return mf.dispatchFetch('https://local.test' + fixture.path, {...fixture.options,
+      headers: {...fixture.options.headers, ...(mode ? {'x-test-relay-mode': mode} : {})}});
+  }
+  for (const suffix of ['assignments', 'logs']) {
+    const original = await signedOptions(suffix);
+    assert.ok((await send(original)).ok);
+    response = await send(original, 'unavailable');
+    assert.equal(response.status, 503, `${suffix}: DO outage must not accept a previously used nonce via D1`);
+    assert.equal((await response.json()).error, 'node_replay_store_unavailable');
+    assert.equal((await send(original)).status, 409);
+
+    const ambiguous = await signedOptions(suffix);
+    assert.equal((await send(ambiguous, 'response-lost')).status, 503);
+    assert.equal((await send(ambiguous)).status, 409, 'a committed claim survives a lost response');
+
+    const legacy = await signedOptions(suffix);
+    assert.ok((await send(legacy, 'absent')).ok, 'D1-only deployments remain supported');
+    assert.equal((await send(legacy, 'absent')).status, 409);
+    assert.equal((await send(legacy)).status, 409, 'D1 nonce is honored when DO becomes available');
+
+    const futureTimestamp = Math.floor(Date.now() / 1000) + 299;
+    const future = await signedOptions(suffix, String(futureTimestamp));
+    response = await send(future);
+    assert.ok(response.ok, await response.clone().text());
+    assert.ok(Number(response.headers.get('x-test-replay-expires')) > futureTimestamp + 300,
+      'nonce must outlive the entire accepted signature window, including clock skew');
+  }
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM node_request_nonces').first()).n, 2,
+    'only the two explicitly D1-only requests may create nonce rows');
   await db.prepare("UPDATE nodes SET status = 'revoked' WHERE node_id = ?").bind(nodeId).run();
   response = await mf.dispatchFetch('https://local.test' + route, options);
   assert.equal(response.status, 403);
