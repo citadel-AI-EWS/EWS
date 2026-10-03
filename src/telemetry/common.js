@@ -402,10 +402,10 @@ export async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   if (!verified) throw new TelemetryError(401, "invalid_signature");
 
   if (requestId) {
-    const syncHotPath = url.pathname.endsWith("/sync");
-    const durableClaim = syncHotPath
-      ? await claimDurableReplayNonce(env, nodeId, requestId)
-      : null;
+    // Use the per-node Durable Object as the primary atomic replay store for
+    // every signed modern node request. D1 remains a fail-closed fallback when
+    // the binding is unavailable or the Durable Object cannot be reached.
+    const durableClaim = await claimDurableReplayNonce(env, nodeId, requestId);
     if (durableClaim === false) {
       throw new TelemetryError(409, "replayed_request");
     }
