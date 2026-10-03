@@ -170,9 +170,10 @@ const twenty = fleetProjection(20);
 const FREE_DAILY_ROWS_WRITTEN = 100_000;
 function writeProjection(nodes, sync = true) {
   const requests = POLLS_PER_DAY * (sync ? 1 : 4);
-  // Sync replay IDs are claimed in the per-node Durable Object. Legacy signed
-  // routes keep the D1 nonce table as a conservative fallback.
-  const nonceWrites = sync ? 0 : requests * 2 * 3;
+  // All modern signed node routes claim replay IDs in the per-node Durable
+  // Object. D1 nonce storage is only the fail-closed fallback when that binding
+  // is unavailable, so healthy steady-state fleet traffic has zero nonce writes.
+  const nonceWrites = 0;
   const heartbeatWrites = (86_400 / (sync ? 240 : 30)) * 3;
   const aiWrites = (86_400 / (sync ? 300 : 30)) * 3; // summary + updated_at index + runtime
   const sshWrites = 0; // unchanged probes are now conditional, on sync and legacy heartbeat
@@ -202,7 +203,7 @@ console.log(JSON.stringify({
     public_hub_refresh_seconds: PUBLIC_HUB_REFRESH_SECONDS,
     machine_row_equivalents_per_node: MACHINE_ROW_EQUIVALENTS_PER_NODE,
     presence_row_equivalents_per_node: PRESENCE_ROW_EQUIVALENTS_PER_NODE,
-    note: "Read projection retains the legacy three-poll estimate for comparison. Writes include stable 30s sync polling with replay IDs in the node Durable Object, 4m persisted heartbeat, unchanged SSH/network/presence/hardware and 5m AI refresh including its index. Fifty stable nodes leave only 2.8% before guardian, tasks, logs, startup, browser auth and other databases. Production Cloudflare Analytics remains authoritative."
+    note: "Read projection retains the legacy three-poll estimate for comparison. Writes include modern signed replay IDs in the per-node Durable Object on every route, 4m persisted heartbeat, unchanged SSH/network/presence/hardware and 5m AI refresh including its index. Fifty stable nodes leave only 2.8% before guardian, tasks, logs, startup, browser auth and other databases. Production Cloudflare Analytics remains authoritative."
   },
   fleets: [four, twenty],
   writes: {legacy_four_nodes: writeProjection(4, false), sync_four_nodes: syncFour,
