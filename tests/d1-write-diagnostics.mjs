@@ -28,6 +28,8 @@ const report = await collectWriteDiagnostics(async (path, options) => {
 assert.equal(calls[0].start, '2026-10-03T00:00:00.000Z');
 assert.equal(calls[1].start, '2026-10-03T06:00:00.000Z');
 assert.equal(calls[1].end, '2026-10-03T06:59:59.999Z');
+assert.equal(calls[2].start, '2026-10-03T07:00:00.000Z');
+assert.equal(calls[2].end, '2026-10-03T07:01:06.000Z');
 assert.equal(report.windows[0].returned_rows_written, 430);
 const failed = await collectWriteDiagnostics(async () => {throw Error('Bearer secret-token');},
   {account: 'account', database: 'database', now: new Date('2026-10-03T00:01:00Z')});

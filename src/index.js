@@ -3747,10 +3747,21 @@ function normalizeMetrics(value) {
   return serialized;
 }
 
-async function claimSyncReplayNonce(env, nodeId, requestId) {
+async function claimSyncReplayNonce(env, nodeId, requestId, timestampSeconds) {
   if (!env.SSH_RELAY) return null;
   try {
-    const expires = Math.floor(Date.now() / 1000) + SIGNATURE_WINDOW_SECONDS + 30;
+    // Honor claims made by a D1-only deployment before switching stores. This
+    // indexed read adds no nonce writes and must not hide storage failures.
+    try {
+      const previous = await env.DB.prepare(
+        "SELECT 1 AS used FROM node_request_nonces WHERE node_id = ? AND request_id = ?"
+      ).bind(nodeId, requestId).first();
+      if (previous) return false;
+    } catch (error) {
+      if (!/no such table:\s*node_request_nonces/i.test(String(error?.message || error))) throw error;
+    }
+    const expires = Math.max(Math.floor(Date.now() / 1000) + SIGNATURE_WINDOW_SECONDS + 30,
+      timestampSeconds + SIGNATURE_WINDOW_SECONDS + 1);
     const response = await relayStub(env, nodeId).fetch("https://relay.internal/replay-claim", {
       method: "POST",
       headers: {
@@ -3760,12 +3771,12 @@ async function claimSyncReplayNonce(env, nodeId, requestId) {
       }
     });
     if (response.status === 409) return false;
-    if (response.ok) return true;
+    if (response.status === 201) return true;
   } catch {
-    // If Durable Objects are unavailable, preserve the existing D1-backed
-    // replay store rather than weakening replay protection.
+    // The claim may have committed before a response was lost. Switching to
+    // an independent D1 store here would accept a replay already used in DO.
   }
-  return null;
+  throw new ApiError(503, "node_replay_store_unavailable");
 }
 
 async function authenticateNode(request, env, nodeId, url, bodyBytes) {
@@ -3837,9 +3848,9 @@ async function authenticateNode(request, env, nodeId, url, bodyBytes) {
 
   if (requestId) {
     // Use the per-node Durable Object as the primary atomic replay store for
-    // every signed modern node request. D1 remains a fail-closed fallback when
-    // the binding is unavailable or the Durable Object cannot be reached.
-    const durableClaim = await claimSyncReplayNonce(env, nodeId, requestId);
+    // every signed modern node request. D1-only deployments remain compatible;
+    // a configured but unavailable DO fails closed instead of switching stores.
+    const durableClaim = await claimSyncReplayNonce(env, nodeId, requestId, timestampSeconds);
     if (durableClaim === false) {
       throw new ApiError(409, "replayed_request");
     }

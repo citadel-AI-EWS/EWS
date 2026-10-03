@@ -15,7 +15,7 @@ const QUERY = `query D1WriteSources($account: string!, $database: string!, $star
 }`;
 const TABLES = new Set(['nodes', 'node_request_nonces', 'node_ssh_state',
   'node_network_state', 'node_hardware_state', 'node_presence', 'node_ai_state',
-  'node_ai_runtime_state', 'node_logs', 'node_rate_windows', 'd1_guardian_state',
+  'node_ai_runtime_state', 'node_logs', 'node_log_rate_limits', 'd1_guardian_state',
   'd1_guardian_actions', 'commands', 'assignments', 'results', 'audit_events',
   'architect_projects', 'project_work_items', 'architect_auth_rate_limits']);
 const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -46,7 +46,8 @@ export async function collectWriteDiagnostics(cfJson, {account, database, now = 
   const windows = [
     {name: 'utc_day_so_far', start: midnight, end},
     {name: 'previous_complete_utc_hour', start: new Date(+hourEnd - 3600000).toISOString(),
-      end: new Date(+hourEnd - 1).toISOString()}
+      end: new Date(+hourEnd - 1).toISOString()},
+    {name: 'current_utc_hour_so_far', start: hourEnd.toISOString(), end}
   ];
   const results = [];
   for (const window of windows) {

@@ -17,11 +17,20 @@ const JSON_HEADERS = {
 const SIGNATURE_WINDOW_SECONDS = 300;
 const DURABLE_REPLAY_EXTRA_SECONDS = 30;
 
-async function claimDurableReplayNonce(env, nodeId, requestId) {
-  if (!env.SSH_RELAY || typeof env.SSH_RELAY.idFromName !== "function") return null;
+async function claimDurableReplayNonce(env, nodeId, requestId, timestampSeconds) {
+  if (!env.SSH_RELAY) return null;
   try {
+    try {
+      const previous = await env.DB.prepare(
+        "SELECT 1 AS used FROM node_request_nonces WHERE node_id = ? AND request_id = ?"
+      ).bind(nodeId, requestId).first();
+      if (previous) return false;
+    } catch (error) {
+      if (!/no such table:\s*node_request_nonces/i.test(String(error?.message || error))) throw error;
+    }
     const stub = env.SSH_RELAY.get(env.SSH_RELAY.idFromName(nodeId));
-    const expires = Math.floor(Date.now() / 1000) + SIGNATURE_WINDOW_SECONDS + DURABLE_REPLAY_EXTRA_SECONDS;
+    const expires = Math.max(Math.floor(Date.now() / 1000) + SIGNATURE_WINDOW_SECONDS + DURABLE_REPLAY_EXTRA_SECONDS,
+      timestampSeconds + SIGNATURE_WINDOW_SECONDS + 1);
     const response = await stub.fetch("https://relay.internal/replay-claim", {
       method: "POST",
       headers: {
@@ -31,11 +40,12 @@ async function claimDurableReplayNonce(env, nodeId, requestId) {
       }
     });
     if (response.status === 409) return false;
-    if (response.ok) return true;
+    if (response.status === 201) return true;
   } catch {
-    // Fail closed to the existing D1-backed replay store when DO is unavailable.
+    // A lost DO response may follow a committed claim. An independent D1
+    // fallback cannot safely determine whether that request was already used.
   }
-  return null;
+  throw new TelemetryError(503, "node_replay_store_unavailable");
 }
 
 const SECRET_KEY = /(pass(word)?|secret|token|api[_-]?key|authorization|cookie|private[_-]?key|credential)/i;
@@ -403,9 +413,9 @@ export async function authenticateNode(request, env, nodeId, url, bodyBytes) {
 
   if (requestId) {
     // Use the per-node Durable Object as the primary atomic replay store for
-    // every signed modern node request. D1 remains a fail-closed fallback when
-    // the binding is unavailable or the Durable Object cannot be reached.
-    const durableClaim = await claimDurableReplayNonce(env, nodeId, requestId);
+    // every signed modern node request. Only deployments without a DO binding
+    // use D1; a configured DO outage fails closed without changing replay stores.
+    const durableClaim = await claimDurableReplayNonce(env, nodeId, requestId, timestampSeconds);
     if (durableClaim === false) {
       throw new TelemetryError(409, "replayed_request");
     }

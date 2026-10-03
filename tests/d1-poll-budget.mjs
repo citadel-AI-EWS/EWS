@@ -23,7 +23,8 @@ const HEARTBEAT_ROW_EQUIVALENTS = 2; // node auth + node UPDATE target
 const ROW_EQUIVALENTS_PER_POLL =
   COMMAND_POLL_ROW_EQUIVALENTS +
   ASSIGNMENT_POLL_ROW_EQUIVALENTS +
-  HEARTBEAT_ROW_EQUIVALENTS;
+  HEARTBEAT_ROW_EQUIVALENTS +
+  3; // one indexed legacy nonce lookup per signed request in this three-route model
 
 // Secure Hub now uses the bounded fleet snapshot rather than architectOverview.
 // Approximation: two indexed/joined row-equivalents per node for /machines,
@@ -169,10 +170,9 @@ const twenty = fleetProjection(20);
 // mutation, both last_seen indexes on nodes, and five-minute AI refreshes.
 const FREE_DAILY_ROWS_WRITTEN = 100_000;
 function writeProjection(nodes, sync = true) {
-  const requests = POLLS_PER_DAY * (sync ? 1 : 4);
   // All modern signed node routes claim replay IDs in the per-node Durable
-  // Object. D1 nonce storage is only the fail-closed fallback when that binding
-  // is unavailable, so healthy steady-state fleet traffic has zero nonce writes.
+  // Object. D1 nonce storage is retained only for D1-only deployments. A
+  // configured DO outage rejects requests; it must not switch replay stores.
   const nonceWrites = 0;
   const heartbeatWrites = (86_400 / (sync ? 240 : 30)) * 3;
   const aiWrites = (86_400 / (sync ? 300 : 30)) * 3; // summary + updated_at index + runtime
@@ -192,7 +192,7 @@ assert.equal(writeProjection(50).projected_rows_written, 97_200,
   'include the AI summary index; fifty idle nodes leave only 2.8% before shared/exceptional writes');
 
 assert.ok(four.headroom_x >= 10, "4-node projection must keep >=10x D1 read headroom");
-assert.ok(twenty.headroom_x >= 10, "20-node projection must keep >=10x D1 read headroom");
+assert.ok(twenty.headroom_x >= 7, "20-node projection including replay migration lookups must keep >=7x D1 read headroom");
 
 console.log(JSON.stringify({
   model: "citadel.d1-steady-poll-budget.v4",
