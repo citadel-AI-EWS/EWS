@@ -68,6 +68,50 @@ try {
   response = await mf.dispatchFetch('https://local.test' + route, options);
   assert.equal(response.status, 409);
   assert.equal((await response.json()).error, 'replayed_request');
+  // Non-sync Controller routes must use the same Durable Object replay claim.
+  // This is the hot-path regression that prevents ordinary signed GET/POST traffic
+  // from rebuilding the D1 nonce write amplification removed from /sync.
+  const assignmentRoute = `/api/v1/nodes/${nodeId}/assignments`;
+  const assignmentNonce = crypto.randomUUID();
+  const emptyHash = Buffer.from(await crypto.subtle.digest('SHA-256', new Uint8Array())).toString('hex');
+  const assignmentSignature = await crypto.subtle.sign('Ed25519', keys.privateKey,
+    new TextEncoder().encode(['GET', assignmentRoute, timestamp, assignmentNonce, emptyHash].join('\n')));
+  const assignmentOptions = {method: 'GET', headers: {
+    'x-node-id': nodeId, 'x-node-timestamp': timestamp, 'x-node-request-id': assignmentNonce,
+    'x-node-signature': Buffer.from(assignmentSignature).toString('base64url')}};
+  response = await mf.dispatchFetch('https://local.test' + assignmentRoute, assignmentOptions);
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM node_request_nonces').first()).n, 0,
+    'non-sync Controller request must not persist a D1 replay nonce when the Durable Object is healthy');
+  response = await mf.dispatchFetch('https://local.test' + assignmentRoute, assignmentOptions);
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).error, 'replayed_request');
+
+  // Telemetry uses a separate authentication module; guard that path independently.
+  const logsRoute = `/api/v1/nodes/${nodeId}/logs`;
+  const logsNonce = crypto.randomUUID();
+  const logsBody = JSON.stringify({events: [{
+    event_id: 'workerd_durable_replay_log',
+    level: 'info',
+    event_type: 'command_completed',
+    message: 'durable replay test',
+    created_at: new Date().toISOString()
+  }]});
+  const logsHash = Buffer.from(await crypto.subtle.digest('SHA-256',
+    new TextEncoder().encode(logsBody))).toString('hex');
+  const logsSignature = await crypto.subtle.sign('Ed25519', keys.privateKey,
+    new TextEncoder().encode(['POST', logsRoute, timestamp, logsNonce, logsHash].join('\n')));
+  const logsOptions = {method: 'POST', body: logsBody, headers: {'content-type': 'application/json',
+    'x-node-id': nodeId, 'x-node-timestamp': timestamp, 'x-node-request-id': logsNonce,
+    'x-node-signature': Buffer.from(logsSignature).toString('base64url')}};
+  response = await mf.dispatchFetch('https://local.test' + logsRoute, logsOptions);
+  assert.equal(response.status, 201, await response.clone().text());
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM node_request_nonces').first()).n, 0,
+    'telemetry request must not persist a D1 replay nonce when the Durable Object is healthy');
+  response = await mf.dispatchFetch('https://local.test' + logsRoute, logsOptions);
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).error, 'replayed_request');
+
   const nextNonce = crypto.randomUUID();
   const nextSignature = await crypto.subtle.sign('Ed25519', keys.privateKey,
     new TextEncoder().encode(['POST', route, timestamp, nextNonce, hash].join('\n')));
