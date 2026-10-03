@@ -328,6 +328,9 @@ need(index.includes("WHERE changes() = 1") && index.includes("INSERT INTO ssh_co
 need(sshConsoleResultsMigration.includes("CREATE TABLE IF NOT EXISTS ssh_console_results"), "inline SSH results migration missing");
 need(hub.includes('id="sshInlinePanel"'), "Hub inline restricted terminal missing");
 need(hub.includes("appendSshInline(text,nodeId=sshNodeId)") && hub.includes("if(nodeId!==sshNodeId)return false"), "Hub inline terminal stale-node result guard missing");
+need(hub.includes("const sshInlineBusyNodes=new Set()"), "Hub inline terminal busy state must be scoped per node");
+need(hub.includes("sshInlineBusyNodes.has(sshNodeId)") && hub.includes("sshInlineBusyNodes.add(nodeId)") && hub.includes("sshInlineBusyNodes.delete(nodeId)"), "Hub inline terminal per-node busy lifecycle missing");
+need(!hub.includes("sshInlineBusy=false"), "Hub inline terminal still uses global busy state");
 const sshLoadStart = hub.indexOf("async function loadSshState");
 const sshLoadEnd = hub.indexOf("async function saveSshState", sshLoadStart);
 const sshLoadBlock = hub.slice(sshLoadStart, sshLoadEnd);
