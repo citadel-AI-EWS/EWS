@@ -3,15 +3,7 @@
 language: "en-US"
 early_access: false
 
-tone_instructions: |
-  Be concise and evidence-driven.
-  Prioritize confirmed correctness, security, concurrency, data-loss,
-  deployment, Windows-agent, SSH, D1, authentication, retry/idempotency,
-  supply-chain, and release-integrity issues.
-  Do not spend review budget on cosmetic style, formatting, naming, or
-  subjective refactors unless they create a concrete defect.
-  Prefer P0, P1, and P2 findings with a reproducible failure scenario and
-  the smallest safe fix.
+tone_instructions: "Be concise and evidence-driven. Prioritize confirmed correctness, security, concurrency, data-loss, deployment, Windows-agent, SSH, D1, authentication, retry/idempotency, supply-chain, and release-integrity issues."
 
 reviews:
   profile: "chill"
@@ -42,9 +34,15 @@ reviews:
     - "!knowledge/**"
 
   path_instructions:
-    - path: "src/**"
+    - path: "**"
       instructions: |
         Focus on issues introduced by the current change.
+        Prefer confirmed P0, P1, and P2 findings with a reproducible failure
+        scenario and the smallest safe fix. Skip cosmetic style, formatting,
+        naming, and subjective refactors unless they create a concrete defect.
+
+    - path: "src/**"
+      instructions: |
         Check D1 read and write amplification, replay protection,
         idempotency, stale-node detection, leases, retries, assignment
         fencing, race conditions, bounded queries, and migration
