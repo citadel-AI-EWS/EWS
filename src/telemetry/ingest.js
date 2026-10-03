@@ -5,13 +5,46 @@ import {
   authenticateNode,
   json,
   parseJsonObject,
-  readBody
+  readBody,
+  sha256Hex
 } from "./common.js";
 import { normalizeTelemetryEvent } from "./normalize.js";
 import {
   enforceTelemetryRateLimit,
   ensureTelemetryStorage
 } from "./schema.js";
+
+const COALESCED_ERROR_TYPES = new Set([
+  "cycle_error",
+  "operation_heartbeat_failed"
+]);
+const ERROR_COALESCE_SECONDS = 300;
+
+async function claimNoisyErrorWindow(env, nodeId, event) {
+  if (!COALESCED_ERROR_TYPES.has(event.event_type)) return true;
+  if (!env.SSH_RELAY || typeof env.SSH_RELAY.idFromName !== "function") return true;
+  const fingerprint = await sha256Hex(
+    event.event_type + "\n" + event.message + "\n" + event.details_json
+  );
+  const expires = Math.floor(Date.now() / 1000) + ERROR_COALESCE_SECONDS;
+  try {
+    const stub = env.SSH_RELAY.get(env.SSH_RELAY.idFromName(nodeId));
+    const response = await stub.fetch("https://citadel.internal/telemetry-dedupe", {
+      method: "POST",
+      headers: {
+        "x-citadel-relay-role": "telemetry-dedupe",
+        "x-citadel-telemetry-fingerprint": fingerprint,
+        "x-citadel-telemetry-expires": String(expires)
+      }
+    });
+    if (response.status === 409) return false;
+    if (response.status === 201) return true;
+  } catch {
+    // Observability must fail open: if the Durable Object is unavailable, keep
+    // the event in D1 rather than silently losing a potentially important error.
+  }
+  return true;
+}
 
 export async function ingestNodeLogs(request, env, nodeId, url) {
   const { bytes: bodyBytes, text: bodyText } = await readBody(
@@ -30,7 +63,13 @@ export async function ingestNodeLogs(request, env, nodeId, url) {
     throw new TelemetryError(413, "too_many_events");
   }
   const normalized = body.events.map(normalizeTelemetryEvent);
-  const events = normalized.filter(keepOperationalEvent);
+  const retained = normalized.filter(keepOperationalEvent);
+  const events = [];
+  let coalesced = 0;
+  for (const event of retained) {
+    if (await claimNoisyErrorWindow(env, nodeId, event)) events.push(event);
+    else coalesced += 1;
+  }
 
   const insertStatements = events.map((event) => env.DB.prepare(`
     INSERT OR IGNORE INTO node_logs (
@@ -74,7 +113,8 @@ export async function ingestNodeLogs(request, env, nodeId, url) {
   return json({
     ok: true,
     received: normalized.length,
-    discarded: normalized.length - events.length,
+    discarded: normalized.length - retained.length,
+    coalesced,
     accepted,
     duplicates: events.length - accepted,
     retention_days: TELEMETRY_LIMITS.retention_days,
