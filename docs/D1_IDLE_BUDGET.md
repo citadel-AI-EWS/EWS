@@ -23,7 +23,13 @@ heartbeat-only readiness path.
 Sync persists heartbeat metrics/liveness at most once every four minutes for unchanged
 online/paused identity and capabilities. Recovery from offline status and
 identity/capability changes persist immediately. Network, hardware and presence
-write only when their observed values change. Their `updated_at` now represents
+write only when their observed values change. SSH readiness follows the same rule
+on both sync and legacy heartbeat; changes to every readiness bit and bind target
+persist immediately, while owner-configured hostname/user/fingerprint are preserved.
+Its `observed_at`/`updated_at` indicate the last changed observation, rather than a
+keepalive. Live SSH relay connectivity still comes from the Durable Object.
+The fleet view uses the same five-minute liveness lease as Guardian, so an unchanged
+node does not flicker offline between four-minute heartbeat writes. Snapshot `updated_at` represents
 the last change; node liveness continues to come from `nodes.last_seen_at`.
 Legacy heartbeat retains its original immediate liveness update.
 
@@ -64,17 +70,40 @@ sync node polling every 30 seconds it reserves:
 | --- | ---: |
 | Sync replay claims in D1 | 0 |
 | One persisted heartbeat every four minutes, including last-seen indexes | 1,080 |
-| Five-minute AI refresh, two snapshot tables | 576 |
-| Total | 1,656 |
+| Unchanged SSH readiness snapshot | 0 |
+| Five-minute AI refresh, two snapshot tables plus summary index | 864 |
+| Total | 1,944 |
 
-Twenty-seven stable nodes project about 44,712 written row-equivalents/day. Fifty
-project about 82,800, leaving roughly 17% modeled headroom under the 100,000 daily
-Free write limit before tasks, logs, enrollment and other exceptional writes.
+Twenty-seven stable nodes project about 52,488 written row-equivalents/day. Fifty
+project about 97,200, leaving only 2.8% modeled headroom under the 100,000 daily
+Free write limit before Guardian, tasks, logs, enrollment and other exceptional writes.
+That is not a safe operational capacity claim for fifty nodes. The previous model
+missed the AI summary index and the unconditional SSH snapshot. Before the latter
+fix, a 30-second SSH probe could add 5,760 row-equivalents/day/node (table + index),
+even through `/sync`. No agent upgrade is needed for this server-side correction.
 This estimate excludes startup/schema work, changing network/hardware, browser
 authentication, tasks, command acknowledgements, telemetry and other databases.
 It is a capacity estimate, not measured production usage or a quota guarantee.
 Cloudflare Analytics and per-query `meta.rows_read`/`meta.rows_written` remain
 authoritative. Retention does not undo writes already charged that day.
+
+## Measured write attribution
+
+The D1 Capacity Check now runs after a successful main TEST deployment as well as
+on its existing daily schedule/manual trigger. In addition to account/database UTC
+daily totals, it reads Cloudflare `d1QueriesAdaptiveGroups`, sorted by written rows,
+for the UTC day so far and the previous complete UTC hour. Each window is explicit.
+Only allowlisted table labels, query hashes and numeric counters are published;
+raw SQL, literals, node identifiers, IPs and credentials are never printed.
+This diagnostic adds no operational D1 queries/writes. Query insights are adaptive
+and can be sampled/delayed; the top 30 queries are not a complete billing ledger.
+Unavailable insights are reported as incomplete, never as zero writes.
+
+The 2026-10-03 07:01 UTC run on `9a3e5d9` reported 226,352 account writes and
+226,376 database writes for that UTC day, after the #268 deployment at 20:36 UTC
+on October 2. These approximate totals establish continued load, but do not
+attribute all of it to SSH, legacy routes, AI state or any other single source.
+Use the new query attribution before making that claim.
 
 ## Verification and rollout
 

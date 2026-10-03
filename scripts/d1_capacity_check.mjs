@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import {collectWriteDiagnostics} from './d1_write_diagnostics.mjs';
 
 const config = fs.readFileSync("wrangler.jsonc", "utf8");
 const account = config.match(/"D1_ANALYTICS_ACCOUNT_ID"\s*:\s*"([a-f0-9]+)"/i)?.[1];
@@ -81,6 +82,12 @@ try {
   report.retention = response.ok ? await response.json() : { status: "unavailable", http_status: response.status };
 } catch { report.retention = { status: "unavailable" }; }
 report.threshold_percent = 80;
+report.write_diagnostics = await collectWriteDiagnostics(
+  (path, options) => cfJson(path, process.env.D1_ANALYTICS_TOKEN || process.env.CLOUDFLARE_API_TOKEN, options),
+  {account, database});
+if (report.write_diagnostics.windows.some(window => window.status !== 'ready')) {
+  report.errors.push('write_insights_unavailable');
+}
 report.alerts = [];
 if (report.guardian_cron_configured === false) report.alerts.push("guardian_cron_missing");
 for (const [name, used, limit] of [
@@ -107,7 +114,7 @@ if (process.env.GITHUB_TOKEN && process.env.GITHUB_REPOSITORY && process.env.GIT
   const response = await fetch(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/check-runs`, {
     method: "POST", headers: { authorization: "Bearer " + process.env.GITHUB_TOKEN,
       "content-type": "application/json", "accept": "application/vnd.github+json" },
-    body: JSON.stringify({ name: "D1 capacity diagnostics", head_sha: process.env.GITHUB_SHA,
+    body: JSON.stringify({ name: "D1 capacity diagnostics", head_sha: process.env.CITADEL_CHECK_SHA || process.env.GITHUB_SHA,
       status: "completed", conclusion: report.status === "ready" ? "success" : "neutral",
       output: { title: "D1 capacity: " + report.status, summary } }),
     redirect: "error", signal: AbortSignal.timeout(15000)

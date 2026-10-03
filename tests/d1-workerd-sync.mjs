@@ -4,7 +4,27 @@ import {build} from 'esbuild';
 import {Miniflare, convertV4MiniflareOptions} from 'miniflare';
 
 // The real Worker runtime and local D1 binding; no remote resource is configured.
-const bundle = await build({entryPoints: ['src/worker.js'], bundle: true, format: 'esm', write: false});
+const bundle = await build({stdin: {resolveDir: process.cwd(), contents: `
+  import worker from './src/worker.js';
+  export {NodeSshRelay} from './src/worker.js';
+  export default {async fetch(request, env, ctx) {
+    let writes = 0;
+    const record = result => {writes += Number(result?.meta?.rows_written || 0); return result;};
+    class Statement {
+      constructor(inner) {this.inner = inner;}
+      bind(...args) {return new Statement(this.inner.bind(...args));}
+      async first(...args) {return this.inner.first(...args);}
+      async all(...args) {return record(await this.inner.all(...args));}
+      async run(...args) {return record(await this.inner.run(...args));}
+    }
+    const DB = {prepare: sql => new Statement(env.DB.prepare(sql)),
+      batch: async statements => (await env.DB.batch(statements.map(s => s.inner))).map(record)};
+    const response = await worker.fetch(request, {...env, DB}, ctx);
+    const output = new Response(response.body, response);
+    output.headers.set('x-test-d1-writes', String(writes));
+    return output;
+  }};
+`}, bundle: true, format: 'esm', write: false});
 const mf = new Miniflare(convertV4MiniflareOptions({modules: true, script: bundle.outputFiles[0].text,
   compatibilityDate: '2026-09-05', d1Databases: ['DB'],
   durableObjects: {SSH_RELAY: {className: 'NodeSshRelay', useSQLite: true}}}));
@@ -30,7 +50,8 @@ try {
   assert.equal((await healthResponse.json()).telemetry_storage, 'ready');
   assert.equal((await db.prepare("SELECT created_at FROM node_logs WHERE event_id = 'legacy_relative_time'").first()).created_at, 'now');
   const route = `/api/v1/nodes/${nodeId}/sync`;
-  const body = JSON.stringify({heartbeat: {agent_version: '0.3.24', cpu_percent: 2, memory_percent: 20},
+  const body = JSON.stringify({heartbeat: {agent_version: '0.3.24', cpu_percent: 2, memory_percent: 20,
+    ssh: {ssh_client_available: true, sshd_listening_local: true}},
     ai: {installed: false, server_running: false}});
   const timestamp = String(Math.floor(Date.now() / 1000));
   const nonce = crypto.randomUUID();
@@ -47,6 +68,32 @@ try {
   response = await mf.dispatchFetch('https://local.test' + route, options);
   assert.equal(response.status, 409);
   assert.equal((await response.json()).error, 'replayed_request');
+  const nextNonce = crypto.randomUUID();
+  const nextSignature = await crypto.subtle.sign('Ed25519', keys.privateKey,
+    new TextEncoder().encode(['POST', route, timestamp, nextNonce, hash].join('\n')));
+  const stable = await mf.dispatchFetch('https://local.test' + route, {...options,
+    headers: {...options.headers, 'x-node-request-id': nextNonce,
+      'x-node-signature': Buffer.from(nextSignature).toString('base64url')}});
+  assert.equal(stable.status, 200, await stable.clone().text());
+  assert.equal(Number(stable.headers.get('x-test-d1-writes')), 0,
+    'identical sync including SSH must write zero actual D1 rows, including indexes');
+  for (const [name, sql] of [
+    ['heartbeat', "UPDATE nodes SET last_seen_at = datetime('now', '-241 seconds')"],
+    ['ai', "UPDATE node_ai_state SET updated_at = datetime('now', '-301 seconds')"]
+  ]) {
+    await db.prepare(sql).run();
+    if (name === 'ai') await db.prepare("UPDATE node_ai_runtime_state SET updated_at = datetime('now', '-301 seconds')").run();
+    const requestId = crypto.randomUUID();
+    const signature = await crypto.subtle.sign('Ed25519', keys.privateKey,
+      new TextEncoder().encode(['POST', route, timestamp, requestId, hash].join('\n')));
+    const refreshed = await mf.dispatchFetch('https://local.test' + route, {...options,
+      headers: {...options.headers, 'x-node-request-id': requestId,
+        'x-node-signature': Buffer.from(signature).toString('base64url')}});
+    assert.equal(refreshed.status, 200, await refreshed.clone().text());
+    assert.equal(Number(refreshed.headers.get('x-test-d1-writes')), 3,
+      `${name} budget must include all modified table/index rows`);
+    console.log(`${name} refresh actual local D1 rows_written: ${refreshed.headers.get('x-test-d1-writes')}`);
+  }
   await db.prepare("UPDATE nodes SET status = 'revoked' WHERE node_id = ?").bind(nodeId).run();
   response = await mf.dispatchFetch('https://local.test' + route, options);
   assert.equal(response.status, 403);
