@@ -93,12 +93,19 @@ assert.match(index, /idx_audit_events_target_action/,
 }
 
 {
-  const machines = index.slice(
+  const machineRoute = index.slice(
     index.indexOf('if (url.pathname === "/api/v1/architect/machines")'),
     index.indexOf('if (url.pathname === "/api/v1/architect/projects/check")')
   );
-  assert.match(machines, /ensureCommandReadIndexes\(env\)/,
-    "fleet snapshot must bootstrap read indexes without a manual migration step");
+  assert.match(machineRoute, /await readArchitectMachines\(env\)/,
+    'fleet route must use its read-first storage helper');
+  const machines = index.slice(index.indexOf('async function queryArchitectMachines'),
+    index.indexOf('async function publicHubNodes'));
+  const machineQuery = machines.slice(0, machines.indexOf('async function repairArchitectMachinesStorage'));
+  assert.doesNotMatch(machineQuery, /ensure\w+\(env\)/,
+    'normal fleet reads must not bootstrap storage or consume D1 writes');
+  assert.match(machines, /repairArchitectMachinesStorage\(env, error\)/,
+    'missing storage must still use the bounded repair path');
   assert.match(machines, /LIMIT 500/, "fleet snapshot must stay bounded");
   assert.match(machines, /idx_commands_status_created|status IN \('pending','accepted'\)/,
     "fleet command snapshot must remain status-bounded");
@@ -167,9 +174,10 @@ function writeProjection(nodes, sync = true) {
   // routes keep the D1 nonce table as a conservative fallback.
   const nonceWrites = sync ? 0 : requests * 2 * 3;
   const heartbeatWrites = (86_400 / (sync ? 240 : 30)) * 3;
-  const aiWrites = (86_400 / (sync ? 300 : 30)) * 2;
+  const aiWrites = (86_400 / (sync ? 300 : 30)) * 3; // summary + updated_at index + runtime
+  const sshWrites = 0; // unchanged probes are now conditional, on sync and legacy heartbeat
   const legacySnapshots = sync ? 0 : POLLS_PER_DAY * 3; // network + presence table/index
-  const total = nodes * (nonceWrites + heartbeatWrites + aiWrites + legacySnapshots);
+  const total = nodes * (nonceWrites + heartbeatWrites + aiWrites + legacySnapshots + sshWrites);
   return {nodes, projected_rows_written: total, daily_limit: FREE_DAILY_ROWS_WRITTEN,
     usage_percent: total / FREE_DAILY_ROWS_WRITTEN * 100,
     within_free_daily_write_limit: total <= FREE_DAILY_ROWS_WRITTEN};
@@ -179,14 +187,14 @@ assert.ok(syncFour.projected_rows_written <= FREE_DAILY_ROWS_WRITTEN * 0.1,
   'four idle sync nodes must use <=10% of the daily D1 write limit');
 assert.equal(writeProjection(50).within_free_daily_write_limit, true,
   'fifty stable sync nodes should fit the modeled Free daily D1 write limit');
-assert.ok(writeProjection(50).projected_rows_written <= FREE_DAILY_ROWS_WRITTEN * 0.85,
-  'fifty stable sync nodes must keep at least 15% modeled D1 write headroom');
+assert.equal(writeProjection(50).projected_rows_written, 97_200,
+  'include the AI summary index; fifty idle nodes leave only 2.8% before shared/exceptional writes');
 
 assert.ok(four.headroom_x >= 10, "4-node projection must keep >=10x D1 read headroom");
 assert.ok(twenty.headroom_x >= 10, "20-node projection must keep >=10x D1 read headroom");
 
 console.log(JSON.stringify({
-  model: "citadel.d1-steady-poll-budget.v3",
+  model: "citadel.d1-steady-poll-budget.v4",
   assumptions: {
     poll_seconds: POLL_SECONDS,
     row_equivalents_per_agent_poll: ROW_EQUIVALENTS_PER_POLL,
@@ -194,9 +202,9 @@ console.log(JSON.stringify({
     public_hub_refresh_seconds: PUBLIC_HUB_REFRESH_SECONDS,
     machine_row_equivalents_per_node: MACHINE_ROW_EQUIVALENTS_PER_NODE,
     presence_row_equivalents_per_node: PRESENCE_ROW_EQUIVALENTS_PER_NODE,
-    note: "Read projection retains the legacy three-poll estimate for comparison. Write projection covers stable 30s sync polling with replay IDs in the node Durable Object, 4m persisted heartbeat, unchanged network/presence/hardware and 5m AI refresh. It excludes tasks, logs, startup, browser auth and other databases. Production Cloudflare Analytics remains authoritative."
+    note: "Read projection retains the legacy three-poll estimate for comparison. Writes include stable 30s sync polling with replay IDs in the node Durable Object, 4m persisted heartbeat, unchanged SSH/network/presence/hardware and 5m AI refresh including its index. Fifty stable nodes leave only 2.8% before guardian, tasks, logs, startup, browser auth and other databases. Production Cloudflare Analytics remains authoritative."
   },
   fleets: [four, twenty],
   writes: {legacy_four_nodes: writeProjection(4, false), sync_four_nodes: syncFour,
-    sync_twenty_nodes: writeProjection(20), sync_fifty_nodes: writeProjection(50)}
+    sync_twenty_nodes: writeProjection(20), sync_twenty_seven_nodes: writeProjection(27), sync_fifty_nodes: writeProjection(50)}
 }, null, 2));

@@ -40,6 +40,9 @@ const payload = {
     hardware: {memory_total_bytes: 8 * 1024 ** 3, cpu_logical_count: 4, gpus: []}},
   ai: {installed: false, server_running: false}
 };
+payload.heartbeat.ssh = {ssh_client_available: true, sshd_process_running: true,
+  sshd_listening_local: true, sshd_exposure_verified: true, sshd_loopback_only: true,
+  cloudflared_installed: true, cloudflared_running: true, browser_terminal_local_ready: true};
 async function signed(pathSuffix, body, {nonce = crypto.randomUUID(), badSignature = false,
   timestamp = String(Math.floor(Date.now() / 1000))} = {}) {
   const path = `/api/v1/nodes/${nodeId}/${pathSuffix}`;
@@ -68,11 +71,60 @@ const persisted = db.prepare('SELECT last_seen_at FROM nodes WHERE node_id = ?')
 const start = operations.length;
 response = await signed('sync', payload);
 assert.equal(response.status, 200);
-for (const table of ['nodes', 'node_network_state', 'node_hardware_state', 'node_presence',
+for (const table of ['nodes', 'node_network_state', 'node_hardware_state', 'node_presence', 'node_ssh_state',
   'node_ai_state', 'node_ai_runtime_state']) {
   assert.equal(changesSince(start, table), 0, `identical sync must not rewrite ${table}`);
 }
 assert.equal(db.prepare('SELECT last_seen_at FROM nodes WHERE node_id = ?').get(nodeId).last_seen_at, persisted);
+
+// Every readiness bit and the bind target must still change immediately. Owner
+// configuration is separate and must survive both unchanged and changed probes.
+db.prepare("UPDATE node_ssh_state SET public_hostname = 'ssh.example.com', ssh_user = 'citadel', host_key_fingerprint = 'fixture'").run();
+for (const field of Object.keys(payload.heartbeat.ssh)) {
+  const before = operations.length;
+  response = await signed('sync', {heartbeat: {...payload.heartbeat,
+    ssh: {...payload.heartbeat.ssh, [field]: false}}});
+  assert.equal(response.status, 200);
+  assert.equal(changesSince(before, 'node_ssh_state'), 1, `${field} must persist immediately`);
+  const state = db.prepare('SELECT * FROM node_ssh_state').get();
+  assert.equal(state[field], 0);
+  assert.equal(state.public_hostname, 'ssh.example.com');
+  assert.equal(state.ssh_user, 'citadel');
+  assert.equal(state.host_key_fingerprint, 'fixture');
+  response = await signed('sync', payload);
+  assert.equal(response.status, 200);
+}
+const sshColumns = ['restricted_bootstrap_state_present', 'restricted_console_installed',
+  'cloudflare_ca_public_key_present', 'sshd_force_command_managed'];
+for (const field of sshColumns) {
+  const before = operations.length;
+  response = await signed('heartbeat', {...payload.heartbeat,
+    ssh: {...payload.heartbeat.ssh, [field]: true}});
+  assert.equal(response.status, 200);
+  assert.equal(changesSince(before, 'node_ssh_state'), 1);
+  assert.equal(db.prepare(`SELECT ${field} FROM node_ssh_state`).get()[field], 1);
+  await signed('sync', payload);
+}
+await signed('sync', {heartbeat: {...payload.heartbeat,
+  ssh: {...payload.heartbeat.ssh, bind_target: '127.0.0.1:22',
+    ...Object.fromEntries(sshColumns.map(field => [field, true]))}}});
+assert.equal(db.prepare('SELECT bind_target, restricted_policy_ready FROM node_ssh_state').get().bind_target, '127.0.0.1:22');
+assert.equal(db.prepare('SELECT restricted_policy_ready FROM node_ssh_state').get().restricted_policy_ready, 1);
+await signed('sync', payload);
+const legacySshStart = operations.length;
+response = await signed('heartbeat', payload.heartbeat);
+assert.equal(response.status, 200);
+assert.equal(changesSince(legacySshStart, 'node_ssh_state'), 0, 'legacy unchanged SSH snapshot is also read-only');
+
+// Four-minute heartbeat persistence must remain online in the fleet view;
+// genuinely stale nodes become offline after the shared five-minute lease.
+const controllerSource = fs.readFileSync('src/index.js', 'utf8');
+const machineQuery = controllerSource.match(/async function queryArchitectMachines[\s\S]*?env.DB.prepare\(`([\s\S]*?)`\)/)[1];
+for (const [age, expected] of [[180, 'online'], [301, 'offline']]) {
+  db.prepare("UPDATE nodes SET last_seen_at = datetime('now', ?), status = 'online'").run(`-${age} seconds`);
+  assert.equal(db.prepare(machineQuery).get().status, expected);
+}
+db.prepare('UPDATE nodes SET last_seen_at = ?').run(persisted);
 
 const beforeReplay = operations.length;
 response = await signed('sync', payload, {nonce});

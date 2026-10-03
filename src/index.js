@@ -4164,6 +4164,21 @@ async function persistHeartbeat(env, node, body, coalesce = false) {
         bind_target = excluded.bind_target,
         observed_at = CURRENT_TIMESTAMP,
         updated_at = CURRENT_TIMESTAMP
+      WHERE node_ssh_state.ssh_client_available IS NOT excluded.ssh_client_available
+        OR node_ssh_state.sshd_process_running IS NOT excluded.sshd_process_running
+        OR node_ssh_state.sshd_listening_local IS NOT excluded.sshd_listening_local
+        OR node_ssh_state.sshd_exposure_verified IS NOT excluded.sshd_exposure_verified
+        OR node_ssh_state.sshd_loopback_only IS NOT excluded.sshd_loopback_only
+        OR node_ssh_state.cloudflared_installed IS NOT excluded.cloudflared_installed
+        OR node_ssh_state.cloudflared_running IS NOT excluded.cloudflared_running
+        OR node_ssh_state.restricted_bootstrap_state_present IS NOT excluded.restricted_bootstrap_state_present
+        OR node_ssh_state.restricted_console_installed IS NOT excluded.restricted_console_installed
+        OR node_ssh_state.cloudflare_ca_public_key_present IS NOT excluded.cloudflare_ca_public_key_present
+        OR node_ssh_state.sshd_force_command_managed IS NOT excluded.sshd_force_command_managed
+        OR node_ssh_state.restricted_policy_ready IS NOT excluded.restricted_policy_ready
+        OR node_ssh_state.browser_terminal_local_ready IS NOT excluded.browser_terminal_local_ready
+        OR node_ssh_state.bind_target IS NOT excluded.bind_target
+        OR node_ssh_state.observed_at IS NULL
     `).bind(
       nodeId,
       ssh.ssh_client_available,
@@ -6708,7 +6723,7 @@ async function queryArchitectMachines(env) {
     env.DB.prepare(`SELECT n.node_id, nn.node_number, n.hostname, n.os_name, n.os_version, n.architecture,
       n.agent_version, n.cpu_percent, n.memory_percent, n.last_seen_at,
       CASE WHEN n.status = 'online' AND
-      (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-2 minutes'))
+      (n.last_seen_at IS NULL OR datetime(n.last_seen_at) < datetime('now', '-5 minutes'))
       THEN 'offline' ELSE n.status END AS status,
       net.lan_ipv4, net.mac_addresses_json,
       COALESCE(ai.installed, 0) AS ai_installed,
