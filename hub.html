@@ -741,7 +741,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
 
     const sshHost=$("sshHost"),sshUser=$("sshUser"),sshFingerprint=$("sshFingerprint");
     const sshInlineCommands=new Set(["help","status","hostname","uptime","cpu","memory","disk","network","agent-status","agent-logs","lmstudio-status","diagnostics","ping-controller","exit"]);
-    let sshNodeId="",sshState=null,sshInlineBusy=false,sshSelectionGeneration=0,sshLoadGeneration=0,sshSaveGeneration=0;
+    let sshNodeId="",sshState=null;const sshInlineBusyNodes=new Set();let sshSelectionGeneration=0,sshLoadGeneration=0,sshSaveGeneration=0;
     const sshDirtyFields=new Set();
     function applySshServerFields(state){
       if(!sshDirtyFields.has("host"))sshHost.value=state?.public_hostname||"";
@@ -769,7 +769,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       $("copySshBootstrapButton").disabled=!bootstrapEligible;
       $("copySshButton").disabled=!configured;
       $("openSshButton").disabled=!sshReadyForBrowser();
-      const inlineReady=Boolean(sshNode&&architectToken&&versionAtLeast(sshNode.agent_version,"0.3.32")&&!sshInlineBusy);
+      const inlineReady=Boolean(sshNode&&architectToken&&versionAtLeast(sshNode.agent_version,"0.3.32")&&!sshInlineBusyNodes.has(sshNodeId));
       $("sshInlineInput").disabled=!inlineReady;
       $("sshInlineSend").disabled=!inlineReady;
     }
@@ -856,7 +856,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       appendSshInline("[still pending after 45s — node may be offline or busy]",nodeId);
     }
     async function sendSshInlineCommand(){
-      if(!sshNodeId||sshInlineBusy)return;
+      if(!sshNodeId||sshInlineBusyNodes.has(sshNodeId))return;
       const verb=$("sshInlineInput").value.trim();
       if(!sshInlineCommands.has(verb)){
         appendSshInline(`citadel> ${verb||"(empty)"}\nDENIED: command is not in the CITADEL allow-list. Type help.`);
@@ -867,7 +867,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
         appendSshInline(`citadel> ${verb}\n[agent 0.3.32+ required]`);
         return;
       }
-      sshInlineBusy=true;renderSshState();
+      sshInlineBusyNodes.add(nodeId);renderSshState();
       $("sshInlineInput").value="";
       appendSshInline(`citadel> ${verb}`);
       try{
@@ -881,7 +881,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       }catch(e){
         appendSshInline(`[error: ${e.message}]`,nodeId);
       }finally{
-        sshInlineBusy=false;renderSshState();if(sshNodeId===nodeId)$("sshInlineInput").focus();
+        sshInlineBusyNodes.delete(nodeId);renderSshState();if(sshNodeId===nodeId)$("sshInlineInput").focus();
       }
     }
     sshHost.addEventListener("input",()=>{sshDirtyFields.add("host");renderSshState()});
