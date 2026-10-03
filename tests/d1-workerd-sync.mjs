@@ -112,6 +112,39 @@ try {
   assert.equal(response.status, 409);
   assert.equal((await response.json()).error, 'replayed_request');
 
+  async function postSignedLog(body, requestId) {
+    const bodyHash = Buffer.from(await crypto.subtle.digest('SHA-256',
+      new TextEncoder().encode(body))).toString('hex');
+    const signature = await crypto.subtle.sign('Ed25519', keys.privateKey,
+      new TextEncoder().encode(['POST', logsRoute, timestamp, requestId, bodyHash].join('\n')));
+    return mf.dispatchFetch('https://local.test' + logsRoute, {method: 'POST', body,
+      headers: {'content-type': 'application/json', 'x-node-id': nodeId,
+        'x-node-timestamp': timestamp, 'x-node-request-id': requestId,
+        'x-node-signature': Buffer.from(signature).toString('base64url')}});
+  }
+  const repeatedError = (eventId, createdAt) => JSON.stringify({events: [{
+    event_id: eventId,
+    level: 'error',
+    event_type: 'cycle_error',
+    message: 'cycle_error',
+    details: {error: 'd1_write_limit'},
+    created_at: createdAt
+  }]});
+  response = await postSignedLog(repeatedError('workerd_cycle_error_1',
+    '2026-10-03T12:00:00Z'), crypto.randomUUID());
+  assert.equal(response.status, 201, await response.clone().text());
+  assert.equal((await response.json()).coalesced, 0);
+  response = await postSignedLog(repeatedError('workerd_cycle_error_2',
+    '2026-10-03T12:00:01Z'), crypto.randomUUID());
+  assert.equal(response.status, 200, await response.clone().text());
+  const coalescedBody = await response.json();
+  assert.equal(coalescedBody.accepted, 0);
+  assert.equal(coalescedBody.coalesced, 1);
+  assert.equal((await db.prepare(
+    "SELECT COUNT(*) AS n FROM node_logs WHERE event_type = 'cycle_error'"
+  ).first()).n, 1,
+  'repeated identical cycle errors must be coalesced before D1 persistence');
+
   const nextNonce = crypto.randomUUID();
   const nextSignature = await crypto.subtle.sign('Ed25519', keys.privateKey,
     new TextEncoder().encode(['POST', route, timestamp, nextNonce, hash].join('\n')));

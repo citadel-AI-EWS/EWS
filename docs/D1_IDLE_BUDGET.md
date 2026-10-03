@@ -2,7 +2,7 @@
 
 The previous 30-second agent cycle issued separate command, heartbeat, AI-state
 and assignment requests. Every signed request previously inserted a replay nonce; deleting
-expired nonces also consumed the daily write quota. Modern signed node-request replay IDs now live in the per-node Durable Object instead of D1 on every route; D1 remains a fail-closed fallback when that binding is unavailable. Network, presence and AI
+expired nonces also consumed the daily write quota. Modern signed node-request replay IDs now live in the per-node Durable Object instead of D1 on every route; D1 remains a fail-closed fallback when that binding is unavailable. Repeated identical `cycle_error` and `operation_heartbeat_failed` telemetry is also coalesced per node for five minutes in the Durable Object; unique errors, command failures, security events and results are never coalesced by this rule. Network, presence and AI
 snapshots were rewritten even when their values did not change. The existing
 read-only projection therefore could not establish Free-plan capacity.
 
