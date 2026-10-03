@@ -145,11 +145,14 @@ async function closeChecked(page, entry, route, screenshotName) {
     }
 
     await page.locator("#token").fill("synthetic-invalid-token");
-    await page.locator("#login").evaluate(form => form.requestSubmit());
+    await page.locator("#loginButton").click();
     await page.waitForTimeout(500);
     entry.auth_probe_active = false;
     if (!(await page.locator("#auth").isVisible())) {
       addFinding("invalid_auth_unlocked", "/", "invalid token hid login panel");
+    }
+    if (!(await page.locator("#notice").isVisible())) {
+      addFinding("invalid_auth_error_hidden", "/", "invalid token produced no visible login error");
     }
     if (await page.locator("#machines").isVisible()) {
       addFinding("invalid_auth_exposed_controls", "/", "invalid token exposed machine controls");
