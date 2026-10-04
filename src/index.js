@@ -53,22 +53,22 @@ const LATEST_NODE_RELEASE = Object.freeze({
   files: [
     {
       path: "citadel_node_v1.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/0b996166fd1f96bdcf0be4332e45eef16b6eb41b/agent/citadel_node_v1.py",
       sha256: "ac795bc839f034e1db74058cf3e8b347c91c9462c89b4bdd05edf664065d8faf"
     },
     {
       path: "citadel_node_v2.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/0b996166fd1f96bdcf0be4332e45eef16b6eb41b/agent/citadel_node_v2.py",
       sha256: "afe74909932636d74d5a6bd4c5a5835472040299f2ded1e6aa6a9234618088e2"
     },
     {
       path: "CitadelSshConsole.cs",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/CitadelSshConsole.cs",
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/0b996166fd1f96bdcf0be4332e45eef16b6eb41b/agent/CitadelSshConsole.cs",
       sha256: "56476adfd0d1fe343490c5abbf3663fb24152694e62c97c571cec29917ee21bf"
     },
     {
       path: "configure_restricted_ssh.ps1",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/configure_restricted_ssh.ps1",
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/0b996166fd1f96bdcf0be4332e45eef16b6eb41b/agent/configure_restricted_ssh.ps1",
       sha256: "e8d5be7e56a01e6e7fb4d2e8b02644b4f2082d0f1633dd5e30f59aae7f1dec73"
     }
   ]
