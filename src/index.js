@@ -1654,6 +1654,47 @@ async function ensureRolloutCommandForNode(env, nodeId) {
   }
 }
 
+async function repairLegacyPendingUpdateForNode(env, node) {
+  if (agentVersionAtLeast(node.agent_version, "0.3.27")) return;
+  const pending = await env.DB.prepare(
+    "SELECT command_id, payload_json FROM commands " +
+    "WHERE node_id = ? AND command_type = 'update' AND status = 'pending' LIMIT 1"
+  ).bind(node.node_id).first();
+  if (!pending || updatePayloadCompatibleWithAgent(
+    safeJson(pending.payload_json, {}), node.agent_version
+  )) return;
+
+  const commandId = "command_" + crypto.randomUUID();
+  const payloadJson = JSON.stringify(releaseForAgentVersion(
+    LATEST_NODE_RELEASE, node.agent_version
+  ));
+  const createdAt = new Date().toISOString();
+  const signature = await signControllerCommand(
+    env, commandId, node.node_id, "update", payloadJson, createdAt
+  );
+  const retired = await env.DB.prepare(
+    "UPDATE commands SET status = 'failed', completed_at = CURRENT_TIMESTAMP " +
+    "WHERE command_id = ? AND status = 'pending'"
+  ).bind(pending.command_id).run();
+  if (Number(retired?.meta?.changes || 0) !== 1) return;
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO commands (command_id, node_id, command_type, payload_json, signature, status, created_at) " +
+        "VALUES (?, ?, 'update', ?, ?, 'pending', ?)"
+      ).bind(commandId, node.node_id, payloadJson, signature, createdAt),
+      env.DB.prepare(
+        "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+        "VALUES ('controller', 'controller', 'agent.update.incompatible_command_replaced', 'command', ?, ?)"
+      ).bind(pending.command_id, JSON.stringify({
+        node_id: node.node_id, agent_version: node.agent_version, replacement_command_id: commandId
+      }))
+    ]);
+  } catch (error) {
+    if (!String(error).includes("UNIQUE")) throw error;
+  }
+}
+
 const WORK_ROLE_REGISTRY = Object.freeze([
   { id: "architect", label: "Architect", kind: "human_gate", origin: "project_control" },
   { id: "planner", label: "Planner", kind: "worker", origin: "legacy_simulation" },
@@ -5545,6 +5586,7 @@ async function commandsForNode(env, node) {
   // lookup removes one D1 read from every steady-state command poll.
   if (node.agent_version !== LATEST_NODE_RELEASE.version) {
     await ensureRolloutCommandForNode(env, nodeId);
+    await repairLegacyPendingUpdateForNode(env, node);
   }
 
   const cutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();

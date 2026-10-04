@@ -228,7 +228,21 @@ jobs:
           $help = & $out 2>&1 | Out-String
           if ($LASTEXITCODE -ne 0 -or -not $help.Contains("Allowed commands:")) { throw "Restricted SSH help failed" }
 
-          foreach ($denied in @("whoami", "status;whoami", "cmd", "powershell")) {
+          foreach ($allowed in @("hostname", "whoami")) {
+            $env:SSH_ORIGINAL_COMMAND = $allowed
+            $text = & $out 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0 -or -not $text.Trim()) {
+              throw "Restricted SSH console failed allowed command: $allowed"
+            }
+          }
+
+          $env:SSH_ORIGINAL_COMMAND = "python --version"
+          $python = & $out 2>&1 | Out-String
+          if ($LASTEXITCODE -notin @(0, 127) -or -not $python.Trim()) {
+            throw "Restricted SSH console failed Python version probe"
+          }
+
+          foreach ($denied in @("status;whoami", "cmd", "powershell")) {
             $env:SSH_ORIGINAL_COMMAND = $denied
             $text = & $out 2>&1 | Out-String
             if ($LASTEXITCODE -ne 2 -or -not $text.Contains("DENIED:")) {

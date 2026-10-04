@@ -23,6 +23,8 @@ assert.match(source, /JSON\.stringify\(releaseForAgentVersion\(/);
 const manualUpdate = source.slice(source.indexOf("async function architectCreateCommand"));
 assert.match(manualUpdate, /updatePayloadCompatibleWithAgent\(safeJson\(pending\.payload_json, \{\}\), node\.agent_version\)/);
 assert.match(manualUpdate, /agent\.update\.incompatible_command_retired/);
+assert.match(source, /await repairLegacyPendingUpdateForNode\(env, node\)/);
+assert.match(source, /agent\.update\.incompatible_command_replaced/);
 
 for (const path of ["citadel_node_v1.py", "citadel_node_v2.py"]) {
   const bytes = await readFile(new URL(`../agent/${path}`, import.meta.url));
