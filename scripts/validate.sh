@@ -7,6 +7,7 @@ python -m unittest -v controller_tests.py
 python -m py_compile controller_app.py controller_tests.py agent/citadel_node_v1.py agent/citadel_node_v2.py agent/ssh_restricted_console.py tests/network-recovery-priority.py
 python agent/citadel_node_v2.py self-test
 python tests/network-recovery-priority.py
+python tests/agent-resilience.py
 
 python - <<'PY'
 from pathlib import Path

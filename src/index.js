@@ -48,17 +48,17 @@ const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "r
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const WAKE_PEER_MIN_AGENT_VERSION = "0.3.6";
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.36",
+  version: "0.3.37",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "a4e87ec82e228a769890c1e1b233543f9b78385357c982b74d4867c0e1958ce8"
+      sha256: "0f86aa1da7c34d9ffc4748d5458c3410d15652a1879484fdc484426c8fce156a"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "2ee93d39a27263e882f60b7f71395306e948f190600abffd515984388cb78a1f"
+      sha256: "f392d758163bee65afb14379ed5879d2025b650daf9c602ec843878a7ad8e317"
     },
     {
       path: "CitadelSshConsole.cs",
@@ -90,6 +90,14 @@ export function releaseForAgentVersion(release, agentVersion) {
 function updatePayloadCompatibleWithAgent(payload, agentVersion) {
   return Array.isArray(payload?.files) && payload.files.length > 0 &&
     releaseForAgentVersion(payload, agentVersion).files.length === payload.files.length;
+}
+export function updatePayloadReadyForAgent(payload, agentVersion) {
+  if (payload?.version !== LATEST_NODE_RELEASE.version ||
+      !updatePayloadCompatibleWithAgent(payload, agentVersion)) return false;
+  const expected = releaseForAgentVersion(LATEST_NODE_RELEASE, agentVersion).files;
+  return payload.files.length === expected.length && expected.every((file) =>
+    payload.files.some((candidate) => candidate.path === file.path &&
+      candidate.url === file.url && candidate.sha256 === file.sha256));
 }
 const LMSTUDIO_INTEGRATION = Object.freeze({
   github_url: "https://github.com/citadel-AI-EWS/EWS/tree/main/agent/lmstudio",
@@ -1613,7 +1621,7 @@ async function ensureRolloutCommandForNode(env, nodeId) {
   }
   if (pending) {
     if (pending.command_type !== "update" || pending.status !== "pending" ||
-        updatePayloadCompatibleWithAgent(safeJson(pending.payload_json, {}), node.agent_version)) return;
+        updatePayloadReadyForAgent(safeJson(pending.payload_json, {}), node.agent_version)) return;
     const retired = await env.DB.prepare(
       "UPDATE commands SET status = 'failed', completed_at = CURRENT_TIMESTAMP " +
       "WHERE command_id = ? AND status = 'pending'"
@@ -1632,7 +1640,7 @@ async function ensureRolloutCommandForNode(env, nodeId) {
   if (recentlyInstalled) return;
   const commandId = "command_" + crypto.randomUUID();
   const payloadJson = JSON.stringify(releaseForAgentVersion(
-    safeJson(rollout.release_json, LATEST_NODE_RELEASE), node.agent_version
+    LATEST_NODE_RELEASE, node.agent_version
   ));
   const createdAt = new Date().toISOString();
   const signature = await signControllerCommand(
@@ -1654,13 +1662,12 @@ async function ensureRolloutCommandForNode(env, nodeId) {
   }
 }
 
-async function repairLegacyPendingUpdateForNode(env, node) {
-  if (agentVersionAtLeast(node.agent_version, "0.3.27")) return;
+async function repairPendingUpdateForNode(env, node) {
   const pending = await env.DB.prepare(
     "SELECT command_id, payload_json FROM commands " +
     "WHERE node_id = ? AND command_type = 'update' AND status = 'pending' LIMIT 1"
   ).bind(node.node_id).first();
-  if (!pending || updatePayloadCompatibleWithAgent(
+  if (!pending || updatePayloadReadyForAgent(
     safeJson(pending.payload_json, {}), node.agent_version
   )) return;
 
@@ -5586,7 +5593,7 @@ async function commandsForNode(env, node) {
   // lookup removes one D1 read from every steady-state command poll.
   if (node.agent_version !== LATEST_NODE_RELEASE.version) {
     await ensureRolloutCommandForNode(env, nodeId);
-    await repairLegacyPendingUpdateForNode(env, node);
+    await repairPendingUpdateForNode(env, node);
   }
 
   const cutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
@@ -7029,7 +7036,7 @@ async function architectCreateCommand(request, env, nodeId) {
   if (pending) {
     if (commandType !== "update" || pending.command_type !== "update" ||
         pending.status !== "pending" ||
-        updatePayloadCompatibleWithAgent(safeJson(pending.payload_json, {}), node.agent_version)) {
+        updatePayloadReadyForAgent(safeJson(pending.payload_json, {}), node.agent_version)) {
       throw new ApiError(409, "command_already_pending");
     }
     const retired = await env.DB.prepare(

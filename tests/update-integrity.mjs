@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { releaseForAgentVersion } from "../src/index.js";
+import { releaseForAgentVersion, updatePayloadReadyForAgent } from "../src/index.js";
 
 const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
 const releaseBlock = source.match(/const LATEST_NODE_RELEASE = Object\.freeze\(\{([\s\S]*?)\n\}\);/);
 assert.ok(releaseBlock, "latest release declaration missing");
 
 const release = {
-  version: "0.3.36",
+  version: "0.3.37",
   files: ["citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1",
     "CitadelSshConsole.cs", "configure_restricted_ssh.ps1"].map((path) => ({path}))
 };
@@ -21,10 +21,27 @@ assert.deepEqual(releaseForAgentVersion(release, "0.3.27").files.map((file) => f
 assert.match(source, /payload = releaseForAgentVersion\(LATEST_NODE_RELEASE, node\.agent_version\)/);
 assert.match(source, /JSON\.stringify\(releaseForAgentVersion\(/);
 const manualUpdate = source.slice(source.indexOf("async function architectCreateCommand"));
-assert.match(manualUpdate, /updatePayloadCompatibleWithAgent\(safeJson\(pending\.payload_json, \{\}\), node\.agent_version\)/);
+assert.match(manualUpdate, /updatePayloadReadyForAgent\(safeJson\(pending\.payload_json, \{\}\), node\.agent_version\)/);
 assert.match(manualUpdate, /agent\.update\.incompatible_command_retired/);
-assert.match(source, /await repairLegacyPendingUpdateForNode\(env, node\)/);
+assert.match(source, /await repairPendingUpdateForNode\(env, node\)/);
 assert.match(source, /agent\.update\.incompatible_command_replaced/);
+
+const currentRelease = {
+  version: "0.3.37",
+  files: [...releaseBlock[0].matchAll(/path: "([^"]+)",\s+url: "([^"]+)",\s+sha256: "([^"]+)"/g)]
+    .map(([, path, url, sha256]) => ({ path, url, sha256 }))
+};
+for (const version of ["0.3.1", "0.3.13", "0.3.27", "0.3.36"]) {
+  const payload = releaseForAgentVersion(currentRelease, version);
+  assert.equal(updatePayloadReadyForAgent(payload, version), true);
+  assert.equal(updatePayloadReadyForAgent({...payload, version: "0.3.36"}, version), false);
+  const stale = structuredClone(payload);
+  stale.files[0].sha256 = "0".repeat(64);
+  assert.equal(updatePayloadReadyForAgent(stale, version), false);
+  const mutable = structuredClone(payload);
+  mutable.files[0].url += "?stale";
+  assert.equal(updatePayloadReadyForAgent(mutable, version), false);
+}
 
 for (const path of ["citadel_node_v1.py", "citadel_node_v2.py"]) {
   const bytes = await readFile(new URL(`../agent/${path}`, import.meta.url));

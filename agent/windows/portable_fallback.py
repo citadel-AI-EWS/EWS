@@ -138,6 +138,7 @@ def copy_payload(source: Path, agent_root: Path) -> None:
 def agent_env(agent_root: Path) -> dict[str, str]:
     env = os.environ.copy()
     env["PYTHONHOME"] = str(agent_root / "runtime")
+    env["CITADEL_SUPERVISED"] = "1"
     return env
 
 

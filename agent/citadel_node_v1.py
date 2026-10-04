@@ -25,6 +25,7 @@ import json
 import os
 import platform
 import re
+import select
 import shutil
 import socket
 # Subprocesses below use a fixed interpreter, allowlisted local scripts and no shell.
@@ -66,7 +67,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.36"
+VERSION = "0.3.37"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -1457,6 +1458,42 @@ def system_inventory(payload: dict[str, Any]) -> dict[str, Any]:
 HANDLERS: dict[str, MissionHandler] = {"system_inventory": system_inventory}
 
 
+class LocalWatchdog:
+    """Exit a supervised agent only after local progress stops for ten minutes."""
+
+    def __init__(self, timeout_seconds: float = 600, exit_process=None) -> None:
+        self.timeout_seconds = timeout_seconds
+        self.exit_process = exit_process or os._exit
+        self.last_progress = time.monotonic()
+        self.finished = threading.Event()
+        self.thread = None
+
+    def touch(self) -> None:
+        self.last_progress = time.monotonic()
+
+    def check(self) -> bool:
+        if time.monotonic() - self.last_progress < self.timeout_seconds:
+            return False
+        self.exit_process(1)
+        return True
+
+    def start(self) -> None:
+        self.touch()
+        self.thread = threading.Thread(target=self._monitor, name="citadel-local-watchdog", daemon=True)
+        self.thread.start()
+
+    def _monitor(self) -> None:
+        interval = min(5, max(0.05, self.timeout_seconds / 4))
+        while not self.finished.wait(interval):
+            if self.check():
+                return
+
+    def stop(self) -> None:
+        self.finished.set()
+        if self.thread:
+            self.thread.join(timeout=2)
+
+
 class Agent:
     def __init__(self, config: AgentConfig, config_path: Path | None = None) -> None:
         self.config = config
@@ -1488,6 +1525,9 @@ class Agent:
         self.last_network_remember = 0.0
         self.last_power_guard = 0.0
         self.power_guard_active = False
+        self.power_guard_process = None
+        self.power_guard_attempted = False
+        self.watchdog = None
         self.last_heartbeat = 0.0
         self.last_hardware_report = 0.0
         self.last_ssh_report = 0.0
@@ -1504,7 +1544,7 @@ class Agent:
             for name in ("CitadelSshConsole.cs", "configure_restricted_ssh.ps1")
         ):
             capabilities.add("windows_restricted_ssh_bootstrap")
-        if self.config.prevent_automatic_sleep:
+        if self.config.prevent_automatic_sleep and self.power_guard_active:
             capabilities.add("always_on_guard")
         if self.config.network_recovery_enabled:
             capabilities.add("known_network_recovery")
@@ -1961,6 +2001,7 @@ class Agent:
         """Keep node liveness fresh while a long local assignment is executing."""
         interval = max(5.0, min(float(self.config.heartbeat_seconds), 30.0))
         while not stop_event.wait(interval):
+            self.mark_local_progress()
             try:
                 self.heartbeat(timeout_seconds=5.0)
             except Exception as error:
@@ -2233,6 +2274,7 @@ class Agent:
 
         def keepalive():
             while not finished.is_set():
+                self.mark_local_progress()
                 try:
                     if self.lifecycle_stop_requested() or self.stop_path.exists():
                         connection = self._active_lm_connection
@@ -3433,7 +3475,8 @@ class Agent:
                         raise SystemExit(SERVICE_STOP_EXIT_CODE)
                     raise SystemExit(0)
                 if restart_after:
-                    if service_managed:
+                    supervised = service_managed or os.environ.get("CITADEL_SUPERVISED") == "1" or bool(os.environ.get("INVOCATION_ID"))
+                    if supervised:
                         raise SystemExit(SERVICE_RESTART_EXIT_CODE)
                     entrypoint = Path(__file__).resolve().parent / "citadel_node_v2.py"
                     # The argv is fixed and the shell remains disabled.
@@ -3476,16 +3519,21 @@ class Agent:
             return False
 
     def enforce_power_guard(self) -> bool:
-        if not self.config.prevent_automatic_sleep or os.name != "nt":
+        if not self.config.prevent_automatic_sleep:
             return False
+        if os.name != "nt":
+            return self.enforce_linux_power_guard()
         if time.monotonic() - self.last_power_guard < 60 and self.power_guard_active:
             return True
         self.last_power_guard = time.monotonic()
         es_continuous = 0x80000000
         es_system_required = 0x00000001
-        result = ctypes.windll.kernel32.SetThreadExecutionState(
-            es_continuous | es_system_required
-        )
+        try:
+            result = ctypes.windll.kernel32.SetThreadExecutionState(
+                es_continuous | es_system_required
+            )
+        except (AttributeError, OSError):
+            result = 0
         self.power_guard_active = bool(result)
         self.log.write(
             "windows_sleep_hibernate_inhibit",
@@ -3494,11 +3542,69 @@ class Agent:
         )
         return self.power_guard_active
 
+    def enforce_linux_power_guard(self) -> bool:
+        if not sys.platform.startswith("linux"):
+            return False
+        process = self.power_guard_process
+        if process is not None and process.poll() is None:
+            self.power_guard_active = True
+            return True
+        self.clear_power_guard()
+        now = time.monotonic()
+        if self.power_guard_attempted and now - self.last_power_guard < 60:
+            return False
+        self.power_guard_attempted = True
+        self.last_power_guard = now
+        inhibitor = shutil.which("systemd-inhibit")
+        try:
+            if not inhibitor:
+                raise OSError("systemd-inhibit unavailable")
+            # The fixed child holds logind's inhibitor until this process closes
+            # its pipe or exits. Its readiness byte confirms inhibitor acquisition.
+            process = _citadel_subprocess_popen(
+                [inhibitor, "--what=sleep:idle", "--mode=block", "--who=CITADEL",
+                 "--why=CITADEL agent is running", sys.executable, "-c",
+                 "import sys; sys.stdout.write('1'); sys.stdout.flush(); sys.stdin.buffer.read()"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                shell=False,
+            )
+            self.power_guard_process = process
+            ready, _, _ = select.select([process.stdout], [], [], 3)
+            if not ready or os.read(process.stdout.fileno(), 1) != b"1" or process.poll() is not None:
+                raise OSError("sleep inhibitor did not become ready")
+            self.power_guard_active = True
+        except (OSError, ValueError):
+            self.clear_power_guard()
+        self.log.write("linux_sleep_hibernate_inhibit", enabled=self.power_guard_active)
+        return self.power_guard_active
+
     def clear_power_guard(self) -> None:
         if os.name == "nt" and self.power_guard_active:
             with contextlib.suppress(Exception):
                 ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
         self.power_guard_active = False
+        process = self.power_guard_process
+        self.power_guard_process = None
+        if process is not None:
+            if process.stdin:
+                with contextlib.suppress(OSError):
+                    process.stdin.close()
+            if process.poll() is None:
+                with contextlib.suppress(OSError):
+                    process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    with contextlib.suppress(OSError):
+                        process.kill()
+                    with contextlib.suppress(subprocess.TimeoutExpired, OSError):
+                        process.wait(timeout=3)
+            if process.stdout:
+                process.stdout.close()
+
+    def mark_local_progress(self) -> None:
+        if self.watchdog:
+            self.watchdog.touch()
 
     def remember_network_profile(self) -> None:
         state = load_json(self.network_recovery_path, {}) or {}
@@ -3746,6 +3852,7 @@ class Agent:
         while True:
             if self.lifecycle_stop_requested() or self.stop_path.exists():
                 raise SystemExit(0)
+            self.mark_local_progress()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return
@@ -3817,9 +3924,17 @@ class Agent:
             self.enforce_power_guard()
         backoff = 2
         try:
+            supervised = any(os.environ.get(flag) == "1" for flag in (
+                "CITADEL_SERVICE_MANAGED", "CITADEL_TASK_MANAGED", "CITADEL_SUPERVISED"
+            )) or bool(os.environ.get("INVOCATION_ID"))
+            if not once and supervised:
+                self.watchdog = LocalWatchdog()
+                self.watchdog.start()
             while True:
                 try:
+                    self.mark_local_progress()
                     self.cycle()
+                    self.mark_local_progress()
                     backoff = 2
                     if once:
                         return 0
@@ -3847,6 +3962,9 @@ class Agent:
                     self.interruptible_sleep(backoff)
                     backoff = min(60, backoff * 2)
         finally:
+            if self.watchdog:
+                self.watchdog.stop()
+                self.watchdog = None
             self.clear_power_guard()
 
 
