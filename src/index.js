@@ -1,5 +1,6 @@
 import { getProjectExperienceRegistry } from "./experience/registry.js";
 import { d1UsageOverview, d1UsageStatus } from "./d1-usage.js";
+import {d1QuotaResponse} from './d1-availability.js';
 import { readD1RetentionStatus } from "./d1-retention.js";
 import { readD1GuardianStatus, runD1Guardian } from "./d1-guardian.js";
 import { openRouterQualityConfig, reviewWithOpenRouter } from "./quality/openrouter.js";
@@ -48,26 +49,26 @@ const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "r
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const WAKE_PEER_MIN_AGENT_VERSION = "0.3.6";
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.37",
+  version: "0.3.38",
   files: [
     {
       path: "citadel_node_v1.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/5f087b2598e5e5549aefcdcb339275b6dd68d6f7/agent/citadel_node_v1.py",
-      sha256: "0f86aa1da7c34d9ffc4748d5458c3410d15652a1879484fdc484426c8fce156a"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
+      sha256: "ac795bc839f034e1db74058cf3e8b347c91c9462c89b4bdd05edf664065d8faf"
     },
     {
       path: "citadel_node_v2.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/5f087b2598e5e5549aefcdcb339275b6dd68d6f7/agent/citadel_node_v2.py",
-      sha256: "f392d758163bee65afb14379ed5879d2025b650daf9c602ec843878a7ad8e317"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
+      sha256: "afe74909932636d74d5a6bd4c5a5835472040299f2ded1e6aa6a9234618088e2"
     },
     {
       path: "CitadelSshConsole.cs",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/5f087b2598e5e5549aefcdcb339275b6dd68d6f7/agent/CitadelSshConsole.cs",
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/CitadelSshConsole.cs",
       sha256: "56476adfd0d1fe343490c5abbf3663fb24152694e62c97c571cec29917ee21bf"
     },
     {
       path: "configure_restricted_ssh.ps1",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/5f087b2598e5e5549aefcdcb339275b6dd68d6f7/agent/configure_restricted_ssh.ps1",
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/configure_restricted_ssh.ps1",
       sha256: "e8d5be7e56a01e6e7fb4d2e8b02644b4f2082d0f1633dd5e30f59aae7f1dec73"
     }
   ]
@@ -4164,7 +4165,7 @@ async function heartbeat(request, env, nodeId, url) {
   const { bytes: bodyBytes, text: bodyText } = await readBody(request, MAX_NODE_BODY_BYTES);
   const node = await authenticateNode(request, env, nodeId, url, bodyBytes);
   const body = parseJsonObject(bodyText);
-  return json(await persistHeartbeat(env, node, body));
+  return json(await persistHeartbeat(env, node, body, true));
 }
 
 async function persistHeartbeat(env, node, body, coalesce = false) {
@@ -8403,6 +8404,9 @@ export default {
       if (error instanceof ApiError) {
         return json({ ok: false, error: error.code }, error.status);
       }
+
+      const quotaResponse = d1QuotaResponse(error);
+      if (quotaResponse) return quotaResponse;
 
       const requestId = crypto.randomUUID();
       const d1Code = d1ServiceErrorCode(error, "controller");

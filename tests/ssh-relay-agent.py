@@ -28,7 +28,7 @@ async def main():
         agent.config_path = config_path
         agent._ssh_relay_stop = threading.Event()
         agent.identity = SimpleNamespace(sign=lambda message: "test-signature")
-        agent.api = SimpleNamespace(base_path="")
+        agent.api = SimpleNamespace(base_path="", retry_delay=lambda: 0)
         agent.log = SimpleNamespace(write=lambda name, **fields: events.append((name, fields)))
         finished = asyncio.Event()
 

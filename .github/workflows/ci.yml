@@ -173,6 +173,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/agent-resilience.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/agent-quota-retry.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/ssh-relay-agent.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Validate Windows Enterprise Probe and legacy-upgrade bootstrap

@@ -31,7 +31,7 @@ keepalive. Live SSH relay connectivity still comes from the Durable Object.
 The fleet view uses the same five-minute liveness lease as Guardian, so an unchanged
 node does not flicker offline between four-minute heartbeat writes. Snapshot `updated_at` represents
 the last change; node liveness continues to come from `nodes.last_seen_at`.
-Legacy heartbeat retains its original immediate liveness update.
+From agent release 0.3.38, the legacy heartbeat route uses the same four-minute liveness coalescing as sync. Its authentication and response shape are unchanged. Recovery and version/capability changes persist immediately. This saves heartbeat writes; it does not remove authentication reads or guarantee Free-plan capacity.
 
 AI state is sent on change or at least once every five minutes. Active progress
 changes and explicit probes still publish immediately. Only acknowledged

@@ -5,6 +5,7 @@ import {
 } from "./common.js";
 import { architectListLogs, architectLogStats } from "./architect.js";
 import { ingestNodeLogs } from "./ingest.js";
+import {d1QuotaResponse} from '../d1-availability.js';
 
 export function isTelemetryPath(pathname) {
   return pathname === "/api/v1/architect/logs" ||
@@ -35,6 +36,8 @@ export async function handleTelemetryRequest(request, env, url = new URL(request
     if (error instanceof TelemetryError) {
       return json({ ok: false, error: error.code }, error.status, error.headers);
     }
+    const quotaResponse = d1QuotaResponse(error);
+    if (quotaResponse) return quotaResponse;
     console.error("Unhandled telemetry API error", error);
     return json({ ok: false, error: "internal_error" }, 500);
   }

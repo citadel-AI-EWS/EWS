@@ -1,4 +1,5 @@
 import baseWorker, { expireStaleCommands, recoverStaleProjectAssignments } from "./index.js";
+import {withD1Availability, addD1RetryHint} from './d1-availability.js';
 export {NodeSshRelay} from './ssh/relay.js';
 import { runD1Guardian } from "./d1-guardian.js";
 import { pruneExpiredD1Bookkeeping } from "./d1-retention.js";
@@ -16,7 +17,7 @@ import {
   recordNodePresence
 } from "./presence.js";
 
-export default {
+const worker = {
   async scheduled(_controller, env) {
     const controller = _controller;
     if (controller?.cron === "*/5 * * * *") {
@@ -84,5 +85,15 @@ export default {
       }
     }
     return response;
+  }
+};
+
+export default {
+  scheduled(controller, env) {
+    return worker.scheduled(controller, withD1Availability(env));
+  },
+  async fetch(request, env, executionCtx) {
+    const guarded = withD1Availability(env);
+    return addD1RetryHint(await worker.fetch(request, guarded, executionCtx), guarded);
   }
 };

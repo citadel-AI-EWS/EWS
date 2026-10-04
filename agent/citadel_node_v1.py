@@ -17,6 +17,7 @@ import concurrent.futures
 import ctypes
 import dataclasses
 import datetime as dt
+import email.utils
 import hashlib
 import importlib.util
 import ipaddress
@@ -67,7 +68,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.37"
+VERSION = "0.3.38"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -460,9 +461,10 @@ class Identity:
 
 
 class ControllerApiError(RuntimeError):
-    def __init__(self, status: int, code: str) -> None:
+    def __init__(self, status: int, code: str, retry_after_seconds: float = 0) -> None:
         self.status = int(status)
         self.code = str(code)
+        self.retry_after_seconds = max(0, retry_after_seconds)
         super().__init__(f"controller HTTP {self.status}: {self.code}")
 
 
@@ -475,12 +477,54 @@ class ApiClient:
         self.host = parsed.hostname or ""
         self.port = parsed.port
         self.base_path = parsed.path.rstrip("/")
+        self._retry_lock = threading.Lock()
+        self._retry_until = 0.0
+        self._retry_error = None
         if self.scheme == "https":
             self.connection_type = http.client.HTTPSConnection
         elif self.scheme == "http" and self.host in {"127.0.0.1", "localhost", "::1"}:
             self.connection_type = http.client.HTTPConnection
         else:
             raise ValueError("unsupported controller scheme")
+
+    def retry_delay(self) -> float:
+        with self._retry_lock:
+            return max(0, self._retry_until - time.monotonic())
+
+    def _check_retry_pause(self) -> None:
+        with self._retry_lock:
+            remaining = self._retry_until - time.monotonic()
+            if remaining > 0 and self._retry_error:
+                status, code = self._retry_error
+                raise ControllerApiError(status, code, remaining)
+
+    def _quota_retry(self, response, value, code: str) -> float:
+        if response.status != 503 or not re.search(r"d1_daily_(read|write)_limit_exceeded", code):
+            return 0
+        header = response.getheader("Retry-After") if hasattr(response, "getheader") else None
+        delay = None
+        if header:
+            try:
+                delay = float(header)
+            except (ValueError, TypeError):
+                try:
+                    date = email.utils.parsedate_to_datetime(header)
+                    delay = date.timestamp() - time.time()
+                except (ValueError, TypeError, OverflowError):
+                    pass
+        if delay is None and isinstance(value, dict):
+            raw = value.get("retry_after_seconds")
+            if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+                delay = float(raw)
+        if delay is None or not 0 <= delay <= 86400:
+            utc = dt.datetime.now(dt.timezone.utc)
+            reset = (utc + dt.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            delay = (reset - utc).total_seconds()
+        delay = max(1.0, min(86400.0, delay))
+        with self._retry_lock:
+            self._retry_until = max(self._retry_until, time.monotonic() + delay)
+            self._retry_error = (response.status, code)
+        return delay
 
     def request(
         self,
@@ -491,6 +535,7 @@ class ApiClient:
         *,
         timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
+        self._check_retry_pause()
         method = method.upper()
         if not path.startswith("/"):
             raise ValueError("API path must begin with /")
@@ -539,7 +584,8 @@ class ApiClient:
                 raise RuntimeError("controller returned invalid JSON") from exc
             if not 200 <= response.status < 300:
                 error = value.get("error") if isinstance(value, dict) else decoded
-                raise ControllerApiError(response.status, str(error))
+                retry = self._quota_retry(response, value, str(error))
+                raise ControllerApiError(response.status, str(error), retry)
             if not isinstance(value, dict):
                 raise RuntimeError("controller response must be a JSON object")
             return value
@@ -3959,7 +4005,8 @@ class Agent:
                         self.recover_network()
                     if once:
                         raise
-                    self.interruptible_sleep(backoff)
+                    retry = error.retry_after_seconds if isinstance(error, ControllerApiError) else 0
+                    self.interruptible_sleep(min(300, max(backoff, retry)))
                     backoff = min(60, backoff * 2)
         finally:
             if self.watchdog:

@@ -236,6 +236,41 @@ try {
   }
   assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM node_request_nonces').first()).n, 2,
     'only the two explicitly D1-only requests may create nonce rows');
+
+  // Existing 0.3.1 agents use a nonce-less heartbeat route. Keep their wire
+  // contract and measure the actual table/index writes in the Worker runtime.
+  await db.prepare("UPDATE nodes SET agent_version = '0.3.1', last_seen_at = datetime('now', '-241 seconds')").run();
+  const legacyRoute = `/api/v1/nodes/${nodeId}/heartbeat`;
+  const legacyBody = JSON.stringify({agent_version: '0.3.1', cpu_percent: 2, memory_percent: 20});
+  const legacyStamp = String(Math.floor(Date.now() / 1000));
+  const legacyHash = Buffer.from(await crypto.subtle.digest('SHA-256',
+    new TextEncoder().encode(legacyBody))).toString('hex');
+  const legacySignature = await crypto.subtle.sign('Ed25519', keys.privateKey,
+    new TextEncoder().encode(['POST', legacyRoute, legacyStamp, legacyHash].join('\n')));
+  const legacyOptions = {method: 'POST', body: legacyBody, headers: {
+    'x-node-id': nodeId, 'x-node-timestamp': legacyStamp,
+    'x-node-signature': Buffer.from(legacySignature).toString('base64url')
+  }};
+  response = await mf.dispatchFetch('https://local.test' + legacyRoute, legacyOptions);
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(Number(response.headers.get('x-test-d1-writes')), 3,
+    'legacy heartbeat must refresh its expired lease, including both indexes');
+  const legacyState = await response.json();
+  assert.equal(legacyState.status, 'online');
+  assert.equal(legacyState.node_id, nodeId);
+  response = await mf.dispatchFetch('https://local.test' + legacyRoute, legacyOptions);
+  assert.equal(response.status, 200);
+  assert.equal(Number(response.headers.get('x-test-d1-writes')), 0,
+    'unchanged legacy heartbeat must write zero actual D1 rows');
+  await db.prepare("UPDATE nodes SET last_seen_at = datetime('now', '-241 seconds')").run();
+  response = await mf.dispatchFetch('https://local.test' + legacyRoute, legacyOptions);
+  assert.equal(response.status, 200);
+  assert.equal(Number(response.headers.get('x-test-d1-writes')), 3);
+  await db.prepare("UPDATE nodes SET status = 'paused', last_seen_at = datetime('now', '-241 seconds')").run();
+  response = await mf.dispatchFetch('https://local.test' + legacyRoute, legacyOptions);
+  assert.equal((await response.json()).status, 'paused');
+  assert.equal(Number(response.headers.get('x-test-d1-writes')), 3);
+  console.log('Legacy 0.3.1 heartbeat actual D1 rows_written: initial=3, duplicate=0, refresh=3; paused preserved: PASS');
   await db.prepare("UPDATE nodes SET status = 'revoked' WHERE node_id = ?").bind(nodeId).run();
   response = await mf.dispatchFetch('https://local.test' + route, options);
   assert.equal(response.status, 403);

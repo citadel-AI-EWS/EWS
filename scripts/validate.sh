@@ -8,6 +8,8 @@ python -m py_compile controller_app.py controller_tests.py agent/citadel_node_v1
 python agent/citadel_node_v2.py self-test
 python tests/network-recovery-priority.py
 python tests/agent-resilience.py
+python tests/agent-quota-retry.py
+node tests/d1-availability.mjs
 
 python - <<'PY'
 from pathlib import Path

@@ -24,7 +24,7 @@ from typing import Any, Callable
 
 import citadel_node_v1 as v1
 
-VERSION = "0.3.37"
+VERSION = "0.3.38"
 v1.VERSION = VERSION
 v1.USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 
@@ -290,6 +290,10 @@ class Agent(v1.Agent):
         try:
             delay = 2
             while not self._ssh_relay_stop.is_set():
+                quota_pause = self.api.retry_delay()
+                if quota_pause:
+                    await asyncio.to_thread(self._ssh_relay_stop.wait, min(60, quota_pause))
+                    continue
                 path = f"/api/v1/nodes/{node_id}/ssh/relay"
                 route = self.api.base_path + path
                 parsed = urllib.parse.urlsplit(self.config.controller_url)

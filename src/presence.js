@@ -4,6 +4,7 @@ import {
   json,
   methodNotAllowed
 } from "./telemetry/common.js";
+import {d1QuotaResponse} from './d1-availability.js';
 
 let presenceSchemaPromise;
 
@@ -100,6 +101,8 @@ export async function handlePresenceRequest(request, env) {
     if (error instanceof TelemetryError) {
       return json({ ok: false, error: error.code }, error.status, error.headers);
     }
+    const quotaResponse = d1QuotaResponse(error);
+    if (quotaResponse) return quotaResponse;
     console.error("Unhandled presence API error", error);
     return json({ ok: false, error: "internal_error" }, 500);
   }
