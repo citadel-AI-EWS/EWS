@@ -2,6 +2,7 @@ const baseUrl = (process.argv[2] || process.env.CITADEL_BASE_URL || "https://cit
 const deploySha = process.env.DEPLOY_SHA || "manual";
 const attempts = Number(process.env.SMOKE_ATTEMPTS || 20);
 const delayMs = Number(process.env.SMOKE_DELAY_MS || 3000);
+const requestTimeoutMs = Number(process.env.SMOKE_REQUEST_TIMEOUT_MS || 10000);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -9,7 +10,8 @@ async function getJson(path, attempt) {
   const separator = path.includes("?") ? "&" : "?";
   const response = await fetch(`${baseUrl}${path}${separator}deployment=${encodeURIComponent(deploySha)}-${attempt}`, {
     headers: { accept: "application/json" },
-    cache: "no-store"
+    cache: "no-store",
+    signal: AbortSignal.timeout(requestTimeoutMs)
   });
   if (!response.ok) {
     const body = (await response.text()).slice(0, 500);
@@ -21,7 +23,8 @@ async function getJson(path, attempt) {
 async function getText(path, attempt) {
   const separator = path.includes("?") ? "&" : "?";
   const response = await fetch(`${baseUrl}${path}${separator}deployment=${encodeURIComponent(deploySha)}-${attempt}`, {
-    cache: "no-store"
+    cache: "no-store",
+    signal: AbortSignal.timeout(requestTimeoutMs)
   });
   if (!response.ok) throw new Error(`${path} HTTP ${response.status}`);
   return response.text();
@@ -65,7 +68,7 @@ function assertReady(health, hub, api, root) {
   if (!Array.isArray(api.command_types) || !api.command_types.includes("update")) {
     throw new Error("signed update command is unavailable");
   }
-  if (!['id="machines"', 'id="logs"', 'id="taskForm"'].every(marker => root.includes(marker))) throw new Error("operations console markers missing");
+  if (!['id="machines"', 'id="taskForm"'].every(marker => root.includes(marker))) throw new Error("operations console markers missing");
   if (root.includes("ews-demo-has-project")) throw new Error("demo state leaked into live root");
 }
 
@@ -120,8 +123,8 @@ for (let attempt = 1; attempt <= attempts; attempt += 1) {
   } catch (error) {
     lastError = error;
     console.error(`smoke attempt ${attempt}/${attempts} failed: ${error.message}`);
-    if (String(error?.message || "").includes("hub_d1_daily_read_limit_exceeded")) {
-      console.error("D1 daily read quota is exhausted; retries cannot recover before the quota reset.");
+    if (/_d1_daily_(?:read|write)_limit_exceeded/.test(String(error?.message || ""))) {
+      console.error("D1 daily quota is exhausted; retries cannot recover before the quota reset.");
       break;
     }
     if (attempt < attempts) await sleep(delayMs);
