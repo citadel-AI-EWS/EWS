@@ -9,6 +9,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.ServiceProcess;
+using System.Security.Principal;
 using System.Text;
 
 internal static class CitadelSshConsole
@@ -18,6 +19,10 @@ internal static class CitadelSshConsole
         "help",
         "status",
         "hostname",
+        "whoami",
+        "uname -a",
+        "python --version",
+        "python3 --version",
         "uptime",
         "cpu",
         "memory",
@@ -100,6 +105,30 @@ internal static class CitadelSshConsole
     {
         try { return Dns.GetHostName(); }
         catch (SocketException) { return Environment.MachineName; }
+    }
+
+    private static string Whoami()
+    {
+        using (WindowsIdentity identity = WindowsIdentity.GetCurrent())
+        {
+            return identity.Name;
+        }
+    }
+
+    private static string Uname()
+    {
+        return "Windows " + Hostname() + " " + Environment.OSVersion.VersionString + " "
+            + (Environment.Is64BitOperatingSystem ? "x86_64" : "x86");
+    }
+
+    private static string PythonVersion()
+    {
+        string executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Python314", "python.exe");
+        if (!File.Exists(executable)) return "Python unavailable";
+        FileVersionInfo version = FileVersionInfo.GetVersionInfo(executable);
+        return "Python " + version.FileMajorPart.ToString(CultureInfo.InvariantCulture) + "."
+            + version.FileMinorPart.ToString(CultureInfo.InvariantCulture) + "."
+            + version.FileBuildPart.ToString(CultureInfo.InvariantCulture);
     }
 
     private static string Uptime()
@@ -367,6 +396,12 @@ internal static class CitadelSshConsole
             case "help": return Tuple.Create(Help(), false, 0);
             case "status": return Tuple.Create(Status(), false, 0);
             case "hostname": return Tuple.Create(Hostname(), false, 0);
+            case "whoami": return Tuple.Create(Whoami(), false, 0);
+            case "uname -a": return Tuple.Create(Uname(), false, 0);
+            case "python --version":
+            case "python3 --version":
+                string version = PythonVersion();
+                return Tuple.Create(version, false, version == "Python unavailable" ? 127 : 0);
             case "uptime": return Tuple.Create(Uptime(), false, 0);
             case "cpu": return Tuple.Create(Cpu(), false, 0);
             case "memory": return Tuple.Create(Memory(), false, 0);

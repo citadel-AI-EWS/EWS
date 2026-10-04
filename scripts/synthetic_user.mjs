@@ -115,7 +115,6 @@ async function closeChecked(page, entry, route, screenshotName) {
   try {
     if (!(await page.locator("#auth").isVisible())) addFinding("auth_not_visible", "/", "login panel is not visible");
     if (await page.locator("#machines").isVisible()) addFinding("machines_exposed", "/", "machine controls visible before authentication");
-    if (await page.locator("#logs").isVisible()) addFinding("logs_exposed", "/", "logs visible before authentication");
 
     for (const selector of ["#refresh", "#submitTask", "#lmInstall", "#nodeQuery", "#detailShutdown", "#detailUninstall"]) {
       if (await page.locator(selector).count() !== 1) addFinding("missing_control", "/", selector);
@@ -177,13 +176,13 @@ for (const route of ["/hub/", "/architect/"]) {
   if (page) await closeChecked(page, entry, route, route.includes("hub") ? "compat-hub.png" : "compat-architect.png");
 }
 
-// Logs compatibility URL intentionally resolves to /#logs. Authentication still gates the data.
+// Old logs URLs lead to the machine console, which still requires authentication.
 {
   let page, entry;
   try {
-    ({ page, entry } = await open("/architect/logs/", "#logs"));
+    ({ page, entry } = await open("/architect/logs/", "#machines"));
     if (!(await page.locator("#auth").isVisible())) addFinding("logs_auth_missing", "/architect/logs/", "login panel is not visible");
-    if (await page.locator("#logs").isVisible()) addFinding("logs_exposed", "/architect/logs/", "logs visible without authentication");
+    if (await page.locator("#machines").isVisible()) addFinding("machines_exposed", "/architect/logs/", "machines visible without authentication");
   } catch (error) {
     addFinding("scenario_failure", "/architect/logs/", String(error).slice(0, 1600));
   }

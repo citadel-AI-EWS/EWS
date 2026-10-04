@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readdirSync, readFileSync } from 'node:fs';
-import controller from '../src/index.js';
+import controller, { wakeRelayEligible } from '../src/index.js';
+
+const wakeNow = Date.parse('2026-10-04T13:00:00Z');
+const wakeNode = {status: 'online', lan_ipv4: '192.168.1.10', last_seen_at: '2026-10-04T12:59:30Z'};
+assert.equal(wakeRelayEligible({...wakeNode, agent_version: '0.3.1'}, wakeNow), false);
+assert.equal(wakeRelayEligible({...wakeNode, agent_version: '0.3.6'}, wakeNow), true);
+assert.equal(wakeRelayEligible({...wakeNode, agent_version: '0.3.6', last_seen_at: '2026-10-04T12:54:00Z'}, wakeNow), false);
 
 // Execute the real SQL against SQLite, including D1's transactional batch semantics.
 const db = new DatabaseSync(':memory:');

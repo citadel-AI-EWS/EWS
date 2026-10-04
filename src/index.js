@@ -37,7 +37,8 @@ const ALLOWED_REPORT_SENSITIVITIES = new Set([
 const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const SSH_CONSOLE_COMMANDS = new Set([
-  "help", "status", "hostname", "uptime", "cpu", "memory", "disk", "network",
+  "help", "status", "hostname", "whoami", "uname -a", "python --version", "python3 --version",
+  "uptime", "cpu", "memory", "disk", "network",
   "agent-status", "agent-logs", "lmstudio-status", "diagnostics", "ping-controller", "exit"
 ]);
 const MAX_SSH_CONSOLE_OUTPUT_BYTES = 24 * 1024;
@@ -45,23 +46,24 @@ const SSH_CONSOLE_RESULT_RETENTION_HOURS = 24;
 const SSH_CONSOLE_RESULT_CLEANUP_BATCH = 250;
 const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "restart", "stop", "rollback", "uninstall", "system_reboot", "system_shutdown", "lmstudio_install", "lmstudio_uninstall", "lmstudio_probe", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query", "ssh_probe", "ssh_console"]);
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
+const WAKE_PEER_MIN_AGENT_VERSION = "0.3.6";
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.35",
+  version: "0.3.36",
   files: [
     {
       path: "citadel_node_v1.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v1.py",
-      sha256: "cd19edfe80741ef6c36a76b7fd86f075666948595aaf9cd884cc955cb9d2be01"
+      sha256: "a4e87ec82e228a769890c1e1b233543f9b78385357c982b74d4867c0e1958ce8"
     },
     {
       path: "citadel_node_v2.py",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/citadel_node_v2.py",
-      sha256: "02ab30070acc91377a5eb059ca404ac2e687bcad7f61a2673bf1242132ee6cb4"
+      sha256: "2ee93d39a27263e882f60b7f71395306e948f190600abffd515984388cb78a1f"
     },
     {
       path: "CitadelSshConsole.cs",
       url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/CitadelSshConsole.cs",
-      sha256: "026d1d59420ce4a480bfd7d4027a4b54dd178600e08ae85acfd7f6f8bff4e96b"
+      sha256: "56476adfd0d1fe343490c5abbf3663fb24152694e62c97c571cec29917ee21bf"
     },
     {
       path: "configure_restricted_ssh.ps1",
@@ -70,6 +72,25 @@ const LATEST_NODE_RELEASE = Object.freeze({
     }
   ]
 });
+const LEGACY_CORE_UPDATE_FILES = new Set(["citadel_node_v1.py", "citadel_node_v2.py"]);
+const LEGACY_ENTERPRISE_UPDATE_FILES = new Set([...LEGACY_CORE_UPDATE_FILES, "windows_enterprise_probe.ps1"]);
+
+export function releaseForAgentVersion(release, agentVersion) {
+  const allowed = agentVersionAtLeast(agentVersion, "0.3.27")
+    ? null
+    : agentVersionAtLeast(agentVersion, "0.3.13")
+      ? LEGACY_ENTERPRISE_UPDATE_FILES
+      : LEGACY_CORE_UPDATE_FILES;
+  return {
+    version: release.version,
+    files: (release.files || []).filter((file) => !allowed || allowed.has(file.path))
+  };
+}
+
+function updatePayloadCompatibleWithAgent(payload, agentVersion) {
+  return Array.isArray(payload?.files) && payload.files.length > 0 &&
+    releaseForAgentVersion(payload, agentVersion).files.length === payload.files.length;
+}
 const LMSTUDIO_INTEGRATION = Object.freeze({
   github_url: "https://github.com/citadel-AI-EWS/EWS/tree/main/agent/lmstudio",
   official_url: "https://lmstudio.ai",
@@ -361,6 +382,13 @@ function agentVersionAtLeast(version, minimum) {
     if (actual[i] !== required[i]) return actual[i] > required[i];
   }
   return true;
+}
+
+export function wakeRelayEligible(node, now = Date.now()) {
+  const seenAt = parseControllerTimestamp(node?.last_seen_at);
+  return node?.status === "online" && Boolean(node.lan_ipv4) &&
+    agentVersionAtLeast(node.agent_version, WAKE_PEER_MIN_AGENT_VERSION) &&
+    seenAt !== null && seenAt >= now - NODE_LIVE_WINDOW_MINUTES * 60 * 1000;
 }
 
 function parseJsonObject(text) {
@@ -1564,7 +1592,8 @@ async function ensureRolloutCommandForNode(env, nodeId) {
       "SELECT node_id, hostname, status, agent_version, last_seen_at FROM nodes WHERE node_id = ?"
     ).bind(nodeId).first(),
     env.DB.prepare(
-      "SELECT command_id FROM commands WHERE node_id = ? AND status IN ('pending', 'accepted') LIMIT 1"
+      "SELECT command_id, command_type, status, payload_json FROM commands " +
+      "WHERE node_id = ? AND status IN ('pending', 'accepted') LIMIT 1"
     ).bind(nodeId).first(),
     env.DB.prepare(
       "SELECT payload_json, completed_at FROM commands " +
@@ -1575,20 +1604,36 @@ async function ensureRolloutCommandForNode(env, nodeId) {
   ]);
   if (
     !node ||
-    pending ||
     node.status === "revoked" ||
     isTestNodeRecord(node) ||
+    rollout.target_version !== LATEST_NODE_RELEASE.version ||
     node.agent_version === rollout.target_version
   ) {
     return;
+  }
+  if (pending) {
+    if (pending.command_type !== "update" || pending.status !== "pending" ||
+        updatePayloadCompatibleWithAgent(safeJson(pending.payload_json, {}), node.agent_version)) return;
+    const retired = await env.DB.prepare(
+      "UPDATE commands SET status = 'failed', completed_at = CURRENT_TIMESTAMP " +
+      "WHERE command_id = ? AND status = 'pending'"
+    ).bind(pending.command_id).run();
+    if (Number(retired?.meta?.changes || 0) !== 1) return;
+    await env.DB.prepare(
+      "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+      "VALUES ('controller', ?, 'agent.rollout.incompatible_command_retired', 'command', ?, ?)"
+    ).bind(rollout.rollout_id, pending.command_id, JSON.stringify({
+      node_id: nodeId, agent_version: node.agent_version
+    })).run();
   }
   const recentlyInstalled = recentCompletedUpdate
     ? safeJson(recentCompletedUpdate.payload_json, {})?.version === rollout.target_version
     : false;
   if (recentlyInstalled) return;
-  if (rollout.target_version !== LATEST_NODE_RELEASE.version) return;
   const commandId = "command_" + crypto.randomUUID();
-  const payloadJson = rollout.release_json;
+  const payloadJson = JSON.stringify(releaseForAgentVersion(
+    safeJson(rollout.release_json, LATEST_NODE_RELEASE), node.agent_version
+  ));
   const createdAt = new Date().toISOString();
   const signature = await signControllerCommand(
     env, commandId, nodeId, "update", payloadJson, createdAt
@@ -6671,11 +6716,7 @@ async function architectOverview(request, env) {
   });
 
   const rawNodes = nodesQuery.results || [];
-  const liveRelays = rawNodes.filter((node) =>
-    node.status === "online" &&
-    node.lan_ipv4 &&
-    Date.parse(String(node.last_seen_at).replace(" ", "T") + (String(node.last_seen_at).includes("T") ? "" : "Z")) >= Date.now() - 5 * 60 * 1000
-  );
+  const liveRelays = rawNodes.filter((node) => wakeRelayEligible(node));
   const nodes = rawNodes.map((node) => {
     const macAddresses = safeJson(node.mac_addresses_json, []);
     const prefix = subnet24(node.lan_ipv4);
@@ -6940,17 +6981,34 @@ async function architectCreateCommand(request, env, nodeId) {
   }
 
   const pending = await env.DB.prepare(
-    "SELECT command_id FROM commands " +
+    "SELECT command_id, command_type, status, payload_json FROM commands " +
     "WHERE node_id = ? AND status IN ('pending', 'accepted') LIMIT 1"
   ).bind(nodeId).first();
   if (pending) {
-    throw new ApiError(409, "command_already_pending");
+    if (commandType !== "update" || pending.command_type !== "update" ||
+        pending.status !== "pending" ||
+        updatePayloadCompatibleWithAgent(safeJson(pending.payload_json, {}), node.agent_version)) {
+      throw new ApiError(409, "command_already_pending");
+    }
+    const retired = await env.DB.prepare(
+      "UPDATE commands SET status = 'failed', completed_at = CURRENT_TIMESTAMP " +
+      "WHERE command_id = ? AND status = 'pending'"
+    ).bind(pending.command_id).run();
+    if (Number(retired?.meta?.changes || 0) !== 1) {
+      throw new ApiError(409, "command_already_pending");
+    }
+    await env.DB.prepare(
+      "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+      "VALUES ('architect', ?, 'agent.update.incompatible_command_retired', 'command', ?, ?)"
+    ).bind(actor.actor_id, pending.command_id, JSON.stringify({
+      node_id: nodeId, agent_version: node.agent_version
+    })).run();
   }
 
   const commandId = "command_" + crypto.randomUUID();
   let payload = {};
   if (commandType === "update") {
-    payload = LATEST_NODE_RELEASE;
+    payload = releaseForAgentVersion(LATEST_NODE_RELEASE, node.agent_version);
   } else if (commandType === "lmstudio_install") {
     payload = { asset: lmstudioInstallAssetForNode(node) };
   } else if (commandType === "lmstudio_uninstall") {
@@ -7490,7 +7548,7 @@ async function architectWakeNode(request, env, targetNodeId) {
   }
 
   const relaysQuery = await env.DB.prepare(`
-    SELECT n.node_id, n.last_seen_at, net.lan_ipv4
+    SELECT n.node_id, n.agent_version, n.status, n.last_seen_at, net.lan_ipv4
     FROM nodes AS n
     JOIN node_network_state AS net ON net.node_id = n.node_id
     WHERE n.node_id != ?
@@ -7499,7 +7557,9 @@ async function architectWakeNode(request, env, targetNodeId) {
     ORDER BY datetime(n.last_seen_at) DESC
     LIMIT 100
   `).bind(targetNodeId).all();
-  const relay = (relaysQuery.results || []).find((candidate) => subnet24(candidate.lan_ipv4) === prefix);
+  const relay = (relaysQuery.results || []).find((candidate) =>
+    wakeRelayEligible(candidate) && subnet24(candidate.lan_ipv4) === prefix
+  );
   if (!relay) throw new ApiError(409, "wake_relay_unavailable");
 
   // Wake is an explicit control action, so reclaim an expired command slot here
@@ -7962,11 +8022,7 @@ async function handleApi(request, env, url, executionCtx = null) {
       if (!latestCommands.has(command.node_id)) latestCommands.set(command.node_id, command);
     }
     const rawNodes = nodes.results || [];
-    const liveRelays = rawNodes.filter((node) =>
-      node.status === "online" &&
-      node.lan_ipv4 &&
-      Date.parse(String(node.last_seen_at).replace(" ", "T") + (String(node.last_seen_at).includes("T") ? "" : "Z")) >= Date.now() - 5 * 60 * 1000
-    );
+    const liveRelays = rawNodes.filter((node) => wakeRelayEligible(node));
     const machineNodes = rawNodes.map((node) => {
       const macAddresses = safeJson(node.mac_addresses_json, []);
       const prefix = subnet24(node.lan_ipv4);

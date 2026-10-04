@@ -41,7 +41,6 @@ for (const required of [
   "RED ARMY   ·   BLACK ARMY   ·   SHADOW ARMY",
   'id="chromeSubbrand"',
   'id="chromeStats"',
-  'id="chromeLogsPreview"',
   'id="chromeSshQuick"',
   'id="chromeAiQuick"',
   'id="taskExecution"',
@@ -71,7 +70,9 @@ assert.match(hub, /<svg class="hub-only art-globe-left[\s\S]*BLACK ARMY \/ RED A
 
 assert.match(hub, /class="brand-lockup"[\s\S]*CITADEL[\s\S]*chromeSubbrand/);
 assert.match(hub, /id="auth"[\s\S]*ACCESS KEY[\s\S]*LOGIN/);
-assert.match(hub, /chrome-upper-grid[\s\S]*id="nodes"[\s\S]*SYSTEM LOGS/);
+assert.match(hub, /chrome-upper-grid[\s\S]*id="nodes"/);
+assert.doesNotMatch(hub, /id="chromeLogsPreview"|id="logs"|id="events"|id="reports"|>LOGS<|SYSTEM LOGS/);
+assert.match(hub, /\$\('projects'\)\.append\(c\)/);
 assert.match(hub, /chrome-lower-grid[\s\S]*SSH ACCESS[\s\S]*AI \/ LM STUDIO[\s\S]*id="d1Overview"[\s\S]*id="taskExecution"/);
 
 assert.ok(!hub.includes("avatar=el('div','>_','node-avatar')"), "legacy terminal-only node avatar returned");

@@ -49,7 +49,7 @@ try {
       await db.prepare(sql).run();
     }
   }
-  await db.prepare("INSERT INTO nodes (node_id, public_key, hostname, os_name, agent_version, status) VALUES (?, ?, ?, 'Linux', '0.3.35', 'online')")
+  await db.prepare("INSERT INTO nodes (node_id, public_key, hostname, os_name, agent_version, status) VALUES (?, ?, ?, 'Linux', '0.3.36', 'online')")
     .bind(nodeId, JSON.stringify({kty: jwk.kty, crv: jwk.crv, x: jwk.x}), 'relay-test').run();
   const sessionPath = `/api/v1/architect/nodes/${nodeId}/ssh/session`;
   const auth = {authorization: `Bearer ${owner}`, 'content-type': 'application/json'};

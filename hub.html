@@ -155,6 +155,8 @@ Select a node, then type help.</pre>
             </div>
             <datalist id="sshInlineCommands">
               <option value="help"></option><option value="status"></option><option value="hostname"></option>
+              <option value="whoami"></option><option value="uname -a"></option>
+              <option value="python --version"></option><option value="python3 --version"></option>
               <option value="uptime"></option><option value="cpu"></option><option value="memory"></option>
               <option value="disk"></option><option value="network"></option><option value="agent-status"></option>
               <option value="agent-logs"></option><option value="lmstudio-status"></option><option value="diagnostics"></option>
@@ -740,7 +742,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
     exportButton.addEventListener("click",()=>{if(!lastOverview)return;const snapshot={exported_at:new Date().toISOString(),counts:lastOverview.counts,nodes:lastOverview.nodes,presence:lastPresence,release_version:releaseVersion};const blob=new Blob([JSON.stringify(snapshot,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`citadel-hub-${new Date().toISOString().replace(/[:.]/g,"-")}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);toast("Snapshot exported","Real controller data only")});
 
     const sshHost=$("sshHost"),sshUser=$("sshUser"),sshFingerprint=$("sshFingerprint");
-    const sshInlineCommands=new Set(["help","status","hostname","uptime","cpu","memory","disk","network","agent-status","agent-logs","lmstudio-status","diagnostics","ping-controller","exit"]);
+    const sshInlineCommands=new Set(["help","status","hostname","whoami","uname -a","python --version","python3 --version","uptime","cpu","memory","disk","network","agent-status","agent-logs","lmstudio-status","diagnostics","ping-controller","exit"]);
     let sshNodeId="",sshState=null;const sshInlineBusyNodes=new Set();let sshSelectionGeneration=0,sshLoadGeneration=0,sshSaveGeneration=0;
     const sshDirtyFields=new Set();
     function applySshServerFields(state){

@@ -68,7 +68,7 @@ for route in architect hub; do
   printf '%s\n' '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/"><a href="/">Машины</a>' > "$OUTPUT/$route/index.html"
 done
 for route in logs architect/logs; do
-  printf '%s\n' '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/#logs"><a href="/#logs">Логи</a>' > "$OUTPUT/$route/index.html"
+  printf '%s\n' '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/#machines"><a href="/#machines">Машины</a>' > "$OUTPUT/$route/index.html"
 done
 cat > "$OUTPUT/_headers" <<'HEADERS'
 /*

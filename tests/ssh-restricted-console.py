@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import platform
 import tempfile
 from pathlib import Path
 
@@ -40,7 +41,8 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 expected = {
-    "help", "status", "hostname", "uptime", "cpu", "memory", "disk", "network",
+    "help", "status", "hostname", "whoami", "uname -a", "python --version", "python3 --version",
+    "uptime", "cpu", "memory", "disk", "network",
     "agent-status", "agent-logs", "lmstudio-status", "diagnostics", "ping-controller", "exit",
 }
 require(set(module.ALLOWED_COMMANDS) == expected, "SSH command allow-list changed unexpectedly")
@@ -48,11 +50,13 @@ require(set(module.ALLOWED_COMMANDS) == expected, "SSH command allow-list change
 with tempfile.TemporaryDirectory() as temp:
     config = Path(temp) / "config.json"
     config.write_text('{"controller_url":"https://127.0.0.1:9"}\n', encoding="utf-8")
-    for command in ("help", "status", "hostname", "uptime", "cpu", "memory", "disk", "network", "agent-status", "diagnostics"):
+    for command in ("help", "status", "hostname", "whoami", "uname -a", "python --version", "python3 --version", "uptime", "cpu", "memory", "disk", "network", "agent-status", "diagnostics"):
         output, should_exit = module.execute(command, config)
         require(isinstance(output, str) and output != "", f"{command} returned no output")
         require(should_exit is False, f"{command} unexpectedly closed the session")
-    for unsafe in ("bash", "cmd", "powershell", "whoami", "ls", "dir", "cat /etc/passwd", "status; hostname", "status | cat", "python -c pass"):
+    require(module.execute("python3 --version", config)[0] == f"Python {platform.python_version()}", "Python version did not come from the running interpreter")
+    require(module.execute("uname -a", config)[0].startswith(platform.system() + " "), "uname did not report the running OS")
+    for unsafe in ("bash", "cmd", "powershell", "ls", "dir", "cat /etc/passwd", "status; hostname", "status | cat", "python -c pass", "python3 -c pass"):
         output, should_exit = module.execute(unsafe, config)
         require(output.startswith("DENIED:"), f"unsafe command accepted: {unsafe}")
         require(should_exit is False, f"unsafe command closed session: {unsafe}")

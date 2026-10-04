@@ -39,8 +39,8 @@ need(index.includes("LEFT JOIN node_numbers AS nn"), "Architect node number join
 need(!readme.includes("-EnrollmentToken"), "README still documents EnrollmentToken");
 need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_token");
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
-need(agentV1.includes('VERSION = "0.3.35"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.35"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.36"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.36"'), "v2 release not bumped");
 need(!agentV1.includes("tailscale_ipv4"), "agent must not report Tailscale telemetry");
 need(agentV1.includes("WINDOWS_CREATE_NO_WINDOW = 0x08000000"), "Windows child-process no-window flag missing");
 need(agentV1.includes("def _citadel_subprocess_run") && agentV1.includes("def _citadel_subprocess_popen"), "Windows no-window subprocess wrappers missing");
@@ -322,9 +322,9 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.35"'), "Controller release not bumped");
-need(index.includes('path: "CitadelSshConsole.cs"'), "0.3.35 release must deliver the restricted SSH console source");
-need(index.includes('path: "configure_restricted_ssh.ps1"'), "0.3.35 release must deliver the restricted SSH bootstrap");
+need(index.includes('version: "0.3.36"'), "Controller release not bumped");
+need(index.includes('path: "CitadelSshConsole.cs"'), "0.3.36 release must deliver the restricted SSH console source");
+need(index.includes('path: "configure_restricted_ssh.ps1"'), "0.3.36 release must deliver the restricted SSH bootstrap");
 need(index.includes('"ssh_console"'), "inline SSH command missing from Controller allow-list");
 need(agentV1.includes('"ssh_console"'), "inline SSH command missing from node allow-list");
 need(agentV1.includes("validate_ssh_console_payload"), "inline SSH payload allow-list validation missing");
@@ -400,7 +400,7 @@ need(
 need(hub.includes('command_type:"ssh_console"'), "Hub inline terminal does not dispatch signed restricted commands");
 need(hub.includes('versionAtLeast(sshNode.agent_version,"0.3.32")'), "Hub inline terminal must require agent 0.3.32");
 need(operations.includes('id="sshDialog"') && operations.includes('id="sshInlineOutput"'), "deployed Machines SSH dialog/terminal missing");
-need(operations.includes("const sshAllowedCommands=new Set(['help','status','hostname','uptime','cpu','memory','disk','network','agent-status','agent-logs','lmstudio-status','diagnostics','ping-controller','exit'])"), "deployed Machines SSH allow-list missing or drifted");
+need(operations.includes("const sshAllowedCommands=new Set(['help','status','hostname','whoami','uname -a','python --version','python3 --version','uptime','cpu','memory','disk','network','agent-status','agent-logs','lmstudio-status','diagnostics','ping-controller','exit'])"), "deployed Machines SSH allow-list missing or drifted");
 need(operations.includes("sshVersionAtLeast(node.agent_version,'0.3.32')"), "deployed Machines restricted terminal must require agent 0.3.32");
 need(operations.includes("if(Array.isArray(node?.capabilities))return node.capabilities;"), "deployed Machines SSH bootstrap must consume detailed capabilities");
 need(operations.includes("if(currentNode?.node_id===sshNodeId)return currentNode;"), "deployed Machines SSH must prefer detailed node state");

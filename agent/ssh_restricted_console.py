@@ -8,6 +8,7 @@ listed in ALLOWED_COMMANDS are accepted.
 from __future__ import annotations
 
 import argparse
+import getpass
 import http.client
 import json
 import os
@@ -27,6 +28,10 @@ ALLOWED_COMMANDS = (
     "help",
     "status",
     "hostname",
+    "whoami",
+    "uname -a",
+    "python --version",
+    "python3 --version",
     "uptime",
     "cpu",
     "memory",
@@ -84,6 +89,21 @@ def command_status() -> str:
 
 def command_hostname() -> str:
     return socket.gethostname()
+
+
+def command_whoami() -> str:
+    if os.name == "posix":
+        import pwd
+        return pwd.getpwuid(os.geteuid()).pw_name
+    return getpass.getuser()
+
+
+def command_uname() -> str:
+    return " ".join(str(part) for part in platform.uname())
+
+
+def command_python_version() -> str:
+    return f"Python {platform.python_version()}"
 
 
 def command_uptime() -> str:
@@ -273,6 +293,10 @@ def execute(command: str, config_path: Path) -> tuple[str, bool]:
         "help": command_help,
         "status": command_status,
         "hostname": command_hostname,
+        "whoami": command_whoami,
+        "uname -a": command_uname,
+        "python --version": command_python_version,
+        "python3 --version": command_python_version,
         "uptime": command_uptime,
         "cpu": command_cpu,
         "memory": command_memory,
