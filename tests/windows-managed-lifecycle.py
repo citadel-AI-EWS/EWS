@@ -16,6 +16,7 @@ agent = next(n for n in parsed.body if isinstance(n, ast.ClassDef) and n.name ==
 methods = [n for n in agent.body if isinstance(n, ast.FunctionDef) and n.name in
            {'handle_commands', 'cycle', 'interruptible_sleep'}]
 namespace = dict(os=os, time=time, Path=Path, subprocess=subprocess, Any=Any,
+                 OperationCancelled=type("OperationCancelled", (RuntimeError,), {}),
                  SERVICE_STOP_EXIT_CODE=76, SERVICE_RESTART_EXIT_CODE=75)
 exec(compile(ast.Module(body=methods, type_ignores=[]), str(SOURCE), 'exec'), namespace)
 

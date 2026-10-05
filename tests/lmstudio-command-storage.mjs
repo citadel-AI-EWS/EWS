@@ -62,6 +62,13 @@ class Statement {
         ? { ...state.activeCommand }
         : null;
     }
+    if (this.sql.includes("SELECT command_id, node_id, command_type, status FROM commands WHERE command_id = ? AND node_id = ?")) {
+      return state.activeCommand &&
+        state.activeCommand.command_id === this.args[0] &&
+        state.activeCommand.node_id === this.args[1]
+        ? { ...state.activeCommand }
+        : null;
+    }
     throw new Error(`Unhandled first(): ${this.sql}`);
   }
   async all() {
@@ -98,6 +105,16 @@ class Statement {
     }
     if (this.sql.startsWith("UPDATE commands")) {
       if (!state.tables.has("commands")) throw new Error("no such table: commands");
+      if (
+        this.sql.includes("SET status = 'cancelled'") &&
+        state.activeCommand &&
+        state.activeCommand.command_id === this.args[0] &&
+        state.activeCommand.node_id === this.args[1] &&
+        state.activeCommand.status === "pending"
+      ) {
+        state.activeCommand.status = "cancelled";
+        return { meta: { changes: 1 } };
+      }
       if (
         this.sql.startsWith("UPDATE commands SET status = ?, completed_at = COALESCE") &&
         state.activeCommand &&
@@ -195,4 +212,53 @@ assert.equal(recoveredResponse.status, 503);
 assert.equal((await recoveredResponse.json()).error, "controller_signing_not_configured");
 assert.equal(state.activeCommand.status, "completed");
 
-console.log("LM Studio legacy command schema repair + terminal runtime recovery regression: OK");
+state.activeCommand = {
+  command_id: "command_cancel_pending",
+  node_id: "node_lm_bootstrap",
+  command_type: "hybrid_query",
+  payload_json: JSON.stringify({request_id:"query_cancel_pending"}),
+  status: "pending"
+};
+let cancelResponse = await worker.fetch(new Request(
+  "https://example.test/api/v1/architect/nodes/node_lm_bootstrap/commands/command_cancel_pending/cancel",
+  {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${architectToken}`,
+      "content-type": "application/json"
+    },
+    body: "{}"
+  }
+), env);
+assert.equal(cancelResponse.status, 200);
+let cancelData = await cancelResponse.json();
+assert.equal(cancelData.cancel.requested, true);
+assert.equal(cancelData.cancel.status, "cancelled");
+assert.equal(state.activeCommand.status, "cancelled");
+assert.ok(state.audit.length >= 1);
+
+state.activeCommand = {
+  command_id: "command_cancel_running",
+  node_id: "node_lm_bootstrap",
+  command_type: "hybrid_query",
+  payload_json: JSON.stringify({request_id:"query_cancel_running"}),
+  status: "accepted"
+};
+cancelResponse = await worker.fetch(new Request(
+  "https://example.test/api/v1/architect/nodes/node_lm_bootstrap/commands/command_cancel_running/cancel",
+  {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${architectToken}`,
+      "content-type": "application/json"
+    },
+    body: "{}"
+  }
+), env);
+assert.equal(cancelResponse.status, 200);
+cancelData = await cancelResponse.json();
+assert.equal(cancelData.cancel.requested, true);
+assert.equal(cancelData.cancel.status, "accepted");
+assert.equal(state.activeCommand.status, "accepted");
+
+console.log("LM Studio schema repair + terminal recovery + query cancellation regression: OK");

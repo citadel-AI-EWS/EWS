@@ -21,6 +21,7 @@ export const ALLOWED_EVENT_TYPES = new Set([
   "queued_results_flushed",
   "command_signature_rejected",
   "command_completed",
+  "command_cancelled",
   "agent_updated",
   "agent_update_rolled_back",
   "agent_update_healthcheck_passed",

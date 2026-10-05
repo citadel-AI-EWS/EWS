@@ -39,8 +39,8 @@ need(index.includes("LEFT JOIN node_numbers AS nn"), "Architect node number join
 need(!readme.includes("-EnrollmentToken"), "README still documents EnrollmentToken");
 need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_token");
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
-need(agentV1.includes('VERSION = "0.3.38"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.38"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.39"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.39"'), "v2 release not bumped");
 need(!agentV1.includes("tailscale_ipv4"), "agent must not report Tailscale telemetry");
 need(agentV1.includes("WINDOWS_CREATE_NO_WINDOW = 0x08000000"), "Windows child-process no-window flag missing");
 need(agentV1.includes("def _citadel_subprocess_run") && agentV1.includes("def _citadel_subprocess_popen"), "Windows no-window subprocess wrappers missing");
@@ -327,9 +327,9 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.38"'), "Controller release not bumped");
-need(index.includes('path: "CitadelSshConsole.cs"'), "0.3.38 release must deliver the restricted SSH console source");
-need(index.includes('path: "configure_restricted_ssh.ps1"'), "0.3.38 release must deliver the restricted SSH bootstrap");
+need(index.includes('version: "0.3.39"'), "Controller release not bumped");
+need(index.includes('path: "CitadelSshConsole.cs"'), "0.3.39 release must deliver the restricted SSH console source");
+need(index.includes('path: "configure_restricted_ssh.ps1"'), "0.3.39 release must deliver the restricted SSH bootstrap");
 need(index.includes('"ssh_console"'), "inline SSH command missing from Controller allow-list");
 need(agentV1.includes('"ssh_console"'), "inline SSH command missing from node allow-list");
 need(agentV1.includes("validate_ssh_console_payload"), "inline SSH payload allow-list validation missing");

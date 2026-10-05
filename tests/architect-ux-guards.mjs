@@ -238,6 +238,46 @@ for (const required of [
   assert.ok(operations.includes(required), "agent update proof UX missing: " + required);
 }
 for (const required of [
+  'id="nodeQueryStop"',
+  "async function cancelNodeQuery",
+  "■ Стоп LM Studio",
+  "/cancel",
+  "agent_version,'0.3.39'",
+  "stopSupported=lmInstalled&&sshVersionAtLeast(n.agent_version,'0.3.39')",
+  "$('nodeQueryStop').hidden=!stopSupported"
+]) {
+  assert.ok(operations.includes(required), "LM Studio query Stop UX missing: " + required);
+}
+for (const required of [
+  'id="hybridStop"',
+  "async function stopHybrid",
+  "■ Стоп LM Studio",
+  "/cancel",
+  "agent_version,'0.3.39'",
+  "$('hybridStop').hidden=!stopSupported",
+  "lmstudio_installed||0"
+]) {
+  assert.ok(hub.includes(required), "Hub LM Studio query Stop UX missing: " + required);
+}
+for (const required of [
+  "async function architectCancelCommand",
+  "async function nodeCommandCancelState",
+  "command.cancel_requested",
+  "cancel-state",
+  '"cancelled"'
+]) {
+  assert.ok(index.includes(required), "Controller query cancellation missing: " + required);
+}
+for (const required of [
+  "class OperationCancelled",
+  "command_cancel_requested",
+  "cancel-state",
+  "cancellable=True",
+  'ack_command(command_id, "cancelled")'
+]) {
+  assert.ok(agent.includes(required), "Agent query cancellation missing: " + required);
+}
+for (const required of [
   "architectModelDetails",
   "architectLmstudioPreflight",
   "ai_installed",
