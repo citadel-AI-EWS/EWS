@@ -260,6 +260,11 @@ need(wrangler.includes('"17 * * * *"'), "telemetry retention cron missing");
 }
 need(index.includes("do {") && index.includes("expiredBatchSize = await expireStaleCommands(env);") && index.includes("while (expiredBatchSize === 250);"), "command storage must drain every full stale-command batch before creating the active-command unique index");
 need(index.includes('throw new ApiError(409, "command_already_pending")'), "command storage UNIQUE conflicts must not surface as internal_error");
+need(index.includes("async function reconcileTerminalAiCommand"), "terminal AI command recovery helper missing");
+need(index.includes('commandType === "lmstudio_model_load" && phase === "load_complete"'), "LM Studio load completion must reconcile the active command");
+need(index.includes('commandType === "hybrid_query"') && index.includes('phase === "query_complete"'), "Hybrid query completion must reconcile the active command");
+need(index.includes("pending && await reconcileTerminalAiCommand(env, nodeId, pending)"), "Architect command path must reconcile only when an active command exists");
+need(index.includes('const message = String(error).toLowerCase();') && index.includes('message.includes("unique")'), "command UNIQUE mapping must be case-insensitive");
 {
   const start = index.indexOf("async function architectCreateCommand");
   const end = index.indexOf("async function nodeUpdateAiState", start);
