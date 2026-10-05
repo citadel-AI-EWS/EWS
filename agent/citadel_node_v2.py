@@ -49,6 +49,7 @@ ALLOWED_EVENTS = {
     "windows_sleep_inhibit",
     "cycle_error",
     "operation_heartbeat_failed",
+    "operation_cancel_check_failed",
     "assignment_heartbeat_failed",
     "resource_guard",
     "assignment_rejected_local",
