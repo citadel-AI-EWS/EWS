@@ -12,7 +12,18 @@ const release = {
   files: ["citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1",
     "CitadelSshConsole.cs", "configure_restricted_ssh.ps1"].map((path) => ({path}))
 };
-assert.deepEqual(releaseForAgentVersion(release, "0.3.1").files.map((file) => file.path),
+const legacy031Bridge = releaseForAgentVersion(release, "0.3.1");
+assert.equal(legacy031Bridge.version, "0.3.2");
+assert.deepEqual(legacy031Bridge.files.map((file) => file.path),
+  ["citadel_node_v1.py", "citadel_node_v2.py"]);
+assert.ok(legacy031Bridge.files.every((file) =>
+  file.url.includes("/04571327f3f229d8e319c9e216a564e0857e3c54/agent/")));
+assert.deepEqual(legacy031Bridge.files.map((file) => file.sha256), [
+  "69d7838bea16f2d0b1578a47f32af9bfe7b94c51b0a2eaf49803d7d0e8e30a5f",
+  "8f7667ff675e1e5b5b964a77deb191eb25b84259cdd78367bd9df2bb9f4f2d24"
+]);
+assert.equal(releaseForAgentVersion(release, "0.3.2").version, "0.3.39");
+assert.deepEqual(releaseForAgentVersion(release, "0.3.2").files.map((file) => file.path),
   ["citadel_node_v1.py", "citadel_node_v2.py"]);
 assert.deepEqual(releaseForAgentVersion(release, "0.3.13").files.map((file) => file.path),
   ["citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1"]);
