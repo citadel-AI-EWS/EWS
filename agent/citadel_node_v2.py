@@ -245,48 +245,106 @@ class Agent(v1.Agent):
             self.log.write("ssh_relay_error", error=type(error).__name__ + ": " + str(error)[:160])
             self._ssh_relay_stop.wait(60)
 
+    def _managed_windows_ssh_target(self) -> dict[str, str] | None:
+        if os.name != "nt":
+            return None
+        program_data = Path(os.environ.get("PROGRAMDATA") or r"C:\\ProgramData")
+        ssh_root = program_data / "CitadelEWS" / "ssh"
+        state_path = ssh_root / "bootstrap-state.json"
+        if not state_path.is_file():
+            return None
+        state = v1.load_json(state_path, {}) or {}
+        if state.get("managed_admin") is not True:
+            return None
+        username = str(state.get("ssh_user") or "").strip()
+        if not username or len(username) > 20 or any(
+            ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-" for ch in username
+        ):
+            raise RuntimeError("managed_ssh_invalid_username")
+        private_key = ssh_root / "relay_ed25519"
+        authorized_keys = ssh_root / "relay_authorized_keys"
+        host_public_key = program_data / "ssh" / "ssh_host_ed25519_key.pub"
+        for required in (private_key, authorized_keys, host_public_key):
+            if not required.is_file():
+                raise RuntimeError("managed_ssh_material_missing")
+        host_key_line = host_public_key.read_text(encoding="utf-8-sig", errors="strict").splitlines()[0].strip()
+        if not host_key_line.startswith("ssh-ed25519 "):
+            raise RuntimeError("managed_ssh_host_key_invalid")
+        return {
+            "mode": "managed_admin",
+            "host": "127.0.0.1",
+            "port": "22",
+            "username": username,
+            "private_key": str(private_key),
+            "host_key": host_key_line,
+        }
+
     async def _ssh_relay_loop(self, node_id, asyncssh, websockets) -> None:
-        from ssh_restricted_console import execute
+        managed_target = self._managed_windows_ssh_target()
+        server = None
+        if managed_target:
+            target = {
+                "mode": managed_target["mode"],
+                "host": managed_target["host"],
+                "port": int(managed_target["port"]),
+                "username": managed_target["username"],
+                "client_keys": [managed_target["private_key"]],
+                "known_hosts": asyncssh.import_known_hosts(
+                    f"[{managed_target['host']}]:{managed_target['port']} {managed_target['host_key']}"
+                ),
+            }
+        else:
+            from ssh_restricted_console import execute
 
-        host_key = asyncssh.generate_private_key("ssh-ed25519")
-        client_key = asyncssh.generate_private_key("ssh-ed25519")
-        host_public = host_key.export_public_key()
-        client_public = client_key.export_public_key()
-        config_path = self.config_path
+            host_key = asyncssh.generate_private_key("ssh-ed25519")
+            client_key = asyncssh.generate_private_key("ssh-ed25519")
+            host_public = host_key.export_public_key()
+            client_public = client_key.export_public_key()
+            config_path = self.config_path
 
-        class LocalServer(asyncssh.SSHServer):
-            def begin_auth(self, username):
-                return True
+            class LocalServer(asyncssh.SSHServer):
+                def begin_auth(self, username):
+                    return True
 
-            def public_key_auth_supported(self):
-                return True
+                def public_key_auth_supported(self):
+                    return True
 
-            def validate_public_key(self, username, key):
-                return username == "citadel" and key.export_public_key() == client_public
+                def validate_public_key(self, username, key):
+                    return username == "citadel" and key.export_public_key() == client_public
 
-        async def console(process):
-            if process.command:
-                process.exit(2)
-                return
-            process.stdout.write("CITADEL Restricted SSH Console\r\nType 'help'.\r\ncitadel> ")
-            while True:
-                line = await process.stdin.readline()
-                if not line:
-                    break
-                output, done = await asyncio.to_thread(execute, line, config_path)
-                if output:
-                    process.stdout.write(output.replace("\n", "\r\n") + "\r\n")
-                if done:
-                    break
-                process.stdout.write("citadel> ")
-            process.exit(0)
+            async def console(process):
+                if process.command:
+                    process.exit(2)
+                    return
+                process.stdout.write("CITADEL Restricted SSH Console\r\nType 'help'.\r\ncitadel> ")
+                while True:
+                    line = await process.stdin.readline()
+                    if not line:
+                        break
+                    output, done = await asyncio.to_thread(execute, line, config_path)
+                    if output:
+                        process.stdout.write(output.replace("\n", "\r\n") + "\r\n")
+                    if done:
+                        break
+                    process.stdout.write("citadel> ")
+                process.exit(0)
 
-        server = await asyncssh.listen("127.0.0.1", 0, server_host_keys=[host_key],
-            server_factory=LocalServer, process_factory=console)
-        port = server.sockets[0].getsockname()[1]
-        known_hosts = asyncssh.import_known_hosts(
-            f"[127.0.0.1]:{port} {host_public.decode('ascii').strip()}")
-        self.log.write("ssh_relay_local_ready", bind="127.0.0.1", platform=os.name)
+            server = await asyncssh.listen("127.0.0.1", 0, server_host_keys=[host_key],
+                server_factory=LocalServer, process_factory=console)
+            port = server.sockets[0].getsockname()[1]
+            target = {
+                "mode": "restricted_fallback",
+                "host": "127.0.0.1",
+                "port": port,
+                "username": "citadel",
+                "client_keys": [client_key],
+                "known_hosts": asyncssh.import_known_hosts(
+                    f"[127.0.0.1]:{port} {host_public.decode('ascii').strip()}"
+                ),
+            }
+        self.log.write("ssh_relay_local_ready",
+            bind=f"{target['host']}:{target['port']}", platform=os.name,
+            mode=target["mode"], username=target["username"])
         try:
             delay = 2
             while not self._ssh_relay_stop.is_set():
@@ -310,20 +368,22 @@ class Agent(v1.Agent):
                         ping_interval=20, ping_timeout=20, open_timeout=15) as socket:
                         if socket.subprotocol != "citadel-ssh-agent-v1":
                             raise RuntimeError("ssh_relay_protocol_mismatch")
-                        self.log.write("ssh_relay_connected")
+                        self.log.write("ssh_relay_connected", mode=target["mode"])
                         delay = 2
-                        await self._ssh_relay_session(socket, node_id, port, client_key, known_hosts, asyncssh)
+                        await self._ssh_relay_session(socket, node_id, target, asyncssh)
                 except Exception as error:
                     self.log.write("ssh_relay_disconnected", reason=type(error).__name__)
                 await asyncio.to_thread(self._ssh_relay_stop.wait, delay)
                 delay = min(60, delay * 2)
         finally:
-            server.close()
-            await server.wait_closed()
+            if server is not None:
+                server.close()
+                await server.wait_closed()
 
-    async def _ssh_relay_session(self, socket, node_id, port, client_key, known_hosts, asyncssh) -> None:
+    async def _ssh_relay_session(self, socket, node_id, target, asyncssh) -> None:
         active = None
         reader = None
+
         async def stop():
             nonlocal active, reader
             if reader:
@@ -367,12 +427,16 @@ class Agent(v1.Agent):
                     if not isinstance(expires, int) or not 0 < expires - time.time() <= 1800:
                         continue
                     try:
-                        connection = await asyncssh.connect("127.0.0.1", port, username="citadel",
-                            client_keys=[client_key], known_hosts=known_hosts,
-                            agent_path=None, connect_timeout=10)
+                        connection = await asyncssh.connect(
+                            target["host"], target["port"], username=target["username"],
+                            client_keys=target["client_keys"], known_hosts=target["known_hosts"],
+                            agent_path=None, connect_timeout=10,
+                        )
                         process = await connection.create_process(term_type="xterm", encoding=None)
                         active = (connection, process)
-                        await socket.send(json.dumps({"type": "ready", "node_id": node_id}))
+                        await socket.send(json.dumps({
+                            "type": "ready", "node_id": node_id, "mode": target["mode"]
+                        }))
                         reader = asyncio.create_task(output_loop(process))
                     except Exception:
                         await socket.send(json.dumps({"type": "error", "code": "ssh_connection_failed"}))
