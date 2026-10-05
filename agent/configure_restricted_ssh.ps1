@@ -641,9 +641,11 @@ Match User $SshUser
     AllowTcpForwarding no
     GatewayPorts no
 # END CITADEL SSH USER
+Match all
 "@
   # Put Match User before the stock Windows "Match Group administrators" block
-  # so the dedicated per-user key file wins for this one CITADEL account.
+  # so the dedicated per-user key file wins for this one CITADEL account. Match
+  # all immediately returns parsing to global scope before the original config.
   $NewConfig = $GlobalBlock.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $UserBlock.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $Clean.Trim() + [Environment]::NewLine
 } else {
   $UserBlock = @"
