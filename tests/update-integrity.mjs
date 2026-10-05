@@ -8,7 +8,7 @@ const releaseBlock = source.match(/const LATEST_NODE_RELEASE = Object\.freeze\(\
 assert.ok(releaseBlock, "latest release declaration missing");
 
 const release = {
-  version: "0.3.38",
+  version: "0.3.39",
   files: ["citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1",
     "CitadelSshConsole.cs", "configure_restricted_ssh.ps1"].map((path) => ({path}))
 };
@@ -27,7 +27,7 @@ assert.match(source, /await repairPendingUpdateForNode\(env, node\)/);
 assert.match(source, /agent\.update\.incompatible_command_replaced/);
 
 const currentRelease = {
-  version: "0.3.38",
+  version: "0.3.39",
   files: [...releaseBlock[0].matchAll(/path: "([^"]+)",\s+url: "([^"]+)",\s+sha256: "([^"]+)"/g)]
     .map(([, path, url, sha256]) => ({ path, url, sha256 }))
 };
