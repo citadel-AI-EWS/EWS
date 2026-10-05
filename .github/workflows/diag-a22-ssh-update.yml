@@ -1,0 +1,33 @@
+name: Diagnostic a22 SSH/update
+on:
+  push:
+    branches:
+      - diag/a22-ssh-update-20261005
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: cloudflare-test
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Read a22 node state
+        run: |
+          npx wrangler d1 execute citadel-control --remote --command "SELECT node_id, hostname, status, agent_version, last_seen_at FROM nodes WHERE node_id='node_4bfab98e-fa16-414e-a1c8-13d7dc05d7d6' OR hostname='a22';"
+      - name: Read a22 commands
+        run: |
+          npx wrangler d1 execute citadel-control --remote --command "SELECT command_id, command_type, status, created_at, completed_at FROM commands WHERE node_id='node_4bfab98e-fa16-414e-a1c8-13d7dc05d7d6' ORDER BY created_at DESC LIMIT 12;"
+      - name: Read a22 audit trail
+        run: |
+          npx wrangler d1 execute citadel-control --remote --command "SELECT action, target_id, details_json, created_at FROM audit_events WHERE target_id='node_4bfab98e-fa16-414e-a1c8-13d7dc05d7d6' ORDER BY event_id DESC LIMIT 20;"
+      - name: Read a22 SSH state
+        run: |
+          npx wrangler d1 execute citadel-control --remote --command "SELECT * FROM node_ssh_state WHERE node_id='node_4bfab98e-fa16-414e-a1c8-13d7dc05d7d6' LIMIT 1;"
