@@ -68,7 +68,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.38"
+VERSION = "0.3.39"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -466,6 +466,10 @@ class ControllerApiError(RuntimeError):
         self.code = str(code)
         self.retry_after_seconds = max(0, retry_after_seconds)
         super().__init__(f"controller HTTP {self.status}: {self.code}")
+
+
+class OperationCancelled(RuntimeError):
+    """Raised when the Controller cancels one active long-running operation."""
 
 
 class ApiClient:
@@ -1546,6 +1550,7 @@ class Agent:
         self._state_lock = threading.RLock()
         self._operation_depth = 0
         self._active_lm_connection = None
+        self._operation_cancel_requested = threading.Event()
         self.config_path = (config_path or Path("config.json")).resolve()
         if os.name == "nt":
             _ensure_windows_enterprise_probe_file()
@@ -2300,15 +2305,47 @@ class Agent:
             atomic_write(self.lmstudio_state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
 
     def raise_if_stopping(self) -> None:
+        if self._operation_cancel_requested.is_set():
+            raise OperationCancelled("operation_cancelled")
         if self.lifecycle_stop_requested() or self.stop_path.exists():
             raise SystemExit(0)
 
+    def command_cancel_requested(self, command_id: str) -> bool:
+        node_id = self.require_node_id()
+        quoted = urllib.parse.quote(command_id, safe="")
+        try:
+            response = self.api.request(
+                "GET",
+                f"/api/v1/nodes/{node_id}/commands/{quoted}/cancel-state",
+                timeout_seconds=min(5.0, float(self.config.request_timeout_seconds)),
+            )
+        except Exception as error:
+            self.log.write(
+                "operation_cancel_check_failed",
+                command_id=command_id,
+                error=local_error_code(error),
+            )
+            return False
+        return bool(response.get("cancel_requested"))
+
+    def interrupt_active_lm_connection(self) -> None:
+        connection = self._active_lm_connection
+        if not connection:
+            return
+        sock = getattr(connection, "sock", None)
+        if sock:
+            with contextlib.suppress(OSError):
+                sock.shutdown(socket.SHUT_RDWR)
+        with contextlib.suppress(OSError):
+            connection.close()
+
     @contextlib.contextmanager
-    def long_operation(self, command_id: str | None = None):
-        """Maintain node liveness while the single executor performs blocking work."""
+    def long_operation(self, command_id: str | None = None, *, cancellable: bool = False):
+        """Maintain liveness and optionally watch a Controller cancellation request."""
         if self._operation_depth:
             yield
             return
+        self._operation_cancel_requested.clear()
         self.raise_if_stopping()
         self._operation_depth += 1
         finished = threading.Event()
@@ -2319,21 +2356,27 @@ class Agent:
                                  progress_detail="Command accepted by the agent")
 
         def keepalive():
+            next_heartbeat = 0.0
+            interval = 2.0 if cancellable and command_id else max(1.0, float(self.config.heartbeat_seconds))
             while not finished.is_set():
                 self.mark_local_progress()
                 try:
                     if self.lifecycle_stop_requested() or self.stop_path.exists():
-                        connection = self._active_lm_connection
-                        if connection and connection.sock:
-                            with contextlib.suppress(OSError):
-                                connection.sock.shutdown(socket.SHUT_RDWR)
+                        self.interrupt_active_lm_connection()
                         return
-                    self.heartbeat()
-                    if command_id:
-                        self.report_ai_state()
+                    if cancellable and command_id and self.command_cancel_requested(command_id):
+                        self._operation_cancel_requested.set()
+                        self.interrupt_active_lm_connection()
+                        return
+                    now = time.monotonic()
+                    if now >= next_heartbeat:
+                        self.heartbeat()
+                        if command_id:
+                            self.report_ai_state()
+                        next_heartbeat = now + max(1.0, float(self.config.heartbeat_seconds))
                 except Exception as error:
                     self.log.write("operation_heartbeat_failed", error=local_error_code(error))
-                finished.wait(self.config.heartbeat_seconds)
+                finished.wait(interval)
 
         thread = None
         if self.identity.node_id:
@@ -2341,6 +2384,10 @@ class Agent:
             thread.start()
         try:
             yield
+        except OperationCancelled:
+            self.report_ai_state(progress_phase="cancelled",
+                                 progress_detail="Query stopped by Architect")
+            raise
         except SystemExit:
             self.report_ai_state(progress_phase="cancelled",
                                  progress_detail="Operation stopped locally")
@@ -2350,8 +2397,10 @@ class Agent:
             raise
         finally:
             finished.set()
+            self.interrupt_active_lm_connection()
             if thread:
                 thread.join(timeout=self.config.request_timeout_seconds + 1)
+            self._operation_cancel_requested.clear()
             self._operation_depth -= 1
 
     def report_ai_state(self, force: bool = False, **updates: Any) -> None:
@@ -3113,6 +3162,10 @@ class Agent:
                 elif kind == "error":
                     error = event.get("error")
                     raise RuntimeError("lmstudio_chat_error:" + str(error)[:300])
+        except Exception:
+            if self._operation_cancel_requested.is_set():
+                raise OperationCancelled("operation_cancelled")
+            raise
         finally:
             self._active_lm_connection = None
             connection.close()
@@ -3144,11 +3197,23 @@ class Agent:
                     prompt, settings, request_id,
                     python_context=python_answer if mode == "both" else None,
                 )
-        except (Exception, SystemExit) as error:
+        except OperationCancelled:
+            partial = str(self.lmstudio_state().get("query_answer") or "")
             self.report_ai_state(
-                query_id=request_id, query_status="cancelled" if isinstance(error, SystemExit) else "failed",
-                progress_phase="cancelled" if isinstance(error, SystemExit) else "failed",
-                progress_detail="Operation stopped locally" if isinstance(error, SystemExit) else local_error_code(error),
+                query_id=request_id, query_status="cancelled", query_answer=partial,
+                progress_phase="cancelled", progress_detail="Query stopped by Architect",
+            )
+            raise
+        except SystemExit:
+            self.report_ai_state(
+                query_id=request_id, query_status="cancelled",
+                progress_phase="cancelled", progress_detail="Operation stopped locally",
+            )
+            raise
+        except Exception as error:
+            self.report_ai_state(
+                query_id=request_id, query_status="failed",
+                progress_phase="failed", progress_detail=local_error_code(error),
             )
             raise
         self.report_ai_state(
@@ -3495,7 +3560,7 @@ class Agent:
                     with self.long_operation(command_id):
                         self.load_lmstudio_model(command.get("payload") or {})
                 elif command_type == "hybrid_query":
-                    with self.long_operation(command_id):
+                    with self.long_operation(command_id, cancellable=True):
                         self.run_hybrid_query(command.get("payload") or {})
                 elif command_type == "ssh_probe":
                     self.last_ssh_report = 0.0
@@ -3533,6 +3598,17 @@ class Agent:
                         creationflags=(0x08000000 if os.name == "nt" else 0),
                     )
                     raise SystemExit(0)
+            except OperationCancelled:
+                try:
+                    self.ack_command(command_id, "cancelled")
+                except Exception as ack_error:
+                    self.log.write(
+                        "command_failure_ack_failed",
+                        command_id=command_id,
+                        error=str(ack_error)[:300],
+                    )
+                self.log.write("command_cancelled", command_id=command_id, command_type=command_type)
+                continue
             except Exception as error:
                 try:
                     self.ack_command(command_id, "failed")
