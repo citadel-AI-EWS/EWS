@@ -511,20 +511,22 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       });
       if(!aiReady&&hybridMode!=="python")hybridMode="python";
       document.querySelectorAll("[data-hybrid-mode]").forEach(button=>button.classList.toggle("active",button.dataset.hybridMode===hybridMode));
-      const pythonOnly=hybridMode==="python";
+      const pythonOnly=hybridMode==="python",stopSupported=Number(node?.lmstudio_installed||0)===1&&versionAtLeast(node?.agent_version,'0.3.39');
       $("hybridTemperature").disabled=pythonOnly;
       $("hybridMaxTokens").disabled=pythonOnly;
+      $("hybridStop").hidden=!stopSupported;
+      if(stopSupported&&!legacyQueryOperation)$("hybridStop").disabled=true;
       if(pythonOnly)$("hybridStatus").textContent="Python only · без AI/LLM. Поддерживаются расчёты, text:/json: и диагностика системы.";
     }
     function openHybrid(node){
       hybridNodeId=node.node_id;$("hybridNode").textContent=node.hostname||node.node_id;$("hybridPanel").classList.remove("hidden");
       $("hybridAnswer").textContent=(node.lmstudio_runtime||{}).query_answer||"";
       $("hybridStatus").textContent=(node.lmstudio_runtime||{}).query_status||"Готово к запросу.";
-      syncHybridModes(node);if(legacyQueryOperation?.nodeId===node.node_id){showLegacyQuery(legacyQueryOperation);if(!["completed","failed","cancelled"].includes(legacyQueryOperation.status))watchLegacyQuery(legacyQueryOperation)}else{$("hybridOperation").hidden=true;$("hybridSend").disabled=false;$("hybridStop").hidden=true;$("hybridStop").disabled=false}
+      syncHybridModes(node);if(legacyQueryOperation?.nodeId===node.node_id){showLegacyQuery(legacyQueryOperation);if(!["completed","failed","cancelled"].includes(legacyQueryOperation.status))watchLegacyQuery(legacyQueryOperation)}else{$("hybridOperation").hidden=true;$("hybridSend").disabled=false;$("hybridStop").disabled=true}
     }
     function closeHybrid(){clearTimeout(hybridPollTimer);hybridPollTimer=null;hybridNodeId="";$("hybridPanel").classList.add("hidden")}
 
-    function showLegacyQuery(op){operationView($('hybridOperation'),{title:{sending:'Отправляю промпт',queued:'Промпт отправлен · ожидаю агента',running:'Ожидаю ответ агента',receiving:'Получаю ответ агента',cancelling:'Останавливаю LM Studio…',completed:'Ответ получен',failed:'Запрос завершился ошибкой',cancelled:'Запрос остановлен',disconnected:'Связь прервана · проверяю состояние'}[op.status],detail:op.error||'',status:op.status,startedAt:op.startedAt,query:true});const terminal=['completed','failed','cancelled'].includes(op.status),node=hybridNode(),canStop=!terminal&&op.mode!=='python'&&Boolean(op.commandId)&&versionAtLeast(node?.agent_version,'0.3.39');$('hybridSend').disabled=!terminal;$('hybridStop').hidden=!canStop;$('hybridStop').disabled=op.status==='cancelling'}
+    function showLegacyQuery(op){operationView($('hybridOperation'),{title:{sending:'Отправляю промпт',queued:'Промпт отправлен · ожидаю агента',running:'Ожидаю ответ агента',receiving:'Получаю ответ агента',cancelling:'Останавливаю LM Studio…',completed:'Ответ получен',failed:'Запрос завершился ошибкой',cancelled:'Запрос остановлен',disconnected:'Связь прервана · проверяю состояние'}[op.status],detail:op.error||'',status:op.status,startedAt:op.startedAt,query:true});const terminal=['completed','failed','cancelled'].includes(op.status),node=hybridNode(),stopSupported=Number(node?.lmstudio_installed||0)===1&&versionAtLeast(node?.agent_version,'0.3.39'),canStop=stopSupported&&!terminal&&op.mode!=='python'&&Boolean(op.commandId);$('hybridSend').disabled=!terminal;$('hybridStop').hidden=!stopSupported;$('hybridStop').disabled=!canStop||op.status==='cancelling'}
     function watchLegacyQuery(op){
       clearTimeout(hybridPollTimer);
       const poll=async()=>{hybridPollTimer=null;if(document.hidden||!architectToken||hybridNodeId!==op.nodeId)return;
