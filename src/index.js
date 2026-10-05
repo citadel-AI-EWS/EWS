@@ -6978,7 +6978,10 @@ function terminalAiCommandStatus(commandType, runtime) {
   return null;
 }
 
-async function reconcileTerminalAiCommand(env, nodeId) {
+async function reconcileTerminalAiCommand(env, nodeId, command) {
+  if (!command || !["lmstudio_install", "lmstudio_uninstall", "lmstudio_model_get", "lmstudio_model_load", "hybrid_query"].includes(command.command_type)) {
+    return false;
+  }
   await ensureNodeAiStorage(env);
   const runtimeRow = await env.DB.prepare(
     "SELECT state_json FROM node_ai_runtime_state WHERE node_id = ?"
@@ -6987,13 +6990,7 @@ async function reconcileTerminalAiCommand(env, nodeId) {
   const commandId = typeof runtime.operation_id === "string"
     ? runtime.operation_id.trim()
     : "";
-  if (!commandId) return false;
-
-  const command = await env.DB.prepare(
-    "SELECT command_id, command_type, status FROM commands " +
-    "WHERE command_id = ? AND node_id = ? AND status IN ('pending', 'accepted')"
-  ).bind(commandId, nodeId).first();
-  if (!command) return false;
+  if (!commandId || commandId !== command.command_id) return false;
 
   const nextStatus = terminalAiCommandStatus(command.command_type, runtime);
   if (!nextStatus) return false;
@@ -7087,12 +7084,16 @@ async function architectCreateCommand(request, env, nodeId) {
     throw new ApiError(409, "node_not_paused");
   }
 
-  await reconcileTerminalAiCommand(env, nodeId);
-
-  const pending = await env.DB.prepare(
+  let pending = await env.DB.prepare(
     "SELECT command_id, command_type, status, payload_json FROM commands " +
     "WHERE node_id = ? AND status IN ('pending', 'accepted') LIMIT 1"
   ).bind(nodeId).first();
+  if (pending && await reconcileTerminalAiCommand(env, nodeId, pending)) {
+    pending = await env.DB.prepare(
+      "SELECT command_id, command_type, status, payload_json FROM commands " +
+      "WHERE node_id = ? AND status IN ('pending', 'accepted') LIMIT 1"
+    ).bind(nodeId).first();
+  }
   if (pending) {
     if (commandType !== "update" || pending.command_type !== "update" ||
         pending.status !== "pending" ||
