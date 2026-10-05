@@ -31,6 +31,27 @@ async def main():
         agent.identity = SimpleNamespace(sign=lambda message: "test-signature")
         agent.api = SimpleNamespace(base_path="", retry_delay=lambda: 0)
         agent.log = SimpleNamespace(write=lambda name, **fields: events.append((name, fields)))
+
+        program_data = Path(directory) / "ProgramData"
+        managed_root = program_data / "CitadelEWS" / "ssh"
+        windows_ssh_root = program_data / "ssh"
+        managed_root.mkdir(parents=True)
+        windows_ssh_root.mkdir(parents=True)
+        (managed_root / "bootstrap-state.json").write_text(json.dumps({
+            "managed_admin": True, "ssh_user": "citadel-admin"
+        }), encoding="utf-8")
+        (managed_root / "relay_ed25519").write_text("fixture-private-key", encoding="utf-8")
+        (managed_root / "relay_authorized_keys").write_text(
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixture fixture\n", encoding="utf-8")
+        (windows_ssh_root / "ssh_host_ed25519_key.pub").write_text(
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHostFixture host\n", encoding="utf-8")
+        managed = agent._managed_windows_ssh_target(program_data)
+        assert managed["mode"] == "managed_admin"
+        assert managed["host"] == "127.0.0.1" and managed["port"] == "22"
+        assert managed["username"] == "citadel-admin"
+        assert managed["private_key"].endswith("relay_ed25519")
+        assert managed["host_key"].startswith("ssh-ed25519 ")
+
         finished = asyncio.Event()
 
         async def controller(socket):
