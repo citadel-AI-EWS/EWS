@@ -227,6 +227,17 @@ for (const required of [
   assert.ok(operations.includes(required), "LM Studio fleet/model UX missing: " + required);
 }
 for (const required of [
+  "function updateCommandFeedback",
+  "удалённый агент подтвердил получение",
+  "проверяет SHA-256 и self-check",
+  "локальную фазу и проверку файлов",
+  "Обновление подтверждено heartbeat",
+  "без heartbeat >5 мин",
+  "heartbeat новой версии подтверждён"
+]) {
+  assert.ok(operations.includes(required), "agent update proof UX missing: " + required);
+}
+for (const required of [
   "architectModelDetails",
   "architectLmstudioPreflight",
   "ai_installed",
