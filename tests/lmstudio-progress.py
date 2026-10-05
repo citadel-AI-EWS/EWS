@@ -9,7 +9,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'agent'))
@@ -96,7 +96,7 @@ class ProgressTests(unittest.TestCase):
         self.agent.ack_command.assert_any_call('command_query','accepted')
         self.agent.ack_command.assert_any_call('command_query','cancelled')
         self.assertNotIn(
-            unittest.mock.call('command_query','failed'),
+            call('command_query','failed'),
             self.agent.ack_command.call_args_list,
         )
 
