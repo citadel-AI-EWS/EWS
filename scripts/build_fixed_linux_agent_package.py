@@ -58,9 +58,9 @@ def build() -> Path:
     v2 = STAGE / "citadel_node_v2.py"
     setup = (STAGE / "setup_linux.sh").read_text(encoding="utf-8")
     if 'VERSION = "0.3.39"' not in v1.read_text(encoding="utf-8"):
-        raise RuntimeError("repository v1 source is not release 0.3.38")
+        raise RuntimeError("repository v1 source is not release 0.3.39")
     if 'VERSION = "0.3.39"' not in v2.read_text(encoding="utf-8"):
-        raise RuntimeError("repository v2 source is not release 0.3.38")
+        raise RuntimeError("repository v2 source is not release 0.3.39")
     enterprise_probe = STAGE / "windows_enterprise_probe.ps1"
     ssh_console = STAGE / "ssh_restricted_console.py"
     if (
