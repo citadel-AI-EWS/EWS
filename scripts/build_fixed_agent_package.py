@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
-PACKAGE_NAME = "CITADEL_FIXED_AGENT_0.3.38_2026-10-04"
+PACKAGE_NAME = "CITADEL_FIXED_AGENT_0.3.39_2026-10-05"
 STAGE = DIST / PACKAGE_NAME
 ZIP_PATH = DIST / f"{PACKAGE_NAME}.zip"
 
@@ -40,7 +40,7 @@ def indented_block(value: str, spaces: int = 8) -> str:
 def patch_v1(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     text = must_replace(text, "import hashlib\n", "import hashlib\nimport ipaddress\n", "ipaddress import")
-    text = must_replace(text, 'VERSION = "0.3.0"', 'VERSION = "0.3.38"', "v1 version")
+    text = must_replace(text, 'VERSION = "0.3.0"', 'VERSION = "0.3.39"', "v1 version")
     text = must_replace(
         text,
         'return json.loads(path.read_text(encoding="utf-8"))',
@@ -249,7 +249,7 @@ def patch_v1(path: Path) -> None:
 
 def patch_v2(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
-    text = must_replace(text, 'VERSION = "0.3.0"', 'VERSION = "0.3.38"', "v2 version")
+    text = must_replace(text, 'VERSION = "0.3.0"', 'VERSION = "0.3.39"', "v2 version")
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
@@ -336,9 +336,9 @@ def build() -> Path:
     setup_path = STAGE / "setup_windows.ps1"
     v1_hash = sha256(v1_path)
     v2_hash = sha256(v2_path)
-    if 'VERSION = "0.3.38"' not in v1_path.read_text(encoding="utf-8"):
+    if 'VERSION = "0.3.39"' not in v1_path.read_text(encoding="utf-8"):
         raise RuntimeError("repository v1 source is not release 0.3.38")
-    if 'VERSION = "0.3.38"' not in v2_path.read_text(encoding="utf-8"):
+    if 'VERSION = "0.3.39"' not in v2_path.read_text(encoding="utf-8"):
         raise RuntimeError("repository v2 source is not release 0.3.38")
     setup_text = setup_path.read_text(encoding="utf-8")
     service_source = STAGE / "CitadelNodeService.cs"
@@ -369,7 +369,7 @@ def build() -> Path:
     restricted_ssh_bootstrap_hash = sha256(restricted_ssh_bootstrap)
     if f'$ExpectedRestrictedSshBootstrapSha256 = "{restricted_ssh_bootstrap_hash}"' not in setup_text:
         raise RuntimeError("setup_windows.ps1 restricted SSH bootstrap hash pin does not match repository source")
-    if '$ReleaseVersion = "0.3.38"' not in setup_text:
+    if '$ReleaseVersion = "0.3.39"' not in setup_text:
         raise RuntimeError("setup_windows.ps1 release version is not 0.3.38")
     write_extras()
 
