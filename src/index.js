@@ -74,17 +74,17 @@ const LATEST_NODE_RELEASE = Object.freeze({
   ]
 });
 const LEGACY_031_BRIDGE_RELEASE = Object.freeze({
-  version: "0.3.2",
+  version: "0.3.2-bridge.1",
   files: Object.freeze([
     Object.freeze({
       path: "citadel_node_v1.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/04571327f3f229d8e319c9e216a564e0857e3c54/agent/citadel_node_v1.py",
-      sha256: "69d7838bea16f2d0b1578a47f32af9bfe7b94c51b0a2eaf49803d7d0e8e30a5f"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/0e168af8c39baad7c9157a732562dade0c58f12c/agent/citadel_node_v1.py",
+      sha256: "4a5638a410ca689141a9a4c81d4e2d109c8cf2904e62df50ec6753f4146f5b37"
     }),
     Object.freeze({
       path: "citadel_node_v2.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/04571327f3f229d8e319c9e216a564e0857e3c54/agent/citadel_node_v2.py",
-      sha256: "8f7667ff675e1e5b5b964a77deb191eb25b84259cdd78367bd9df2bb9f4f2d24"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/0e168af8c39baad7c9157a732562dade0c58f12c/agent/citadel_node_v2.py",
+      sha256: "18fe495f2a46882e5c6c0172d217898d7374177c04b391a34931061b36342b6d"
     })
   ])
 });
