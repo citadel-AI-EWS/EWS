@@ -1,0 +1,33 @@
+name: Diagnostic a22 legacy update self-test
+on:
+  push:
+    branches:
+      - diag/a22-ssh-update-20261005
+permissions:
+  contents: read
+jobs:
+  legacy-selftest:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Build 0.3.1-style staging directory
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\legacy-stage" | Out-Null
+          Copy-Item agent\citadel_node_v1.py "$env:RUNNER_TEMP\legacy-stage\citadel_node_v1.py"
+          Copy-Item agent\citadel_node_v2.py "$env:RUNNER_TEMP\legacy-stage\citadel_node_v2.py"
+          Set-Content -LiteralPath "$env:RUNNER_TEMP\legacy-req.txt" -Value @("cryptography>=50.0.1,<51","psutil>=5.9,<8")
+          python -m pip install --disable-pip-version-check -r "$env:RUNNER_TEMP\legacy-req.txt"
+      - name: Run exactly the legacy updater self-test
+        shell: pwsh
+        run: |
+          Push-Location "$env:RUNNER_TEMP\legacy-stage"
+          python .\citadel_node_v2.py self-test
+          $code=$LASTEXITCODE
+          Get-ChildItem -Force | Select-Object Name,Length
+          Pop-Location
+          exit $code
