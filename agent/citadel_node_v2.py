@@ -245,10 +245,11 @@ class Agent(v1.Agent):
             self.log.write("ssh_relay_error", error=type(error).__name__ + ": " + str(error)[:160])
             self._ssh_relay_stop.wait(60)
 
-    def _managed_windows_ssh_target(self) -> dict[str, str] | None:
-        if os.name != "nt":
-            return None
-        program_data = Path(os.environ.get("PROGRAMDATA") or r"C:\\ProgramData")
+    def _managed_windows_ssh_target(self, program_data: Path | None = None) -> dict[str, str] | None:
+        if program_data is None:
+            if os.name != "nt":
+                return None
+            program_data = Path(os.environ.get("PROGRAMDATA") or r"C:\\ProgramData")
         ssh_root = program_data / "CitadelEWS" / "ssh"
         state_path = ssh_root / "bootstrap-state.json"
         if not state_path.is_file():
