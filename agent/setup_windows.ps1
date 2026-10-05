@@ -656,6 +656,31 @@ try {
   } | ConvertTo-Json
   [System.IO.File]::WriteAllText($InstallStatePath, $InstallState + [Environment]::NewLine, $Utf8NoBom)
 
+  # Once install-state points at the verified release, provision the dedicated
+  # loopback-only managed administrator used by the outbound Browser SSH relay.
+  # This is best-effort for repair compatibility: a machine with pre-existing
+  # unmanaged OpenSSH is left untouched rather than silently rewriting its SSH policy.
+  $ManagedSshReady = $false
+  $ManagedSshBootstrap = Join-Path $ReleaseRoot "configure_restricted_ssh.ps1"
+  try {
+    & $ManagedSshBootstrap -InstallRoot $InstallRoot -StateRoot $StateRoot -ManagedAdmin -SshUser "citadel-admin" -SkipCloudflared
+    if ($LASTEXITCODE -ne 0) { throw "Managed SSH bootstrap exited with code $LASTEXITCODE." }
+    $ManagedSshReady = $true
+    Write-Host "[CITADEL] Managed administrator SSH is ready for the outbound Hub relay."
+  } catch {
+    Write-Warning ("[CITADEL] Managed administrator SSH was not provisioned automatically: " + $_.Exception.Message)
+    Write-Warning "[CITADEL] Core Agent remains installed; existing unmanaged OpenSSH was not exposed or overwritten."
+  }
+  try {
+    $InstallStateObject = $InstallState | ConvertFrom-Json
+    $InstallStateObject | Add-Member -NotePropertyName managed_admin_ssh -NotePropertyValue $ManagedSshReady -Force
+    $InstallStateObject | Add-Member -NotePropertyName managed_ssh_user -NotePropertyValue $(if ($ManagedSshReady) { "citadel-admin" } else { $null }) -Force
+    $InstallState = $InstallStateObject | ConvertTo-Json
+    [System.IO.File]::WriteAllText($InstallStatePath, $InstallState + [Environment]::NewLine, $Utf8NoBom)
+  } catch {
+    Write-Warning ("[CITADEL] Could not append managed SSH readiness to install-state: " + $_.Exception.Message)
+  }
+
   $KeepReleasePaths = @($ReleaseRoot)
   if ($null -ne $PreviousReleaseRoot) { $KeepReleasePaths += $PreviousReleaseRoot }
   foreach ($ReleaseDirectory in @(Get-ChildItem -LiteralPath $ReleaseBase -Directory -ErrorAction SilentlyContinue)) {
@@ -714,5 +739,16 @@ Write-Host "[CITADEL] Node: $NodeId"
 Write-Host "[CITADEL] Controller: $($ControllerUrl.TrimEnd('/'))"
 Write-Host "[CITADEL] Release: $ReleaseRoot"
 Write-Host "[CITADEL] Windows service: $ServiceName / LocalService / Automatic (Delayed Start)"
+$ManagedSshState = Join-Path $env:ProgramData "CitadelEWS\ssh\bootstrap-state.json"
+$ManagedSshFinal = $false
+if (Test-Path -LiteralPath $ManagedSshState) {
+  try {
+    $ManagedSshSnapshot = Get-Content -LiteralPath $ManagedSshState -Raw -Encoding UTF8 | ConvertFrom-Json
+    $ManagedSshFinal = $ManagedSshSnapshot.managed_admin -eq $true -and [string]$ManagedSshSnapshot.ssh_user -eq "citadel-admin"
+  } catch {
+    $ManagedSshFinal = $false
+  }
+}
+Write-Host ("[CITADEL] Managed SSH: " + $(if ($ManagedSshFinal) { "READY / citadel-admin / loopback-only / key-only" } else { "NOT READY (core agent unaffected)" }))
 Write-Host "[CITADEL] SCM process and managed Python child were verified after cutover."
 Write-Host "[CITADEL] Re-running this installer stages and verifies a new release before touching the running lifecycle."
