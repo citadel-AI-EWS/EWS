@@ -12,7 +12,9 @@ const state = {
   indexes: new Set(),
   commandColumns: new Set(["command_id","node_id","command_type","payload_json","signature","status","created_at"]),
   commands: [],
-  audit: []
+  audit: [],
+  activeCommand: null,
+  runtimeState: null
 };
 
 function compact(sql) {
@@ -52,8 +54,11 @@ class Statement {
         recently_seen: 1
       };
     }
+    if (this.sql === "SELECT state_json FROM node_ai_runtime_state WHERE node_id = ?") {
+      return state.runtimeState ? { state_json: JSON.stringify(state.runtimeState) } : null;
+    }
     if (this.sql.includes("FROM commands") && this.sql.includes("status IN ('pending', 'accepted')")) {
-      return null;
+      return state.activeCommand ? { ...state.activeCommand } : null;
     }
     throw new Error(`Unhandled first(): ${this.sql}`);
   }
@@ -91,6 +96,16 @@ class Statement {
     }
     if (this.sql.startsWith("UPDATE commands")) {
       if (!state.tables.has("commands")) throw new Error("no such table: commands");
+      if (
+        this.sql.startsWith("UPDATE commands SET status = ?, completed_at = COALESCE") &&
+        state.activeCommand &&
+        state.activeCommand.command_id === this.args[1] &&
+        state.activeCommand.node_id === this.args[2] &&
+        ["pending", "accepted"].includes(state.activeCommand.status)
+      ) {
+        state.activeCommand.status = this.args[0];
+        return { meta: { changes: 1 } };
+      }
       return { meta: { changes: 0 } };
     }
     if (this.sql.startsWith("INSERT INTO commands")) {
@@ -150,4 +165,32 @@ assert.equal(state.tables.has("audit_events"), true);
 assert.equal(state.indexes.has("idx_commands_one_active_per_node"), true);
 assert.equal(state.commands.length, 0);
 
-console.log("LM Studio legacy command schema repair regression: OK");
+state.activeCommand = {
+  command_id: "command_terminal_load",
+  node_id: "node_lm_bootstrap",
+  command_type: "lmstudio_model_load",
+  payload_json: "{}",
+  status: "accepted"
+};
+state.runtimeState = {
+  operation_id: "command_terminal_load",
+  progress_phase: "load_complete"
+};
+
+const recoveredResponse = await worker.fetch(new Request(
+  "https://example.test/api/v1/architect/nodes/node_lm_bootstrap/commands",
+  {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${architectToken}`,
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({ command_type: "lmstudio_install" })
+  }
+), env);
+
+assert.equal(recoveredResponse.status, 503);
+assert.equal((await recoveredResponse.json()).error, "controller_signing_not_configured");
+assert.equal(state.activeCommand.status, "completed");
+
+console.log("LM Studio legacy command schema repair + terminal runtime recovery regression: OK");
