@@ -213,7 +213,7 @@ Select a node, then type help.</pre>
       <input id="hybridTemperature" inputmode="decimal" value="0.2" aria-label="Temperature">
       <input id="hybridMaxTokens" inputmode="numeric" value="2048" aria-label="Maximum output tokens">
     </div>
-    <button id="hybridSend" class="btn good" type="button" style="margin-top:9px;width:100%">Выполнить</button>
+    <div class="lm-row" style="margin-top:9px"><button id="hybridSend" class="btn good" type="button" style="flex:1">Выполнить</button><button id="hybridStop" class="btn bad" type="button" hidden>■ Стоп LM Studio</button></div>
     <div id="hybridOperation" hidden></div><div id="hybridStatus" class="lm-status">Готово к запросу.</div>
     <pre id="hybridAnswer" class="lm-status hybrid-answer"></pre>
   </div>
@@ -520,11 +520,11 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       hybridNodeId=node.node_id;$("hybridNode").textContent=node.hostname||node.node_id;$("hybridPanel").classList.remove("hidden");
       $("hybridAnswer").textContent=(node.lmstudio_runtime||{}).query_answer||"";
       $("hybridStatus").textContent=(node.lmstudio_runtime||{}).query_status||"Готово к запросу.";
-      syncHybridModes(node);if(legacyQueryOperation?.nodeId===node.node_id){showLegacyQuery(legacyQueryOperation);if(!["completed","failed","cancelled"].includes(legacyQueryOperation.status))watchLegacyQuery(legacyQueryOperation)}else{$("hybridOperation").hidden=true;$("hybridSend").disabled=false}
+      syncHybridModes(node);if(legacyQueryOperation?.nodeId===node.node_id){showLegacyQuery(legacyQueryOperation);if(!["completed","failed","cancelled"].includes(legacyQueryOperation.status))watchLegacyQuery(legacyQueryOperation)}else{$("hybridOperation").hidden=true;$("hybridSend").disabled=false;$("hybridStop").hidden=true;$("hybridStop").disabled=false}
     }
     function closeHybrid(){clearTimeout(hybridPollTimer);hybridPollTimer=null;hybridNodeId="";$("hybridPanel").classList.add("hidden")}
 
-    function showLegacyQuery(op){operationView($('hybridOperation'),{title:{sending:'Отправляю промпт',queued:'Промпт отправлен · ожидаю агента',running:'Ожидаю ответ агента',receiving:'Получаю ответ агента',completed:'Ответ получен',failed:'Запрос завершился ошибкой',cancelled:'Запрос остановлен',disconnected:'Связь прервана · проверяю состояние'}[op.status],detail:op.error||'',status:op.status,startedAt:op.startedAt,query:true});$('hybridSend').disabled=!['completed','failed','cancelled'].includes(op.status)}
+    function showLegacyQuery(op){operationView($('hybridOperation'),{title:{sending:'Отправляю промпт',queued:'Промпт отправлен · ожидаю агента',running:'Ожидаю ответ агента',receiving:'Получаю ответ агента',cancelling:'Останавливаю LM Studio…',completed:'Ответ получен',failed:'Запрос завершился ошибкой',cancelled:'Запрос остановлен',disconnected:'Связь прервана · проверяю состояние'}[op.status],detail:op.error||'',status:op.status,startedAt:op.startedAt,query:true});const terminal=['completed','failed','cancelled'].includes(op.status),node=hybridNode(),canStop=!terminal&&op.mode!=='python'&&Boolean(op.commandId)&&versionAtLeast(node?.agent_version,'0.3.39');$('hybridSend').disabled=!terminal;$('hybridStop').hidden=!canStop;$('hybridStop').disabled=op.status==='cancelling'}
     function watchLegacyQuery(op){
       clearTimeout(hybridPollTimer);
       const poll=async()=>{hybridPollTimer=null;if(document.hidden||!architectToken||hybridNodeId!==op.nodeId)return;
@@ -537,8 +537,14 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
     async function sendHybrid(){
       const node=hybridNode();if(!node||$('hybridSend').disabled)return;const prompt=$('hybridPrompt').value.trim();if(!prompt)return toast('Hybrid','Введите вопрос или задачу','bad');
       const settings={};if(hybridMode!=='python'){const temperature=Number($('hybridTemperature').value),maxTokens=Number($('hybridMaxTokens').value);if(Number.isFinite(temperature)&&temperature>=0&&temperature<=1)settings.temperature=temperature;if(Number.isInteger(maxTokens)&&maxTokens>=1&&maxTokens<=32768)settings.max_output_tokens=maxTokens}
-      const op={nodeId:node.node_id,type:'hybrid_query',startedAt:Date.now(),status:'sending'};legacyQueryOperation=op;showLegacyQuery(op);$('hybridAnswer').textContent='';
+      const op={nodeId:node.node_id,type:'hybrid_query',mode:hybridMode,startedAt:Date.now(),status:'sending'};legacyQueryOperation=op;showLegacyQuery(op);$('hybridAnswer').textContent='';
       try{const d=await api('/api/v1/architect/nodes/'+encodeURIComponent(node.node_id)+'/commands',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({command_type:'hybrid_query',mode:hybridMode,prompt,settings})});op.commandId=d.command?.command_id;op.queryId=d.command?.query_id;op.status='queued';showLegacyQuery(op);watchLegacyQuery(op)}catch(error){op.status='failed';op.error=error.message;showLegacyQuery(op);toast('Hybrid',error.message,'bad')}
+    }
+    async function stopHybrid(){
+      const op=legacyQueryOperation,node=hybridNode();if(!op||!node||!op.commandId||['completed','failed','cancelled'].includes(op.status))return;
+      if(!versionAtLeast(node.agent_version,'0.3.39'))return toast('Hybrid','Для Stop LM Studio сначала обновите агент до 0.3.39 или новее.','bad');
+      op.status='cancelling';op.error='Отмена отправляется на удалённый агент…';showLegacyQuery(op);
+      try{const d=await api('/api/v1/architect/nodes/'+encodeURIComponent(node.node_id)+'/commands/'+encodeURIComponent(op.commandId)+'/cancel',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});if(d.cancel?.status==='cancelled'){op.status='cancelled';op.error='Запрос остановлен до начала генерации.'}else{op.error='Команда Stop принята. Закрываю текущую генерацию LM Studio…'}showLegacyQuery(op);watchLegacyQuery(op)}catch(error){op.status='running';op.error='Stop не отправлен: '+error.message;showLegacyQuery(op);toast('Hybrid',op.error,'bad')}
     }
 
     function secureCard(node,presence,commands){
@@ -715,7 +721,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
     $("lmstudioModel").addEventListener("input",()=>{syncLmstudioPanel();clearTimeout(lmstudioModelSearchTimer);lmstudioModelSearchTimer=setTimeout(searchModelsForLmstudio,400);});
     $("hybridClose").addEventListener("click",closeHybrid);
     document.querySelectorAll("[data-hybrid-mode]").forEach(button=>button.addEventListener("click",()=>{if(button.disabled)return;hybridMode=button.dataset.hybridMode;syncHybridModes(hybridNode())}));
-    $("hybridSend").addEventListener("click",sendHybrid);
+    $("hybridSend").addEventListener("click",sendHybrid);$("hybridStop").addEventListener("click",stopHybrid);
 
     async function waitForRefreshIdle(){
       const deadline=Date.now()+5000;
