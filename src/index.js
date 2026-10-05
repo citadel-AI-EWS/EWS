@@ -68,8 +68,8 @@ const LATEST_NODE_RELEASE = Object.freeze({
     },
     {
       path: "configure_restricted_ssh.ps1",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/edf1fe9115c51d5c233dd5d945e6ec484ff1bf06/agent/configure_restricted_ssh.ps1",
-      sha256: "ae6fdb9e5945e8a55731cd838e4f5685f0d22c6cbb2d156c56e823f9f58238ae"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/5af316f6ddfc3e9a3629ea0dfd79d88464dc0754/agent/configure_restricted_ssh.ps1",
+      sha256: "92d23b42bd43bdfe8967741f31c476e9a51eeaf53def327295d4ae1ee231666d"
     }
   ]
 });
