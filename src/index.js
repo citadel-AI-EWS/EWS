@@ -7450,7 +7450,6 @@ async function architectCancelCommand(request, env, nodeId, commandId) {
 
 async function nodeCommandCancelState(request, env, nodeId, commandId, url) {
   await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
-  await ensureCommandStorage(env);
   const row = await env.DB.prepare(`
     SELECT c.command_type, c.status,
       EXISTS(
