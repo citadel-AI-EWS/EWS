@@ -68,6 +68,48 @@ class ProgressTests(unittest.TestCase):
             self.agent.download_lmstudio_model({'model':'test/model'})
         self.assertEqual(self.agent.lmstudio_http_json.call_count,1)
 
+    def test_hybrid_query_cancellation_is_reported_as_cancelled(self):
+        self.agent.report_ai_state = Mock(wraps=self.agent.report_ai_state)
+        self.agent.stream_lmstudio_answer = Mock(side_effect=node.OperationCancelled('operation_cancelled'))
+        with self.assertRaises(node.OperationCancelled):
+            self.agent.run_hybrid_query({
+                'mode':'lmstudio',
+                'prompt':'stop this answer',
+                'request_id':'query_cancel_1234',
+            })
+        state=self.agent.lmstudio_state()
+        self.assertEqual(state['query_status'],'cancelled')
+        self.assertEqual(state['progress_phase'],'cancelled')
+        self.assertEqual(state['progress_detail'],'Query stopped by Architect')
+
+    def test_cancelled_command_ack_is_not_failed(self):
+        self.agent.require_node_id=Mock(return_value='node_test')
+        self.agent.verify_controller_command=Mock(return_value=True)
+        self.agent.ack_command=Mock()
+        self.agent.run_hybrid_query=Mock(side_effect=node.OperationCancelled('operation_cancelled'))
+        self.agent.handle_commands({'commands':[{
+            'command_id':'command_query',
+            'command_type':'hybrid_query',
+            'status':'pending',
+            'payload':{'mode':'lmstudio','prompt':'task','request_id':'query_cancel_5678'}
+        }]})
+        self.agent.ack_command.assert_any_call('command_query','accepted')
+        self.agent.ack_command.assert_any_call('command_query','cancelled')
+        self.assertNotIn(
+            unittest.mock.call('command_query','failed'),
+            self.agent.ack_command.call_args_list,
+        )
+
+    def test_cancel_state_uses_dedicated_read_only_endpoint(self):
+        self.agent.require_node_id=Mock(return_value='node_test')
+        self.agent.api.request=Mock(return_value={'ok':True,'cancel_requested':True})
+        self.assertTrue(self.agent.command_cancel_requested('command_query'))
+        self.agent.api.request.assert_called_once_with(
+            'GET',
+            '/api/v1/nodes/node_test/commands/command_query/cancel-state',
+            timeout_seconds=min(5.0,float(self.agent.config.request_timeout_seconds)),
+        )
+
     def test_download_has_overall_deadline(self):
         self.agent.run_lms=Mock()
         self.agent.lmstudio_http_json=Mock(return_value={'status':'downloading','job_id':'test'})
