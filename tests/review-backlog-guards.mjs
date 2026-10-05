@@ -91,6 +91,7 @@ need(windowsSshBootstrap.includes('if ([string]::IsNullOrWhiteSpace($SshUser)) {
 need(windowsSshBootstrap.includes("Add-LocalGroupMember"), "managed SSH must explicitly grant local Administrators membership");
 need(windowsSshBootstrap.includes("CITADEL refuses to elevate a pre-existing unmanaged local account."), "managed SSH must not elevate arbitrary existing accounts");
 need(windowsSshBootstrap.includes("AuthorizedKeysFile C:/ProgramData/CitadelEWS/ssh/relay_authorized_keys"), "managed SSH key-only account path missing");
+need(windowsSshBootstrap.includes("Match all"), "managed SSH Match User block must return sshd parsing to global scope");
 need(windowsSshBootstrap.includes('relay_ed25519'), "managed SSH relay private key missing");
 need(windowsSshBootstrap.includes("Set-CitadelRelayKeyAcl"), "managed SSH relay key ACL hardening missing");
 need(setup.includes('-ManagedAdmin -SshUser "citadel-admin" -SkipCloudflared'), "Windows installer must provision managed SSH automatically");
