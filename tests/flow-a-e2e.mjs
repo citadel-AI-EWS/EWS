@@ -148,6 +148,19 @@ globalThis.fetch = async (input, init = {}) => {
     qualityCalls++;
     return qualityResponse;
   }
+  if (url.startsWith("https://www.googleapis.com/drive/v3/files?q=")) {
+    return new Response(JSON.stringify({ files: [] }), {
+      status: 200, headers: { "content-type": "application/json" }
+    });
+  }
+  if (url === "https://www.googleapis.com/drive/v3/files?fields=id,name" &&
+      String(init.method || "GET").toUpperCase() === "POST") {
+    const metadata = JSON.parse(String(init.body || "{}"));
+    const id = "drive_folder_" + (++driveSequence);
+    return new Response(JSON.stringify({ id, name: metadata.name }), {
+      status: 200, headers: { "content-type": "application/json" }
+    });
+  }
   if (url.startsWith("https://www.googleapis.com/upload/drive/v3/files")) {
     const contentType = String(init.headers?.["content-type"] || init.headers?.get?.("content-type") || "");
     const boundary = /boundary=([^;]+)/i.exec(contentType)?.[1];
@@ -183,6 +196,7 @@ const env = {
   ARCHITECT_TOKEN_HASH: createHash("sha256").update(ARCHITECT_TOKEN).digest("hex"),
   GOOGLE_DRIVE_ACCESS_TOKEN: "flow-a-test-drive-token",
   GOOGLE_DRIVE_REPORTS_FOLDER_ID: "flow-a-test-folder",
+  GOOGLE_DRIVE_AI_REPORTS_FOLDER_ID: "flow-a-test-ai-reports-folder",
   ASSETS: { fetch: () => new Response("not found", { status: 404 }) }
 };
 const background = [];

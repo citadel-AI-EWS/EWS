@@ -121,6 +121,7 @@ const LMSTUDIO_INTEGRATION = Object.freeze({
 });
 const CONTROLLER_COMMAND_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0";
 const DEFAULT_GOOGLE_DRIVE_PAYLOAD_FOLDER_ID = "135_YkqQRJpkM1gmk_oh2uV8ldROqVmbn";
+const DEFAULT_GOOGLE_DRIVE_AI_REPORTS_FOLDER_ID = "1cUOu0FFbMMaf32tvPMK0bgsFsLyVAyTn";
 const DRIVE_POINTER_PREFIX = "@drive:";
 let driveAccessTokenCache = { token: null, expires_at_ms: 0 };
 let payloadSchemaPromise;
@@ -496,6 +497,81 @@ function googleDrivePayloadConfig(env) {
   };
 }
 
+function googleDriveAiReportsFolderId(env) {
+  const configured = typeof env.GOOGLE_DRIVE_AI_REPORTS_FOLDER_ID === "string"
+    ? env.GOOGLE_DRIVE_AI_REPORTS_FOLDER_ID.trim()
+    : "";
+  return configured || DEFAULT_GOOGLE_DRIVE_AI_REPORTS_FOLDER_ID;
+}
+
+function sanitizeDriveFolderName(value) {
+  const normalized = String(value || "unknown-node")
+    .replace(/[\\/\u0000-\u001f]/g, "_")
+    .trim()
+    .slice(0, 120);
+  return normalized || "unknown-node";
+}
+
+function driveQueryLiteral(value) {
+  return String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+
+async function ensureDriveChildFolder(env, token, parentId, name) {
+  const safeName = sanitizeDriveFolderName(name);
+  const query = [
+    "'" + driveQueryLiteral(parentId) + "' in parents",
+    "trashed = false",
+    "mimeType = 'application/vnd.google-apps.folder'",
+    "name = '" + driveQueryLiteral(safeName) + "'"
+  ].join(" and ");
+  let response;
+  try {
+    response = await fetch(
+      "https://www.googleapis.com/drive/v3/files?q=" + encodeURIComponent(query) +
+      "&spaces=drive&pageSize=10&fields=files(id,name)",
+      { headers: { authorization: "Bearer " + token } }
+    );
+  } catch {
+    throw new ApiError(503, "drive_payload_upload_failed");
+  }
+  if (!response.ok) throw new ApiError(503, "drive_payload_upload_failed");
+  const found = await response.json().catch(() => ({}));
+  const existing = Array.isArray(found.files)
+    ? found.files.find((item) => item && item.name === safeName && typeof item.id === "string")
+    : null;
+  if (existing?.id) return existing.id;
+
+  try {
+    response = await fetch("https://www.googleapis.com/drive/v3/files?fields=id,name", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer " + token,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        name: safeName,
+        mimeType: "application/vnd.google-apps.folder",
+        parents: [parentId]
+      })
+    });
+  } catch {
+    throw new ApiError(503, "drive_payload_upload_failed");
+  }
+  if (!response.ok) throw new ApiError(503, "drive_payload_upload_failed");
+  const created = await response.json().catch(() => ({}));
+  if (typeof created.id !== "string" || !created.id) {
+    throw new ApiError(503, "drive_payload_upload_failed");
+  }
+  return created.id;
+}
+
+function timestampedAiReportFileName(kind, ownerId, date = new Date()) {
+  const stamp = date.toISOString().replace(/[:.]/g, "-");
+  const safeKind = String(kind || "ai_response").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 48);
+  const safeOwner = String(ownerId || "unknown").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 80);
+  return stamp + "__" + safeKind + "__" + safeOwner + ".json";
+}
+
 async function googleDriveAccessToken(env) {
   const config = googleDrivePayloadConfig(env);
   if (!config.configured) throw new ApiError(503, "drive_payload_storage_unavailable");
@@ -639,7 +715,7 @@ async function deletePayloadBestEffort(env, payloadId) {
   }
 }
 
-async function persistDrivePayload(env, { owner_type, owner_id, kind, value }) {
+async function persistDrivePayload(env, { owner_type, owner_id, kind, value, node_id = null }) {
   await ensurePayloadStorage(env);
   const config = googleDrivePayloadConfig(env);
   if (!config.configured) throw new ApiError(503, "drive_payload_storage_unavailable");
@@ -650,15 +726,29 @@ async function persistDrivePayload(env, { owner_type, owner_id, kind, value }) {
   const token = await googleDriveAccessToken(env);
   const safeOwner = String(owner_id || "unknown").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 80);
   const safeKind = String(kind || "payload").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 48);
+  let parentFolderId = config.folder_id;
+  let fileName = safeOwner + "__" + safeKind + "__" + payloadId + ".json";
+  if (node_id && ["agent_report", "ai_response"].includes(String(kind || ""))) {
+    const node = await env.DB.prepare("SELECT hostname FROM nodes WHERE node_id = ?").bind(node_id).first();
+    const nodeFolderName = sanitizeDriveFolderName(node?.hostname || node_id);
+    parentFolderId = await ensureDriveChildFolder(
+      env,
+      token,
+      googleDriveAiReportsFolderId(env),
+      nodeFolderName
+    );
+    fileName = timestampedAiReportFileName(kind, owner_id);
+  }
   const metadata = {
-    name: safeOwner + "__" + safeKind + "__" + payloadId + ".json",
-    parents: [config.folder_id],
+    name: fileName,
+    parents: [parentFolderId],
     mimeType: "application/json",
     appProperties: {
       citadel_payload_id: payloadId,
       citadel_owner_type: String(owner_type || "").slice(0, 64),
       citadel_owner_id: String(owner_id || "").slice(0, 120),
       citadel_kind: String(kind || "").slice(0, 64),
+      citadel_node_id: String(node_id || "").slice(0, 128),
       citadel_sha256: sha256
     }
   };
@@ -1423,6 +1513,81 @@ async function ensureNodeAiStorage(env) {
     });
   }
   await nodeAiSchemaPromise;
+}
+
+async function ensureAiResponseArchiveStorage(env) {
+  await ensurePayloadStorage(env);
+  await env.DB.batch([
+    env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS ai_response_archives (
+        query_id TEXT PRIMARY KEY,
+        node_id TEXT NOT NULL,
+        payload_id TEXT NOT NULL UNIQUE,
+        drive_file_id TEXT NOT NULL UNIQUE,
+        model TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE,
+        FOREIGN KEY (payload_id) REFERENCES payload_objects(payload_id) ON DELETE CASCADE
+      )
+    `),
+    env.DB.prepare(`
+      CREATE INDEX IF NOT EXISTS idx_ai_response_archives_node_created
+      ON ai_response_archives(node_id, created_at DESC)
+    `)
+  ]);
+}
+
+async function archiveCompletedAiResponse(env, nodeId, state) {
+  if (
+    !state ||
+    state.query_status !== "completed" ||
+    typeof state.query_id !== "string" || !state.query_id ||
+    typeof state.query_answer !== "string" || !state.query_answer
+  ) return null;
+
+  await ensureAiResponseArchiveStorage(env);
+  const existing = await env.DB.prepare(
+    "SELECT query_id, payload_id, drive_file_id, created_at FROM ai_response_archives WHERE query_id = ?"
+  ).bind(state.query_id).first();
+  if (existing) return existing;
+
+  const payload = await persistDrivePayload(env, {
+    owner_type: "ai_response",
+    owner_id: state.query_id,
+    kind: "ai_response",
+    node_id: nodeId,
+    value: {
+      node_id: nodeId,
+      query_id: state.query_id,
+      model: state.loaded_model || state.selected_model || null,
+      mode: state.query_mode || null,
+      prompt: state.query_prompt || "",
+      response: state.query_answer,
+      completed_at: new Date().toISOString()
+    }
+  });
+
+  try {
+    await env.DB.prepare(`
+      INSERT INTO ai_response_archives (
+        query_id, node_id, payload_id, drive_file_id, model
+      ) VALUES (?, ?, ?, ?, ?)
+    `).bind(
+      state.query_id,
+      nodeId,
+      payload.payload_id,
+      payload.drive_file_id,
+      state.loaded_model || state.selected_model || null
+    ).run();
+  } catch (error) {
+    const duplicate = String(error).toLowerCase().includes("unique");
+    await deletePayloadBestEffort(env, payload.payload_id);
+    if (!duplicate) throw error;
+  }
+
+  return env.DB.prepare(
+    "SELECT query_id, payload_id, drive_file_id, created_at FROM ai_response_archives WHERE query_id = ?"
+  ).bind(state.query_id).first();
 }
 
 async function upsertNodeAiState(env, nodeId, state) {
@@ -4540,7 +4705,8 @@ async function submitResult(request, env, nodeId, url) {
     owner_type: "report",
     owner_id: reportId,
     kind: "agent_report",
-    value: reportValue
+    value: reportValue,
+    node_id: nodeId
   });
   const reportPointer = drivePointer(reportPayload.payload_id);
   const effectiveArtifactKey = artifactKey || ("gdrive:" + reportPayload.drive_file_id);
@@ -7113,28 +7279,45 @@ async function architectCreateCommand(request, env, nodeId) {
   );
   const detailsJson = JSON.stringify({ node_id: nodeId, command_type: commandType });
 
+  let commandPersisted = false;
   try {
-    await env.DB.batch([
-      env.DB.prepare(
-        "INSERT INTO commands (" +
-        "command_id, node_id, command_type, payload_json, signature, status, created_at" +
-        ") VALUES (?, ?, ?, ?, ?, 'pending', ?)"
-      ).bind(commandId, nodeId, commandType, payloadJson, signature, createdAt),
-      env.DB.prepare(
-        "INSERT INTO audit_events (" +
-        "actor_type, actor_id, action, target_type, target_id, details_json" +
-        ") SELECT 'architect', 'test-console', 'command.created', 'command', ?, ? " +
-        "WHERE EXISTS (SELECT 1 FROM commands WHERE command_id = ?)"
-      ).bind(commandId, detailsJson, commandId)
-    ]);
+    await env.DB.prepare(
+      "INSERT INTO commands (" +
+      "command_id, node_id, command_type, payload_json, signature, status, created_at" +
+      ") VALUES (?, ?, ?, ?, ?, 'pending', ?)"
+    ).bind(commandId, nodeId, commandType, payloadJson, signature, createdAt).run();
+    commandPersisted = true;
   } catch (error) {
     if (String(error).includes("idx_commands_one_active_per_node") || String(error).includes("UNIQUE")) {
       throw new ApiError(409, "command_already_pending");
     }
-    console.error("Command persistence failed", { node_id: nodeId, command_type: commandType, error: String(error) });
-    throw new ApiError(503, commandType.startsWith("lmstudio_")
-      ? "lmstudio_command_storage_unavailable"
-      : "command_storage_unavailable");
+    try {
+      commandPersisted = Boolean(await env.DB.prepare(
+        "SELECT command_id FROM commands WHERE command_id = ?"
+      ).bind(commandId).first());
+    } catch {
+      commandPersisted = false;
+    }
+    if (!commandPersisted) {
+      console.error("Command persistence failed", {
+        node_id: nodeId, command_type: commandType, error: String(error)
+      });
+      throw new ApiError(503, commandType.startsWith("lmstudio_")
+        ? "lmstudio_command_storage_unavailable"
+        : "command_storage_unavailable");
+    }
+  }
+
+  try {
+    await env.DB.prepare(
+      "INSERT INTO audit_events (" +
+      "actor_type, actor_id, action, target_type, target_id, details_json" +
+      ") VALUES ('architect', ?, 'command.created', 'command', ?, ?)"
+    ).bind(actor.actor_id, commandId, detailsJson).run();
+  } catch (error) {
+    console.error("Command audit persistence failed", {
+      node_id: nodeId, command_id: commandId, command_type: commandType, error: String(error)
+    });
   }
 
   return json({
@@ -7182,7 +7365,13 @@ async function nodeUpdateAiState(request, env, nodeId, url) {
   await authenticateNode(request, env, nodeId, url, bodyBytes);
   const state = normalizeAiState(parseJsonObject(bodyText));
   await upsertNodeAiState(env, nodeId, state);
-  return json({ ok: true, node_id: nodeId, ai: await nodeAiStateResponse(env, nodeId) });
+  const archived = await archiveCompletedAiResponse(env, nodeId, state);
+  return json({
+    ok: true,
+    node_id: nodeId,
+    ai: await nodeAiStateResponse(env, nodeId),
+    archive: archived ? { saved: true, drive_file_id: archived.drive_file_id } : null
+  });
 }
 
 async function architectNodeAiState(request, env, nodeId) {

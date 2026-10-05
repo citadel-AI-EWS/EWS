@@ -30,6 +30,18 @@ const originalFetch = globalThis.fetch;
 let driveNo = 0;
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input);
+  if (url.startsWith("https://www.googleapis.com/drive/v3/files?q=")) {
+    return new Response(JSON.stringify({ files: [] }), {
+      status: 200, headers: { "content-type": "application/json" }
+    });
+  }
+  if (url === "https://www.googleapis.com/drive/v3/files?fields=id,name" &&
+      String(init.method || "GET").toUpperCase() === "POST") {
+    const metadata = JSON.parse(String(init.body || "{}"));
+    return new Response(JSON.stringify({ id: "folder_" + metadata.name, name: metadata.name }), {
+      status: 200, headers: { "content-type": "application/json" }
+    });
+  }
   if (url.startsWith("https://www.googleapis.com/upload/drive/v3/files")) {
     driveNo += 1;
     const fileId = "drive_report_" + driveNo;
@@ -72,6 +84,9 @@ class Statement {
     if (this.sql.includes("SELECT token_hash") && this.sql.includes("FROM architect_auth_state")) return { token_hash: architectHash };
     if (this.sql.includes("SELECT node_id, public_key, status")) {
       return this.args[0] === state.node.node_id ? { ...state.node } : null;
+    }
+    if (this.sql.includes("SELECT hostname FROM nodes WHERE node_id = ?")) {
+      return this.args[0] === state.node.node_id ? { hostname: "a9" } : null;
     }
     if (this.sql.includes("SELECT result_id, outcome, created_at FROM results")) {
       return state.result;
@@ -173,6 +188,7 @@ class Statement {
 const env = {
   ARCHITECT_TOKEN_HASH: architectHash,
   GOOGLE_DRIVE_ACCESS_TOKEN: "test-drive-token",
+  GOOGLE_DRIVE_AI_REPORTS_FOLDER_ID: "test-ai-reports-folder",
   DB: {
     prepare(sql) {
       return new Statement(sql);
