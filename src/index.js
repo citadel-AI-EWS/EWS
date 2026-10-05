@@ -6961,9 +6961,10 @@ async function architectRelease(request, env) {
 function terminalAiCommandStatus(commandType, runtime) {
   const phase = String(runtime?.progress_phase || "");
   const queryStatus = String(runtime?.query_status || "");
+  if (phase === "failed" || phase === "cancelled") return "failed";
   if (
-    phase === "failed" || phase === "cancelled" ||
-    queryStatus === "failed" || queryStatus === "cancelled"
+    commandType === "hybrid_query" &&
+    (queryStatus === "failed" || queryStatus === "cancelled")
   ) return "failed";
   if (commandType === "lmstudio_model_get" && phase === "download_complete") return "completed";
   if (commandType === "lmstudio_model_load" && phase === "load_complete") return "completed";
