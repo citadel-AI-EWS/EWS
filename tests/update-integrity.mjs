@@ -12,7 +12,18 @@ const release = {
   files: ["citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1",
     "CitadelSshConsole.cs", "configure_restricted_ssh.ps1"].map((path) => ({path}))
 };
-assert.deepEqual(releaseForAgentVersion(release, "0.3.1").files.map((file) => file.path),
+const legacy031Bridge = releaseForAgentVersion(release, "0.3.1");
+assert.equal(legacy031Bridge.version, "0.3.2-bridge.1");
+assert.deepEqual(legacy031Bridge.files.map((file) => file.path),
+  ["citadel_node_v1.py", "citadel_node_v2.py"]);
+assert.ok(legacy031Bridge.files.every((file) =>
+  file.url.includes("/0e168af8c39baad7c9157a732562dade0c58f12c/agent/")));
+assert.deepEqual(legacy031Bridge.files.map((file) => file.sha256), [
+  "4a5638a410ca689141a9a4c81d4e2d109c8cf2904e62df50ec6753f4146f5b37",
+  "18fe495f2a46882e5c6c0172d217898d7374177c04b391a34931061b36342b6d"
+]);
+assert.equal(releaseForAgentVersion(release, "0.3.2-bridge.1").version, "0.3.39");
+assert.deepEqual(releaseForAgentVersion(release, "0.3.2-bridge.1").files.map((file) => file.path),
   ["citadel_node_v1.py", "citadel_node_v2.py"]);
 assert.deepEqual(releaseForAgentVersion(release, "0.3.13").files.map((file) => file.path),
   ["citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1"]);
@@ -25,6 +36,10 @@ assert.match(manualUpdate, /updatePayloadReadyForAgent\(safeJson\(pending\.paylo
 assert.match(manualUpdate, /agent\.update\.incompatible_command_retired/);
 assert.match(source, /await repairPendingUpdateForNode\(env, node\)/);
 assert.match(source, /agent\.update\.incompatible_command_replaced/);
+
+// A completed bridge is not the final rollout target, so the next poll must be able to
+// materialize the current 0.3.39 command immediately after the bridge heartbeat.
+assert.match(source, /safeJson\(recentCompletedUpdate\.payload_json, \{\}\)\?\.version === rollout\.target_version/);
 
 const currentRelease = {
   version: "0.3.39",
