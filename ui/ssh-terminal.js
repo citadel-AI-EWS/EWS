@@ -96,7 +96,9 @@ class CitadelSshTerminal {
         try {message = JSON.parse(event.data);} catch {return this.disconnect('Некорректный ответ SSH.');}
         if (message.type === 'ready') {
           if (message.node_id !== nodeId) return this.disconnect('Ответ относится к другому узлу.');
-          this.ready = true; this.buttons(); this.resize(); this.terminal.focus(); this.status('SSH подключён.');
+          this.ready = true; this.buttons(); this.resize(); this.terminal.focus();
+          this.status(message.mode === 'managed_admin' ? 'SSH подключён · citadel-admin (administrator).' :
+            message.mode === 'restricted_fallback' ? 'SSH подключён · ограниченный fallback.' : 'SSH подключён.');
         } else if (message.type === 'error') {
           failed = true;
           const errors = {ssh_target_not_configured: 'SSH для этого узла ещё не настроен.',
