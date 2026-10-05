@@ -242,7 +242,9 @@ for (const required of [
   "async function cancelNodeQuery",
   "■ Стоп LM Studio",
   "/cancel",
-  "agent_version,'0.3.39'"
+  "agent_version,'0.3.39'",
+  "stopSupported=lmInstalled&&sshVersionAtLeast(n.agent_version,'0.3.39')",
+  "$('nodeQueryStop').hidden=!stopSupported"
 ]) {
   assert.ok(operations.includes(required), "LM Studio query Stop UX missing: " + required);
 }
@@ -251,7 +253,9 @@ for (const required of [
   "async function stopHybrid",
   "■ Стоп LM Studio",
   "/cancel",
-  "agent_version,'0.3.39'"
+  "agent_version,'0.3.39'",
+  "$('hybridStop').hidden=!stopSupported",
+  "lmstudio_installed||0"
 ]) {
   assert.ok(hub.includes(required), "Hub LM Studio query Stop UX missing: " + required);
 }
