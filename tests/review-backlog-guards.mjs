@@ -263,7 +263,7 @@ need(index.includes('throw new ApiError(409, "command_already_pending")'), "comm
 need(index.includes("async function reconcileTerminalAiCommand"), "terminal AI command recovery helper missing");
 need(index.includes('commandType === "lmstudio_model_load" && phase === "load_complete"'), "LM Studio load completion must reconcile the active command");
 need(index.includes('commandType === "hybrid_query"') && index.includes('phase === "query_complete"'), "Hybrid query completion must reconcile the active command");
-need(index.includes("await reconcileTerminalAiCommand(env, nodeId);"), "Architect command path must reconcile terminal AI commands before checking for an active command");
+need(index.includes("pending && await reconcileTerminalAiCommand(env, nodeId, pending)"), "Architect command path must reconcile only when an active command exists");
 need(index.includes('const message = String(error).toLowerCase();') && index.includes('message.includes("unique")'), "command UNIQUE mapping must be case-insensitive");
 {
   const start = index.indexOf("async function architectCreateCommand");
