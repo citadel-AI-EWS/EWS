@@ -16,7 +16,7 @@ const fixtures = {
     project_readiness_error: null, openrouter_quality: "unconfigured"
   },
   "/api/v1/hub/nodes": {
-    ok: true, nodes: [{node_id: "local-smoke-fixture", status: "online", agent_version: "0.3.38"}]
+    ok: true, nodes: [{node_id: "local-smoke-fixture", status: "online", agent_version: "0.3.39"}]
   },
   "/api/v1": {ok: true, arbitrary_remote_execution: false, command_types: ["update"]},
   "/": '<!doctype html><section id="machines"><form id="taskForm"></form></section>'
