@@ -263,12 +263,22 @@ class Agent(v1.Agent):
             raise RuntimeError("managed_ssh_invalid_username")
         private_key = ssh_root / "relay_ed25519"
         authorized_keys = ssh_root / "relay_authorized_keys"
-        host_public_key = program_data / "ssh" / "ssh_host_ed25519_key.pub"
-        for required in (private_key, authorized_keys, host_public_key):
+        for required in (private_key, authorized_keys):
             if not required.is_file():
                 raise RuntimeError("managed_ssh_material_missing")
-        host_key_line = host_public_key.read_text(encoding="utf-8-sig", errors="strict").splitlines()[0].strip()
-        if not host_key_line.startswith("ssh-ed25519 "):
+        host_public_key = next((
+            path for path in (
+                program_data / "ssh" / "ssh_host_ed25519_key.pub",
+                program_data / "ssh" / "ssh_host_ecdsa_key.pub",
+                program_data / "ssh" / "ssh_host_rsa_key.pub",
+            ) if path.is_file()
+        ), None)
+        if host_public_key is None:
+            raise RuntimeError("managed_ssh_host_key_missing")
+        host_key_line = host_public_key.read_text(
+            encoding="utf-8-sig", errors="strict"
+        ).splitlines()[0].strip()
+        if not host_key_line.startswith(("ssh-ed25519 ", "ecdsa-sha2-", "ssh-rsa ")):
             raise RuntimeError("managed_ssh_host_key_invalid")
         return {
             "mode": "managed_admin",
