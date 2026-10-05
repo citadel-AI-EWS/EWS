@@ -258,7 +258,7 @@ def patch_setup(path: Path, v1_hash: str, v2_hash: str) -> None:
     original = text
     text = re.sub(r'\$ExpectedV1Sha256 = "[0-9a-f]{64}"', f'$ExpectedV1Sha256 = "{v1_hash}"', text, count=1)
     text = re.sub(r'\$ExpectedV2Sha256 = "[0-9a-f]{64}"', f'$ExpectedV2Sha256 = "{v2_hash}"', text, count=1)
-    text = text.replace('agent_version = "0.3.0"', 'agent_version = "0.3.38"')
+    text = text.replace('agent_version = "0.3.0"', 'agent_version = "0.3.39"')
     if text == original:
         raise RuntimeError("setup_windows.ps1 was not patched")
     path.write_text(text, encoding="utf-8", newline="\n")
@@ -271,7 +271,7 @@ def write_extras() -> None:
         newline="",
     )
     readme = (
-        "CITADEL/EWS — исправленный самодостаточный пакет 0.3.38\n\n"
+        "CITADEL/EWS — исправленный самодостаточный пакет 0.3.39\n\n"
         "1. Распакуйте ZIP полностью.\n"
         "2. Запустите START_HERE.cmd.\n"
         "3. Агент использует HTTPS Controller: https://citadel-ai.init1.workers.dev\n\n"
@@ -337,9 +337,9 @@ def build() -> Path:
     v1_hash = sha256(v1_path)
     v2_hash = sha256(v2_path)
     if 'VERSION = "0.3.39"' not in v1_path.read_text(encoding="utf-8"):
-        raise RuntimeError("repository v1 source is not release 0.3.38")
+        raise RuntimeError("repository v1 source is not release 0.3.39")
     if 'VERSION = "0.3.39"' not in v2_path.read_text(encoding="utf-8"):
-        raise RuntimeError("repository v2 source is not release 0.3.38")
+        raise RuntimeError("repository v2 source is not release 0.3.39")
     setup_text = setup_path.read_text(encoding="utf-8")
     service_source = STAGE / "CitadelNodeService.cs"
     service_helper = STAGE / "windows_service.ps1"
@@ -370,7 +370,7 @@ def build() -> Path:
     if f'$ExpectedRestrictedSshBootstrapSha256 = "{restricted_ssh_bootstrap_hash}"' not in setup_text:
         raise RuntimeError("setup_windows.ps1 restricted SSH bootstrap hash pin does not match repository source")
     if '$ReleaseVersion = "0.3.39"' not in setup_text:
-        raise RuntimeError("setup_windows.ps1 release version is not 0.3.38")
+        raise RuntimeError("setup_windows.ps1 release version is not 0.3.39")
     write_extras()
 
     manifest_names = sorted(
