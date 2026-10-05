@@ -24,7 +24,7 @@ from typing import Any, Callable
 
 import citadel_node_v1 as v1
 
-VERSION = "0.3.38"
+VERSION = "0.3.39"
 v1.VERSION = VERSION
 v1.USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 
@@ -38,6 +38,7 @@ WARN_EVENTS = {
 ERROR_EVENTS = {
     "cycle_error",
     "operation_heartbeat_failed",
+    "operation_cancel_check_failed",
     "command_failed",
     "command_failure_ack_failed",
 }
@@ -56,6 +57,7 @@ ALLOWED_EVENTS = {
     "queued_results_flushed",
     "command_signature_rejected",
     "command_completed",
+    "command_cancelled",
     "agent_updated",
     "agent_update_rolled_back",
     "agent_update_healthcheck_passed",
