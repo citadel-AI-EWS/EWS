@@ -251,7 +251,7 @@ for (const required of [
   "async function stopHybrid",
   "■ Стоп LM Studio",
   "/cancel",
-  'agent_version,"0.3.39"'
+  "agent_version,'0.3.39'"
 ]) {
   assert.ok(hub.includes(required), "Hub LM Studio query Stop UX missing: " + required);
 }
