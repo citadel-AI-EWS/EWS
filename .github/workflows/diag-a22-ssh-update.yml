@@ -28,6 +28,12 @@ jobs:
       - name: Read a22 audit trail
         run: |
           npx wrangler d1 execute citadel-control --remote --command "SELECT action, target_id, details_json, created_at FROM audit_events WHERE target_id='node_4bfab98e-fa16-414e-a1c8-13d7dc05d7d6' ORDER BY event_id DESC LIMIT 20;"
+      - name: Read a22 update/error telemetry
+        run: |
+          npx wrangler d1 execute citadel-control --remote --command "SELECT event_type, level, message, details_json, created_at, received_at FROM node_logs WHERE node_id='node_4bfab98e-fa16-414e-a1c8-13d7dc05d7d6' AND (event_type LIKE '%update%' OR event_type IN ('command_failed','command_failure_ack_failed','cycle_error')) ORDER BY datetime(received_at) DESC, event_id DESC LIMIT 40;"
+      - name: Read latest update command audit
+        run: |
+          npx wrangler d1 execute citadel-control --remote --command "SELECT action, target_id, details_json, created_at FROM audit_events WHERE target_id='command_bda03753-2198-496a-8272-c0c2b4b45459' OR details_json LIKE '%command_bda03753-2198-496a-8272-c0c2b4b45459%' ORDER BY event_id DESC LIMIT 30;"
       - name: Read a22 SSH state
         run: |
           npx wrangler d1 execute citadel-control --remote --command "SELECT * FROM node_ssh_state WHERE node_id='node_4bfab98e-fa16-414e-a1c8-13d7dc05d7d6' LIMIT 1;"
