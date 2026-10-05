@@ -2356,27 +2356,31 @@ class Agent:
                                  progress_detail="Command accepted by the agent")
 
         def keepalive():
+            heartbeat_period = max(0.01, float(self.config.heartbeat_seconds))
+            local_tick = min(1.0, max(0.01, heartbeat_period / 4.0))
             next_heartbeat = 0.0
-            interval = 2.0 if cancellable and command_id else max(1.0, float(self.config.heartbeat_seconds))
+            next_cancel_check = 0.0
             while not finished.is_set():
                 self.mark_local_progress()
                 try:
                     if self.lifecycle_stop_requested() or self.stop_path.exists():
                         self.interrupt_active_lm_connection()
                         return
-                    if cancellable and command_id and self.command_cancel_requested(command_id):
-                        self._operation_cancel_requested.set()
-                        self.interrupt_active_lm_connection()
-                        return
                     now = time.monotonic()
+                    if cancellable and command_id and now >= next_cancel_check:
+                        if self.command_cancel_requested(command_id):
+                            self._operation_cancel_requested.set()
+                            self.interrupt_active_lm_connection()
+                            return
+                        next_cancel_check = now + 2.0
                     if now >= next_heartbeat:
                         self.heartbeat()
                         if command_id:
                             self.report_ai_state()
-                        next_heartbeat = now + max(1.0, float(self.config.heartbeat_seconds))
+                        next_heartbeat = now + heartbeat_period
                 except Exception as error:
                     self.log.write("operation_heartbeat_failed", error=local_error_code(error))
-                finished.wait(interval)
+                finished.wait(local_tick)
 
         thread = None
         if self.identity.node_id:
