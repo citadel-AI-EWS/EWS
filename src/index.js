@@ -35,7 +35,7 @@ const ALLOWED_REPORT_SENSITIVITIES = new Set([
   "confidential",
   "restricted"
 ]);
-const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed"]);
+const ALLOWED_COMMAND_ACKS = new Set(["accepted", "completed", "failed", "cancelled"]);
 const ALLOWED_ARCHITECT_MISSION_TYPES = new Set(["system_inventory"]);
 const SSH_CONSOLE_COMMANDS = new Set([
   "help", "status", "hostname", "whoami", "uname -a", "python --version", "python3 --version",
@@ -5801,8 +5801,8 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
   }
 
   const transitionAllowed =
-    (current.status === "pending" && ["accepted", "completed", "failed"].includes(status)) ||
-    (current.status === "accepted" && ["completed", "failed"].includes(status));
+    (current.status === "pending" && ["accepted", "completed", "failed", "cancelled"].includes(status)) ||
+    (current.status === "accepted" && ["completed", "failed", "cancelled"].includes(status));
   if (!transitionAllowed) {
     throw new ApiError(409, "invalid_command_transition");
   }
@@ -5825,7 +5825,7 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
       UPDATE commands
       SET status = ?,
           completed_at = CASE
-            WHEN ? IN ('completed', 'failed') THEN CURRENT_TIMESTAMP
+            WHEN ? IN ('completed', 'failed', 'cancelled') THEN CURRENT_TIMESTAMP
             ELSE completed_at
           END
       WHERE command_id = ?
@@ -7127,11 +7127,10 @@ async function architectRelease(request, env) {
 function terminalAiCommandStatus(commandType, runtime) {
   const phase = String(runtime?.progress_phase || "");
   const queryStatus = String(runtime?.query_status || "");
-  if (phase === "failed" || phase === "cancelled") return "failed";
-  if (
-    commandType === "hybrid_query" &&
-    (queryStatus === "failed" || queryStatus === "cancelled")
-  ) return "failed";
+  if (phase === "cancelled") return "cancelled";
+  if (phase === "failed") return "failed";
+  if (commandType === "hybrid_query" && queryStatus === "cancelled") return "cancelled";
+  if (commandType === "hybrid_query" && queryStatus === "failed") return "failed";
   if (commandType === "lmstudio_model_get" && phase === "download_complete") return "completed";
   if (commandType === "lmstudio_model_load" && phase === "load_complete") return "completed";
   if (
@@ -7397,6 +7396,79 @@ async function architectCreateCommand(request, env, nodeId) {
       created_at: createdAt
     }
   }, 201);
+}
+
+async function architectCancelCommand(request, env, nodeId, commandId) {
+  const actor = await authenticateArchitect(request, env);
+  await ensureCommandStorage(env);
+  const command = await env.DB.prepare(
+    "SELECT command_id, node_id, command_type, status FROM commands WHERE command_id = ? AND node_id = ?"
+  ).bind(commandId, nodeId).first();
+  if (!command) throw new ApiError(404, "command_not_found");
+  if (command.command_type !== "hybrid_query") {
+    throw new ApiError(409, "command_not_cancellable");
+  }
+  if (["completed", "failed", "cancelled"].includes(command.status)) {
+    return json({ ok: true, cancel: { command_id: commandId, requested: true, status: command.status } });
+  }
+  if (!["pending", "accepted"].includes(command.status)) {
+    throw new ApiError(409, "command_not_cancellable");
+  }
+
+  const details = JSON.stringify({
+    node_id: nodeId,
+    command_type: command.command_type,
+    previous_status: command.status
+  });
+  const statements = [];
+  if (command.status === "pending") {
+    statements.push(env.DB.prepare(
+      "UPDATE commands SET status = 'cancelled', completed_at = CURRENT_TIMESTAMP " +
+      "WHERE command_id = ? AND node_id = ? AND status = 'pending'"
+    ).bind(commandId, nodeId));
+  }
+  statements.push(env.DB.prepare(`
+    INSERT INTO audit_events (
+      actor_type, actor_id, action, target_type, target_id, details_json
+    )
+    SELECT 'architect', ?, 'command.cancel_requested', 'command', ?, ?
+    WHERE NOT EXISTS (
+      SELECT 1 FROM audit_events
+      WHERE target_type = 'command' AND target_id = ? AND action = 'command.cancel_requested'
+    )
+  `).bind(actor.actor_id || "architect", commandId, details, commandId));
+  await env.DB.batch(statements);
+  return json({
+    ok: true,
+    cancel: {
+      command_id: commandId,
+      requested: true,
+      status: command.status === "pending" ? "cancelled" : "accepted"
+    }
+  });
+}
+
+async function nodeCommandCancelState(request, env, nodeId, commandId, url) {
+  await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
+  await ensureCommandStorage(env);
+  const row = await env.DB.prepare(`
+    SELECT c.command_type, c.status,
+      EXISTS(
+        SELECT 1 FROM audit_events AS a
+        WHERE a.target_type = 'command'
+          AND a.target_id = c.command_id
+          AND a.action = 'command.cancel_requested'
+      ) AS cancel_requested
+    FROM commands AS c
+    WHERE c.command_id = ? AND c.node_id = ?
+  `).bind(commandId, nodeId).first();
+  if (!row) throw new ApiError(404, "command_not_found");
+  return json({
+    ok: true,
+    command_id: commandId,
+    cancel_requested: row.command_type === "hybrid_query" &&
+      (row.status === "cancelled" || Number(row.cancel_requested || 0) === 1)
+  });
 }
 
 async function architectGetCommand(request, env, nodeId, commandId) {
@@ -8525,6 +8597,20 @@ async function handleApi(request, env, url, executionCtx = null) {
       : methodNotAllowed(["POST"]);
   }
 
+  const architectCommandCancelMatch = url.pathname.match(
+    /^\/api\/v1\/architect\/nodes\/([^/]+)\/commands\/([^/]+)\/cancel$/
+  );
+  if (architectCommandCancelMatch) {
+    return request.method === "POST"
+      ? architectCancelCommand(
+          request,
+          env,
+          decodeURIComponent(architectCommandCancelMatch[1]),
+          decodeURIComponent(architectCommandCancelMatch[2])
+        )
+      : methodNotAllowed(["POST"]);
+  }
+
   const architectCommandStatusMatch = url.pathname.match(
     /^\/api\/v1\/architect\/nodes\/([^/]+)\/commands\/([^/]+)$/
   );
@@ -8620,6 +8706,19 @@ async function handleApi(request, env, url, executionCtx = null) {
   if (match) {
     return request.method === "GET"
       ? listCommands(request, env, decodeURIComponent(match[1]), url)
+      : methodNotAllowed(["GET"]);
+  }
+
+  match = url.pathname.match(/^\/api\/v1\/nodes\/([^/]+)\/commands\/([^/]+)\/cancel-state$/);
+  if (match) {
+    return request.method === "GET"
+      ? nodeCommandCancelState(
+          request,
+          env,
+          decodeURIComponent(match[1]),
+          decodeURIComponent(match[2]),
+          url
+        )
       : methodNotAllowed(["GET"]);
   }
 
