@@ -2648,7 +2648,7 @@
       try {
         const data = await api("/api/v1/architect/update-all", { method: "POST" });
         const rollout = data.rollout;
-        updateAllStatus.textContent = `Rollout → ${rollout.target_version}. Production-нод: ${rollout.registered_nodes}; устаревших: ${rollout.nodes_waiting_for_update}; доступны сейчас: ${rollout.nodes_updateable_now ?? 0}; отложены offline/stale: ${rollout.nodes_deferred ?? 0}; тестовых исключено: ${rollout.excluded_test_nodes ?? 0}.`;
+        updateAllStatus.textContent = `Rollout → ${rollout.target_version}. Фаза: ${rollout.phase || "canary"}; канарейка: ${rollout.canary_hostname || rollout.canary_node_id || "—"}; Production-нод: ${rollout.registered_nodes}; устаревших: ${rollout.nodes_waiting_for_update}; доступны сейчас: ${rollout.nodes_updateable_now ?? 0}; отложены offline/stale: ${rollout.nodes_deferred ?? 0}; после канарейки одновременно не больше ${rollout.max_parallel ?? 3}.`;
         updateAllStatus.className = "status good";
       } catch (error) {
         updateAllStatus.textContent = `Массовое обновление не запущено: ${error.message}`;
