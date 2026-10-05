@@ -49,26 +49,26 @@ const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "r
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const WAKE_PEER_MIN_AGENT_VERSION = "0.3.6";
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.38",
+  version: "0.3.39",
   files: [
     {
       path: "citadel_node_v1.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/0b996166fd1f96bdcf0be4332e45eef16b6eb41b/agent/citadel_node_v1.py",
-      sha256: "ac795bc839f034e1db74058cf3e8b347c91c9462c89b4bdd05edf664065d8faf"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/f41a2d5fbd23691d3c6ee8260906ab8804a3414e/agent/citadel_node_v1.py",
+      sha256: "d2277500a7783a3039c736dfaeb9237241662a916717b1dd6f070b1c0ca5bb5c"
     },
     {
       path: "citadel_node_v2.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/0b996166fd1f96bdcf0be4332e45eef16b6eb41b/agent/citadel_node_v2.py",
-      sha256: "afe74909932636d74d5a6bd4c5a5835472040299f2ded1e6aa6a9234618088e2"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/f41a2d5fbd23691d3c6ee8260906ab8804a3414e/agent/citadel_node_v2.py",
+      sha256: "9fedc79c08b46f861c7ee889687701bfee7008e217a2186cf8c8d25acb289830"
     },
     {
       path: "CitadelSshConsole.cs",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/0b996166fd1f96bdcf0be4332e45eef16b6eb41b/agent/CitadelSshConsole.cs",
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/f41a2d5fbd23691d3c6ee8260906ab8804a3414e/agent/CitadelSshConsole.cs",
       sha256: "56476adfd0d1fe343490c5abbf3663fb24152694e62c97c571cec29917ee21bf"
     },
     {
       path: "configure_restricted_ssh.ps1",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/0b996166fd1f96bdcf0be4332e45eef16b6eb41b/agent/configure_restricted_ssh.ps1",
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/f41a2d5fbd23691d3c6ee8260906ab8804a3414e/agent/configure_restricted_ssh.ps1",
       sha256: "e8d5be7e56a01e6e7fb4d2e8b02644b4f2082d0f1633dd5e30f59aae7f1dec73"
     }
   ]
