@@ -21,6 +21,7 @@ async def main():
         events = []
 
         class FakeAgent:
+            _managed_windows_ssh_target = Agent._managed_windows_ssh_target
             _ssh_relay_session = Agent._ssh_relay_session
             _ssh_relay_loop = Agent._ssh_relay_loop
 
