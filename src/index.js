@@ -6957,6 +6957,63 @@ async function architectRelease(request, env) {
   });
 }
 
+
+function terminalAiCommandStatus(commandType, runtime) {
+  const phase = String(runtime?.progress_phase || "");
+  const queryStatus = String(runtime?.query_status || "");
+  if (
+    phase === "failed" || phase === "cancelled" ||
+    queryStatus === "failed" || queryStatus === "cancelled"
+  ) return "failed";
+  if (commandType === "lmstudio_model_get" && phase === "download_complete") return "completed";
+  if (commandType === "lmstudio_model_load" && phase === "load_complete") return "completed";
+  if (
+    ["lmstudio_install", "lmstudio_uninstall"].includes(commandType) &&
+    ["complete", "completed", "completed_partial"].includes(phase)
+  ) return "completed";
+  if (
+    commandType === "hybrid_query" &&
+    (queryStatus === "completed" || phase === "query_complete")
+  ) return "completed";
+  return null;
+}
+
+async function reconcileTerminalAiCommand(env, nodeId) {
+  await ensureNodeAiStorage(env);
+  const runtimeRow = await env.DB.prepare(
+    "SELECT state_json FROM node_ai_runtime_state WHERE node_id = ?"
+  ).bind(nodeId).first();
+  const runtime = safeJson(runtimeRow?.state_json, {});
+  const commandId = typeof runtime.operation_id === "string"
+    ? runtime.operation_id.trim()
+    : "";
+  if (!commandId) return false;
+
+  const command = await env.DB.prepare(
+    "SELECT command_id, command_type, status FROM commands " +
+    "WHERE command_id = ? AND node_id = ? AND status IN ('pending', 'accepted')"
+  ).bind(commandId, nodeId).first();
+  if (!command) return false;
+
+  const nextStatus = terminalAiCommandStatus(command.command_type, runtime);
+  if (!nextStatus) return false;
+
+  const update = await env.DB.prepare(
+    "UPDATE commands SET status = ?, completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP) " +
+    "WHERE command_id = ? AND node_id = ? AND status IN ('pending', 'accepted')"
+  ).bind(nextStatus, commandId, nodeId).run();
+  const changed = Number(update?.meta?.changes || 0) === 1;
+  if (changed) {
+    console.log("Recovered terminal AI command from runtime state", {
+      node_id: nodeId,
+      command_id: commandId,
+      command_type: command.command_type,
+      status: nextStatus
+    });
+  }
+  return changed;
+}
+
 async function architectCreateCommand(request, env, nodeId) {
   const actor = await authenticateArchitect(request, env);
   const bodyText = await readBodyText(request, 8 * 1024);
@@ -7029,6 +7086,8 @@ async function architectCreateCommand(request, env, nodeId) {
   if (commandType === "resume" && node.status !== "paused") {
     throw new ApiError(409, "node_not_paused");
   }
+
+  await reconcileTerminalAiCommand(env, nodeId);
 
   const pending = await env.DB.prepare(
     "SELECT command_id, command_type, status, payload_json FROM commands " +
@@ -7128,7 +7187,12 @@ async function architectCreateCommand(request, env, nodeId) {
       ).bind(commandId, detailsJson, commandId)
     ]);
   } catch (error) {
-    if (String(error).includes("idx_commands_one_active_per_node") || String(error).includes("UNIQUE")) {
+    const message = String(error).toLowerCase();
+    if (
+      message.includes("idx_commands_one_active_per_node") ||
+      message.includes("unique") ||
+      message.includes("commands.node_id")
+    ) {
       throw new ApiError(409, "command_already_pending");
     }
     console.error("Command persistence failed", { node_id: nodeId, command_type: commandType, error: String(error) });
