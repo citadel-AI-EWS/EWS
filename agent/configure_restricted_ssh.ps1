@@ -6,6 +6,7 @@ param(
   [string]$CloudflareCaPublicKey = "",
   [switch]$ForceLoopback,
   [switch]$SkipCloudflared,
+  [switch]$ManagedAdmin,
   [switch]$Uninstall
 )
 
@@ -193,7 +194,7 @@ function Require-SafeUsername([string]$Value) {
   }
   $Reserved = @("administrator", "guest", "defaultaccount", "wdagutilityaccount", "system", "localservice", "networkservice")
   if ($Reserved -contains $Name.ToLowerInvariant()) {
-    throw "Built-in or privileged Windows accounts are not allowed for CITADEL SSH."
+    throw "Built-in Windows accounts are not allowed for CITADEL SSH."
   }
   return $Name
 }
@@ -264,7 +265,14 @@ function Get-AdministratorsGroupName {
   return ($Account -split '\\')[-1]
 }
 
-function Ensure-NonPrivilegedUser([string]$Name) {
+function Test-UserInLocalGroup([Microsoft.PowerShell.Commands.LocalUser]$User, [string]$GroupName) {
+  foreach ($Member in @(Get-LocalGroupMember -Group $GroupName -ErrorAction Stop)) {
+    if ($null -ne $Member.SID -and $Member.SID.Value -eq $User.SID.Value) { return $true }
+  }
+  return $false
+}
+
+function Ensure-CitadelSshUser([string]$Name, [bool]$ManagedAdmin, $PriorState) {
   $Existing = Get-LocalUser -Name $Name -ErrorAction SilentlyContinue
   $Created = $false
   if ($null -eq $Existing) {
@@ -273,20 +281,79 @@ function Ensure-NonPrivilegedUser([string]$Name) {
     try { $Rng.GetBytes($Bytes) } finally { $Rng.Dispose() }
     $RandomPassword = [Convert]::ToBase64String($Bytes) + "!aA1"
     $SecurePassword = ConvertTo-SecureString $RandomPassword -AsPlainText -Force
-    New-LocalUser -Name $Name -Password $SecurePassword -AccountNeverExpires -PasswordNeverExpires -UserMayNotChangePassword -Description "CITADEL restricted SSH account" | Out-Null
+    $Description = if ($ManagedAdmin) { "CITADEL managed SSH administrator" } else { "CITADEL restricted SSH account" }
+    New-LocalUser -Name $Name -Password $SecurePassword -AccountNeverExpires -PasswordNeverExpires -UserMayNotChangePassword -Description $Description | Out-Null
     $Existing = Get-LocalUser -Name $Name -ErrorAction Stop
     $Created = $true
   }
   if (-not $Existing.Enabled) { Enable-LocalUser -Name $Name }
 
   $AdminGroup = Get-AdministratorsGroupName
-  $AdminMembers = @(Get-LocalGroupMember -Group $AdminGroup -ErrorAction Stop)
-  foreach ($Member in $AdminMembers) {
-    if ($null -ne $Member.SID -and $Member.SID.Value -eq $Existing.SID.Value) {
-      throw "CITADEL SSH user must not be a member of the local Administrators group."
+  $IsAdmin = Test-UserInLocalGroup -User $Existing -GroupName $AdminGroup
+  if ($ManagedAdmin) {
+    if (-not $Created) {
+      $PriorUser = [string](Get-OptionalProperty -Object $PriorState -Name "ssh_user" -DefaultValue "")
+      $PriorCreated = [bool](Get-OptionalProperty -Object $PriorState -Name "created_user" -DefaultValue $false)
+      if (-not $PriorCreated -or $PriorUser -ne $Name) {
+        throw "CITADEL refuses to elevate a pre-existing unmanaged local account."
+      }
+    }
+    if (-not $IsAdmin) {
+      Add-LocalGroupMember -Group $AdminGroup -Member $Existing.Name -ErrorAction Stop
+      $IsAdmin = Test-UserInLocalGroup -User $Existing -GroupName $AdminGroup
+    }
+    if (-not $IsAdmin) { throw "CITADEL managed SSH user could not be added to the local Administrators group." }
+  } elseif ($IsAdmin) {
+    throw "CITADEL restricted SSH user must not be a member of the local Administrators group."
+  }
+  return @{ User = $Existing; Created = $Created; IsAdmin = $IsAdmin }
+}
+
+function Set-CitadelRelayKeyAcl([string]$Path, [string]$UserSid, [bool]$IncludeUser) {
+  $Acl = New-Object System.Security.AccessControl.FileSecurity
+  $Acl.SetAccessRuleProtection($true, $false)
+  $Allow = [System.Security.AccessControl.AccessControlType]::Allow
+  $Rules = @(
+    @("S-1-5-18", [System.Security.AccessControl.FileSystemRights]::FullControl),
+    @("S-1-5-32-544", [System.Security.AccessControl.FileSystemRights]::FullControl),
+    @("S-1-5-19", [System.Security.AccessControl.FileSystemRights]::ReadAndExecute)
+  )
+  if ($IncludeUser) {
+    $Rules += ,@($UserSid, [System.Security.AccessControl.FileSystemRights]::Read)
+  }
+  foreach ($Rule in $Rules) {
+    $Sid = New-Object System.Security.Principal.SecurityIdentifier($Rule[0])
+    $Ace = New-Object System.Security.AccessControl.FileSystemAccessRule($Sid, $Rule[1], $Allow)
+    [void]$Acl.AddAccessRule($Ace)
+  }
+  $Acl.SetOwner((New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")))
+  Set-Acl -LiteralPath $Path -AclObject $Acl
+}
+
+function Ensure-ManagedRelayKey([string]$PrivateKeyPath, [string]$PublicKeyPath, [string]$AuthorizedKeysPath, [string]$UserSid) {
+  $SshKeygen = Join-Path $env:WINDIR "System32\OpenSSH\ssh-keygen.exe"
+  if (-not (Test-Path -LiteralPath $SshKeygen)) { throw "Windows OpenSSH ssh-keygen.exe is missing." }
+  if (-not (Test-Path -LiteralPath $PrivateKeyPath)) {
+    & $SshKeygen -q -t ed25519 -N "" -f $PrivateKeyPath
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $PrivateKeyPath)) {
+      throw "CITADEL managed SSH relay key generation failed."
     }
   }
-  return @{ User = $Existing; Created = $Created }
+  if (-not (Test-Path -LiteralPath $PublicKeyPath)) {
+    $PublicKey = (& $SshKeygen -y -f $PrivateKeyPath | Select-Object -First 1)
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace([string]$PublicKey)) {
+      throw "CITADEL managed SSH public key recovery failed."
+    }
+    [System.IO.File]::WriteAllText($PublicKeyPath, ([string]$PublicKey).Trim() + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
+  }
+  $AuthorizedKey = (Get-Content -LiteralPath $PublicKeyPath -Encoding UTF8 | Select-Object -First 1).Trim()
+  if ($AuthorizedKey -notmatch '^ssh-ed25519\s+[A-Za-z0-9+/=]+(?:\s+.*)?$') {
+    throw "CITADEL managed SSH relay public key is invalid."
+  }
+  [System.IO.File]::WriteAllText($AuthorizedKeysPath, $AuthorizedKey + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
+  Set-CitadelRelayKeyAcl -Path $PrivateKeyPath -UserSid $UserSid -IncludeUser $false
+  Set-CitadelRelayKeyAcl -Path $PublicKeyPath -UserSid $UserSid -IncludeUser $true
+  Set-CitadelRelayKeyAcl -Path $AuthorizedKeysPath -UserSid $UserSid -IncludeUser $true
 }
 
 function Compile-RestrictedConsole([string]$Source, [string]$Destination) {
@@ -352,6 +419,7 @@ if (-not (Test-IsAdministrator)) {
   )
   if ($ForceLoopback) { $Args += "-ForceLoopback" }
   if ($SkipCloudflared) { $Args += "-SkipCloudflared" }
+  if ($ManagedAdmin) { $Args += "-ManagedAdmin" }
   if ($Uninstall) { $Args += "-Uninstall" }
   $Elevated = Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $Args -Wait -PassThru
   exit $Elevated.ExitCode
@@ -361,6 +429,9 @@ $SshStateRoot = Join-Path $env:ProgramData "CitadelEWS\ssh"
 $StatePath = Join-Path $SshStateRoot "bootstrap-state.json"
 $ConsoleExe = Join-Path $SshStateRoot "CitadelSshConsole.exe"
 $CaPath = Join-Path $env:ProgramData "ssh\citadel_cloudflare_ca.pub"
+$RelayPrivateKeyPath = Join-Path $SshStateRoot "relay_ed25519"
+$RelayPublicKeyPath = Join-Path $SshStateRoot "relay_ed25519.pub"
+$RelayAuthorizedKeysPath = Join-Path $SshStateRoot "relay_authorized_keys"
 $SshdConfig = Join-Path $env:ProgramData "ssh\sshd_config"
 $SshdExe = Join-Path $env:WINDIR "System32\OpenSSH\sshd.exe"
 
@@ -390,7 +461,7 @@ if ($Uninstall) {
   $RestoreStartMode = if ($State.service_start_mode_before) { [string]$State.service_start_mode_before } else { "Manual" }
   $RestoreRunning = [bool]($State.service_was_running_before -eq $true)
   Set-CitadelSshServiceState -StartMode $RestoreStartMode -WasRunning $RestoreRunning
-  foreach ($Path in @($ConsoleExe, $CaPath, (Join-Path $SshStateRoot "controller-url.txt"), $StatePath)) {
+  foreach ($Path in @($ConsoleExe, $CaPath, $RelayPrivateKeyPath, $RelayPublicKeyPath, $RelayAuthorizedKeysPath, (Join-Path $SshStateRoot "controller-url.txt"), $StatePath)) {
     Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
   }
   Write-Host "[CITADEL] Restricted SSH configuration removed. OpenSSH itself was left installed."
@@ -404,14 +475,22 @@ $ReleaseRoot = $Resolved.ReleaseRoot
 $ConfigPath = $Resolved.ConfigPath
 $AgentLayout = $Resolved.Layout
 
-if ([string]::IsNullOrWhiteSpace($SshUser)) {
-  $SshUser = Read-Host "Cloudflare Access SSH username (normally your email prefix)"
+if ($ManagedAdmin) {
+  if ([string]::IsNullOrWhiteSpace($SshUser)) { $SshUser = "citadel-admin" }
+  $SshUser = Require-SafeUsername $SshUser
+  if (-not [string]::IsNullOrWhiteSpace($CloudflareCaPublicKey)) {
+    $CloudflareCaPublicKey = Require-CloudflareCaKey $CloudflareCaPublicKey
+  }
+} else {
+  if ([string]::IsNullOrWhiteSpace($SshUser)) {
+    $SshUser = Read-Host "Cloudflare Access SSH username (normally your email prefix)"
+  }
+  $SshUser = Require-SafeUsername $SshUser
+  if ([string]::IsNullOrWhiteSpace($CloudflareCaPublicKey)) {
+    $CloudflareCaPublicKey = Read-Host "Paste the Cloudflare SSH CA PUBLIC key"
+  }
+  $CloudflareCaPublicKey = Require-CloudflareCaKey $CloudflareCaPublicKey
 }
-$SshUser = Require-SafeUsername $SshUser
-if ([string]::IsNullOrWhiteSpace($CloudflareCaPublicKey)) {
-  $CloudflareCaPublicKey = Read-Host "Paste the Cloudflare SSH CA PUBLIC key"
-}
-$CloudflareCaPublicKey = Require-CloudflareCaKey $CloudflareCaPublicKey
 
 $Capability = Get-WindowsCapability -Online -Name "OpenSSH.Server~~~~0.0.1.0"
 $OpenSshWasInstalled = $Capability.State -eq "Installed"
@@ -459,18 +538,24 @@ if (-not (Test-Path -LiteralPath $SshdConfig)) {
 }
 
 New-Item -ItemType Directory -Force -Path $SshStateRoot | Out-Null
-$UserState = Ensure-NonPrivilegedUser -Name $SshUser
+$UserState = Ensure-CitadelSshUser -Name $SshUser -ManagedAdmin ([bool]$ManagedAdmin) -PriorState $PriorBootstrapState
 $User = $UserState.User
 $CreatedUser = [bool]$UserState.Created
 
-$ConsoleSource = Join-Path $ReleaseRoot "CitadelSshConsole.cs"
-Compile-RestrictedConsole -Source $ConsoleSource -Destination $ConsoleExe
+if (-not $ManagedAdmin) {
+  $ConsoleSource = Join-Path $ReleaseRoot "CitadelSshConsole.cs"
+  Compile-RestrictedConsole -Source $ConsoleSource -Destination $ConsoleExe
+}
 
 $Config = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $ControllerUrl = [string]$Config.controller_url
 if ([string]::IsNullOrWhiteSpace($ControllerUrl)) { throw "Active CITADEL controller_url is missing." }
 [System.IO.File]::WriteAllText((Join-Path $SshStateRoot "controller-url.txt"), $ControllerUrl.Trim() + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
-[System.IO.File]::WriteAllText($CaPath, $CloudflareCaPublicKey + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
+if (-not [string]::IsNullOrWhiteSpace($CloudflareCaPublicKey)) {
+  [System.IO.File]::WriteAllText($CaPath, $CloudflareCaPublicKey + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
+} elseif ($ManagedAdmin) {
+  Remove-Item -LiteralPath $CaPath -Force -ErrorAction SilentlyContinue
+}
 
 $Acl = Get-Acl -LiteralPath $SshStateRoot
 $Acl.SetAccessRuleProtection($true, $false)
@@ -478,16 +563,24 @@ foreach ($ExistingRule in @($Acl.Access)) { [void]$Acl.RemoveAccessRuleAll($Exis
 $Inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
 $Propagation = [System.Security.AccessControl.PropagationFlags]::None
 $Allow = [System.Security.AccessControl.AccessControlType]::Allow
-foreach ($Rule in @(
+$DirectoryRules = @(
   @("S-1-5-18", [System.Security.AccessControl.FileSystemRights]::FullControl),
   @("S-1-5-32-544", [System.Security.AccessControl.FileSystemRights]::FullControl),
   @($User.SID.Value, [System.Security.AccessControl.FileSystemRights]::ReadAndExecute)
-)) {
+)
+if ($ManagedAdmin) {
+  $DirectoryRules += ,@("S-1-5-19", [System.Security.AccessControl.FileSystemRights]::ReadAndExecute)
+}
+foreach ($Rule in $DirectoryRules) {
   $Sid = New-Object System.Security.Principal.SecurityIdentifier($Rule[0])
   $Ace = New-Object System.Security.AccessControl.FileSystemAccessRule($Sid, $Rule[1], $Inheritance, $Propagation, $Allow)
   [void]$Acl.AddAccessRule($Ace)
 }
 Set-Acl -LiteralPath $SshStateRoot -AclObject $Acl
+
+if ($ManagedAdmin) {
+  Ensure-ManagedRelayKey -PrivateKeyPath $RelayPrivateKeyPath -PublicKeyPath $RelayPublicKeyPath -AuthorizedKeysPath $RelayAuthorizedKeysPath -UserSid $User.SID.Value
+}
 
 if (-not (Test-Path -LiteralPath $SshdConfig)) { throw "OpenSSH sshd_config was not created." }
 $Original = Get-Content -LiteralPath $SshdConfig -Raw -Encoding UTF8
@@ -518,6 +611,9 @@ $Clean = [regex]::Replace(
   '# CITADEL disabled original listener: $1'
 )
 
+$TrustedCaLine = if (-not [string]::IsNullOrWhiteSpace($CloudflareCaPublicKey)) {
+  "TrustedUserCAKeys C:/ProgramData/ssh/citadel_cloudflare_ca.pub"
+} else { "" }
 $GlobalBlock = @"
 # BEGIN CITADEL SSH GLOBAL
 ListenAddress 127.0.0.1
@@ -529,11 +625,28 @@ PermitEmptyPasswords no
 AllowAgentForwarding no
 AllowTcpForwarding no
 GatewayPorts no
-TrustedUserCAKeys C:/ProgramData/ssh/citadel_cloudflare_ca.pub
+$TrustedCaLine
 # END CITADEL SSH GLOBAL
 "@
 
-$UserBlock = @"
+if ($ManagedAdmin) {
+  $UserBlock = @"
+# BEGIN CITADEL SSH USER
+Match User $SshUser
+    AuthorizedKeysFile C:/ProgramData/CitadelEWS/ssh/relay_authorized_keys
+    AuthenticationMethods publickey
+    PubkeyAuthentication yes
+    PasswordAuthentication no
+    PermitTTY yes
+    AllowTcpForwarding no
+    GatewayPorts no
+# END CITADEL SSH USER
+"@
+  # Put Match User before the stock Windows "Match Group administrators" block
+  # so the dedicated per-user key file wins for this one CITADEL account.
+  $NewConfig = $GlobalBlock.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $UserBlock.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $Clean.Trim() + [Environment]::NewLine
+} else {
+  $UserBlock = @"
 # BEGIN CITADEL SSH USER
 Match User $SshUser
     AuthenticationMethods publickey
@@ -545,8 +658,8 @@ Match User $SshUser
     GatewayPorts no
 # END CITADEL SSH USER
 "@
-
-$NewConfig = $GlobalBlock.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $Clean.Trim() + [Environment]::NewLine + [Environment]::NewLine + $UserBlock.TrimEnd() + [Environment]::NewLine
+  $NewConfig = $GlobalBlock.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $Clean.Trim() + [Environment]::NewLine + [Environment]::NewLine + $UserBlock.TrimEnd() + [Environment]::NewLine
+}
 [System.IO.File]::WriteAllText($SshdConfig, $NewConfig, (New-Object System.Text.UTF8Encoding($false)))
 
 & $SshdExe -t -f $SshdConfig
@@ -589,8 +702,11 @@ $State = [ordered]@{
   service_start_mode_before = $ServiceStartModeBefore
   service_was_running_before = $ServiceWasRunningBefore
   firewall_rule_was_enabled_before = $FirewallWasEnabledBefore
-  force_command = "C:/ProgramData/CitadelEWS/ssh/CitadelSshConsole.exe"
-  ca_public_key_path = $CaPath
+  managed_admin = [bool]$ManagedAdmin
+  force_command = $(if ($ManagedAdmin) { $null } else { "C:/ProgramData/CitadelEWS/ssh/CitadelSshConsole.exe" })
+  relay_private_key_path = $(if ($ManagedAdmin) { $RelayPrivateKeyPath } else { $null })
+  relay_authorized_keys_path = $(if ($ManagedAdmin) { $RelayAuthorizedKeysPath } else { $null })
+  ca_public_key_path = $(if (Test-Path -LiteralPath $CaPath) { $CaPath } else { $null })
   cloudflared_service_created_by_citadel = $PriorCloudflaredCreated
   cloudflared_service_preexisted = $PriorCloudflaredPreexisted
   configured_at = (Get-Date).ToUniversalTime().ToString("o")
@@ -640,8 +756,9 @@ if (-not $SkipCloudflared) {
 
 [System.IO.File]::WriteAllText($StatePath, (($State | ConvertTo-Json -Depth 4) + [Environment]::NewLine), (New-Object System.Text.UTF8Encoding($false)))
 
-Write-Host "[CITADEL] Restricted SSH bootstrap: READY"
+Write-Host ("[CITADEL] " + $(if ($ManagedAdmin) { "Managed admin SSH bootstrap: READY" } else { "Restricted SSH bootstrap: READY" }))
 Write-Host "[CITADEL] user=$SshUser"
+Write-Host ("[CITADEL] local administrator=" + $(if ($ManagedAdmin) { "YES" } else { "NO" }))
 Write-Host "[CITADEL] listener=127.0.0.1:22 only"
 Write-Host "[CITADEL] password authentication for this user=disabled"
 Write-Host "[CITADEL] forwarding/tunneling=disabled"
