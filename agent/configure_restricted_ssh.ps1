@@ -265,7 +265,7 @@ function Get-AdministratorsGroupName {
   return ($Account -split '\\')[-1]
 }
 
-function Test-UserInLocalGroup([Microsoft.PowerShell.Commands.LocalUser]$User, [string]$GroupName) {
+function Test-UserInLocalGroup($User, [string]$GroupName) {
   foreach ($Member in @(Get-LocalGroupMember -Group $GroupName -ErrorAction Stop)) {
     if ($null -ne $Member.SID -and $Member.SID.Value -eq $User.SID.Value) { return $true }
   }
