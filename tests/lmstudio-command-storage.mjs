@@ -58,7 +58,9 @@ class Statement {
       return state.runtimeState ? { state_json: JSON.stringify(state.runtimeState) } : null;
     }
     if (this.sql.includes("FROM commands") && this.sql.includes("status IN ('pending', 'accepted')")) {
-      return state.activeCommand ? { ...state.activeCommand } : null;
+      return state.activeCommand && ["pending", "accepted"].includes(state.activeCommand.status)
+        ? { ...state.activeCommand }
+        : null;
     }
     throw new Error(`Unhandled first(): ${this.sql}`);
   }
