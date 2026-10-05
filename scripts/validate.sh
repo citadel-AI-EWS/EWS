@@ -339,6 +339,7 @@ node tests/review-backlog-guards.mjs
 node tests/legacy-experience.mjs
 node tests/experience-registry.mjs
 node tests/architect-ux-guards.mjs
+node tests/smart-rollout-recovery.mjs
 node tests/lmstudio-command-storage.mjs
 node tests/legacy-command-duplicates.mjs
 node tests/enterprise-policy.mjs
@@ -382,7 +383,7 @@ for migration in sorted(Path("migrations").glob("*.sql")):
 required = {
     "nodes", "missions", "assignments", "results", "commands", "audit_events",
     "agent_reports", "architect_sessions", "node_logs", "node_log_rate_limits",
-    "agent_rollouts", "architect_projects", "project_work_items",
+    "agent_rollouts", "agent_rollout_policy", "architect_projects", "project_work_items",
     "project_specializations", "project_quality_gates", "node_network_state", "node_ai_state",
     "architect_auth_state", "architect_recovery_attempts",
     "architect_access_tokens", "enterprise_sites", "enterprise_node_groups",

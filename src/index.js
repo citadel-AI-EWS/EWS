@@ -1695,6 +1695,22 @@ async function ensureRolloutStorage(env) {
         CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_rollouts_one_active
         ON agent_rollouts(status)
         WHERE status = 'active'
+      `),
+      env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS agent_rollout_policy (
+          rollout_id TEXT PRIMARY KEY,
+          canary_node_id TEXT,
+          phase TEXT NOT NULL DEFAULT 'canary'
+            CHECK (phase IN ('canary','fleet','paused','completed')),
+          max_parallel INTEGER NOT NULL DEFAULT 3 CHECK (max_parallel BETWEEN 1 AND 20),
+          max_failures INTEGER NOT NULL DEFAULT 2 CHECK (max_failures BETWEEN 1 AND 20),
+          pause_reason TEXT,
+          canary_verified_at TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (rollout_id) REFERENCES agent_rollouts(rollout_id) ON DELETE CASCADE,
+          FOREIGN KEY (canary_node_id) REFERENCES nodes(node_id) ON DELETE SET NULL
+        )
       `)
     ]).catch((error) => {
       rolloutSchemaPromise = undefined;
@@ -1705,22 +1721,8 @@ async function ensureRolloutStorage(env) {
 }
 
 async function startUpdateAllRollout(request, env) {
-  await authenticateArchitect(request, env);
+  const actor = await authenticateArchitect(request, env);
   await ensureRolloutStorage(env);
-  const releaseJson = JSON.stringify(LATEST_NODE_RELEASE);
-  const rolloutId = "rollout_" + crypto.randomUUID();
-  await env.DB.batch([
-    env.DB.prepare(
-      "UPDATE agent_rollouts SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE status = 'active'"
-    ),
-    env.DB.prepare(
-      "INSERT INTO agent_rollouts (rollout_id, target_version, release_json, status) VALUES (?, ?, ?, 'active')"
-    ).bind(rolloutId, LATEST_NODE_RELEASE.version, releaseJson),
-    env.DB.prepare(
-      "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
-      "VALUES ('architect', 'test-console', 'agent.rollout.started', 'rollout', ?, ?)"
-    ).bind(rolloutId, JSON.stringify({ target_version: LATEST_NODE_RELEASE.version }))
-  ]);
   const nodeRows = await env.DB.prepare(
     "SELECT node_id, hostname, agent_version, status, last_seen_at " +
     "FROM nodes WHERE status != 'revoked'"
@@ -1733,19 +1735,238 @@ async function startUpdateAllRollout(request, env) {
   const updateableNow = outdatedNodes.filter(
     (node) => operationalNodeState(node) === "live"
   );
+  const byFreshness = (left, right) =>
+    parseControllerTimestamp(right.last_seen_at) - parseControllerTimestamp(left.last_seen_at);
+  updateableNow.sort(byFreshness);
+  outdatedNodes.sort(byFreshness);
+
+  if (!outdatedNodes.length) {
+    await env.DB.prepare(
+      "UPDATE agent_rollouts SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE status = 'active'"
+    ).run();
+    return json({
+      ok: true,
+      rollout: {
+        rollout_id: null,
+        target_version: LATEST_NODE_RELEASE.version,
+        status: "completed",
+        phase: "completed",
+        registered_nodes: productionNodes.length,
+        nodes_waiting_for_update: 0,
+        nodes_updateable_now: 0,
+        nodes_deferred: 0,
+        excluded_test_nodes: Math.max(0, registered.length - productionNodes.length),
+        canary_node_id: null,
+        canary_hostname: null,
+        max_parallel: 3,
+        max_failures: 2
+      }
+    });
+  }
+
+  const canary = updateableNow[0] || outdatedNodes[0];
+  const releaseJson = JSON.stringify(LATEST_NODE_RELEASE);
+  const rolloutId = "rollout_" + crypto.randomUUID();
+  await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE agent_rollouts SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE status = 'active'"
+    ),
+    env.DB.prepare(
+      "INSERT INTO agent_rollouts (rollout_id, target_version, release_json, status) VALUES (?, ?, ?, 'active')"
+    ).bind(rolloutId, LATEST_NODE_RELEASE.version, releaseJson),
+    env.DB.prepare(
+      "INSERT INTO agent_rollout_policy " +
+      "(rollout_id, canary_node_id, phase, max_parallel, max_failures) " +
+      "VALUES (?, ?, 'canary', 3, 2)"
+    ).bind(rolloutId, canary.node_id),
+    env.DB.prepare(
+      "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+      "VALUES ('architect', ?, 'agent.rollout.started', 'rollout', ?, ?)"
+    ).bind(actor.actor_id || "architect", rolloutId, JSON.stringify({
+      target_version: LATEST_NODE_RELEASE.version,
+      canary_node_id: canary.node_id,
+      canary_hostname: canary.hostname || null,
+      max_parallel: 3,
+      max_failures: 2
+    }))
+  ]);
+
   return json({
     ok: true,
     rollout: {
       rollout_id: rolloutId,
       target_version: LATEST_NODE_RELEASE.version,
       status: "active",
+      phase: "canary",
       registered_nodes: productionNodes.length,
       nodes_waiting_for_update: outdatedNodes.length,
       nodes_updateable_now: updateableNow.length,
       nodes_deferred: Math.max(0, outdatedNodes.length - updateableNow.length),
-      excluded_test_nodes: Math.max(0, registered.length - productionNodes.length)
+      excluded_test_nodes: Math.max(0, registered.length - productionNodes.length),
+      canary_node_id: canary.node_id,
+      canary_hostname: canary.hostname || canary.node_id,
+      canary_live_now: operationalNodeState(canary) === "live",
+      canary_timeout_seconds: 600,
+      max_parallel: 3,
+      max_failures: 2
     }
   }, 201);
+}
+
+function rolloutCommandAgeMs(command) {
+  const raw = command?.completed_at || command?.created_at;
+  const parsed = parseControllerTimestamp(raw);
+  return parsed > 0 ? Math.max(0, Date.now() - parsed) : 0;
+}
+
+async function reconcileSmartRollout(env, rollout) {
+  let policy = await env.DB.prepare(
+    "SELECT rollout_id, canary_node_id, phase, max_parallel, max_failures, pause_reason, canary_verified_at " +
+    "FROM agent_rollout_policy WHERE rollout_id = ?"
+  ).bind(rollout.rollout_id).first();
+  // An active rollout created before smart gating is deliberately frozen instead
+  // of being allowed to fan out blindly. Starting Update All again creates a
+  // fresh canary-gated rollout.
+  if (!policy) {
+    return {
+      rollout_id: rollout.rollout_id,
+      canary_node_id: null,
+      phase: "paused",
+      max_parallel: 1,
+      max_failures: 1,
+      pause_reason: "legacy_rollout_requires_restart",
+      canary_verified_at: null
+    };
+  }
+
+  if (policy.phase === "canary") {
+    const [canary, command] = await Promise.all([
+      env.DB.prepare(
+        "SELECT node_id, hostname, status, agent_version, last_seen_at FROM nodes WHERE node_id = ?"
+      ).bind(policy.canary_node_id).first(),
+      env.DB.prepare(
+        "SELECT command_id, status, created_at, completed_at, payload_json FROM commands " +
+        "WHERE node_id = ? AND command_type = 'update' " +
+        "AND datetime(created_at) >= datetime(?) ORDER BY created_at DESC LIMIT 1"
+      ).bind(policy.canary_node_id, rollout.created_at).first()
+    ]);
+
+    if (
+      canary &&
+      canary.agent_version === rollout.target_version &&
+      operationalNodeState(canary) === "live"
+    ) {
+      await env.DB.batch([
+        env.DB.prepare(
+          "UPDATE agent_rollout_policy SET phase = 'fleet', canary_verified_at = CURRENT_TIMESTAMP, " +
+          "pause_reason = NULL, updated_at = CURRENT_TIMESTAMP WHERE rollout_id = ?"
+        ).bind(rollout.rollout_id),
+        env.DB.prepare(
+          "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+          "VALUES ('controller', ?, 'agent.rollout.canary_verified', 'rollout', ?, ?)"
+        ).bind(rollout.rollout_id, rollout.rollout_id, JSON.stringify({
+          node_id: canary.node_id,
+          target_version: rollout.target_version
+        }))
+      ]);
+    } else if (command) {
+      let pauseReason = null;
+      if (["failed","cancelled","expired"].includes(command.status)) {
+        pauseReason = "canary_command_" + command.status;
+      } else if (
+        command.status === "completed" &&
+        rolloutCommandAgeMs(command) >= 5 * 60 * 1000
+      ) {
+        pauseReason = "canary_heartbeat_timeout";
+      } else if (
+        ["pending","accepted"].includes(command.status) &&
+        rolloutCommandAgeMs(command) >= 10 * 60 * 1000
+      ) {
+        pauseReason = "canary_update_timeout";
+      }
+      if (pauseReason) {
+        await env.DB.batch([
+          env.DB.prepare(
+            "UPDATE agent_rollout_policy SET phase = 'paused', pause_reason = ?, " +
+            "updated_at = CURRENT_TIMESTAMP WHERE rollout_id = ?"
+          ).bind(pauseReason, rollout.rollout_id),
+          env.DB.prepare(
+            "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+            "VALUES ('controller', ?, 'agent.rollout.paused', 'rollout', ?, ?)"
+          ).bind(rollout.rollout_id, rollout.rollout_id, JSON.stringify({
+            reason: pauseReason,
+            node_id: policy.canary_node_id,
+            target_version: rollout.target_version
+          }))
+        ]);
+      }
+    }
+  } else if (policy.phase === "fleet") {
+    const failures = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM commands " +
+      "WHERE command_type = 'update' AND status IN ('failed','cancelled','expired') " +
+      "AND datetime(created_at) >= datetime(?)"
+    ).bind(rollout.created_at).first();
+    if (Number(failures?.count || 0) >= Number(policy.max_failures || 2)) {
+      const reason = "fleet_failure_budget_exceeded";
+      await env.DB.prepare(
+        "UPDATE agent_rollout_policy SET phase = 'paused', pause_reason = ?, " +
+        "updated_at = CURRENT_TIMESTAMP WHERE rollout_id = ?"
+      ).bind(reason, rollout.rollout_id).run();
+    }
+  }
+
+  policy = await env.DB.prepare(
+    "SELECT rollout_id, canary_node_id, phase, max_parallel, max_failures, pause_reason, canary_verified_at " +
+    "FROM agent_rollout_policy WHERE rollout_id = ?"
+  ).bind(rollout.rollout_id).first();
+  return policy;
+}
+
+async function architectUpdateRolloutStatus(request, env) {
+  await authenticateArchitect(request, env);
+  await ensureRolloutStorage(env);
+  const rollout = await env.DB.prepare(
+    "SELECT rollout_id, target_version, release_json, status, created_at, updated_at " +
+    "FROM agent_rollouts ORDER BY created_at DESC LIMIT 1"
+  ).first();
+  if (!rollout) return json({ ok: true, rollout: null });
+  const policy = rollout.status === "active"
+    ? await reconcileSmartRollout(env, rollout)
+    : await env.DB.prepare(
+        "SELECT rollout_id, canary_node_id, phase, max_parallel, max_failures, pause_reason, canary_verified_at " +
+        "FROM agent_rollout_policy WHERE rollout_id = ?"
+      ).bind(rollout.rollout_id).first();
+  const nodeRows = await env.DB.prepare(
+    "SELECT node_id, hostname, agent_version, status, last_seen_at FROM nodes WHERE status != 'revoked'"
+  ).all();
+  const production = (nodeRows.results || []).filter((node) => !isTestNodeRecord(node));
+  const outdated = production.filter((node) => node.agent_version !== rollout.target_version);
+  const liveOutdated = outdated.filter((node) => operationalNodeState(node) === "live");
+  const canary = policy?.canary_node_id
+    ? production.find((node) => node.node_id === policy.canary_node_id) || null
+    : null;
+  return json({
+    ok: true,
+    rollout: {
+      rollout_id: rollout.rollout_id,
+      target_version: rollout.target_version,
+      status: rollout.status,
+      phase: policy?.phase || null,
+      pause_reason: policy?.pause_reason || null,
+      max_parallel: Number(policy?.max_parallel || 0),
+      max_failures: Number(policy?.max_failures || 0),
+      canary_verified_at: policy?.canary_verified_at || null,
+      canary_node_id: policy?.canary_node_id || null,
+      canary_hostname: canary?.hostname || null,
+      canary_agent_version: canary?.agent_version || null,
+      canary_live: canary ? operationalNodeState(canary) === "live" : false,
+      registered_nodes: production.length,
+      nodes_waiting_for_update: outdated.length,
+      nodes_updateable_now: liveOutdated.length,
+      nodes_deferred: Math.max(0, outdated.length - liveOutdated.length)
+    }
+  });
 }
 
 async function ensureRolloutCommandForNode(env, nodeId) {
@@ -1753,9 +1974,20 @@ async function ensureRolloutCommandForNode(env, nodeId) {
   // Rollouts are exceptional. On the steady-state polling path, do one indexed
   // lookup and return before touching node/command history.
   const rollout = await env.DB.prepare(
-    "SELECT rollout_id, target_version, release_json FROM agent_rollouts WHERE status = 'active' ORDER BY created_at DESC LIMIT 1"
+    "SELECT rollout_id, target_version, release_json, created_at FROM agent_rollouts WHERE status = 'active' ORDER BY created_at DESC LIMIT 1"
   ).first();
   if (!rollout) return;
+  const rolloutPolicy = await reconcileSmartRollout(env, rollout);
+  if (!rolloutPolicy || ["paused","completed"].includes(rolloutPolicy.phase)) return;
+  if (rolloutPolicy.phase === "canary" && nodeId !== rolloutPolicy.canary_node_id) return;
+  if (rolloutPolicy.phase === "fleet") {
+    const inFlight = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM commands " +
+      "WHERE command_type = 'update' AND status IN ('pending','accepted') " +
+      "AND datetime(created_at) >= datetime(?)"
+    ).bind(rollout.created_at).first();
+    if (Number(inFlight?.count || 0) >= Number(rolloutPolicy.max_parallel || 3)) return;
+  }
 
   // Stale active commands only need cleanup when a rollout actually needs the
   // single-active-command slot. Normal agent polling must not scan for stale
@@ -7984,6 +8216,107 @@ async function architectWakeNode(request, env, targetNodeId) {
   }, 202);
 }
 
+async function architectWakeAll(request, env) {
+  const actor = await authenticateArchitect(request, env);
+  await Promise.all([ensureNodeNetworkStorage(env), ensureCommandStorage(env)]);
+  const rows = await env.DB.prepare(`
+    SELECT n.node_id, n.hostname, n.agent_version, n.status, n.last_seen_at,
+      net.lan_ipv4, net.mac_addresses_json
+    FROM nodes AS n
+    LEFT JOIN node_network_state AS net ON net.node_id = n.node_id
+    WHERE n.status != 'revoked'
+    ORDER BY datetime(n.last_seen_at) DESC
+    LIMIT 500
+  `).all();
+  const nodes = (rows.results || []).filter((node) => !isTestNodeRecord(node));
+  const liveRelays = nodes.filter((node) => wakeRelayEligible(node));
+  const offlineTargets = nodes.filter((node) => operationalNodeState(node) !== "live");
+  const queued = [];
+  const skipped = [];
+  const usedRelays = new Set();
+
+  for (const target of offlineTargets) {
+    const macs = safeJson(target.mac_addresses_json, []);
+    const targetMac = Array.isArray(macs) ? macs.map(normalizeMac).find(Boolean) : null;
+    const prefix = subnet24(target.lan_ipv4);
+    if (!targetMac || !target.lan_ipv4 || !prefix) {
+      skipped.push({ node_id: target.node_id, hostname: target.hostname || null, reason: "wake_network_identity_unavailable" });
+      continue;
+    }
+
+    let relay = null;
+    for (const candidate of liveRelays) {
+      if (usedRelays.has(candidate.node_id) || candidate.node_id === target.node_id) continue;
+      if (subnet24(candidate.lan_ipv4) !== prefix) continue;
+      await expireStaleNodeCommands(env, candidate.node_id);
+      const pending = await env.DB.prepare(
+        "SELECT command_id FROM commands WHERE node_id = ? AND status IN ('pending','accepted') LIMIT 1"
+      ).bind(candidate.node_id).first();
+      if (!pending) {
+        relay = candidate;
+        break;
+      }
+    }
+    if (!relay) {
+      skipped.push({ node_id: target.node_id, hostname: target.hostname || null, reason: "wake_relay_unavailable_or_busy" });
+      continue;
+    }
+
+    const commandId = "command_" + crypto.randomUUID();
+    const payloadJson = JSON.stringify({
+      target_node_id: target.node_id,
+      target_mac: targetMac,
+      target_lan_ipv4: target.lan_ipv4
+    });
+    const createdAt = new Date().toISOString();
+    const signature = await signControllerCommand(
+      env, commandId, relay.node_id, "wake_peer", payloadJson, createdAt
+    );
+    try {
+      await env.DB.batch([
+        env.DB.prepare(
+          "INSERT INTO commands (command_id, node_id, command_type, payload_json, signature, status, created_at) " +
+          "VALUES (?, ?, 'wake_peer', ?, ?, 'pending', ?)"
+        ).bind(commandId, relay.node_id, payloadJson, signature, createdAt),
+        env.DB.prepare(
+          "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+          "VALUES ('architect', ?, 'node.wake.requested', 'node', ?, ?)"
+        ).bind(actor.actor_id || "architect", target.node_id, JSON.stringify({
+          relay_node_id: relay.node_id,
+          target_lan_ipv4: target.lan_ipv4,
+          batch: true
+        }))
+      ]);
+      usedRelays.add(relay.node_id);
+      queued.push({
+        target_node_id: target.node_id,
+        hostname: target.hostname || null,
+        relay_node_id: relay.node_id,
+        command_id: commandId
+      });
+    } catch (error) {
+      skipped.push({
+        node_id: target.node_id,
+        hostname: target.hostname || null,
+        reason: String(error).includes("UNIQUE") ? "wake_relay_busy" : "wake_queue_failed"
+      });
+    }
+  }
+
+  return json({
+    ok: true,
+    wake_all: {
+      offline_targets: offlineTargets.length,
+      live_relays: liveRelays.length,
+      queued_count: queued.length,
+      skipped_count: skipped.length,
+      queued,
+      skipped,
+      retry_after_seconds: queued.length && skipped.length ? 20 : null
+    }
+  }, queued.length ? 202 : 200);
+}
+
 async function architectCreateMission(request, env) {
   await authenticateArchitect(request, env);
   const bodyText = await readBodyText(request, 8 * 1024);
@@ -8365,8 +8698,14 @@ async function handleApi(request, env, url, executionCtx = null) {
   }
 
   if (url.pathname === "/api/v1/architect/update-all") {
+    if (request.method === "POST") return startUpdateAllRollout(request, env);
+    if (request.method === "GET") return architectUpdateRolloutStatus(request, env);
+    return methodNotAllowed(["GET", "POST"]);
+  }
+
+  if (url.pathname === "/api/v1/architect/wake-all") {
     return request.method === "POST"
-      ? startUpdateAllRollout(request, env)
+      ? architectWakeAll(request, env)
       : methodNotAllowed(["POST"]);
   }
 
