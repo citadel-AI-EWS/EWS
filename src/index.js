@@ -565,8 +565,8 @@ async function ensureDriveChildFolder(env, token, parentId, name) {
   return created.id;
 }
 
-function timestampedAiReportFileName(kind, ownerId, date = new Date()) {
-  const stamp = date.toISOString().replace(/[:.]/g, "-");
+export function timestampedAiReportFileName(kind, ownerId, date = new Date()) {
+  const stamp = date.toISOString().slice(0, 19).replace("T", "_").replace(/:/g, "-");
   const safeKind = String(kind || "ai_response").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 48);
   const safeOwner = String(ownerId || "unknown").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 80);
   return stamp + "__" + safeKind + "__" + safeOwner + ".json";
@@ -1537,6 +1537,20 @@ async function ensureAiResponseArchiveStorage(env) {
   ]);
 }
 
+export function aiResponseArchiveValue(nodeId, hostname, state, completedAt = new Date().toISOString()) {
+  return {
+    node_id: nodeId,
+    hostname: hostname || nodeId,
+    query_id: state.query_id,
+    status: "completed",
+    model: state.loaded_model || state.selected_model || null,
+    mode: state.query_mode || null,
+    prompt: state.query_prompt || "",
+    response: state.query_answer,
+    completed_at: completedAt
+  };
+}
+
 async function archiveCompletedAiResponse(env, nodeId, state) {
   if (
     !state ||
@@ -1551,20 +1565,16 @@ async function archiveCompletedAiResponse(env, nodeId, state) {
   ).bind(state.query_id).first();
   if (existing) return existing;
 
+  const node = await env.DB.prepare(
+    "SELECT hostname FROM nodes WHERE node_id = ?"
+  ).bind(nodeId).first();
+
   const payload = await persistDrivePayload(env, {
     owner_type: "ai_response",
     owner_id: state.query_id,
     kind: "ai_response",
     node_id: nodeId,
-    value: {
-      node_id: nodeId,
-      query_id: state.query_id,
-      model: state.loaded_model || state.selected_model || null,
-      mode: state.query_mode || null,
-      prompt: state.query_prompt || "",
-      response: state.query_answer,
-      completed_at: new Date().toISOString()
-    }
+    value: aiResponseArchiveValue(nodeId, node?.hostname, state)
   });
 
   try {
@@ -1764,7 +1774,8 @@ async function startUpdateAllRollout(request, env) {
     });
   }
 
-  const canary = updateableNow[0] || outdatedNodes[0];
+  const canary = updateableNow[0];
+  if (!canary) throw new ApiError(409, "rollout_no_live_canary");
   const releaseJson = JSON.stringify(LATEST_NODE_RELEASE);
   const rolloutId = "rollout_" + crypto.randomUUID();
   await env.DB.batch([
@@ -1819,6 +1830,23 @@ function rolloutCommandAgeMs(command) {
   return parsed > 0 ? Math.max(0, Date.now() - parsed) : 0;
 }
 
+export function rolloutCommandOutcome(command, node, targetVersion, now = Date.now()) {
+  if (!command) return "pending";
+  if (["failed", "cancelled", "expired"].includes(command.status)) return "failed";
+  const commandStarted = parseControllerTimestamp(command.created_at);
+  const completed = parseControllerTimestamp(command.completed_at);
+  const heartbeat = parseControllerTimestamp(node?.last_seen_at);
+  if (commandStarted !== null && heartbeat !== null &&
+      heartbeat > Math.max(commandStarted, completed || 0) &&
+      node?.agent_version === targetVersion && operationalNodeState(node, now) === "live") {
+    return "verified";
+  }
+  const age = completed || commandStarted;
+  if (age !== null && now - age >=
+      (command.status === "completed" ? 5 : 10) * 60 * 1000) return "failed";
+  return "pending";
+}
+
 async function reconcileSmartRollout(env, rollout) {
   let policy = await env.DB.prepare(
     "SELECT rollout_id, canary_node_id, phase, max_parallel, max_failures, pause_reason, canary_verified_at " +
@@ -1852,9 +1880,7 @@ async function reconcileSmartRollout(env, rollout) {
     ]);
 
     if (
-      canary &&
-      canary.agent_version === rollout.target_version &&
-      operationalNodeState(canary) === "live"
+      rolloutCommandOutcome(command, canary, rollout.target_version) === "verified"
     ) {
       await env.DB.batch([
         env.DB.prepare(
@@ -1902,12 +1928,15 @@ async function reconcileSmartRollout(env, rollout) {
       }
     }
   } else if (policy.phase === "fleet") {
-    const failures = await env.DB.prepare(
-      "SELECT COUNT(*) AS count FROM commands " +
-      "WHERE command_type = 'update' AND status IN ('failed','cancelled','expired') " +
-      "AND datetime(created_at) >= datetime(?)"
-    ).bind(rollout.created_at).first();
-    if (Number(failures?.count || 0) >= Number(policy.max_failures || 2)) {
+    const attempts = await env.DB.prepare(
+      "SELECT c.status, c.created_at, c.completed_at, " +
+      "n.status AS node_status, n.agent_version, n.last_seen_at FROM commands c " +
+      "JOIN nodes n ON n.node_id = c.node_id WHERE c.command_type = 'update' " +
+      "AND datetime(c.created_at) >= datetime(?)"
+    ).bind(rollout.created_at).all();
+    const failures = (attempts.results || []).filter((row) =>
+      rolloutCommandOutcome(row, { ...row, status: row.node_status }, rollout.target_version) === "failed").length;
+    if (failures >= Number(policy.max_failures || 2)) {
       const reason = "fleet_failure_budget_exceeded";
       await env.DB.prepare(
         "UPDATE agent_rollout_policy SET phase = 'paused', pause_reason = ?, " +
@@ -1981,12 +2010,15 @@ async function ensureRolloutCommandForNode(env, nodeId) {
   if (!rolloutPolicy || ["paused","completed"].includes(rolloutPolicy.phase)) return;
   if (rolloutPolicy.phase === "canary" && nodeId !== rolloutPolicy.canary_node_id) return;
   if (rolloutPolicy.phase === "fleet") {
-    const inFlight = await env.DB.prepare(
-      "SELECT COUNT(*) AS count FROM commands " +
-      "WHERE command_type = 'update' AND status IN ('pending','accepted') " +
-      "AND datetime(created_at) >= datetime(?)"
-    ).bind(rollout.created_at).first();
-    if (Number(inFlight?.count || 0) >= Number(rolloutPolicy.max_parallel || 3)) return;
+    const attempts = await env.DB.prepare(
+      "SELECT c.status, c.created_at, c.completed_at, " +
+      "n.status AS node_status, n.agent_version, n.last_seen_at FROM commands c " +
+      "JOIN nodes n ON n.node_id = c.node_id WHERE c.command_type = 'update' " +
+      "AND datetime(c.created_at) >= datetime(?)"
+    ).bind(rollout.created_at).all();
+    const unverified = (attempts.results || []).filter((row) =>
+      rolloutCommandOutcome(row, { ...row, status: row.node_status }, rollout.target_version) === "pending").length;
+    if (unverified >= Number(rolloutPolicy.max_parallel || 3)) return;
   }
 
   // Stale active commands only need cleanup when a rollout actually needs the
@@ -2045,16 +2077,30 @@ async function ensureRolloutCommandForNode(env, nodeId) {
     env, commandId, nodeId, "update", payloadJson, createdAt
   );
   try {
-    await env.DB.batch([
-      env.DB.prepare(
+    const insert = rolloutPolicy.phase === "fleet"
+      ? env.DB.prepare(
+        "INSERT INTO commands (command_id, node_id, command_type, payload_json, signature, status, created_at) " +
+        "SELECT ?, ?, 'update', ?, ?, 'pending', ? WHERE (" +
+        "SELECT COUNT(*) FROM commands c JOIN nodes n ON n.node_id = c.node_id " +
+        "WHERE c.command_type = 'update' AND datetime(c.created_at) >= datetime(?) " +
+        "AND ((c.status IN ('pending','accepted') AND datetime(c.created_at) > datetime('now','-10 minutes')) " +
+        "OR (c.status = 'completed' AND datetime(COALESCE(c.completed_at,c.created_at)) > datetime('now','-5 minutes'))) " +
+        "AND (n.agent_version IS NULL OR n.agent_version <> ? OR n.status <> 'online' " +
+        "OR n.last_seen_at IS NULL " +
+        "OR datetime(n.last_seen_at) <= datetime(COALESCE(c.completed_at,c.created_at)) " +
+        "OR datetime(n.last_seen_at) < datetime('now','-5 minutes'))) < ?"
+      ).bind(commandId, nodeId, payloadJson, signature, createdAt,
+        rollout.created_at, rollout.target_version, Number(rolloutPolicy.max_parallel || 3))
+      : env.DB.prepare(
         "INSERT INTO commands (command_id, node_id, command_type, payload_json, signature, status, created_at) " +
         "VALUES (?, ?, 'update', ?, ?, 'pending', ?)"
-      ).bind(commandId, nodeId, payloadJson, signature, createdAt),
-      env.DB.prepare(
-        "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
-        "VALUES ('controller', ?, 'agent.rollout.command_created', 'command', ?, ?)"
-      ).bind(rollout.rollout_id, commandId, JSON.stringify({ node_id: nodeId, target_version: rollout.target_version }))
-    ]);
+      ).bind(commandId, nodeId, payloadJson, signature, createdAt);
+    const inserted = await insert.run();
+    if (Number(inserted?.meta?.changes || 0) !== 1) return;
+    await env.DB.prepare(
+      "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+      "VALUES ('controller', ?, 'agent.rollout.command_created', 'command', ?, ?)"
+    ).bind(rollout.rollout_id, commandId, JSON.stringify({ node_id: nodeId, target_version: rollout.target_version })).run();
   } catch (error) {
     if (!String(error).includes("UNIQUE")) throw error;
   }
@@ -8189,21 +8235,11 @@ async function architectWakeNode(request, env, targetNodeId) {
   const signature = await signControllerCommand(
     env, commandId, relay.node_id, "wake_peer", payloadJson, createdAt
   );
-  await env.DB.batch([
-    env.DB.prepare(`
-      INSERT INTO commands (
-        command_id, node_id, command_type, payload_json, signature, status, created_at
-      ) VALUES (?, ?, 'wake_peer', ?, ?, 'pending', ?)
-    `).bind(commandId, relay.node_id, payloadJson, signature, createdAt),
-    env.DB.prepare(`
-      INSERT INTO audit_events (
-        actor_type, actor_id, action, target_type, target_id, details_json
-      ) VALUES ('architect', 'test-console', 'node.wake.requested', 'node', ?, ?)
-    `).bind(targetNodeId, JSON.stringify({
-      relay_node_id: relay.node_id,
-      target_lan_ipv4: target.lan_ipv4
-    }))
-  ]);
+  await persistWakePeerCommand(env, {
+    commandId, relayNodeId: relay.node_id, payloadJson, signature, createdAt,
+    actorId: "test-console", targetNodeId,
+    auditDetails: { relay_node_id: relay.node_id, target_lan_ipv4: target.lan_ipv4 }
+  });
 
   return json({
     ok: true,
@@ -8214,6 +8250,37 @@ async function architectWakeNode(request, env, targetNodeId) {
       status: "pending"
     }
   }, 202);
+}
+
+export async function persistWakePeerCommand(env, {
+  commandId, relayNodeId, payloadJson, signature, createdAt,
+  actorId, targetNodeId, auditDetails
+}) {
+  try {
+    await env.DB.prepare(
+      "INSERT INTO commands (command_id, node_id, command_type, payload_json, signature, status, created_at) " +
+      "VALUES (?, ?, 'wake_peer', ?, ?, 'pending', ?)"
+    ).bind(commandId, relayNodeId, payloadJson, signature, createdAt).run();
+  } catch (error) {
+    if (/unique|idx_commands_one_active_per_node|commands\.node_id/i.test(String(error))) {
+      throw new ApiError(409, "wake_relay_busy");
+    }
+    const persisted = await env.DB.prepare(
+      "SELECT command_id FROM commands WHERE command_id = ?"
+    ).bind(commandId).first().catch(() => null);
+    if (!persisted) {
+      console.error("Wake command persistence failed", { relay_node_id: relayNodeId, error: String(error) });
+      throw new ApiError(503, "wake_queue_failed");
+    }
+  }
+  try {
+    await env.DB.prepare(
+      "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+      "VALUES ('architect', ?, 'node.wake.requested', 'node', ?, ?)"
+    ).bind(actorId, targetNodeId, JSON.stringify(auditDetails)).run();
+  } catch (error) {
+    console.error("Wake command audit persistence failed", { command_id: commandId, error: String(error) });
+  }
 }
 
 async function architectWakeAll(request, env) {
@@ -8239,15 +8306,27 @@ async function architectWakeAll(request, env) {
     const macs = safeJson(target.mac_addresses_json, []);
     const targetMac = Array.isArray(macs) ? macs.map(normalizeMac).find(Boolean) : null;
     const prefix = subnet24(target.lan_ipv4);
+    const targetNetwork = {
+      node_id: target.node_id,
+      hostname: target.hostname || null,
+      mac: targetMac,
+      lan_ipv4: target.lan_ipv4 || null,
+      subnet: prefix ? prefix + ".0/24" : null
+    };
     if (!targetMac || !target.lan_ipv4 || !prefix) {
-      skipped.push({ node_id: target.node_id, hostname: target.hostname || null, reason: "wake_network_identity_unavailable" });
+      skipped.push({ ...targetNetwork, relay_node_id: null, reason: "wake_network_identity_unavailable" });
       continue;
     }
 
     let relay = null;
+    let matchingRelayBusy = false;
     for (const candidate of liveRelays) {
-      if (usedRelays.has(candidate.node_id) || candidate.node_id === target.node_id) continue;
+      if (candidate.node_id === target.node_id) continue;
       if (subnet24(candidate.lan_ipv4) !== prefix) continue;
+      if (usedRelays.has(candidate.node_id)) {
+        matchingRelayBusy = true;
+        continue;
+      }
       await expireStaleNodeCommands(env, candidate.node_id);
       const pending = await env.DB.prepare(
         "SELECT command_id FROM commands WHERE node_id = ? AND status IN ('pending','accepted') LIMIT 1"
@@ -8256,9 +8335,11 @@ async function architectWakeAll(request, env) {
         relay = candidate;
         break;
       }
+      matchingRelayBusy = true;
     }
     if (!relay) {
-      skipped.push({ node_id: target.node_id, hostname: target.hostname || null, reason: "wake_relay_unavailable_or_busy" });
+      skipped.push({ ...targetNetwork, relay_node_id: null,
+        reason: matchingRelayBusy ? "wake_relay_busy" : "wake_relay_unavailable" });
       continue;
     }
 
@@ -8273,32 +8354,23 @@ async function architectWakeAll(request, env) {
       env, commandId, relay.node_id, "wake_peer", payloadJson, createdAt
     );
     try {
-      await env.DB.batch([
-        env.DB.prepare(
-          "INSERT INTO commands (command_id, node_id, command_type, payload_json, signature, status, created_at) " +
-          "VALUES (?, ?, 'wake_peer', ?, ?, 'pending', ?)"
-        ).bind(commandId, relay.node_id, payloadJson, signature, createdAt),
-        env.DB.prepare(
-          "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
-          "VALUES ('architect', ?, 'node.wake.requested', 'node', ?, ?)"
-        ).bind(actor.actor_id || "architect", target.node_id, JSON.stringify({
-          relay_node_id: relay.node_id,
-          target_lan_ipv4: target.lan_ipv4,
-          batch: true
-        }))
-      ]);
+      await persistWakePeerCommand(env, {
+        commandId, relayNodeId: relay.node_id, payloadJson, signature, createdAt,
+        actorId: actor.actor_id || "architect", targetNodeId: target.node_id,
+        auditDetails: { relay_node_id: relay.node_id, target_lan_ipv4: target.lan_ipv4, batch: true }
+      });
       usedRelays.add(relay.node_id);
       queued.push({
+        ...targetNetwork,
         target_node_id: target.node_id,
-        hostname: target.hostname || null,
         relay_node_id: relay.node_id,
         command_id: commandId
       });
     } catch (error) {
       skipped.push({
-        node_id: target.node_id,
-        hostname: target.hostname || null,
-        reason: String(error).includes("UNIQUE") ? "wake_relay_busy" : "wake_queue_failed"
+        ...targetNetwork,
+        relay_node_id: relay.node_id,
+        reason: error instanceof ApiError ? error.code : "wake_queue_failed"
       });
     }
   }

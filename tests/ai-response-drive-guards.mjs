@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { aiResponseArchiveValue, timestampedAiReportFileName } from "../src/index.js";
 
 const source = fs.readFileSync("src/index.js", "utf8");
 
@@ -12,6 +13,22 @@ assert.match(source, /archiveCompletedAiResponse/);
 assert.match(source, /await archiveCompletedAiResponse\(env, nodeId, state\)/);
 assert.match(source, /kind: "ai_response"[\s\S]*node_id: nodeId/);
 assert.match(source, /kind: "agent_report"[\s\S]*node_id: nodeId/);
+assert.equal(
+  timestampedAiReportFileName("ai_response", "query_hi", new Date("2026-10-06T11:00:00Z")),
+  "2026-10-06_11-00-00__ai_response__query_hi.json"
+);
+
+assert.deepEqual(
+  aiResponseArchiveValue("node_a8", "a8", {
+    query_id: "query_hi", query_status: "completed", loaded_model: "tiny-model",
+    query_prompt: "hi", query_answer: "Hello."
+  }, "2026-10-06T11:00:00Z"),
+  {
+    node_id: "node_a8", hostname: "a8", query_id: "query_hi",
+    status: "completed", model: "tiny-model", mode: null,
+    prompt: "hi", response: "Hello.", completed_at: "2026-10-06T11:00:00Z"
+  }
+);
 
 const start = source.indexOf("async function architectCreateCommand");
 const end = source.indexOf("async function nodeUpdateAiState", start);
