@@ -109,8 +109,12 @@ def main() -> int:
         assert stream_body["stream"] is True
         assert stream_body["temperature"] == 0.1
 
-        project = next(item for item in SEEN if item["path"] == "/v1/chat/completions")
-        project_body = project["body"]
+        completions = [item for item in SEEN if item["path"] == "/v1/chat/completions"]
+        assert len(completions) >= 2, completions
+        readiness_body = completions[0]["body"]
+        assert isinstance(readiness_body, dict)
+        assert readiness_body["messages"][-1]["content"] == "hi"
+        project_body = completions[-1]["body"]
         assert isinstance(project_body, dict)
         assert project_body["model"] == "test/model"
         assert project_body["messages"][-1]["content"] == "Return PROJECT OK"
@@ -135,6 +139,7 @@ def main() -> int:
         recovery.probe_lmstudio = lambda: next(recovery_states)
         recovery_commands: list[list[str]] = []
         recovery.run_lms = lambda args, timeout: recovery_commands.append(list(args))
+        recovery.verify_lmstudio_inference = lambda model: None
         assert recovery.ensure_lmstudio_ready_for_inference() == "test/model"
         assert recovery_commands == [
             ["daemon", "up"],
@@ -161,6 +166,7 @@ def main() -> int:
         reload_agent.probe_lmstudio = lambda: next(reload_states)
         reload_payloads: list[dict[str, object]] = []
         reload_agent.load_lmstudio_model = lambda payload: reload_payloads.append(dict(payload))
+        reload_agent.verify_lmstudio_inference = lambda model: None
         assert reload_agent.ensure_lmstudio_ready_for_inference() == "test/model"
         assert reload_payloads == [{
             "model": "test/model",
