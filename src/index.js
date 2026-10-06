@@ -1537,6 +1537,20 @@ async function ensureAiResponseArchiveStorage(env) {
   ]);
 }
 
+export function aiResponseArchiveValue(nodeId, hostname, state, completedAt = new Date().toISOString()) {
+  return {
+    node_id: nodeId,
+    hostname: hostname || nodeId,
+    query_id: state.query_id,
+    status: "completed",
+    model: state.loaded_model || state.selected_model || null,
+    mode: state.query_mode || null,
+    prompt: state.query_prompt || "",
+    response: state.query_answer,
+    completed_at: completedAt
+  };
+}
+
 async function archiveCompletedAiResponse(env, nodeId, state) {
   if (
     !state ||
@@ -1551,20 +1565,16 @@ async function archiveCompletedAiResponse(env, nodeId, state) {
   ).bind(state.query_id).first();
   if (existing) return existing;
 
+  const node = await env.DB.prepare(
+    "SELECT hostname FROM nodes WHERE node_id = ?"
+  ).bind(nodeId).first();
+
   const payload = await persistDrivePayload(env, {
     owner_type: "ai_response",
     owner_id: state.query_id,
     kind: "ai_response",
     node_id: nodeId,
-    value: {
-      node_id: nodeId,
-      query_id: state.query_id,
-      model: state.loaded_model || state.selected_model || null,
-      mode: state.query_mode || null,
-      prompt: state.query_prompt || "",
-      response: state.query_answer,
-      completed_at: new Date().toISOString()
-    }
+    value: aiResponseArchiveValue(nodeId, node?.hostname, state)
   });
 
   try {
