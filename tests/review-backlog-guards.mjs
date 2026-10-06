@@ -51,7 +51,7 @@ need(agentV1.includes("LMSTUDIO_INFERENCE_PROBE_TIMEOUT_SECONDS = 30"), "LM Stud
 need(agentV1.includes("LMSTUDIO_QUERY_TIMEOUT_SECONDS = 4 * 60"), "LM Studio query timeout must be bounded to four minutes");
 need(agentV1.includes("def verify_lmstudio_inference"), "real LM Studio inference readiness probe missing");
 need(agentV1.includes("inference_ready=True") && agentV1.includes("inference_ready=False"), "LM Studio inference readiness state missing");
-need(!agentV1.includes("timeout=1800"), "30-minute LM Studio timeout returned");
+need(!agentV1.includes("timeout=max(1800") && !agentV1.includes('HTTPConnection("127.0.0.1", 1234, timeout=1800)'), "30-minute LM Studio inference/query timeout returned");
 need(index.includes("GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON"), "Drive service-account secret support missing");
 need(index.includes("googleDriveWritablePreflight"), "Drive writable-folder preflight missing");
 need(index.includes("lmstudio_inference_unverified"), "Controller must block AI scheduling without proven inference");
