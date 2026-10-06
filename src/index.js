@@ -8235,21 +8235,11 @@ async function architectWakeNode(request, env, targetNodeId) {
   const signature = await signControllerCommand(
     env, commandId, relay.node_id, "wake_peer", payloadJson, createdAt
   );
-  await env.DB.batch([
-    env.DB.prepare(`
-      INSERT INTO commands (
-        command_id, node_id, command_type, payload_json, signature, status, created_at
-      ) VALUES (?, ?, 'wake_peer', ?, ?, 'pending', ?)
-    `).bind(commandId, relay.node_id, payloadJson, signature, createdAt),
-    env.DB.prepare(`
-      INSERT INTO audit_events (
-        actor_type, actor_id, action, target_type, target_id, details_json
-      ) VALUES ('architect', 'test-console', 'node.wake.requested', 'node', ?, ?)
-    `).bind(targetNodeId, JSON.stringify({
-      relay_node_id: relay.node_id,
-      target_lan_ipv4: target.lan_ipv4
-    }))
-  ]);
+  await persistWakePeerCommand(env, {
+    commandId, relayNodeId: relay.node_id, payloadJson, signature, createdAt,
+    actorId: "test-console", targetNodeId,
+    auditDetails: { relay_node_id: relay.node_id, target_lan_ipv4: target.lan_ipv4 }
+  });
 
   return json({
     ok: true,
@@ -8260,6 +8250,37 @@ async function architectWakeNode(request, env, targetNodeId) {
       status: "pending"
     }
   }, 202);
+}
+
+export async function persistWakePeerCommand(env, {
+  commandId, relayNodeId, payloadJson, signature, createdAt,
+  actorId, targetNodeId, auditDetails
+}) {
+  try {
+    await env.DB.prepare(
+      "INSERT INTO commands (command_id, node_id, command_type, payload_json, signature, status, created_at) " +
+      "VALUES (?, ?, 'wake_peer', ?, ?, 'pending', ?)"
+    ).bind(commandId, relayNodeId, payloadJson, signature, createdAt).run();
+  } catch (error) {
+    if (/unique|idx_commands_one_active_per_node|commands\.node_id/i.test(String(error))) {
+      throw new ApiError(409, "wake_relay_busy");
+    }
+    const persisted = await env.DB.prepare(
+      "SELECT command_id FROM commands WHERE command_id = ?"
+    ).bind(commandId).first().catch(() => null);
+    if (!persisted) {
+      console.error("Wake command persistence failed", { relay_node_id: relayNodeId, error: String(error) });
+      throw new ApiError(503, "wake_queue_failed");
+    }
+  }
+  try {
+    await env.DB.prepare(
+      "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+      "VALUES ('architect', ?, 'node.wake.requested', 'node', ?, ?)"
+    ).bind(actorId, targetNodeId, JSON.stringify(auditDetails)).run();
+  } catch (error) {
+    console.error("Wake command audit persistence failed", { command_id: commandId, error: String(error) });
+  }
 }
 
 async function architectWakeAll(request, env) {
@@ -8333,20 +8354,11 @@ async function architectWakeAll(request, env) {
       env, commandId, relay.node_id, "wake_peer", payloadJson, createdAt
     );
     try {
-      await env.DB.batch([
-        env.DB.prepare(
-          "INSERT INTO commands (command_id, node_id, command_type, payload_json, signature, status, created_at) " +
-          "VALUES (?, ?, 'wake_peer', ?, ?, 'pending', ?)"
-        ).bind(commandId, relay.node_id, payloadJson, signature, createdAt),
-        env.DB.prepare(
-          "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
-          "VALUES ('architect', ?, 'node.wake.requested', 'node', ?, ?)"
-        ).bind(actor.actor_id || "architect", target.node_id, JSON.stringify({
-          relay_node_id: relay.node_id,
-          target_lan_ipv4: target.lan_ipv4,
-          batch: true
-        }))
-      ]);
+      await persistWakePeerCommand(env, {
+        commandId, relayNodeId: relay.node_id, payloadJson, signature, createdAt,
+        actorId: actor.actor_id || "architect", targetNodeId: target.node_id,
+        auditDetails: { relay_node_id: relay.node_id, target_lan_ipv4: target.lan_ipv4, batch: true }
+      });
       usedRelays.add(relay.node_id);
       queued.push({
         ...targetNetwork,
@@ -8358,7 +8370,7 @@ async function architectWakeAll(request, env) {
       skipped.push({
         ...targetNetwork,
         relay_node_id: relay.node_id,
-        reason: String(error).includes("UNIQUE") ? "wake_relay_busy" : "wake_queue_failed"
+        reason: error instanceof ApiError ? error.code : "wake_queue_failed"
       });
     }
   }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { rolloutCommandOutcome } from "../src/index.js";
+import { persistWakePeerCommand, rolloutCommandOutcome } from "../src/index.js";
 
 const index = fs.readFileSync("src/index.js", "utf8");
 const operations = fs.readFileSync("operations.html", "utf8");
@@ -39,6 +39,44 @@ assert.equal(rolloutCommandOutcome(command, { ...newNode, status: "offline" }, "
 assert.equal(rolloutCommandOutcome(command, newNode, "0.3.39", now + 6 * 60_000), "failed");
 assert.equal(rolloutCommandOutcome({ ...command, status: "failed" }, newNode, "0.3.39", now), "failed");
 assert.equal(rolloutCommandOutcome(command, oldNode, "0.3.39", now + 5 * 60_000), "failed");
+
+const wakeWrites = [];
+const wakeArgs = {
+  commandId: "command_wake", relayNodeId: "node_relay", payloadJson: "{}",
+  signature: "signed", createdAt: "2026-10-06T12:00:00Z", actorId: "architect",
+  targetNodeId: "node_target", auditDetails: { batch: true }
+};
+const wakeDb = (insertError = null) => ({
+  prepare(sql) {
+    return {
+      bind(...args) {
+        return {
+          async run() {
+            if (sql.includes("INSERT INTO commands")) {
+              if (insertError) throw insertError;
+              wakeWrites.push(args);
+            } else if (sql.includes("INSERT INTO audit_events")) {
+              throw Error("audit temporarily unavailable");
+            }
+          },
+          async first() { return null; }
+        };
+      }
+    };
+  }
+});
+const priorLog = console.error;
+try {
+  console.error = () => {};
+  await persistWakePeerCommand({ DB: wakeDb() }, wakeArgs);
+  assert.equal(wakeWrites.length, 1, "queued Wake must survive an audit write failure");
+  await assert.rejects(
+    persistWakePeerCommand({ DB: wakeDb(Error("D1 write failed")) }, wakeArgs),
+    (error) => error.code === "wake_queue_failed"
+  );
+} finally {
+  console.error = priorLog;
+}
 assert.match(operations, /id="wakeAll"/);
 assert.match(operations, /async function startSmartUpdateAll/);
 assert.match(operations, /api\('\/update-all'/);
