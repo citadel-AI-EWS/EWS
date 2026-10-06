@@ -434,7 +434,10 @@ assert.match(architect, /sessionStorage\.setItem\("citadel-lmnode-request"/);
 }
 assert.match(autoEnrollmentMigration, /CREATE TABLE IF NOT EXISTS node_numbers/);
 assert.match(autoEnrollmentMigration, /CREATE TABLE IF NOT EXISTS auto_enrollment_windows/);
-assert.doesNotMatch(deployWorkflow, /wrangler d1 execute/);
+assert.ok(deployWorkflow.includes("command_type"));
+assert.match(deployWorkflow, /migrations\/0028_expand_legacy_commands\.sql/);
+assert.match(deployWorkflow, /commands_count/);
+assert.match(deployWorkflow, /ssh_results_count/);
 assert.match(index, /function publicHubQueryErrorCode/);
 assert.match(index, /hub_d1_daily_read_limit_exceeded/);
 assert.match(index, /hub_d1_daily_write_limit_exceeded/);
