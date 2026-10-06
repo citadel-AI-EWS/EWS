@@ -1681,10 +1681,27 @@ class Agent:
         if time.monotonic() - self.last_network_remember >= 300:
             self.remember_network_profile()
             self.last_network_remember = time.monotonic()
+    def refresh_lmstudio_readiness(self) -> dict[str, Any]:
+        """Refresh runtime state and prove inference once when readiness is unknown or stale."""
+        snapshot = self.probe_lmstudio()
+        model = str(snapshot.get("loaded_model") or "").strip()
+        if (
+            snapshot.get("installed")
+            and snapshot.get("server_running")
+            and model
+            and not snapshot.get("inference_ready")
+        ):
+            try:
+                self.verify_lmstudio_inference(model)
+            except Exception as error:
+                self.log.write("lmstudio_inference_probe_failed", error=local_error_code(error))
+            snapshot = self.probe_lmstudio()
+        return snapshot
+
     def sync_lmstudio_readiness(self) -> None:
-        """Refresh scheduler-visible LM Studio state without blocking service HOLD readiness."""
+        """Refresh scheduler-visible LM Studio state with bounded real inference proof."""
         try:
-            self.report_ai_state(**self.probe_lmstudio())
+            self.report_ai_state(**self.refresh_lmstudio_readiness())
         except Exception as error:
             self.log.write("lmstudio_heartbeat_probe_failed", error=str(error)[:300])
 
@@ -2478,6 +2495,7 @@ class Agent:
             "progress_total_bytes", "progress_detail", "download_job_id",
             "query_id", "query_mode", "query_status", "query_prompt", "query_answer",
             "load_config", "operation_id", "live_checked_at",
+            "inference_ready", "inference_model", "inference_checked_at", "inference_error",
         }
         return {key: state.get(key) for key in allowed if key in state}
 
@@ -4085,7 +4103,7 @@ class Agent:
         if now - self.last_heartbeat >= self.config.heartbeat_seconds:
             body["heartbeat"] = self.heartbeat_payload()
             try:
-                self.probe_lmstudio()
+                self.refresh_lmstudio_readiness()
             except Exception as error:
                 self.log.write("lmstudio_heartbeat_probe_failed", error=str(error)[:300])
         ai = self.ai_report_body()
