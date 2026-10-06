@@ -73,10 +73,29 @@ const LATEST_NODE_RELEASE = Object.freeze({
     }
   ]
 });
+const LEGACY_031_BRIDGE_RELEASE = Object.freeze({
+  version: "0.3.2-bridge.1",
+  files: Object.freeze([
+    Object.freeze({
+      path: "citadel_node_v1.py",
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/0e168af8c39baad7c9157a732562dade0c58f12c/agent/citadel_node_v1.py",
+      sha256: "4a5638a410ca689141a9a4c81d4e2d109c8cf2904e62df50ec6753f4146f5b37"
+    }),
+    Object.freeze({
+      path: "citadel_node_v2.py",
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/0e168af8c39baad7c9157a732562dade0c58f12c/agent/citadel_node_v2.py",
+      sha256: "18fe495f2a46882e5c6c0172d217898d7374177c04b391a34931061b36342b6d"
+    })
+  ])
+});
 const LEGACY_CORE_UPDATE_FILES = new Set(["citadel_node_v1.py", "citadel_node_v2.py"]);
 const LEGACY_ENTERPRISE_UPDATE_FILES = new Set([...LEGACY_CORE_UPDATE_FILES, "windows_enterprise_probe.ps1"]);
 
 export function releaseForAgentVersion(release, agentVersion) {
+  if (!agentVersionAtLeast(agentVersion, "0.3.2") &&
+      release?.version !== LEGACY_031_BRIDGE_RELEASE.version) {
+    return LEGACY_031_BRIDGE_RELEASE;
+  }
   const allowed = agentVersionAtLeast(agentVersion, "0.3.27")
     ? null
     : agentVersionAtLeast(agentVersion, "0.3.13")
@@ -93,9 +112,10 @@ function updatePayloadCompatibleWithAgent(payload, agentVersion) {
     releaseForAgentVersion(payload, agentVersion).files.length === payload.files.length;
 }
 export function updatePayloadReadyForAgent(payload, agentVersion) {
-  if (payload?.version !== LATEST_NODE_RELEASE.version ||
+  const expectedRelease = releaseForAgentVersion(LATEST_NODE_RELEASE, agentVersion);
+  if (payload?.version !== expectedRelease.version ||
       !updatePayloadCompatibleWithAgent(payload, agentVersion)) return false;
-  const expected = releaseForAgentVersion(LATEST_NODE_RELEASE, agentVersion).files;
+  const expected = expectedRelease.files;
   return payload.files.length === expected.length && expected.every((file) =>
     payload.files.some((candidate) => candidate.path === file.path &&
       candidate.url === file.url && candidate.sha256 === file.sha256));
@@ -2139,6 +2159,60 @@ async function repairPendingUpdateForNode(env, node) {
         "VALUES ('controller', 'controller', 'agent.update.incompatible_command_replaced', 'command', ?, ?)"
       ).bind(pending.command_id, JSON.stringify({
         node_id: node.node_id, agent_version: node.agent_version, replacement_command_id: commandId
+      }))
+    ]);
+  } catch (error) {
+    if (!String(error).includes("UNIQUE")) throw error;
+  }
+}
+
+async function continueCompletedBridgeUpdateForNode(env, node) {
+  if (node.agent_version !== LEGACY_031_BRIDGE_RELEASE.version) return;
+
+  // Only continue an update that the operator (or rollout) already started.
+  // Looking at the latest update command avoids turning ordinary old nodes into
+  // unsolicited auto-updates and prevents retry loops after a failed final hop.
+  const latestUpdate = await env.DB.prepare(
+    "SELECT command_id, status, payload_json, created_at, completed_at FROM commands " +
+    "WHERE node_id = ? AND command_type = 'update' " +
+    "ORDER BY datetime(created_at) DESC LIMIT 1"
+  ).bind(node.node_id).first();
+  if (
+    !latestUpdate ||
+    latestUpdate.status !== "completed" ||
+    safeJson(latestUpdate.payload_json, {})?.version !== LEGACY_031_BRIDGE_RELEASE.version
+  ) {
+    return;
+  }
+
+  const payload = releaseForAgentVersion(LATEST_NODE_RELEASE, node.agent_version);
+  if (
+    payload.version !== LATEST_NODE_RELEASE.version ||
+    !updatePayloadReadyForAgent(payload, node.agent_version)
+  ) {
+    return;
+  }
+
+  const commandId = "command_" + crypto.randomUUID();
+  const payloadJson = JSON.stringify(payload);
+  const createdAt = new Date().toISOString();
+  const signature = await signControllerCommand(
+    env, commandId, node.node_id, "update", payloadJson, createdAt
+  );
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO commands (command_id, node_id, command_type, payload_json, signature, status, created_at) " +
+        "VALUES (?, ?, 'update', ?, ?, 'pending', ?)"
+      ).bind(commandId, node.node_id, payloadJson, signature, createdAt),
+      env.DB.prepare(
+        "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+        "VALUES ('controller', 'controller', 'agent.update.bridge_continued', 'command', ?, ?)"
+      ).bind(commandId, JSON.stringify({
+        node_id: node.node_id,
+        bridge_command_id: latestUpdate.command_id,
+        bridge_version: LEGACY_031_BRIDGE_RELEASE.version,
+        target_version: LATEST_NODE_RELEASE.version
       }))
     ]);
   } catch (error) {
@@ -6039,6 +6113,7 @@ async function commandsForNode(env, node) {
   if (node.agent_version !== LATEST_NODE_RELEASE.version) {
     await ensureRolloutCommandForNode(env, nodeId);
     await repairPendingUpdateForNode(env, node);
+    await continueCompletedBridgeUpdateForNode(env, node);
   }
 
   const cutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
