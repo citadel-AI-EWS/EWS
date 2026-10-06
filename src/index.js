@@ -3293,7 +3293,8 @@ function projectNodeReady(node, sourceType) {
     Number(node.installed || node.lmstudio_installed || 0) === 1 &&
     Number(node.server_running || node.lmstudio_server_running || 0) === 1 &&
     typeof (node.loaded_model || node.lmstudio_loaded_model) === "string" &&
-    (node.loaded_model || node.lmstudio_loaded_model).length > 0;
+    (node.loaded_model || node.lmstudio_loaded_model).length > 0 &&
+    Number(node.inference_ready || 0) === 1;
 }
 
 /**
@@ -3316,9 +3317,11 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
 
   const node = await env.DB.prepare(`
     SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
-      ai.installed, ai.loaded_model, ai.server_running
+      ai.installed, ai.loaded_model, ai.server_running,
+      json_extract(air.state_json, '$.inference_ready') AS inference_ready
     FROM nodes AS n
     LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
+    LEFT JOIN node_ai_runtime_state AS air ON air.node_id = n.node_id
     WHERE n.node_id = ?
   `).bind(nodeId).first();
   if (!node || operationalNodeState(node) !== "live" || isTestNodeRecord(node)) return 0;
@@ -3350,9 +3353,11 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
     `).bind(projectId, projectId, canRunPython ? 1 : 0, canRunAi ? 1 : 0, nodeId).all(),
     env.DB.prepare(`
       SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
-        ai.installed, ai.loaded_model, ai.server_running
+        ai.installed, ai.loaded_model, ai.server_running,
+        json_extract(air.state_json, '$.inference_ready') AS inference_ready
       FROM nodes AS n
       LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
+      LEFT JOIN node_ai_runtime_state AS air ON air.node_id = n.node_id
       WHERE n.status = 'online'
         AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes')
     `).all()
@@ -3676,10 +3681,12 @@ async function architectCreateProject(request, env) {
   const nodesQuery = await env.DB.prepare(
     "SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.agent_version, n.capabilities_json, nn.node_number, " +
     "ai.installed AS lmstudio_installed, ai.loaded_model AS lmstudio_loaded_model, " +
-    "ai.server_running AS lmstudio_server_running " +
+    "ai.server_running AS lmstudio_server_running, " +
+    "json_extract(air.state_json, '$.inference_ready') AS inference_ready " +
     "FROM nodes AS n " +
     "LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id " +
     "LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id " +
+    "LEFT JOIN node_ai_runtime_state AS air ON air.node_id = n.node_id " +
     "WHERE n.status = 'online' AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes') " +
     "ORDER BY n.last_seen_at DESC, n.node_id ASC"
   ).all();
@@ -3941,10 +3948,14 @@ async function architectGetProject(request, env, projectId, executionCtx = null)
       ai.installed AS lmstudio_installed,
       ai.loaded_model AS lmstudio_loaded_model,
       ai.server_running AS lmstudio_server_running,
+      json_extract(air.state_json, '$.inference_ready') AS inference_ready,
+      json_extract(air.state_json, '$.inference_checked_at') AS inference_checked_at,
+      json_extract(air.state_json, '$.inference_error') AS inference_error,
       ai.updated_at AS lmstudio_state_updated_at
     FROM nodes AS n
     LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id
     LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
+    LEFT JOIN node_ai_runtime_state AS air ON air.node_id = n.node_id
     WHERE n.status != 'revoked'
     ORDER BY recently_seen DESC, n.last_seen_at DESC, nn.node_number ASC
     LIMIT 100
@@ -3961,6 +3972,7 @@ async function architectGetProject(request, env, projectId, executionCtx = null)
     const installed = Number(node.lmstudio_installed || 0) === 1;
     const serverRunning = Number(node.lmstudio_server_running || 0) === 1;
     const loadedModel = typeof node.lmstudio_loaded_model === "string" && node.lmstudio_loaded_model.length > 0;
+    const inferenceReady = Number(node.inference_ready || 0) === 1;
     const blockers = [];
     if (testNode) blockers.push("test_node_excluded");
     if (!live) blockers.push("offline");
@@ -3979,6 +3991,7 @@ async function architectGetProject(request, env, projectId, executionCtx = null)
       } else {
         if (!serverRunning) blockers.push("lmstudio_server_stopped");
         if (!loadedModel) blockers.push("lmstudio_model_not_loaded");
+        if (serverRunning && loadedModel && !inferenceReady) blockers.push("lmstudio_inference_unverified");
       }
     }
     return {
@@ -3996,6 +4009,9 @@ async function architectGetProject(request, env, projectId, executionCtx = null)
       lmstudio_installed: installed,
       lmstudio_server_running: serverRunning,
       lmstudio_loaded_model: node.lmstudio_loaded_model || null,
+      lmstudio_inference_ready: inferenceReady,
+      lmstudio_inference_checked_at: node.inference_checked_at || null,
+      lmstudio_inference_error: node.inference_error || null,
       ready: blockers.length === 0,
       blockers
     };
@@ -4497,11 +4513,13 @@ function normalizeAiState(value) {
     ["selected_model", 192], ["loaded_model", 192], ["last_action", 96],
     ["progress_phase", 96], ["progress_detail", 512], ["download_job_id", 160],
     ["query_id", 160], ["query_mode", 32], ["query_status", 32], ["operation_id", 160],
-    ["query_prompt", 8000], ["query_answer", 65536], ["live_checked_at", 64]
+    ["query_prompt", 8000], ["query_answer", 65536], ["live_checked_at", 64],
+    ["inference_model", 192], ["inference_checked_at", 64], ["inference_error", 256]
   ];
   const out = {
     installed: value.installed === true || value.installed === 1 ? 1 : 0,
-    server_running: value.server_running === true || value.server_running === 1 ? 1 : 0
+    server_running: value.server_running === true || value.server_running === 1 ? 1 : 0,
+    inference_ready: value.inference_ready === true || value.inference_ready === 1 ? 1 : 0
   };
   for (const [name, max] of strings) {
     const raw = value[name];
@@ -8820,9 +8838,11 @@ async function handleApi(request, env, url, executionCtx = null) {
         try {
           await ensureNodeAiStorage(env);
           const aiRows = await env.DB.prepare(`
-            SELECT node_id, installed, loaded_model, server_running
-            FROM node_ai_state
-            ORDER BY updated_at DESC
+            SELECT ai.node_id, ai.installed, ai.loaded_model, ai.server_running,
+              json_extract(air.state_json, '$.inference_ready') AS inference_ready
+            FROM node_ai_state AS ai
+            LEFT JOIN node_ai_runtime_state AS air ON air.node_id = ai.node_id
+            ORDER BY ai.updated_at DESC
             LIMIT 500
           `).all();
           const aiByNode = new Map(
