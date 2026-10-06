@@ -27,6 +27,13 @@ assert.match(operations, /async function startSmartUpdateAll/);
 assert.match(operations, /api\('\/update-all'/);
 assert.match(operations, /async function wakeAllOffline/);
 assert.match(operations, /api\('\/wake-all'/);
+assert.match(operations, /onclick="startSmartUpdateAll\(\)"/);
+assert.match(operations, /onclick="wakeAllOffline\(\)"/);
+assert.match(operations, /async function pollSmartRollout/);
+assert.match(operations, /smartRolloutTimer=setTimeout\(pollSmartRollout,1500\)/);
+assert.match(operations, /pass<3/);
+assert.doesNotMatch(operations, /confirm\('Запустить безопасное автообновление/);
+assert.doesNotMatch(operations, /confirm\('Попробовать Wake-on-LAN/);
 assert.match(architect, /канарейка/);
 
 console.log("Smart canary rollout + bounded wake recovery guards: OK");
