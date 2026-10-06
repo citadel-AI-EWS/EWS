@@ -2075,9 +2075,10 @@ async function ensureRolloutCommandForNode(env, nodeId) {
         "WHERE c.command_type = 'update' AND datetime(c.created_at) >= datetime(?) " +
         "AND ((c.status IN ('pending','accepted') AND datetime(c.created_at) > datetime('now','-10 minutes')) " +
         "OR (c.status = 'completed' AND datetime(COALESCE(c.completed_at,c.created_at)) > datetime('now','-5 minutes'))) " +
-        "AND NOT (n.agent_version = ? AND n.status = 'online' " +
-        "AND datetime(n.last_seen_at) > datetime(COALESCE(c.completed_at,c.created_at)) " +
-        "AND datetime(n.last_seen_at) >= datetime('now','-5 minutes'))) < ?"
+        "AND (n.agent_version IS NULL OR n.agent_version <> ? OR n.status <> 'online' " +
+        "OR n.last_seen_at IS NULL " +
+        "OR datetime(n.last_seen_at) <= datetime(COALESCE(c.completed_at,c.created_at)) " +
+        "OR datetime(n.last_seen_at) < datetime('now','-5 minutes'))) < ?"
       ).bind(commandId, nodeId, payloadJson, signature, createdAt,
         rollout.created_at, rollout.target_version, Number(rolloutPolicy.max_parallel || 3))
       : env.DB.prepare(
