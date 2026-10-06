@@ -166,7 +166,7 @@ jobs:
           npx wrangler d1 execute citadel-control --remote --command "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'commands'" --json > /tmp/citadel-command-schema.json
           if node -e "const r=require('/tmp/citadel-command-schema.json'); process.exit(/CHECK\\s*\\(\\s*command_type/i.test(r[0]?.results?.[0]?.sql || '') ? 0 : 1)"; then
             npx wrangler d1 execute citadel-control --remote --command "SELECT (SELECT COUNT(*) FROM commands) AS commands_count, (SELECT COUNT(*) FROM ssh_console_results) AS ssh_results_count" --json > /tmp/citadel-command-counts-before.json
-            npx wrangler d1 execute citadel-control --remote --file migrations/0028_expand_legacy_commands.sql
+            npx wrangler d1 execute citadel-control --remote --yes --file migrations/0028_expand_legacy_commands.sql
             npx wrangler d1 execute citadel-control --remote --command "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'commands'" --json > /tmp/citadel-command-schema-after.json
             npx wrangler d1 execute citadel-control --remote --command "SELECT (SELECT COUNT(*) FROM commands) AS commands_count, (SELECT COUNT(*) FROM ssh_console_results) AS ssh_results_count" --json > /tmp/citadel-command-counts-after.json
             node -e "const fs=require('node:fs'); const before=require('/tmp/citadel-command-counts-before.json')[0].results[0]; const after=require('/tmp/citadel-command-counts-after.json')[0].results[0]; const schema=require('/tmp/citadel-command-schema-after.json')[0].results[0].sql; if (JSON.stringify(before)!==JSON.stringify(after) || /CHECK\\s*\\(\\s*command_type/i.test(schema)) process.exit(1); console.log('Legacy commands migrated; command and SSH result counts preserved:',after)"
