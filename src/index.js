@@ -1764,7 +1764,8 @@ async function startUpdateAllRollout(request, env) {
     });
   }
 
-  const canary = updateableNow[0] || outdatedNodes[0];
+  const canary = updateableNow[0];
+  if (!canary) throw new ApiError(409, "rollout_no_live_canary");
   const releaseJson = JSON.stringify(LATEST_NODE_RELEASE);
   const rolloutId = "rollout_" + crypto.randomUUID();
   await env.DB.batch([
@@ -1819,6 +1820,23 @@ function rolloutCommandAgeMs(command) {
   return parsed > 0 ? Math.max(0, Date.now() - parsed) : 0;
 }
 
+export function rolloutCommandOutcome(command, node, targetVersion, now = Date.now()) {
+  if (!command) return "pending";
+  if (["failed", "cancelled", "expired"].includes(command.status)) return "failed";
+  const commandStarted = parseControllerTimestamp(command.created_at);
+  const completed = parseControllerTimestamp(command.completed_at);
+  const heartbeat = parseControllerTimestamp(node?.last_seen_at);
+  if (commandStarted !== null && heartbeat !== null &&
+      heartbeat > Math.max(commandStarted, completed || 0) &&
+      node?.agent_version === targetVersion && operationalNodeState(node, now) === "live") {
+    return "verified";
+  }
+  const age = completed || commandStarted;
+  if (age !== null && now - age >=
+      (command.status === "completed" ? 5 : 10) * 60 * 1000) return "failed";
+  return "pending";
+}
+
 async function reconcileSmartRollout(env, rollout) {
   let policy = await env.DB.prepare(
     "SELECT rollout_id, canary_node_id, phase, max_parallel, max_failures, pause_reason, canary_verified_at " +
@@ -1852,9 +1870,7 @@ async function reconcileSmartRollout(env, rollout) {
     ]);
 
     if (
-      canary &&
-      canary.agent_version === rollout.target_version &&
-      operationalNodeState(canary) === "live"
+      rolloutCommandOutcome(command, canary, rollout.target_version) === "verified"
     ) {
       await env.DB.batch([
         env.DB.prepare(
@@ -1902,12 +1918,15 @@ async function reconcileSmartRollout(env, rollout) {
       }
     }
   } else if (policy.phase === "fleet") {
-    const failures = await env.DB.prepare(
-      "SELECT COUNT(*) AS count FROM commands " +
-      "WHERE command_type = 'update' AND status IN ('failed','cancelled','expired') " +
-      "AND datetime(created_at) >= datetime(?)"
-    ).bind(rollout.created_at).first();
-    if (Number(failures?.count || 0) >= Number(policy.max_failures || 2)) {
+    const attempts = await env.DB.prepare(
+      "SELECT c.status, c.created_at, c.completed_at, " +
+      "n.status AS node_status, n.agent_version, n.last_seen_at FROM commands c " +
+      "JOIN nodes n ON n.node_id = c.node_id WHERE c.command_type = 'update' " +
+      "AND datetime(c.created_at) >= datetime(?)"
+    ).bind(rollout.created_at).all();
+    const failures = (attempts.results || []).filter((row) =>
+      rolloutCommandOutcome(row, { ...row, status: row.node_status }, rollout.target_version) === "failed").length;
+    if (failures >= Number(policy.max_failures || 2)) {
       const reason = "fleet_failure_budget_exceeded";
       await env.DB.prepare(
         "UPDATE agent_rollout_policy SET phase = 'paused', pause_reason = ?, " +
@@ -1981,12 +2000,15 @@ async function ensureRolloutCommandForNode(env, nodeId) {
   if (!rolloutPolicy || ["paused","completed"].includes(rolloutPolicy.phase)) return;
   if (rolloutPolicy.phase === "canary" && nodeId !== rolloutPolicy.canary_node_id) return;
   if (rolloutPolicy.phase === "fleet") {
-    const inFlight = await env.DB.prepare(
-      "SELECT COUNT(*) AS count FROM commands " +
-      "WHERE command_type = 'update' AND status IN ('pending','accepted') " +
-      "AND datetime(created_at) >= datetime(?)"
-    ).bind(rollout.created_at).first();
-    if (Number(inFlight?.count || 0) >= Number(rolloutPolicy.max_parallel || 3)) return;
+    const attempts = await env.DB.prepare(
+      "SELECT c.status, c.created_at, c.completed_at, " +
+      "n.status AS node_status, n.agent_version, n.last_seen_at FROM commands c " +
+      "JOIN nodes n ON n.node_id = c.node_id WHERE c.command_type = 'update' " +
+      "AND datetime(c.created_at) >= datetime(?)"
+    ).bind(rollout.created_at).all();
+    const unverified = (attempts.results || []).filter((row) =>
+      rolloutCommandOutcome(row, { ...row, status: row.node_status }, rollout.target_version) === "pending").length;
+    if (unverified >= Number(rolloutPolicy.max_parallel || 3)) return;
   }
 
   // Stale active commands only need cleanup when a rollout actually needs the
@@ -2045,16 +2067,29 @@ async function ensureRolloutCommandForNode(env, nodeId) {
     env, commandId, nodeId, "update", payloadJson, createdAt
   );
   try {
-    await env.DB.batch([
-      env.DB.prepare(
+    const insert = rolloutPolicy.phase === "fleet"
+      ? env.DB.prepare(
+        "INSERT INTO commands (command_id, node_id, command_type, payload_json, signature, status, created_at) " +
+        "SELECT ?, ?, 'update', ?, ?, 'pending', ? WHERE (" +
+        "SELECT COUNT(*) FROM commands c JOIN nodes n ON n.node_id = c.node_id " +
+        "WHERE c.command_type = 'update' AND datetime(c.created_at) >= datetime(?) " +
+        "AND ((c.status IN ('pending','accepted') AND datetime(c.created_at) > datetime('now','-10 minutes')) " +
+        "OR (c.status = 'completed' AND datetime(COALESCE(c.completed_at,c.created_at)) > datetime('now','-5 minutes'))) " +
+        "AND NOT (n.agent_version = ? AND n.status = 'online' " +
+        "AND datetime(n.last_seen_at) > datetime(COALESCE(c.completed_at,c.created_at)) " +
+        "AND datetime(n.last_seen_at) >= datetime('now','-5 minutes'))) < ?"
+      ).bind(commandId, nodeId, payloadJson, signature, createdAt,
+        rollout.created_at, rollout.target_version, Number(rolloutPolicy.max_parallel || 3))
+      : env.DB.prepare(
         "INSERT INTO commands (command_id, node_id, command_type, payload_json, signature, status, created_at) " +
         "VALUES (?, ?, 'update', ?, ?, 'pending', ?)"
-      ).bind(commandId, nodeId, payloadJson, signature, createdAt),
-      env.DB.prepare(
-        "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
-        "VALUES ('controller', ?, 'agent.rollout.command_created', 'command', ?, ?)"
-      ).bind(rollout.rollout_id, commandId, JSON.stringify({ node_id: nodeId, target_version: rollout.target_version }))
-    ]);
+      ).bind(commandId, nodeId, payloadJson, signature, createdAt);
+    const inserted = await insert.run();
+    if (Number(inserted?.meta?.changes || 0) !== 1) return;
+    await env.DB.prepare(
+      "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+      "VALUES ('controller', ?, 'agent.rollout.command_created', 'command', ?, ?)"
+    ).bind(rollout.rollout_id, commandId, JSON.stringify({ node_id: nodeId, target_version: rollout.target_version })).run();
   } catch (error) {
     if (!String(error).includes("UNIQUE")) throw error;
   }
@@ -8239,15 +8274,27 @@ async function architectWakeAll(request, env) {
     const macs = safeJson(target.mac_addresses_json, []);
     const targetMac = Array.isArray(macs) ? macs.map(normalizeMac).find(Boolean) : null;
     const prefix = subnet24(target.lan_ipv4);
+    const targetNetwork = {
+      node_id: target.node_id,
+      hostname: target.hostname || null,
+      mac: targetMac,
+      lan_ipv4: target.lan_ipv4 || null,
+      subnet: prefix ? prefix + ".0/24" : null
+    };
     if (!targetMac || !target.lan_ipv4 || !prefix) {
-      skipped.push({ node_id: target.node_id, hostname: target.hostname || null, reason: "wake_network_identity_unavailable" });
+      skipped.push({ ...targetNetwork, relay_node_id: null, reason: "wake_network_identity_unavailable" });
       continue;
     }
 
     let relay = null;
+    let matchingRelayBusy = false;
     for (const candidate of liveRelays) {
-      if (usedRelays.has(candidate.node_id) || candidate.node_id === target.node_id) continue;
+      if (candidate.node_id === target.node_id) continue;
       if (subnet24(candidate.lan_ipv4) !== prefix) continue;
+      if (usedRelays.has(candidate.node_id)) {
+        matchingRelayBusy = true;
+        continue;
+      }
       await expireStaleNodeCommands(env, candidate.node_id);
       const pending = await env.DB.prepare(
         "SELECT command_id FROM commands WHERE node_id = ? AND status IN ('pending','accepted') LIMIT 1"
@@ -8256,9 +8303,11 @@ async function architectWakeAll(request, env) {
         relay = candidate;
         break;
       }
+      matchingRelayBusy = true;
     }
     if (!relay) {
-      skipped.push({ node_id: target.node_id, hostname: target.hostname || null, reason: "wake_relay_unavailable_or_busy" });
+      skipped.push({ ...targetNetwork, relay_node_id: null,
+        reason: matchingRelayBusy ? "wake_relay_busy" : "wake_relay_unavailable" });
       continue;
     }
 
@@ -8289,15 +8338,15 @@ async function architectWakeAll(request, env) {
       ]);
       usedRelays.add(relay.node_id);
       queued.push({
+        ...targetNetwork,
         target_node_id: target.node_id,
-        hostname: target.hostname || null,
         relay_node_id: relay.node_id,
         command_id: commandId
       });
     } catch (error) {
       skipped.push({
-        node_id: target.node_id,
-        hostname: target.hostname || null,
+        ...targetNetwork,
+        relay_node_id: relay.node_id,
         reason: String(error).includes("UNIQUE") ? "wake_relay_busy" : "wake_queue_failed"
       });
     }
