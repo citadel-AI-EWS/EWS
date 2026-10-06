@@ -68,7 +68,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.39"
+VERSION = "0.3.40"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -83,6 +83,8 @@ LMSTUDIO_INSTALL_FILE_NAMES = {"install_llmstudio_headless.ps1", "install_llmstu
 LMSTUDIO_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,95})?(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,31})?$")
 LMSTUDIO_QUANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
 HYBRID_MODES = {"python", "lmstudio", "both"}
+LMSTUDIO_INFERENCE_PROBE_TIMEOUT_SECONDS = 30
+LMSTUDIO_QUERY_TIMEOUT_SECONDS = 4 * 60
 SSH_INLINE_COMMANDS = frozenset({
     "help", "status", "hostname", "whoami", "uname -a", "python --version", "python3 --version",
     "uptime", "cpu", "memory", "disk", "network",
@@ -1707,6 +1709,7 @@ class Agent:
         *,
         max_tokens: int,
         temperature: float = 0.2,
+        timeout_seconds: float = LMSTUDIO_QUERY_TIMEOUT_SECONDS,
     ) -> tuple[str, dict[str, int] | None]:
         request_body = json_text({
             "model": model,
@@ -1720,7 +1723,7 @@ class Agent:
         connection = http.client.HTTPConnection(
             "127.0.0.1",
             1234,
-            timeout=max(1800, self.config.request_timeout_seconds),
+            timeout=max(1.0, min(float(timeout_seconds), LMSTUDIO_QUERY_TIMEOUT_SECONDS)),
         )
         try:
             connection.request(
@@ -1762,6 +1765,45 @@ class Agent:
                     "total_tokens": prompt_tokens + completion_tokens,
                 }
         return content.strip(), measured
+
+    def verify_lmstudio_inference(self, model: str) -> None:
+        """Prove the loaded model can produce tokens; listing it is not enough."""
+        started = time.monotonic()
+        try:
+            answer, _ = self._project_llm_chat(
+                model,
+                "CITADEL readiness probe. Reply with one short word.",
+                "hi",
+                max_tokens=4,
+                temperature=0.0,
+                timeout_seconds=LMSTUDIO_INFERENCE_PROBE_TIMEOUT_SECONDS,
+            )
+        except Exception as error:
+            self.report_ai_state(
+                installed=True,
+                server_running=True,
+                loaded_model=model,
+                inference_ready=False,
+                inference_checked_at=now_iso(),
+                inference_error=local_error_code(error),
+                last_action="inference_preflight",
+                progress_phase="failed",
+                progress_detail="lmstudio_inference_probe_failed",
+            )
+            raise RuntimeError("lmstudio_inference_probe_failed") from error
+        if not answer.strip():
+            raise RuntimeError("lmstudio_inference_probe_failed")
+        self.report_ai_state(
+            installed=True,
+            server_running=True,
+            loaded_model=model,
+            inference_ready=True,
+            inference_checked_at=now_iso(),
+            inference_error=None,
+            last_action="inference_preflight",
+            progress_phase="ready",
+            progress_detail=f"LM Studio inference verified in {time.monotonic() - started:.1f}s",
+        )
 
     def ensure_lmstudio_ready_for_inference(self) -> str:
         """Use live LM Studio state and repair daemon/server/model drift before inference."""
@@ -1842,13 +1884,15 @@ class Agent:
             )
             raise RuntimeError("lmstudio_model_not_loaded")
 
+        self.verify_lmstudio_inference(model)
         self.report_ai_state(
             installed=True,
             server_running=True,
             loaded_model=model,
+            inference_ready=True,
             last_action="project_preflight",
             progress_phase="ready",
-            progress_detail=f"LM Studio ready: {model}",
+            progress_detail=f"LM Studio inference-ready: {model}",
         )
         return model
 
@@ -3110,11 +3154,12 @@ class Agent:
                 "Answer the user's question using the deterministic CITADEL Python-node context below when relevant. "
                 "Do not invent machine state that is not present.\n\n" + python_context[:12000]
             )
-        connection = http.client.HTTPConnection("127.0.0.1", 1234, timeout=1800)
+        connection = http.client.HTTPConnection("127.0.0.1", 1234, timeout=LMSTUDIO_QUERY_TIMEOUT_SECONDS)
         answer = ""
         completed = False
         self._active_lm_connection = connection
         last_report = 0.0
+        deadline = time.monotonic() + LMSTUDIO_QUERY_TIMEOUT_SECONDS
         try:
             connection.request(
                 "POST",
@@ -3129,6 +3174,8 @@ class Agent:
             event_type = ""
             while True:
                 self.raise_if_stopping()
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("lmstudio_query_timeout")
                 raw_line = response.readline(262145)
                 if len(raw_line) > 262144:
                     raise RuntimeError("lmstudio_event_too_large")
