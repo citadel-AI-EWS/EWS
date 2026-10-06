@@ -565,8 +565,8 @@ async function ensureDriveChildFolder(env, token, parentId, name) {
   return created.id;
 }
 
-function timestampedAiReportFileName(kind, ownerId, date = new Date()) {
-  const stamp = date.toISOString().replace(/[:.]/g, "-");
+export function timestampedAiReportFileName(kind, ownerId, date = new Date()) {
+  const stamp = date.toISOString().slice(0, 19).replace("T", "_").replace(/:/g, "-");
   const safeKind = String(kind || "ai_response").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 48);
   const safeOwner = String(ownerId || "unknown").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 80);
   return stamp + "__" + safeKind + "__" + safeOwner + ".json";
