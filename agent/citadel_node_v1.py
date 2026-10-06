@@ -1784,6 +1784,7 @@ class Agent:
                 server_running=True,
                 loaded_model=model,
                 inference_ready=False,
+                inference_model=model,
                 inference_checked_at=now_iso(),
                 inference_error=local_error_code(error),
                 last_action="inference_preflight",
@@ -1798,6 +1799,7 @@ class Agent:
             server_running=True,
             loaded_model=model,
             inference_ready=True,
+            inference_model=model,
             inference_checked_at=now_iso(),
             inference_error=None,
             last_action="inference_preflight",
@@ -2613,11 +2615,20 @@ class Agent:
             if selected_model and selected_model in loaded_models
             else loaded_models[0] if loaded_models else None
         )
+        prior_inference_model = str(state.get("inference_model") or "").strip()
+        inference_ready = bool(
+            state.get("inference_ready") and server_running and loaded_model
+            and prior_inference_model == loaded_model
+        )
         snapshot = {
             "installed": installed,
             "selected_model": state.get("selected_model"),
             "loaded_model": loaded_model,
             "server_running": server_running,
+            "inference_ready": inference_ready,
+            "inference_model": prior_inference_model if inference_ready else None,
+            "inference_checked_at": state.get("inference_checked_at") if inference_ready else None,
+            "inference_error": state.get("inference_error") if inference_ready else None,
             "last_action": state.get("last_action"),
             "progress_phase": state.get("progress_phase"),
             "progress_current": state.get("progress_current"),
@@ -2637,6 +2648,10 @@ class Agent:
             installed=installed,
             server_running=server_running,
             loaded_model=loaded_model,
+            inference_ready=inference_ready,
+            inference_model=snapshot["inference_model"],
+            inference_checked_at=snapshot["inference_checked_at"],
+            inference_error=snapshot["inference_error"],
             live_checked_at=snapshot["live_checked_at"],
         )
         return snapshot
