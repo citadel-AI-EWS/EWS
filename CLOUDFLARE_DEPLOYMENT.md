@@ -13,6 +13,7 @@ Create the protected GitHub environment `cloudflare-test` and add:
 - `CLOUDFLARE_API_TOKEN` — a narrowly scoped token allowed to deploy only this Worker;
 - `ARCHITECT_TOKEN_HASH` — lowercase SHA-256 hex of the Architect bearer token, never the token itself;
 - `CONTROLLER_COMMAND_PRIVATE_JWK` — the protected Ed25519 Controller signing private JWK.
+- `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` — optional complete Google service-account JSON used only as a protected Worker secret for Drive payload/report storage; never commit the JSON/private key. OAuth refresh-token credentials remain supported as an alternative.
 - `OPENROUTER_API_KEY` — optional at deploy time, but required to activate the hidden final-answer
   quality gate. Store it only as a GitHub environment secret or Cloudflare Worker secret; never commit it.
 
