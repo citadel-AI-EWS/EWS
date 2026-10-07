@@ -425,6 +425,8 @@ body:not(.authenticated) .art-network-bottom{width:min(45vw,680px)!important;rig
  }
 }
 
+.model-result > div:first-child{min-width:0}
+@media(max-width:700px){.model-result{grid-template-columns:minmax(0,1fr)}.model-result .model-actions{justify-content:flex-start}.model-result .model-actions button{flex:1 1 110px}}
 </style></head><body><div id="activityBar" class="activity-bar" aria-hidden="true"></div><div id="cyberArt" class="cyber-art" aria-hidden="true">
 <svg class="login-only art-mask-left cyber-glitch" viewBox="0 0 440 620" role="presentation">
 <defs>
@@ -1091,8 +1093,11 @@ function renderQueryStatus(op){
   $('nodeQueryStop').disabled=!canStop||op.status==='cancelling';
 }
 function reconcileOperation(op,ai){
-  if(!op||['completed','failed','cancelled'].includes(op.status))return;const command=(lastMachineData.commands||[]).find(c=>c.command_id===op.commandId);
-  if(['failed','expired','cancelled'].includes(command?.status)){op.status=command.status==='cancelled'?'cancelled':'failed';op.error='Агент не завершил команду. Проверьте связь и журнал ноды.'}
+  if(!op)return;
+  const matchingFailure=operationSnapshotMatches(op,ai)&&ai.progress_phase==='failed';
+  if(op.status==='failed'&&matchingFailure){op.ai=ai;op.error='Ошибка агента: '+(ai.progress_detail||'подробности смотрите через SSH → agent-logs');return}
+  if(['completed','failed','cancelled'].includes(op.status))return;const command=(lastMachineData.commands||[]).find(c=>c.command_id===op.commandId);
+  if(['failed','expired','cancelled'].includes(command?.status)){op.status=command.status==='cancelled'?'cancelled':'failed';if(matchingFailure)op.ai=ai;op.error=matchingFailure?'Ошибка агента: '+(ai.progress_detail||'подробности смотрите через SSH → agent-logs'):'Агент не завершил команду. Проверьте SSH → agent-logs (команда '+(op.commandId||'без ID')+').'}
   else if(operationSnapshotMatches(op,ai)&&op.status!=='sending'){
     op.ai=ai;op.error='';const done=operationFinished(op.type,ai);op.status=done||(op.type==='hybrid_query'?(ai.query_answer?'receiving':ai.query_status==='running'?'running':'queued'):'running');
   }else if(command?.status==='completed')op.status='completed';
