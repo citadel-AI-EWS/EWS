@@ -425,6 +425,8 @@ body:not(.authenticated) .art-network-bottom{width:min(45vw,680px)!important;rig
  }
 }
 
+.model-result > div:first-child{min-width:0}
+@media(max-width:700px){.model-result{grid-template-columns:minmax(0,1fr)}.model-result .model-actions{justify-content:flex-start}.model-result .model-actions button{flex:1 1 110px}}
 </style></head><body><div id="activityBar" class="activity-bar" aria-hidden="true"></div><div id="cyberArt" class="cyber-art" aria-hidden="true">
 <svg class="login-only art-mask-left cyber-glitch" viewBox="0 0 440 620" role="presentation">
 <defs>
@@ -885,10 +887,12 @@ function updateCommandFeedback(node,command){
  }
  if(command.status==='completed'){
    const age=commandElapsedMinutes(command,true);
+   if(age!==null&&age>=10)return {phase:'stalled',spinning:false,error:true,text:'Обновление не подтверждено '+age+' мин: нода '+(node?.status==='online'?'на связи, но сообщает':'последний раз сообщала')+' старую версию '+(node?.agent_version||'—')+'. Проверьте перезапуск службы через SSH → agent-logs.'};
    return {phase:'installed',spinning:true,error:age!==null&&age>=5,text:'Обновление: удалённый агент завершил локальную фазу и проверку файлов; ждём перезапуск и heartbeat '+target+(age!==null&&age>=5?' · нет подтверждения уже '+age+' мин':'')+'.'};
  }
  if(['failed','expired','cancelled'].includes(command.status)){
-   return {phase:'failed',spinning:false,error:true,text:'Обновление не подтверждено: '+label(command.status)+'.'};
+   const bridge=String(node?.agent_version||'').includes('-bridge.');
+   return {phase:'failed',spinning:false,error:true,text:(bridge?'Промежуточный агент '+node.agent_version+' работает, но переход на '+target+' завершился ошибкой. ':'Обновление не подтверждено: '+label(command.status)+'. ')+ 'Проверьте SSH → agent-logs'+(command.command_id?' · команда '+command.command_id:'')+'.'};
  }
  return null;
 }
@@ -1077,7 +1081,7 @@ function startDetailProgressWatch(node,label,options={}){
   const op=options.resume&&existing?existing:{nodeId:node.node_id,type:options.type||'lmstudio_install',title:label||'Операция LM Studio',startedAt:Date.now(),status:'sending',ai:{}};
   nodeOperations.set(node.node_id,op);lmOperationStartedAt=op.type==='hybrid_query'?0:op.startedAt;lmOperationLabel=op.title;renderLmLocalStatus();
   if(op.type==='hybrid_query')renderQueryStatus(op);
-  const poll=async()=>{detailPollTimer=null;if(!$('nodeDialog').open||currentNode?.node_id!==node.node_id||document.hidden||!token)return;await loadNodeDetails(node,true);if(!['completed','failed','cancelled'].includes(op.status)&&$('nodeDialog').open&&currentNode?.node_id===node.node_id&&!document.hidden&&token)detailPollTimer=setTimeout(poll,op.type==='hybrid_query'?2000:10000)};
+  const poll=async()=>{detailPollTimer=null;if(!$('nodeDialog').open||currentNode?.node_id!==node.node_id||document.hidden||!token)return;await loadNodeDetails(node,true);const retryFailure=op.status==='failed'&&op.ai?.progress_phase!=='failed'&&(op.failureDetailPolls||0)<3;if(retryFailure)op.failureDetailPolls=(op.failureDetailPolls||0)+1;if((!['completed','failed','cancelled'].includes(op.status)||retryFailure)&&$('nodeDialog').open&&currentNode?.node_id===node.node_id&&!document.hidden&&token)detailPollTimer=setTimeout(poll,retryFailure?4000:op.type==='hybrid_query'?2000:10000)};
   detailPollTimer=setTimeout(poll,1500);return op;
 }
 function syncOperationButtons(op){const active=!['completed','failed','cancelled'].includes(op.status);for(const id of ['lmInstall','lmUpdate','lmRemove','lmProbe','modelGet','modelLoad','nodeQuery'])$(id).disabled=active}
@@ -1091,8 +1095,11 @@ function renderQueryStatus(op){
   $('nodeQueryStop').disabled=!canStop||op.status==='cancelling';
 }
 function reconcileOperation(op,ai){
-  if(!op||['completed','failed','cancelled'].includes(op.status))return;const command=(lastMachineData.commands||[]).find(c=>c.command_id===op.commandId);
-  if(['failed','expired','cancelled'].includes(command?.status)){op.status=command.status==='cancelled'?'cancelled':'failed';op.error='Агент не завершил команду. Проверьте связь и журнал ноды.'}
+  if(!op)return;
+  const matchingFailure=operationSnapshotMatches(op,ai)&&ai.progress_phase==='failed';
+  if(op.status==='failed'&&matchingFailure){op.ai=ai;op.error='Ошибка агента: '+(ai.progress_detail||'подробности смотрите через SSH → agent-logs');return}
+  if(['completed','failed','cancelled'].includes(op.status))return;const command=(lastMachineData.commands||[]).find(c=>c.command_id===op.commandId);
+  if(['failed','expired','cancelled'].includes(command?.status)){op.status=command.status==='cancelled'?'cancelled':'failed';if(matchingFailure)op.ai=ai;op.error=matchingFailure?'Ошибка агента: '+(ai.progress_detail||'подробности смотрите через SSH → agent-logs'):'Агент не завершил команду. Проверьте SSH → agent-logs (команда '+(op.commandId||'без ID')+').'}
   else if(operationSnapshotMatches(op,ai)&&op.status!=='sending'){
     op.ai=ai;op.error='';const done=operationFinished(op.type,ai);op.status=done||(op.type==='hybrid_query'?(ai.query_answer?'receiving':ai.query_status==='running'?'running':'queued'):'running');
   }else if(command?.status==='completed')op.status='completed';
