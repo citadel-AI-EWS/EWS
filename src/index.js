@@ -540,7 +540,7 @@ function googleDriveServiceAccount(config) {
     !value || typeof value !== "object" || Array.isArray(value) ||
     value.type !== "service_account" ||
     typeof value.client_email !== "string" ||
-    !/^[^@\\s]+@[^@\\s]+\\.gserviceaccount\\.com$/.test(value.client_email) ||
+    !/^[^@\s]+@[^@\s]+\.gserviceaccount\.com$/.test(value.client_email) ||
     typeof value.private_key !== "string" ||
     !value.private_key.includes("-----BEGIN PRIVATE KEY-----") ||
     !value.private_key.includes("-----END PRIVATE KEY-----")
@@ -561,7 +561,7 @@ function googleServiceAccountPkcs8(privateKey) {
   const base64 = String(privateKey)
     .replace(/-----BEGIN PRIVATE KEY-----/g, "")
     .replace(/-----END PRIVATE KEY-----/g, "")
-    .replace(/\\s+/g, "");
+    .replace(/\s+/g, "");
   if (!base64 || !/^[A-Za-z0-9+/=]+$/.test(base64)) {
     throw new ApiError(503, "drive_payload_auth_failed");
   }
