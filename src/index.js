@@ -717,10 +717,11 @@ async function googleDriveAccessToken(env) {
 
   const serviceAccount = googleDriveServiceAccount(config);
   const oauthConfigured = Boolean(config.client_id && config.client_secret && config.refresh_token);
+  // Cache tokens by credential fingerprint so rotation takes effect immediately.
   const sourceKey = oauthConfigured
-    ? "oauth:" + config.client_id
+    ? "oauth:" + await sha256Hex(JSON.stringify([config.client_id, config.client_secret, config.refresh_token]))
     : serviceAccount
-      ? "service:" + serviceAccount.client_email
+      ? "service:" + await sha256Hex(JSON.stringify([serviceAccount.client_email, serviceAccount.private_key]))
       : null;
   if (
     sourceKey &&
