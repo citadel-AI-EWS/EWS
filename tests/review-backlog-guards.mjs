@@ -48,6 +48,10 @@ need((agentV1.match(/kwargs\.setdefault\("creationflags", WINDOWS_CREATE_NO_WIND
 need((agentV1.match(/subprocess\.run\(/g) || []).length === 1, "direct subprocess.run calls can flash Windows consoles");
 need((agentV1.match(/subprocess\.Popen\(/g) || []).length === 1, "direct subprocess.Popen calls can flash Windows consoles");
 need(agentV1.includes("LMSTUDIO_INFERENCE_PROBE_TIMEOUT_SECONDS = 30"), "LM Studio real inference probe timeout missing");
+need(agentV1.includes("LMSTUDIO_INFERENCE_PROOF_TTL_SECONDS = 5 * 60"), "LM inference proof TTL missing");
+need(agentV1.includes("def lm_connection_deadline"), "absolute LM wall-clock deadline helper missing");
+need(agentV1.includes("self.runtime_session_id = uuid.uuid4().hex"), "LM inference proof is not process-bound");
+need(agentV1.includes("inference_session_id=self.runtime_session_id"), "LM proof session marker missing");
 need(agentV1.includes("LMSTUDIO_QUERY_TIMEOUT_SECONDS = 4 * 60"), "LM Studio query timeout must be bounded to four minutes");
 need(agentV1.includes("def verify_lmstudio_inference"), "real LM Studio inference readiness probe missing");
 need(agentV1.includes("inference_ready=True") && agentV1.includes("inference_ready=False"), "LM Studio inference readiness state missing");
