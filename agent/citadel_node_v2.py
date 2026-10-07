@@ -432,12 +432,24 @@ def startup_check(config_path: Path) -> int:
 
 
 def controller_probe(config_path: Path) -> int:
-    """Verify enrollment and a signed heartbeat without consuming work."""
+    """Check local activation for legacy bridge updates without a second network call.
+
+    The running agent's heartbeat after restart is the Controller's proof that
+    the new version is live. A transient failure of a second request here must
+    not roll back already verified files.
+    """
     config = v1.AgentConfig.from_file(config_path)
     agent = Agent(config, config_path)
-    node_id = agent.enroll()
-    agent.heartbeat()
-    print(json.dumps({"ok": True, "node_id": node_id, "agent_version": VERSION}))
+    agent.identity.require_key()
+    node_id = agent.identity.node_id
+    if not node_id:
+        raise RuntimeError("node is not enrolled")
+    print(json.dumps({
+        "ok": True,
+        "node_id": node_id,
+        "agent_version": VERSION,
+        "check": "local_activation",
+    }))
     return 0
 
 
