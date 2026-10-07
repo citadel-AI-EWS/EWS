@@ -40,6 +40,13 @@ globalThis.fetch = async (input, init = {}) => {
   if (url === "https://oauth2.googleapis.com/token") {
     tokenRequests += 1;
     const form = new URLSearchParams(String(init.body || ""));
+    if (form.get("grant_type") === "refresh_token") {
+      assert.equal(form.get("client_id"), "oauth-client");
+      return new Response(JSON.stringify({
+        access_token: "oauth-token-" + form.get("refresh_token"),
+        expires_in: 3600
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
     assert.equal(form.get("grant_type"), "urn:ietf:params:oauth:grant-type:jwt-bearer");
     const assertion = form.get("assertion");
     assert.ok(assertion);
@@ -68,7 +75,10 @@ globalThis.fetch = async (input, init = {}) => {
   if (match) {
     const folderId = decodeURIComponent(match[1]);
     folderRequests.push(folderId);
-    assert.equal(init.headers.authorization, "Bearer test-service-account-access-token");
+    assert.ok(
+      ["Bearer test-service-account-access-token", "Bearer oauth-token-first", "Bearer oauth-token-rotated"]
+        .includes(init.headers.authorization)
+    );
     if (folderId === "denied-folder") {
       return new Response(JSON.stringify({ error: { message: "forbidden" } }), {
         status: 403, headers: { "content-type": "application/json" }
@@ -110,6 +120,19 @@ try {
     (error) => error?.code === "drive_payload_write_denied"
   );
   assert.equal(tokenRequests, 2);
+
+  const oauthEnv = {
+    GOOGLE_DRIVE_CLIENT_ID: "oauth-client",
+    GOOGLE_DRIVE_CLIENT_SECRET: "oauth-secret",
+    GOOGLE_DRIVE_REFRESH_TOKEN: "first",
+    GOOGLE_DRIVE_REPORTS_FOLDER_ID: "oauth-folder",
+    GOOGLE_DRIVE_AI_REPORTS_FOLDER_ID: "oauth-ai-folder"
+  };
+  await googleDriveWritablePreflight(oauthEnv);
+  await googleDriveWritablePreflight(oauthEnv);
+  assert.equal(tokenRequests, 3, "unchanged OAuth credentials should reuse the token");
+  await googleDriveWritablePreflight({ ...oauthEnv, GOOGLE_DRIVE_REFRESH_TOKEN: "rotated" });
+  assert.equal(tokenRequests, 4, "rotating the refresh token must invalidate the cached access token");
 } finally {
   globalThis.fetch = originalFetch;
 }
