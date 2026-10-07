@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { releaseForAgentVersion, updatePayloadReadyForAgent } from "../src/index.js";
+import { releaseForAgentVersion, updatePayloadReadyForAgent, failedBridgeUpdateNeedsNewRelease } from "../src/index.js";
 
 const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
 const releaseBlock = source.match(/const LATEST_NODE_RELEASE = Object\.freeze\(\{([\s\S]*?)\n\}\);/);
@@ -46,6 +46,23 @@ const currentRelease = {
   files: [...releaseBlock[0].matchAll(/path: "([^"]+)",\s+url: "([^"]+)",\s+sha256: "([^"]+)"/g)]
     .map(([, path, url, sha256]) => ({ path, url, sha256 }))
 };
+const oldBridgeTarget = structuredClone(releaseForAgentVersion(currentRelease, "0.3.2-bridge.1"));
+oldBridgeTarget.files[1].sha256 = "c04d60c25621f8f25e511b1b99a7d2b7f9dd721de1f5c35515eb854024e9b094";
+const failedOldHop = {
+  command_id: "command_failed",
+  status: "failed",
+  payload_json: JSON.stringify(oldBridgeTarget)
+};
+assert.equal(failedBridgeUpdateNeedsNewRelease(failedOldHop, "0.3.2-bridge.1", currentRelease), true);
+assert.equal(failedBridgeUpdateNeedsNewRelease(failedOldHop, "0.3.36", currentRelease), false);
+assert.equal(failedBridgeUpdateNeedsNewRelease(
+  {...failedOldHop, status: "completed"}, "0.3.2-bridge.1", currentRelease
+), false);
+assert.equal(failedBridgeUpdateNeedsNewRelease({
+  ...failedOldHop,
+  payload_json: JSON.stringify(releaseForAgentVersion(currentRelease, "0.3.2-bridge.1"))
+}, "0.3.2-bridge.1", currentRelease), false, "same failed release cannot retry");
+
 for (const version of ["0.3.1", "0.3.2-bridge.1", "0.3.13", "0.3.27", "0.3.36"]) {
   const payload = releaseForAgentVersion(currentRelease, version);
   assert.equal(updatePayloadReadyForAgent(payload, version), true);
