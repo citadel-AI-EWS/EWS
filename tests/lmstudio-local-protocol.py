@@ -7,6 +7,7 @@ import socketserver
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -118,6 +119,58 @@ def main() -> int:
         assert isinstance(project_body, dict)
         assert project_body["model"] == "test/model"
         assert project_body["messages"][-1]["content"] == "Return PROJECT OK"
+
+        # Inference proof is bound to the running Agent process and cannot survive restart.
+        proof_agent = node.Agent(config)
+        proof_agent.find_lms = lambda: "lms"
+
+        class LmsResult:
+            def __init__(self, stdout: str):
+                self.stdout = stdout
+
+        proof_agent.run_lms = lambda args, timeout: (
+            LmsResult('{"running":true}')
+            if args[:2] == ["server", "status"]
+            else LmsResult('[{"identifier":"test/model"}]')
+        )
+        proof_agent.save_lmstudio_state(
+            inference_ready=True,
+            inference_model="test/model",
+            inference_session_id="previous-agent-process",
+            inference_checked_at=node.now_iso(),
+            inference_error=None,
+        )
+        stale_proof = proof_agent.probe_lmstudio()
+        assert stale_proof["inference_ready"] is False, stale_proof
+
+        # Failed proof diagnostics remain visible until the model changes or a proof succeeds.
+        proof_agent.save_lmstudio_state(
+            inference_ready=False,
+            inference_model="test/model",
+            inference_session_id=proof_agent.runtime_session_id,
+            inference_checked_at=node.now_iso(),
+            inference_error="lmstudio_query_timeout",
+        )
+        failed_proof = proof_agent.probe_lmstudio()
+        assert failed_proof["inference_ready"] is False, failed_proof
+        assert failed_proof["inference_error"] == "lmstudio_query_timeout", failed_proof
+        assert failed_proof["inference_checked_at"], failed_proof
+
+        # Absolute deadline helper fires on wall clock rather than relying on idle socket timeouts.
+        class DummyConnection:
+            sock = None
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        dummy = DummyConnection()
+        started = time.monotonic()
+        with proof_agent.lm_connection_deadline(dummy, 0.05) as expired:
+            time.sleep(0.10)
+        assert expired.is_set(), "LM absolute deadline did not fire"
+        assert dummy.closed, "LM absolute deadline did not close the connection"
+        assert time.monotonic() - started < 0.5
 
         # A dead server is restarted before an AI assignment instead of trusting stale state.
         recovery = node.Agent(config)
