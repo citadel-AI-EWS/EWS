@@ -2053,7 +2053,6 @@ function rolloutCommandAgeMs(command) {
 
 export function rolloutCommandOutcome(command, node, targetVersion, now = Date.now()) {
   if (!command) return "pending";
-  if (["failed", "cancelled", "expired"].includes(command.status)) return "failed";
   const commandStarted = parseControllerTimestamp(command.created_at);
   const completed = parseControllerTimestamp(command.completed_at);
   const heartbeat = parseControllerTimestamp(node?.last_seen_at);
@@ -2062,13 +2061,16 @@ export function rolloutCommandOutcome(command, node, targetVersion, now = Date.n
       node?.agent_version === targetVersion && operationalNodeState(node, now) === "live") {
     return "verified";
   }
+  // The agent may install successfully and then fail while acknowledging the
+  // command. A later live heartbeat with the target version is stronger proof.
+  if (["failed", "cancelled", "expired"].includes(command.status)) return "failed";
   const age = completed || commandStarted;
   if (age !== null && now - age >=
       (command.status === "completed" ? 5 : 10) * 60 * 1000) return "failed";
   return "pending";
 }
 
-async function reconcileSmartRollout(env, rollout) {
+export async function reconcileSmartRollout(env, rollout) {
   let policy = await env.DB.prepare(
     "SELECT rollout_id, canary_node_id, phase, max_parallel, max_failures, pause_reason, canary_verified_at " +
     "FROM agent_rollout_policy WHERE rollout_id = ?"
@@ -2088,7 +2090,9 @@ async function reconcileSmartRollout(env, rollout) {
     };
   }
 
-  if (policy.phase === "canary") {
+  const canaryPaused = policy.phase === "paused" &&
+    String(policy.pause_reason || "").startsWith("canary_");
+  if (policy.phase === "canary" || canaryPaused) {
     const [canary, command] = await Promise.all([
       env.DB.prepare(
         "SELECT node_id, hostname, status, agent_version, last_seen_at FROM nodes WHERE node_id = ?"
@@ -2116,7 +2120,7 @@ async function reconcileSmartRollout(env, rollout) {
           target_version: rollout.target_version
         }))
       ]);
-    } else if (command) {
+    } else if (policy.phase === "canary" && command) {
       let pauseReason = null;
       if (["failed","cancelled","expired"].includes(command.status)) {
         pauseReason = "canary_command_" + command.status;
