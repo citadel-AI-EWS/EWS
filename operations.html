@@ -984,6 +984,12 @@ async function pollSmartRollout(){
     }
     smartRolloutTimer=setTimeout(pollSmartRollout,5000);
   }catch(e){
+    if(e.status===401||e.status===403){
+      sessionStorage.removeItem('citadel-smart-rollout-watch');
+      setFleetActivity('Умное автообновление','Доступ к статусу rollout отклонён: '+e.message,0,1,true);
+      tell('Доступ к статусу rollout отклонён: '+e.message,true);
+      return;
+    }
     const delay=Math.min(30000,5000*Math.pow(2,Math.min(smartRolloutPollFailures++,3)));
     const message='Статус rollout временно недоступен: '+e.message+
       ' · повторяю через '+Math.ceil(delay/1000)+' с. Обновление может продолжаться.';
@@ -1262,5 +1268,5 @@ function updateTerminalHud(data){
 }
 setInterval(rotateTerminalPhrase,6500);
 
-updateClock();setInterval(updateClock,1000);window.addEventListener('hashchange',()=>{route();refresh()});document.addEventListener('visibilitychange',()=>{clearTimeout(timer);if(document.hidden){stopSmartRolloutWatch();clearDetailProgressWatch();stopReportThreadWatch();generation++;aborter?.abort()}else{if(token&&sessionStorage.getItem('citadel-smart-rollout-watch')==='1')pollSmartRollout();if($('nodeDialog').open&&currentNode&&nodeOperations.has(currentNode.node_id))startDetailProgressWatch(currentNode,'',{resume:true});refresh()}});window.addEventListener('pagehide',()=>{if($('directSshDialog').open)$('directSshDialog').close();sshTerminal.close();clearTimeout(timer);generation++;aborter?.abort()});window.addEventListener('pageshow',()=>{route();refresh()});route();refresh();if(token&&sessionStorage.getItem('citadel-smart-rollout-watch')==='1')pollSmartRollout();
+updateClock();setInterval(updateClock,1000);window.addEventListener('hashchange',()=>{route();refresh()});document.addEventListener('visibilitychange',()=>{clearTimeout(timer);if(document.hidden){stopSmartRolloutWatch();clearDetailProgressWatch();stopReportThreadWatch();generation++;aborter?.abort()}else{if(token&&sessionStorage.getItem('citadel-smart-rollout-watch')==='1')smartRolloutTimer=setTimeout(pollSmartRollout,1500);if($('nodeDialog').open&&currentNode&&nodeOperations.has(currentNode.node_id))startDetailProgressWatch(currentNode,'',{resume:true});refresh()}});window.addEventListener('pagehide',()=>{if($('directSshDialog').open)$('directSshDialog').close();sshTerminal.close();clearTimeout(timer);generation++;aborter?.abort()});window.addEventListener('pageshow',()=>{route();refresh()});route();refresh();if(token&&sessionStorage.getItem('citadel-smart-rollout-watch')==='1')smartRolloutTimer=setTimeout(pollSmartRollout,1500);
 </script></body></html>
