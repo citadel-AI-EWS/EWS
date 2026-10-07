@@ -84,6 +84,7 @@ LMSTUDIO_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:/[A-Za-z0-9]
 LMSTUDIO_QUANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
 HYBRID_MODES = {"python", "lmstudio", "both"}
 LMSTUDIO_INFERENCE_PROBE_TIMEOUT_SECONDS = 30
+LMSTUDIO_INFERENCE_PROOF_TTL_SECONDS = 5 * 60
 LMSTUDIO_QUERY_TIMEOUT_SECONDS = 4 * 60
 SSH_INLINE_COMMANDS = frozenset({
     "help", "status", "hostname", "whoami", "uname -a", "python --version", "python3 --version",
@@ -2672,9 +2673,23 @@ class Agent:
         )
         prior_inference_model = str(state.get("inference_model") or "").strip()
         same_inference_model = bool(loaded_model and prior_inference_model == loaded_model)
+        proof_fresh = False
+        checked_at = state.get("inference_checked_at")
+        if isinstance(checked_at, str) and checked_at:
+            try:
+                checked = dt.datetime.fromisoformat(checked_at.replace("Z", "+00:00"))
+                if checked.tzinfo is None:
+                    checked = checked.replace(tzinfo=dt.timezone.utc)
+                proof_age = (
+                    dt.datetime.now(dt.timezone.utc) - checked.astimezone(dt.timezone.utc)
+                ).total_seconds()
+                proof_fresh = 0 <= proof_age <= LMSTUDIO_INFERENCE_PROOF_TTL_SECONDS
+            except (TypeError, ValueError):
+                proof_fresh = False
         inference_ready = bool(
             state.get("inference_ready") and server_running and same_inference_model
             and state.get("inference_session_id") == self.runtime_session_id
+            and proof_fresh
         )
         snapshot = {
             "installed": installed,
