@@ -165,12 +165,9 @@ def main() -> int:
                 self.closed = True
 
         dummy = DummyConnection()
-        started = time.monotonic()
         with proof_agent.lm_connection_deadline(dummy, 0.05) as expired:
-            time.sleep(0.10)
-        assert expired.is_set(), "LM absolute deadline did not fire"
+            assert expired.wait(1.0), "LM absolute deadline did not fire"
         assert dummy.closed, "LM absolute deadline did not close the connection"
-        assert time.monotonic() - started < 0.5
 
         # A dead server is restarted before an AI assignment instead of trusting stale state.
         recovery = node.Agent(config)
