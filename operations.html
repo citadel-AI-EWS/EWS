@@ -891,7 +891,8 @@ function updateCommandFeedback(node,command){
    return {phase:'installed',spinning:true,error:age!==null&&age>=5,text:'Обновление: удалённый агент завершил локальную фазу и проверку файлов; ждём перезапуск и heartbeat '+target+(age!==null&&age>=5?' · нет подтверждения уже '+age+' мин':'')+'.'};
  }
  if(['failed','expired','cancelled'].includes(command.status)){
-   return {phase:'failed',spinning:false,error:true,text:'Обновление не подтверждено: '+label(command.status)+'.'};
+   const bridge=String(node?.agent_version||'').includes('-bridge.');
+   return {phase:'failed',spinning:false,error:true,text:(bridge?'Промежуточный агент '+node.agent_version+' работает, но переход на '+target+' завершился ошибкой. ':'Обновление не подтверждено: '+label(command.status)+'. ')+ 'Проверьте SSH → agent-logs'+(command.command_id?' · команда '+command.command_id:'')+'.'};
  }
  return null;
 }
