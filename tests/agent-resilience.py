@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "agent"))
 import citadel_node_v1 as node
+import citadel_node_v2 as node_v2
 
 
 class ResilienceTests(unittest.TestCase):
@@ -123,6 +124,28 @@ time.sleep(.3)
             exit_process.assert_not_called()
         finally:
             self.agent.watchdog.stop()
+
+    def test_legacy_bridge_probe_uses_local_identity_without_network(self):
+        config_path = Path(self.temp.name) / "config.json"
+        config_path.write_text(
+            '{"controller_url":"https://example.invalid","data_dir":'
+            + __import__("json").dumps(self.temp.name) + "}",
+            encoding="utf-8",
+        )
+        self.agent.identity.set_node_id("node_test")
+        with patch.object(node_v2.Agent, "enroll", side_effect=AssertionError("network enroll")), \
+             patch.object(node_v2.Agent, "heartbeat", side_effect=AssertionError("network heartbeat")):
+            self.assertEqual(node_v2.controller_probe(config_path), 0)
+
+    def test_legacy_bridge_probe_rejects_missing_identity(self):
+        config_path = Path(self.temp.name) / "config.json"
+        config_path.write_text(
+            '{"controller_url":"https://example.invalid","data_dir":'
+            + __import__("json").dumps(self.temp.name) + "}",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(RuntimeError, "not enrolled"):
+            node_v2.controller_probe(config_path)
 
     def test_supervised_update_delegates_restart_without_duplicate_process(self):
         self.agent.identity.set_node_id("node_test")
