@@ -58,8 +58,8 @@ const LATEST_NODE_RELEASE = Object.freeze({
     },
     {
       path: "citadel_node_v2.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/91919785baeaae02e3596728d1f218d244b40f2b/agent/citadel_node_v2.py",
-      sha256: "c04d60c25621f8f25e511b1b99a7d2b7f9dd721de1f5c35515eb854024e9b094"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/40efd1400194a8c9f13f5128218a195a179486b3/agent/citadel_node_v2.py",
+      sha256: "7f75c80dfb56c789107b24f2312d747e494b4f9b137fc8d0cd834852a9aed97d"
     },
     {
       path: "CitadelSshConsole.cs",
