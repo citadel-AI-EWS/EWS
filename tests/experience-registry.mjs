@@ -5,14 +5,15 @@ import {
 } from "../src/experience/registry.js";
 
 const registry = getProjectExperienceRegistry();
-assert.match(PROJECT_EXPERIENCE_REGISTRY_VERSION, /^2026-09-18\./);
+assert.match(PROJECT_EXPERIENCE_REGISTRY_VERSION, /^2026-10-07\./);
 assert.equal(registry.registry_version, PROJECT_EXPERIENCE_REGISTRY_VERSION);
 assert.equal(registry.operational_d1, false);
 assert.equal(registry.raw_archive_embedded, false);
 assert.equal(registry.raw_logs_embedded, false);
 assert.equal(registry.legacy_summary.structured_runs, 650);
 assert.equal(registry.legacy_summary.structured_failures, 650);
-assert.ok(registry.entries.length >= 12);
+assert.ok(registry.entries.length >= 13);
+assert.ok(registry.entries.some((entry) => entry.id === "CRE-013"));
 
 const ids = registry.entries.map((entry) => entry.id);
 assert.equal(new Set(ids).size, ids.length);
