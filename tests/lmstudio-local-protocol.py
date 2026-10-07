@@ -109,11 +109,64 @@ def main() -> int:
         assert stream_body["stream"] is True
         assert stream_body["temperature"] == 0.1
 
-        project = next(item for item in SEEN if item["path"] == "/v1/chat/completions")
-        project_body = project["body"]
+        completions = [item for item in SEEN if item["path"] == "/v1/chat/completions"]
+        assert len(completions) >= 2, completions
+        readiness_body = completions[0]["body"]
+        assert isinstance(readiness_body, dict)
+        assert readiness_body["messages"][-1]["content"] == "hi"
+        project_body = completions[-1]["body"]
         assert isinstance(project_body, dict)
         assert project_body["model"] == "test/model"
         assert project_body["messages"][-1]["content"] == "Return PROJECT OK"
+
+        # Inference proof is bound to the running Agent process and cannot survive restart.
+        proof_agent = node.Agent(config)
+        proof_agent.find_lms = lambda: "lms"
+
+        class LmsResult:
+            def __init__(self, stdout: str):
+                self.stdout = stdout
+
+        proof_agent.run_lms = lambda args, timeout: (
+            LmsResult('{"running":true}')
+            if args[:2] == ["server", "status"]
+            else LmsResult('[{"identifier":"test/model"}]')
+        )
+        proof_agent.save_lmstudio_state(
+            inference_ready=True,
+            inference_model="test/model",
+            inference_session_id="previous-agent-process",
+            inference_checked_at=node.now_iso(),
+            inference_error=None,
+        )
+        stale_proof = proof_agent.probe_lmstudio()
+        assert stale_proof["inference_ready"] is False, stale_proof
+
+        # Failed proof diagnostics remain visible until the model changes or a proof succeeds.
+        proof_agent.save_lmstudio_state(
+            inference_ready=False,
+            inference_model="test/model",
+            inference_session_id=proof_agent.runtime_session_id,
+            inference_checked_at=node.now_iso(),
+            inference_error="lmstudio_query_timeout",
+        )
+        failed_proof = proof_agent.probe_lmstudio()
+        assert failed_proof["inference_ready"] is False, failed_proof
+        assert failed_proof["inference_error"] == "lmstudio_query_timeout", failed_proof
+        assert failed_proof["inference_checked_at"], failed_proof
+
+        # Absolute deadline helper fires on wall clock rather than relying on idle socket timeouts.
+        class DummyConnection:
+            sock = None
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        dummy = DummyConnection()
+        with proof_agent.lm_connection_deadline(dummy, 0.05) as expired:
+            assert expired.wait(1.0), "LM absolute deadline did not fire"
+        assert dummy.closed, "LM absolute deadline did not close the connection"
 
         # A dead server is restarted before an AI assignment instead of trusting stale state.
         recovery = node.Agent(config)
@@ -135,6 +188,7 @@ def main() -> int:
         recovery.probe_lmstudio = lambda: next(recovery_states)
         recovery_commands: list[list[str]] = []
         recovery.run_lms = lambda args, timeout: recovery_commands.append(list(args))
+        recovery.verify_lmstudio_inference = lambda model: None
         assert recovery.ensure_lmstudio_ready_for_inference() == "test/model"
         assert recovery_commands == [
             ["daemon", "up"],
@@ -161,6 +215,7 @@ def main() -> int:
         reload_agent.probe_lmstudio = lambda: next(reload_states)
         reload_payloads: list[dict[str, object]] = []
         reload_agent.load_lmstudio_model = lambda payload: reload_payloads.append(dict(payload))
+        reload_agent.verify_lmstudio_inference = lambda model: None
         assert reload_agent.ensure_lmstudio_ready_for_inference() == "test/model"
         assert reload_payloads == [{
             "model": "test/model",

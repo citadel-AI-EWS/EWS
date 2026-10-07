@@ -30,15 +30,15 @@ assert.match(index, /wake_relay_unavailable/);
 
 const now = Date.parse("2026-10-06T12:00:00Z");
 const oldNode = { status: "online", agent_version: "0.3.24", last_seen_at: "2026-10-06T11:59:00Z" };
-const newNode = { ...oldNode, agent_version: "0.3.39" };
+const newNode = { ...oldNode, agent_version: "0.3.40" };
 const command = { status: "completed", created_at: "2026-10-06T11:55:00Z", completed_at: "2026-10-06T11:58:00Z" };
-assert.equal(rolloutCommandOutcome(command, oldNode, "0.3.39", now), "pending");
-assert.equal(rolloutCommandOutcome(command, newNode, "0.3.39", now), "verified");
-assert.equal(rolloutCommandOutcome(command, { ...newNode, last_seen_at: "2026-10-06T11:57:00Z" }, "0.3.39", now), "pending");
-assert.equal(rolloutCommandOutcome(command, { ...newNode, status: "offline" }, "0.3.39", now), "pending");
-assert.equal(rolloutCommandOutcome(command, newNode, "0.3.39", now + 6 * 60_000), "failed");
-assert.equal(rolloutCommandOutcome({ ...command, status: "failed" }, newNode, "0.3.39", now), "failed");
-assert.equal(rolloutCommandOutcome(command, oldNode, "0.3.39", now + 5 * 60_000), "failed");
+assert.equal(rolloutCommandOutcome(command, oldNode, "0.3.40", now), "pending");
+assert.equal(rolloutCommandOutcome(command, newNode, "0.3.40", now), "verified");
+assert.equal(rolloutCommandOutcome(command, { ...newNode, last_seen_at: "2026-10-06T11:57:00Z" }, "0.3.40", now), "pending");
+assert.equal(rolloutCommandOutcome(command, { ...newNode, status: "offline" }, "0.3.40", now), "pending");
+assert.equal(rolloutCommandOutcome(command, newNode, "0.3.40", now + 6 * 60_000), "failed");
+assert.equal(rolloutCommandOutcome({ ...command, status: "failed" }, newNode, "0.3.40", now), "failed");
+assert.equal(rolloutCommandOutcome(command, oldNode, "0.3.40", now + 5 * 60_000), "failed");
 
 const wakeWrites = [];
 const wakeArgs = {

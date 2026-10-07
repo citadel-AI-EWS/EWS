@@ -49,17 +49,17 @@ const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "r
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const WAKE_PEER_MIN_AGENT_VERSION = "0.3.6";
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.39",
+  version: "0.3.40",
   files: [
     {
       path: "citadel_node_v1.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/64139abefcbc8daf161dc34a896163f52f899469/agent/citadel_node_v1.py",
-      sha256: "cd0a23ed5676fa0368bad8555e5636f285a7327b38be8b01eba66575a259b812"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/91919785baeaae02e3596728d1f218d244b40f2b/agent/citadel_node_v1.py",
+      sha256: "6e9df9f0b06133fc121ed7170142e17cf5819636e40f41b4107fcbec345196c7"
     },
     {
       path: "citadel_node_v2.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/64139abefcbc8daf161dc34a896163f52f899469/agent/citadel_node_v2.py",
-      sha256: "9fedc79c08b46f861c7ee889687701bfee7008e217a2186cf8c8d25acb289830"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/91919785baeaae02e3596728d1f218d244b40f2b/agent/citadel_node_v2.py",
+      sha256: "c04d60c25621f8f25e511b1b99a7d2b7f9dd721de1f5c35515eb854024e9b094"
     },
     {
       path: "CitadelSshConsole.cs",
@@ -142,8 +142,10 @@ const LMSTUDIO_INTEGRATION = Object.freeze({
 const CONTROLLER_COMMAND_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0";
 const DEFAULT_GOOGLE_DRIVE_PAYLOAD_FOLDER_ID = "135_YkqQRJpkM1gmk_oh2uV8ldROqVmbn";
 const DEFAULT_GOOGLE_DRIVE_AI_REPORTS_FOLDER_ID = "1cUOu0FFbMMaf32tvPMK0bgsFsLyVAyTn";
+const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
 const DRIVE_POINTER_PREFIX = "@drive:";
-let driveAccessTokenCache = { token: null, expires_at_ms: 0 };
+let driveAccessTokenCache = { token: null, expires_at_ms: 0, source_key: null };
 let payloadSchemaPromise;
 let reportSchemaPromise;
 let legacyReportBackfillPromise;
@@ -504,6 +506,9 @@ function googleDrivePayloadConfig(env) {
   const clientSecret = typeof env.GOOGLE_DRIVE_CLIENT_SECRET === "string" ? env.GOOGLE_DRIVE_CLIENT_SECRET.trim() : "";
   const refreshToken = typeof env.GOOGLE_DRIVE_REFRESH_TOKEN === "string" ? env.GOOGLE_DRIVE_REFRESH_TOKEN.trim() : "";
   const accessToken = typeof env.GOOGLE_DRIVE_ACCESS_TOKEN === "string" ? env.GOOGLE_DRIVE_ACCESS_TOKEN.trim() : "";
+  const serviceAccountJson = typeof env.GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON === "string"
+    ? env.GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON.trim()
+    : "";
   const folderId = typeof env.GOOGLE_DRIVE_REPORTS_FOLDER_ID === "string" && env.GOOGLE_DRIVE_REPORTS_FOLDER_ID.trim()
     ? env.GOOGLE_DRIVE_REPORTS_FOLDER_ID.trim()
     : DEFAULT_GOOGLE_DRIVE_PAYLOAD_FOLDER_ID;
@@ -513,7 +518,120 @@ function googleDrivePayloadConfig(env) {
     client_id: clientId,
     client_secret: clientSecret,
     refresh_token: refreshToken,
-    configured: Boolean(folderId && (accessToken || (clientId && clientSecret && refreshToken)))
+    service_account_json: serviceAccountJson,
+    configured: Boolean(folderId && (
+      accessToken ||
+      (clientId && clientSecret && refreshToken) ||
+      serviceAccountJson
+    ))
+  };
+}
+
+function googleDriveServiceAccount(config) {
+  if (!config.service_account_json) return null;
+  let value;
+  try {
+    value = JSON.parse(config.service_account_json);
+    if (typeof value === "string") value = JSON.parse(value.trim());
+  } catch {
+    throw new ApiError(503, "drive_payload_auth_failed");
+  }
+  if (
+    !value || typeof value !== "object" || Array.isArray(value) ||
+    value.type !== "service_account" ||
+    typeof value.client_email !== "string" ||
+    !/^[^@\s]+@[^@\s]+\.gserviceaccount\.com$/.test(value.client_email) ||
+    typeof value.private_key !== "string" ||
+    !value.private_key.includes("-----BEGIN PRIVATE KEY-----") ||
+    !value.private_key.includes("-----END PRIVATE KEY-----")
+  ) {
+    throw new ApiError(503, "drive_payload_auth_failed");
+  }
+  if (value.token_uri && value.token_uri !== GOOGLE_OAUTH_TOKEN_URL) {
+    throw new ApiError(503, "drive_payload_auth_failed");
+  }
+  return {
+    client_email: value.client_email,
+    private_key: value.private_key,
+    token_uri: GOOGLE_OAUTH_TOKEN_URL
+  };
+}
+
+function googleServiceAccountPkcs8(privateKey) {
+  const base64 = String(privateKey)
+    .replace(/-----BEGIN PRIVATE KEY-----/g, "")
+    .replace(/-----END PRIVATE KEY-----/g, "")
+    .replace(/\s+/g, "");
+  if (!base64 || !/^[A-Za-z0-9+/=]+$/.test(base64)) {
+    throw new ApiError(503, "drive_payload_auth_failed");
+  }
+  try {
+    const decoded = atob(base64);
+    return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+  } catch {
+    throw new ApiError(503, "drive_payload_auth_failed");
+  }
+}
+
+function googleJwtSegment(value) {
+  return bytesToBase64Url(new TextEncoder().encode(JSON.stringify(value)));
+}
+
+async function googleDriveServiceAccountToken(serviceAccount) {
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const header = googleJwtSegment({ alg: "RS256", typ: "JWT" });
+  const claim = googleJwtSegment({
+    iss: serviceAccount.client_email,
+    scope: GOOGLE_DRIVE_SCOPE,
+    aud: GOOGLE_OAUTH_TOKEN_URL,
+    iat: issuedAt,
+    exp: issuedAt + 3600
+  });
+  const signingInput = header + "." + claim;
+  let key;
+  try {
+    key = await crypto.subtle.importKey(
+      "pkcs8",
+      googleServiceAccountPkcs8(serviceAccount.private_key),
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+  } catch {
+    throw new ApiError(503, "drive_payload_auth_failed");
+  }
+  let signature;
+  try {
+    signature = await crypto.subtle.sign(
+      "RSASSA-PKCS1-v1_5",
+      key,
+      new TextEncoder().encode(signingInput)
+    );
+  } catch {
+    throw new ApiError(503, "drive_payload_auth_failed");
+  }
+  const assertion = signingInput + "." + bytesToBase64Url(signature);
+  let response;
+  try {
+    response = await fetch(GOOGLE_OAUTH_TOKEN_URL, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        assertion
+      })
+    });
+  } catch {
+    throw new ApiError(503, "drive_payload_storage_unavailable");
+  }
+  if (!response.ok) throw new ApiError(503, "drive_payload_auth_failed");
+  const data = await response.json().catch(() => ({}));
+  if (typeof data.access_token !== "string" || !data.access_token) {
+    throw new ApiError(503, "drive_payload_auth_failed");
+  }
+  return {
+    token: data.access_token,
+    expires_in: Math.max(300, Number(data.expires_in || 3600))
   };
 }
 
@@ -596,36 +714,100 @@ async function googleDriveAccessToken(env) {
   const config = googleDrivePayloadConfig(env);
   if (!config.configured) throw new ApiError(503, "drive_payload_storage_unavailable");
   if (config.access_token) return config.access_token;
-  if (driveAccessTokenCache.token && Date.now() < driveAccessTokenCache.expires_at_ms - 60000) {
+
+  const serviceAccount = googleDriveServiceAccount(config);
+  const oauthConfigured = Boolean(config.client_id && config.client_secret && config.refresh_token);
+  const sourceKey = oauthConfigured
+    ? "oauth:" + config.client_id
+    : serviceAccount
+      ? "service:" + serviceAccount.client_email
+      : null;
+  if (
+    sourceKey &&
+    driveAccessTokenCache.source_key === sourceKey &&
+    driveAccessTokenCache.token &&
+    Date.now() < driveAccessTokenCache.expires_at_ms - 60000
+  ) {
     return driveAccessTokenCache.token;
   }
-  const body = new URLSearchParams({
-    client_id: config.client_id,
-    client_secret: config.client_secret,
-    refresh_token: config.refresh_token,
-    grant_type: "refresh_token"
-  });
+
+  let tokenData;
+  if (oauthConfigured) {
+    const body = new URLSearchParams({
+      client_id: config.client_id,
+      client_secret: config.client_secret,
+      refresh_token: config.refresh_token,
+      grant_type: "refresh_token"
+    });
+    let response;
+    try {
+      response = await fetch(GOOGLE_OAUTH_TOKEN_URL, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body
+      });
+    } catch {
+      throw new ApiError(503, "drive_payload_storage_unavailable");
+    }
+    if (!response.ok) throw new ApiError(503, "drive_payload_auth_failed");
+    const data = await response.json().catch(() => ({}));
+    if (typeof data.access_token !== "string" || !data.access_token) {
+      throw new ApiError(503, "drive_payload_auth_failed");
+    }
+    tokenData = {
+      token: data.access_token,
+      expires_in: Math.max(300, Number(data.expires_in || 3600))
+    };
+  } else if (serviceAccount) {
+    tokenData = await googleDriveServiceAccountToken(serviceAccount);
+  } else {
+    throw new ApiError(503, "drive_payload_storage_unavailable");
+  }
+
+  driveAccessTokenCache = {
+    token: tokenData.token,
+    expires_at_ms: Date.now() + tokenData.expires_in * 1000,
+    source_key: sourceKey
+  };
+  return tokenData.token;
+}
+
+async function googleDriveFolderWritable(token, folderId) {
   let response;
   try {
-    response = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body
-    });
+    response = await fetch(
+      "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(folderId) +
+      "?fields=id,name,mimeType,capabilities(canEdit)&supportsAllDrives=true",
+      { headers: { authorization: "Bearer " + token } }
+    );
   } catch {
     throw new ApiError(503, "drive_payload_storage_unavailable");
   }
-  if (!response.ok) throw new ApiError(503, "drive_payload_auth_failed");
+  if (response.status === 401) throw new ApiError(503, "drive_payload_auth_failed");
+  if (response.status === 403) throw new ApiError(503, "drive_payload_write_denied");
+  if (!response.ok) throw new ApiError(503, "drive_payload_storage_unavailable");
   const data = await response.json().catch(() => ({}));
-  if (typeof data.access_token !== "string" || !data.access_token) {
-    throw new ApiError(503, "drive_payload_auth_failed");
+  if (data.mimeType !== "application/vnd.google-apps.folder") {
+    throw new ApiError(503, "drive_payload_storage_unavailable");
   }
-  const expiresIn = Number(data.expires_in || 3600);
-  driveAccessTokenCache = {
-    token: data.access_token,
-    expires_at_ms: Date.now() + Math.max(300, expiresIn) * 1000
-  };
-  return data.access_token;
+  if (data.capabilities?.canEdit !== true) {
+    throw new ApiError(503, "drive_payload_write_denied");
+  }
+  return { id: data.id || folderId, name: data.name || null };
+}
+
+export async function googleDriveWritablePreflight(env) {
+  const token = await googleDriveAccessToken(env);
+  const config = googleDrivePayloadConfig(env);
+  const folders = [...new Set([
+    config.folder_id,
+    googleDriveAiReportsFolderId(env)
+  ].filter(Boolean))];
+  const checked = [];
+  for (const folderId of folders) {
+    checked.push(await googleDriveFolderWritable(token, folderId));
+  }
+  return { ok: true, folders: checked };
 }
 
 async function ensurePayloadStorage(env) {
@@ -3111,7 +3293,8 @@ function projectNodeReady(node, sourceType) {
     Number(node.installed || node.lmstudio_installed || 0) === 1 &&
     Number(node.server_running || node.lmstudio_server_running || 0) === 1 &&
     typeof (node.loaded_model || node.lmstudio_loaded_model) === "string" &&
-    (node.loaded_model || node.lmstudio_loaded_model).length > 0;
+    (node.loaded_model || node.lmstudio_loaded_model).length > 0 &&
+    Number(node.inference_ready || 0) === 1;
 }
 
 /**
@@ -3134,9 +3317,11 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
 
   const node = await env.DB.prepare(`
     SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
-      ai.installed, ai.loaded_model, ai.server_running
+      ai.installed, ai.loaded_model, ai.server_running,
+      json_extract(air.state_json, '$.inference_ready') AS inference_ready
     FROM nodes AS n
     LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
+    LEFT JOIN node_ai_runtime_state AS air ON air.node_id = n.node_id
     WHERE n.node_id = ?
   `).bind(nodeId).first();
   if (!node || operationalNodeState(node) !== "live" || isTestNodeRecord(node)) return 0;
@@ -3168,9 +3353,11 @@ async function materializeProjectWorkForNode(env, nodeId, projectId = null) {
     `).bind(projectId, projectId, canRunPython ? 1 : 0, canRunAi ? 1 : 0, nodeId).all(),
     env.DB.prepare(`
       SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.capabilities_json,
-        ai.installed, ai.loaded_model, ai.server_running
+        ai.installed, ai.loaded_model, ai.server_running,
+        json_extract(air.state_json, '$.inference_ready') AS inference_ready
       FROM nodes AS n
       LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
+      LEFT JOIN node_ai_runtime_state AS air ON air.node_id = n.node_id
       WHERE n.status = 'online'
         AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes')
     `).all()
@@ -3494,10 +3681,12 @@ async function architectCreateProject(request, env) {
   const nodesQuery = await env.DB.prepare(
     "SELECT n.node_id, n.hostname, n.status, n.last_seen_at, n.agent_version, n.capabilities_json, nn.node_number, " +
     "ai.installed AS lmstudio_installed, ai.loaded_model AS lmstudio_loaded_model, " +
-    "ai.server_running AS lmstudio_server_running " +
+    "ai.server_running AS lmstudio_server_running, " +
+    "json_extract(air.state_json, '$.inference_ready') AS inference_ready " +
     "FROM nodes AS n " +
     "LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id " +
     "LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id " +
+    "LEFT JOIN node_ai_runtime_state AS air ON air.node_id = n.node_id " +
     "WHERE n.status = 'online' AND datetime(n.last_seen_at) >= datetime('now', '-5 minutes') " +
     "ORDER BY n.last_seen_at DESC, n.node_id ASC"
   ).all();
@@ -3759,10 +3948,14 @@ async function architectGetProject(request, env, projectId, executionCtx = null)
       ai.installed AS lmstudio_installed,
       ai.loaded_model AS lmstudio_loaded_model,
       ai.server_running AS lmstudio_server_running,
+      json_extract(air.state_json, '$.inference_ready') AS inference_ready,
+      json_extract(air.state_json, '$.inference_checked_at') AS inference_checked_at,
+      json_extract(air.state_json, '$.inference_error') AS inference_error,
       ai.updated_at AS lmstudio_state_updated_at
     FROM nodes AS n
     LEFT JOIN node_numbers AS nn ON nn.node_id = n.node_id
     LEFT JOIN node_ai_state AS ai ON ai.node_id = n.node_id
+    LEFT JOIN node_ai_runtime_state AS air ON air.node_id = n.node_id
     WHERE n.status != 'revoked'
     ORDER BY recently_seen DESC, n.last_seen_at DESC, nn.node_number ASC
     LIMIT 100
@@ -3779,6 +3972,7 @@ async function architectGetProject(request, env, projectId, executionCtx = null)
     const installed = Number(node.lmstudio_installed || 0) === 1;
     const serverRunning = Number(node.lmstudio_server_running || 0) === 1;
     const loadedModel = typeof node.lmstudio_loaded_model === "string" && node.lmstudio_loaded_model.length > 0;
+    const inferenceReady = Number(node.inference_ready || 0) === 1;
     const blockers = [];
     if (testNode) blockers.push("test_node_excluded");
     if (!live) blockers.push("offline");
@@ -3797,6 +3991,7 @@ async function architectGetProject(request, env, projectId, executionCtx = null)
       } else {
         if (!serverRunning) blockers.push("lmstudio_server_stopped");
         if (!loadedModel) blockers.push("lmstudio_model_not_loaded");
+        if (serverRunning && loadedModel && !inferenceReady) blockers.push("lmstudio_inference_unverified");
       }
     }
     return {
@@ -3814,6 +4009,9 @@ async function architectGetProject(request, env, projectId, executionCtx = null)
       lmstudio_installed: installed,
       lmstudio_server_running: serverRunning,
       lmstudio_loaded_model: node.lmstudio_loaded_model || null,
+      lmstudio_inference_ready: inferenceReady,
+      lmstudio_inference_checked_at: node.inference_checked_at || null,
+      lmstudio_inference_error: node.inference_error || null,
       ready: blockers.length === 0,
       blockers
     };
@@ -4315,11 +4513,13 @@ function normalizeAiState(value) {
     ["selected_model", 192], ["loaded_model", 192], ["last_action", 96],
     ["progress_phase", 96], ["progress_detail", 512], ["download_job_id", 160],
     ["query_id", 160], ["query_mode", 32], ["query_status", 32], ["operation_id", 160],
-    ["query_prompt", 8000], ["query_answer", 65536], ["live_checked_at", 64]
+    ["query_prompt", 8000], ["query_answer", 65536], ["live_checked_at", 64],
+    ["inference_model", 192], ["inference_checked_at", 64], ["inference_error", 256]
   ];
   const out = {
     installed: value.installed === true || value.installed === 1 ? 1 : 0,
-    server_running: value.server_running === true || value.server_running === 1 ? 1 : 0
+    server_running: value.server_running === true || value.server_running === 1 ? 1 : 0,
+    inference_ready: value.inference_ready === true || value.inference_ready === 1 ? 1 : 0
   };
   for (const [name, max] of strings) {
     const raw = value[name];
@@ -8588,6 +8788,7 @@ async function handleApi(request, env, url, executionCtx = null) {
 
     try {
       const row = await env.DB.prepare("SELECT 1 AS ok").first();
+      let payloadStorageError = null;
       const [controllerSigning, reportStorage, sessionStorage, payloadStorage] = await Promise.all([
         importControllerPrivateKey(env)
           .then(() => "ready")
@@ -8598,9 +8799,12 @@ async function handleApi(request, env, url, executionCtx = null) {
         ensureSessionStorage(env)
           .then(() => "ready")
           .catch(() => "unavailable"),
-        googleDriveAccessToken(env)
+        googleDriveWritablePreflight(env)
           .then(() => "ready")
-          .catch(() => "unavailable")
+          .catch((error) => {
+            payloadStorageError = error instanceof ApiError ? error.code : "drive_payload_storage_unavailable";
+            return "unavailable";
+          })
       ]);
 
       let projectExecution = "unavailable";
@@ -8634,9 +8838,11 @@ async function handleApi(request, env, url, executionCtx = null) {
         try {
           await ensureNodeAiStorage(env);
           const aiRows = await env.DB.prepare(`
-            SELECT node_id, installed, loaded_model, server_running
-            FROM node_ai_state
-            ORDER BY updated_at DESC
+            SELECT ai.node_id, ai.installed, ai.loaded_model, ai.server_running,
+              json_extract(air.state_json, '$.inference_ready') AS inference_ready
+            FROM node_ai_state AS ai
+            LEFT JOIN node_ai_runtime_state AS air ON air.node_id = ai.node_id
+            ORDER BY ai.updated_at DESC
             LIMIT 500
           `).all();
           const aiByNode = new Map(
@@ -8674,6 +8880,7 @@ async function handleApi(request, env, url, executionCtx = null) {
         session_storage: sessionStorage,
         payload_storage: payloadStorage,
         payload_storage_provider: "google_drive",
+        payload_storage_error: payloadStorageError,
         openrouter_quality: openRouterQualityConfig(env).configured ? "configured" : "unconfigured",
         project_execution: projectExecution,
         project_readiness_error: projectReadinessError,

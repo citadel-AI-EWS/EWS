@@ -68,7 +68,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.39"
+VERSION = "0.3.40"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -83,6 +83,9 @@ LMSTUDIO_INSTALL_FILE_NAMES = {"install_llmstudio_headless.ps1", "install_llmstu
 LMSTUDIO_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,95})?(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,31})?$")
 LMSTUDIO_QUANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
 HYBRID_MODES = {"python", "lmstudio", "both"}
+LMSTUDIO_INFERENCE_PROBE_TIMEOUT_SECONDS = 30
+LMSTUDIO_INFERENCE_PROOF_TTL_SECONDS = 5 * 60
+LMSTUDIO_QUERY_TIMEOUT_SECONDS = 4 * 60
 SSH_INLINE_COMMANDS = frozenset({
     "help", "status", "hostname", "whoami", "uname -a", "python --version", "python3 --version",
     "uptime", "cpu", "memory", "disk", "network",
@@ -1551,6 +1554,8 @@ class Agent:
         self._operation_depth = 0
         self._active_lm_connection = None
         self._operation_cancel_requested = threading.Event()
+        # A readiness proof is valid only inside this running Agent process.
+        self.runtime_session_id = uuid.uuid4().hex
         self.config_path = (config_path or Path("config.json")).resolve()
         if os.name == "nt":
             _ensure_windows_enterprise_probe_file()
@@ -1679,10 +1684,27 @@ class Agent:
         if time.monotonic() - self.last_network_remember >= 300:
             self.remember_network_profile()
             self.last_network_remember = time.monotonic()
+    def refresh_lmstudio_readiness(self) -> dict[str, Any]:
+        """Refresh runtime state and prove inference once when readiness is unknown or stale."""
+        snapshot = self.probe_lmstudio()
+        model = str(snapshot.get("loaded_model") or "").strip()
+        if (
+            snapshot.get("installed")
+            and snapshot.get("server_running")
+            and model
+            and not snapshot.get("inference_ready")
+        ):
+            try:
+                self.verify_lmstudio_inference(model)
+            except Exception as error:
+                self.log.write("lmstudio_inference_probe_failed", error=local_error_code(error))
+            snapshot = self.probe_lmstudio()
+        return snapshot
+
     def sync_lmstudio_readiness(self) -> None:
-        """Refresh scheduler-visible LM Studio state without blocking service HOLD readiness."""
+        """Refresh scheduler-visible LM Studio state with bounded real inference proof."""
         try:
-            self.report_ai_state(**self.probe_lmstudio())
+            self.report_ai_state(**self.refresh_lmstudio_readiness())
         except Exception as error:
             self.log.write("lmstudio_heartbeat_probe_failed", error=str(error)[:300])
 
@@ -1707,6 +1729,7 @@ class Agent:
         *,
         max_tokens: int,
         temperature: float = 0.2,
+        timeout_seconds: float = LMSTUDIO_QUERY_TIMEOUT_SECONDS,
     ) -> tuple[str, dict[str, int] | None]:
         request_body = json_text({
             "model": model,
@@ -1717,30 +1740,38 @@ class Agent:
             "temperature": temperature,
             "max_tokens": max_tokens,
         })
+        timeout_limit = max(1.0, min(float(timeout_seconds), LMSTUDIO_QUERY_TIMEOUT_SECONDS))
         connection = http.client.HTTPConnection(
             "127.0.0.1",
             1234,
-            timeout=max(1800, self.config.request_timeout_seconds),
+            timeout=timeout_limit,
         )
-        try:
-            connection.request(
-                "POST",
-                "/v1/chat/completions",
-                body=request_body.encode("utf-8"),
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "User-Agent": USER_AGENT,
-                },
-            )
-            response = connection.getresponse()
-            raw = response.read(MAX_RESPONSE_BYTES + 1)
-            if len(raw) > MAX_RESPONSE_BYTES:
-                raise RuntimeError("lmstudio_response_too_large")
-            if response.status != 200:
-                raise RuntimeError(f"lmstudio_http_{response.status}")
-        finally:
-            connection.close()
+        with self.lm_connection_deadline(connection, timeout_limit) as deadline_expired:
+            try:
+                connection.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    body=request_body.encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "User-Agent": USER_AGENT,
+                    },
+                )
+                response = connection.getresponse()
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+                if len(raw) > MAX_RESPONSE_BYTES:
+                    raise RuntimeError("lmstudio_response_too_large")
+                if response.status != 200:
+                    raise RuntimeError(f"lmstudio_http_{response.status}")
+            except Exception as error:
+                if deadline_expired.is_set():
+                    raise RuntimeError("lmstudio_query_timeout") from error
+                raise
+            finally:
+                connection.close()
+        if deadline_expired.is_set():
+            raise RuntimeError("lmstudio_query_timeout")
 
         try:
             decoded = json.loads(raw.decode("utf-8"))
@@ -1762,6 +1793,51 @@ class Agent:
                     "total_tokens": prompt_tokens + completion_tokens,
                 }
         return content.strip(), measured
+
+    def verify_lmstudio_inference(self, model: str) -> None:
+        """Prove the loaded model can produce tokens; listing it is not enough."""
+        started = time.monotonic()
+        try:
+            answer, _ = self._project_llm_chat(
+                model,
+                "CITADEL readiness probe. Reply with one short word.",
+                "hi",
+                max_tokens=4,
+                temperature=0.0,
+                timeout_seconds=LMSTUDIO_INFERENCE_PROBE_TIMEOUT_SECONDS,
+            )
+        except Exception as error:
+            # Keep heartbeat/sync polling to one Controller request.  Readiness
+            # proof is local here; the next normal sync carries the state.
+            self.save_lmstudio_state(
+                installed=True,
+                server_running=True,
+                loaded_model=model,
+                inference_ready=False,
+                inference_model=model,
+                inference_checked_at=now_iso(),
+                inference_error=local_error_code(error),
+                inference_session_id=self.runtime_session_id,
+                last_action="inference_preflight",
+                progress_phase="failed",
+                progress_detail="lmstudio_inference_probe_failed",
+            )
+            raise RuntimeError("lmstudio_inference_probe_failed") from error
+        if not answer.strip():
+            raise RuntimeError("lmstudio_inference_probe_failed")
+        self.save_lmstudio_state(
+            installed=True,
+            server_running=True,
+            loaded_model=model,
+            inference_ready=True,
+            inference_model=model,
+            inference_checked_at=now_iso(),
+            inference_error=None,
+            inference_session_id=self.runtime_session_id,
+            last_action="inference_preflight",
+            progress_phase="ready",
+            progress_detail=f"LM Studio inference verified in {time.monotonic() - started:.1f}s",
+        )
 
     def ensure_lmstudio_ready_for_inference(self) -> str:
         """Use live LM Studio state and repair daemon/server/model drift before inference."""
@@ -1842,13 +1918,15 @@ class Agent:
             )
             raise RuntimeError("lmstudio_model_not_loaded")
 
+        self.verify_lmstudio_inference(model)
         self.report_ai_state(
             installed=True,
             server_running=True,
             loaded_model=model,
+            inference_ready=True,
             last_action="project_preflight",
             progress_phase="ready",
-            progress_detail=f"LM Studio ready: {model}",
+            progress_detail=f"LM Studio inference-ready: {model}",
         )
         return model
 
@@ -2340,6 +2418,29 @@ class Agent:
             connection.close()
 
     @contextlib.contextmanager
+    def lm_connection_deadline(self, connection: http.client.HTTPConnection, timeout_seconds: float):
+        """Interrupt a local LM HTTP connection at an absolute wall-clock deadline."""
+        expired = threading.Event()
+        seconds = max(0.1, float(timeout_seconds))
+
+        def expire() -> None:
+            expired.set()
+            sock = getattr(connection, "sock", None)
+            if sock:
+                with contextlib.suppress(OSError):
+                    sock.shutdown(socket.SHUT_RDWR)
+            with contextlib.suppress(OSError):
+                connection.close()
+
+        timer = threading.Timer(seconds, expire)
+        timer.daemon = True
+        timer.start()
+        try:
+            yield expired
+        finally:
+            timer.cancel()
+
+    @contextlib.contextmanager
     def long_operation(self, command_id: str | None = None, *, cancellable: bool = False):
         """Maintain liveness and optionally watch a Controller cancellation request."""
         if self._operation_depth:
@@ -2432,6 +2533,7 @@ class Agent:
             "progress_total_bytes", "progress_detail", "download_job_id",
             "query_id", "query_mode", "query_status", "query_prompt", "query_answer",
             "load_config", "operation_id", "live_checked_at",
+            "inference_ready", "inference_model", "inference_checked_at", "inference_error",
         }
         return {key: state.get(key) for key in allowed if key in state}
 
@@ -2569,11 +2671,36 @@ class Agent:
             if selected_model and selected_model in loaded_models
             else loaded_models[0] if loaded_models else None
         )
+        prior_inference_model = str(state.get("inference_model") or "").strip()
+        same_inference_model = bool(loaded_model and prior_inference_model == loaded_model)
+        proof_fresh = False
+        checked_at = state.get("inference_checked_at")
+        if isinstance(checked_at, str) and checked_at:
+            try:
+                checked = dt.datetime.fromisoformat(checked_at.replace("Z", "+00:00"))
+                if checked.tzinfo is None:
+                    checked = checked.replace(tzinfo=dt.timezone.utc)
+                proof_age = (
+                    dt.datetime.now(dt.timezone.utc) - checked.astimezone(dt.timezone.utc)
+                ).total_seconds()
+                proof_fresh = 0 <= proof_age <= LMSTUDIO_INFERENCE_PROOF_TTL_SECONDS
+            except (TypeError, ValueError):
+                proof_fresh = False
+        inference_ready = bool(
+            state.get("inference_ready") and server_running and same_inference_model
+            and state.get("inference_session_id") == self.runtime_session_id
+            and proof_fresh
+        )
         snapshot = {
             "installed": installed,
             "selected_model": state.get("selected_model"),
             "loaded_model": loaded_model,
             "server_running": server_running,
+            "inference_ready": inference_ready,
+            "inference_model": prior_inference_model if same_inference_model else None,
+            # Preserve failed-proof evidence while the same model remains loaded.
+            "inference_checked_at": state.get("inference_checked_at") if same_inference_model else None,
+            "inference_error": state.get("inference_error") if same_inference_model else None,
             "last_action": state.get("last_action"),
             "progress_phase": state.get("progress_phase"),
             "progress_current": state.get("progress_current"),
@@ -2593,6 +2720,13 @@ class Agent:
             installed=installed,
             server_running=server_running,
             loaded_model=loaded_model,
+            inference_ready=inference_ready,
+            inference_model=snapshot["inference_model"],
+            inference_checked_at=snapshot["inference_checked_at"],
+            inference_error=snapshot["inference_error"],
+            inference_session_id=(
+                state.get("inference_session_id") if same_inference_model else None
+            ),
             live_checked_at=snapshot["live_checked_at"],
         )
         return snapshot
@@ -3110,69 +3244,87 @@ class Agent:
                 "Answer the user's question using the deterministic CITADEL Python-node context below when relevant. "
                 "Do not invent machine state that is not present.\n\n" + python_context[:12000]
             )
-        connection = http.client.HTTPConnection("127.0.0.1", 1234, timeout=1800)
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", 1234, timeout=LMSTUDIO_QUERY_TIMEOUT_SECONDS
+        )
         answer = ""
         completed = False
         self._active_lm_connection = connection
         last_report = 0.0
-        try:
-            connection.request(
-                "POST",
-                "/api/v1/chat",
-                body=json_text(body).encode("utf-8"),
-                headers={"Content-Type": "application/json", "Accept": "text/event-stream", "User-Agent": USER_AGENT},
-            )
-            response = connection.getresponse()
-            if response.status != 200:
-                raw = response.read(4096).decode("utf-8", errors="replace")
-                raise RuntimeError(f"lmstudio_http_{response.status}:{raw[:300]}")
-            event_type = ""
-            while True:
-                self.raise_if_stopping()
-                raw_line = response.readline(262145)
-                if len(raw_line) > 262144:
-                    raise RuntimeError("lmstudio_event_too_large")
-                if not raw_line:
-                    break
-                line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
-                if line.startswith("event:"):
-                    event_type = line[6:].strip()
-                    continue
-                if not line.startswith("data:"):
-                    continue
-                try:
-                    event = json.loads(line[5:].strip())
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(event, dict):
-                    raise RuntimeError("lmstudio_invalid_event")
-                kind = str(event.get("type") or event_type)
-                if kind == "message.delta":
-                    content = event.get("content")
-                    if isinstance(content, str):
-                        answer += content
-                        if len(answer) > 64000:
-                            raise RuntimeError("lmstudio_response_too_large")
-                        now = time.monotonic()
-                        if now - last_report >= 0.8:
-                            self.report_ai_state(
-                                query_id=request_id, query_status="running",
-                                query_answer=answer, last_action="hybrid_query",
-                            )
-                            last_report = now
-                elif kind == "chat.end":
-                    completed = True
-                    break
-                elif kind == "error":
-                    error = event.get("error")
-                    raise RuntimeError("lmstudio_chat_error:" + str(error)[:300])
-        except Exception:
-            if self._operation_cancel_requested.is_set():
-                raise OperationCancelled("operation_cancelled")
-            raise
-        finally:
-            self._active_lm_connection = None
-            connection.close()
+        deadline = time.monotonic() + LMSTUDIO_QUERY_TIMEOUT_SECONDS
+        with self.lm_connection_deadline(
+            connection, LMSTUDIO_QUERY_TIMEOUT_SECONDS
+        ) as deadline_expired:
+            try:
+                connection.request(
+                    "POST",
+                    "/api/v1/chat",
+                    body=json_text(body).encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "text/event-stream",
+                        "User-Agent": USER_AGENT,
+                    },
+                )
+                response = connection.getresponse()
+                if response.status != 200:
+                    raw = response.read(4096).decode("utf-8", errors="replace")
+                    raise RuntimeError(f"lmstudio_http_{response.status}:{raw[:300]}")
+                event_type = ""
+                while True:
+                    self.raise_if_stopping()
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("lmstudio_query_timeout")
+                    raw_line = response.readline(262145)
+                    if len(raw_line) > 262144:
+                        raise RuntimeError("lmstudio_event_too_large")
+                    if not raw_line:
+                        break
+                    line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+                    if line.startswith("event:"):
+                        event_type = line[6:].strip()
+                        continue
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        event = json.loads(line[5:].strip())
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(event, dict):
+                        raise RuntimeError("lmstudio_invalid_event")
+                    kind = str(event.get("type") or event_type)
+                    if kind == "message.delta":
+                        content = event.get("content")
+                        if isinstance(content, str):
+                            answer += content
+                            if len(answer) > 64000:
+                                raise RuntimeError("lmstudio_response_too_large")
+                            now = time.monotonic()
+                            if now - last_report >= 0.8:
+                                self.report_ai_state(
+                                    query_id=request_id,
+                                    query_status="running",
+                                    query_answer=answer,
+                                    last_action="hybrid_query",
+                                )
+                                last_report = now
+                    elif kind == "chat.end":
+                        completed = True
+                        break
+                    elif kind == "error":
+                        error = event.get("error")
+                        raise RuntimeError("lmstudio_chat_error:" + str(error)[:300])
+            except Exception as error:
+                if self._operation_cancel_requested.is_set():
+                    raise OperationCancelled("operation_cancelled")
+                if deadline_expired.is_set():
+                    raise RuntimeError("lmstudio_query_timeout") from error
+                raise
+            finally:
+                self._active_lm_connection = None
+                connection.close()
+        if deadline_expired.is_set():
+            raise RuntimeError("lmstudio_query_timeout")
         self.raise_if_stopping()
         if not completed:
             raise RuntimeError("lmstudio_stream_incomplete")
@@ -4023,7 +4175,7 @@ class Agent:
         if now - self.last_heartbeat >= self.config.heartbeat_seconds:
             body["heartbeat"] = self.heartbeat_payload()
             try:
-                self.probe_lmstudio()
+                self.refresh_lmstudio_readiness()
             except Exception as error:
                 self.log.write("lmstudio_heartbeat_probe_failed", error=str(error)[:300])
         ai = self.ai_report_body()
