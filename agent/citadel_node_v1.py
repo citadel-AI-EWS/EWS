@@ -1796,7 +1796,9 @@ class Agent:
                 timeout_seconds=LMSTUDIO_INFERENCE_PROBE_TIMEOUT_SECONDS,
             )
         except Exception as error:
-            self.report_ai_state(
+            # Keep heartbeat/sync polling to one Controller request.  Readiness
+            # proof is local here; the next normal sync carries the state.
+            self.save_lmstudio_state(
                 installed=True,
                 server_running=True,
                 loaded_model=model,
@@ -1811,7 +1813,7 @@ class Agent:
             raise RuntimeError("lmstudio_inference_probe_failed") from error
         if not answer.strip():
             raise RuntimeError("lmstudio_inference_probe_failed")
-        self.report_ai_state(
+        self.save_lmstudio_state(
             installed=True,
             server_running=True,
             loaded_model=model,
