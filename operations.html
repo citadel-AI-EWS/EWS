@@ -1080,7 +1080,7 @@ function startDetailProgressWatch(node,label,options={}){
   const op=options.resume&&existing?existing:{nodeId:node.node_id,type:options.type||'lmstudio_install',title:label||'Операция LM Studio',startedAt:Date.now(),status:'sending',ai:{}};
   nodeOperations.set(node.node_id,op);lmOperationStartedAt=op.type==='hybrid_query'?0:op.startedAt;lmOperationLabel=op.title;renderLmLocalStatus();
   if(op.type==='hybrid_query')renderQueryStatus(op);
-  const poll=async()=>{detailPollTimer=null;if(!$('nodeDialog').open||currentNode?.node_id!==node.node_id||document.hidden||!token)return;await loadNodeDetails(node,true);if(!['completed','failed','cancelled'].includes(op.status)&&$('nodeDialog').open&&currentNode?.node_id===node.node_id&&!document.hidden&&token)detailPollTimer=setTimeout(poll,op.type==='hybrid_query'?2000:10000)};
+  const poll=async()=>{detailPollTimer=null;if(!$('nodeDialog').open||currentNode?.node_id!==node.node_id||document.hidden||!token)return;await loadNodeDetails(node,true);const retryFailure=op.status==='failed'&&op.ai?.progress_phase!=='failed'&&(op.failureDetailPolls||0)<3;if(retryFailure)op.failureDetailPolls=(op.failureDetailPolls||0)+1;if((!['completed','failed','cancelled'].includes(op.status)||retryFailure)&&$('nodeDialog').open&&currentNode?.node_id===node.node_id&&!document.hidden&&token)detailPollTimer=setTimeout(poll,retryFailure?4000:op.type==='hybrid_query'?2000:10000)};
   detailPollTimer=setTimeout(poll,1500);return op;
 }
 function syncOperationButtons(op){const active=!['completed','failed','cancelled'].includes(op.status);for(const id of ['lmInstall','lmUpdate','lmRemove','lmProbe','modelGet','modelLoad','nodeQuery'])$(id).disabled=active}
