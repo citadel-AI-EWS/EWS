@@ -3229,74 +3229,86 @@ class Agent:
                 "Answer the user's question using the deterministic CITADEL Python-node context below when relevant. "
                 "Do not invent machine state that is not present.\n\n" + python_context[:12000]
             )
-        connection = http.client.HTTPConnection("127.0.0.1", 1234, timeout=LMSTUDIO_QUERY_TIMEOUT_SECONDS)
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", 1234, timeout=LMSTUDIO_QUERY_TIMEOUT_SECONDS
+        )
         answer = ""
         completed = False
         self._active_lm_connection = connection
         last_report = 0.0
         deadline = time.monotonic() + LMSTUDIO_QUERY_TIMEOUT_SECONDS
-        with self.lm_connection_deadline(connection, LMSTUDIO_QUERY_TIMEOUT_SECONDS) as deadline_expired:
+        with self.lm_connection_deadline(
+            connection, LMSTUDIO_QUERY_TIMEOUT_SECONDS
+        ) as deadline_expired:
             try:
                 connection.request(
-                "POST",
-                "/api/v1/chat",
-                body=json_text(body).encode("utf-8"),
-                headers={"Content-Type": "application/json", "Accept": "text/event-stream", "User-Agent": USER_AGENT},
-            )
-            response = connection.getresponse()
-            if response.status != 200:
-                raw = response.read(4096).decode("utf-8", errors="replace")
-                raise RuntimeError(f"lmstudio_http_{response.status}:{raw[:300]}")
-            event_type = ""
-            while True:
-                self.raise_if_stopping()
-                if time.monotonic() >= deadline:
-                    raise RuntimeError("lmstudio_query_timeout")
-                raw_line = response.readline(262145)
-                if len(raw_line) > 262144:
-                    raise RuntimeError("lmstudio_event_too_large")
-                if not raw_line:
-                    break
-                line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n    ")
-                if line.startswith("event:"):
-                    event_type = line[6:].strip()
-                    continue
-                if not line.startswith("data:"):
-                    continue
-                try:
-                    event = json.loads(line[5:].strip())
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(event, dict):
-                    raise RuntimeError("lmstudio_invalid_event")
-                kind = str(event.get("type") or event_type)
-                if kind == "message.delta":
-                    content = event.get("content")
-                    if isinstance(content, str):
-                        answer += content
-                        if len(answer) > 64000:
-                            raise RuntimeError("lmstudio_response_too_large")
-                        now = time.monotonic()
-                        if now - last_report >= 0.8:
-                            self.report_ai_state(
-                                query_id=request_id, query_status="running",
-                                query_answer=answer, last_action="hybrid_query",
-                            )
-                            last_report = now
-                elif kind == "chat.end":
-                    completed = True
-                    break
-                elif kind == "error":
-                    error = event.get("error")
-                    raise RuntimeError("lmstudio_chat_error:" + str(error)[:300])
-        except Exception:
-            if self._operation_cancel_requested.is_set():
-                raise OperationCancelled("operation_cancelled")
-            raise
-        finally:
-            self._active_lm_connection = None
-            connection.close()
-\n        if deadline_expired.is_set():
+                    "POST",
+                    "/api/v1/chat",
+                    body=json_text(body).encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "text/event-stream",
+                        "User-Agent": USER_AGENT,
+                    },
+                )
+                response = connection.getresponse()
+                if response.status != 200:
+                    raw = response.read(4096).decode("utf-8", errors="replace")
+                    raise RuntimeError(f"lmstudio_http_{response.status}:{raw[:300]}")
+                event_type = ""
+                while True:
+                    self.raise_if_stopping()
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("lmstudio_query_timeout")
+                    raw_line = response.readline(262145)
+                    if len(raw_line) > 262144:
+                        raise RuntimeError("lmstudio_event_too_large")
+                    if not raw_line:
+                        break
+                    line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+                    if line.startswith("event:"):
+                        event_type = line[6:].strip()
+                        continue
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        event = json.loads(line[5:].strip())
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(event, dict):
+                        raise RuntimeError("lmstudio_invalid_event")
+                    kind = str(event.get("type") or event_type)
+                    if kind == "message.delta":
+                        content = event.get("content")
+                        if isinstance(content, str):
+                            answer += content
+                            if len(answer) > 64000:
+                                raise RuntimeError("lmstudio_response_too_large")
+                            now = time.monotonic()
+                            if now - last_report >= 0.8:
+                                self.report_ai_state(
+                                    query_id=request_id,
+                                    query_status="running",
+                                    query_answer=answer,
+                                    last_action="hybrid_query",
+                                )
+                                last_report = now
+                    elif kind == "chat.end":
+                        completed = True
+                        break
+                    elif kind == "error":
+                        error = event.get("error")
+                        raise RuntimeError("lmstudio_chat_error:" + str(error)[:300])
+            except Exception as error:
+                if self._operation_cancel_requested.is_set():
+                    raise OperationCancelled("operation_cancelled")
+                if deadline_expired.is_set():
+                    raise RuntimeError("lmstudio_query_timeout") from error
+                raise
+            finally:
+                self._active_lm_connection = None
+                connection.close()
+        if deadline_expired.is_set():
             raise RuntimeError("lmstudio_query_timeout")
         self.raise_if_stopping()
         if not completed:
