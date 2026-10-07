@@ -2466,6 +2466,56 @@ async function continueCompletedBridgeUpdateForNode(env, node) {
   }
 }
 
+
+export function failedBridgeUpdateNeedsNewRelease(latest, agentVersion, release) {
+  if (agentVersion !== LEGACY_031_BRIDGE_RELEASE.version ||
+      latest?.status !== "failed") return false;
+  const previous = safeJson(latest.payload_json, {});
+  const current = releaseForAgentVersion(release, agentVersion);
+  return previous.version === current.version &&
+    updatePayloadCompatibleWithAgent(previous, agentVersion) &&
+    !updatePayloadReadyForAgent(previous, agentVersion) &&
+    previous.files.some((file) => current.files.some((candidate) =>
+      candidate.path === file.path && candidate.sha256 !== file.sha256));
+}
+
+async function retryFailedBridgeUpdateForNode(env, node) {
+  if (node.agent_version !== LEGACY_031_BRIDGE_RELEASE.version) return;
+  const latest = await env.DB.prepare(
+    "SELECT command_id, status, payload_json FROM commands " +
+    "WHERE node_id = ? AND command_type = 'update' " +
+    "ORDER BY datetime(created_at) DESC, rowid DESC LIMIT 1"
+  ).bind(node.node_id).first();
+  if (!failedBridgeUpdateNeedsNewRelease(latest, node.agent_version, LATEST_NODE_RELEASE)) return;
+
+  // One retry per changed, hash-pinned release. A second failure with the new
+  // payload becomes the latest command and will not pass the predicate again.
+  const payload = releaseForAgentVersion(LATEST_NODE_RELEASE, node.agent_version);
+  const commandId = "command_" + crypto.randomUUID();
+  const payloadJson = JSON.stringify(payload);
+  const createdAt = new Date().toISOString();
+  const signature = await signControllerCommand(
+    env, commandId, node.node_id, "update", payloadJson, createdAt
+  );
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO commands (command_id, node_id, command_type, payload_json, signature, status, created_at) " +
+        "VALUES (?, ?, 'update', ?, ?, 'pending', ?)"
+      ).bind(commandId, node.node_id, payloadJson, signature, createdAt),
+      env.DB.prepare(
+        "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+        "VALUES ('controller', 'controller', 'agent.update.failed_bridge_retried', 'command', ?, ?)"
+      ).bind(commandId, JSON.stringify({
+        node_id: node.node_id, failed_command_id: latest.command_id,
+        target_version: payload.version
+      }))
+    ]);
+  } catch (error) {
+    if (!String(error).includes("UNIQUE")) throw error;
+  }
+}
+
 const WORK_ROLE_REGISTRY = Object.freeze([
   { id: "architect", label: "Architect", kind: "human_gate", origin: "project_control" },
   { id: "planner", label: "Planner", kind: "worker", origin: "legacy_simulation" },
@@ -6378,6 +6428,7 @@ async function commandsForNode(env, node) {
     await ensureRolloutCommandForNode(env, nodeId);
     await repairPendingUpdateForNode(env, node);
     await continueCompletedBridgeUpdateForNode(env, node);
+    await retryFailedBridgeUpdateForNode(env, node);
   }
 
   const cutoff = new Date(Date.now() - COMMAND_MAX_AGE_SECONDS * 1000).toISOString();
