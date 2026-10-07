@@ -149,4 +149,4 @@ a772ad0f00e3abbdb92a9b8f737b129851f3490f6efdc6ec1a8d523954876e8c  tests/legacy-c
 
 b6a484fba6c2d821b932e00ae1a8fe07055e46d21e29e417e15ee460b132a638  tests/drive-service-account.mjs
 3703f2ee521cd22ba1c911134418d57a963ab57a72ac256127183c2d2ed81441  tests/update-integrity.mjs
-1b739fc1b095e579a1d6f07d6ec2964a459eefb1f2ec6c15afdf50669d3727a7  tests/lmstudio-local-protocol.py
+d04a5df620f5f47319232b181278a43fe60b2764ee34cf11f311dd6817dc9811  tests/lmstudio-local-protocol.py
