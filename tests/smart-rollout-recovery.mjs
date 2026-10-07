@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import vm from "node:vm";
 import {
   chooseSmartRolloutCanary, persistWakePeerCommand,
   reconcileSmartRollout, rolloutCommandOutcome
@@ -56,7 +57,46 @@ assert.equal(chooseSmartRolloutCanary(liveCandidates.slice(0, 1), {
 }), null, "do not silently retry the same failed canary");
 assert.match(index, /canary_diagnostic_hint: canaryNeedsLogs \? "agent_logs_required"/);
 assert.match(index, /policy.phase === "canary" \|\| canaryPaused/);
+assert.match(index, /reused_existing: true/);
 assert.match(operations, /SSH → agent-logs/);
+
+// Exercise the actual browser status watcher: one slow request is not a
+// terminal rollout failure, and a paused canary remains observable.
+const watcherSource = operations.slice(
+  operations.indexOf("let smartRolloutTimer=null"),
+  operations.indexOf("async function dispatchFleetCommands")
+);
+assert.ok(watcherSource.includes("async function pollSmartRollout"));
+const scheduled = [], notices = [], activity = { hidden: true }, activityText = { textContent: "" };
+let statusResponse = null;
+const watcher = vm.createContext({
+  token: "test", document: { hidden: false },
+  api: async () => { if (statusResponse instanceof Error) throw statusResponse; return statusResponse; },
+  setTimeout: (fn, delay) => { scheduled.push({ fn, delay }); return scheduled.length; },
+  clearTimeout: () => {},
+  $: (id) => id === "fleetActivity" ? activity : activityText,
+  setFleetActivity: () => { activity.hidden = false; },
+  tell: (message) => notices.push(message),
+  sessionStorage: { removeItem: () => {} }
+});
+vm.runInContext(watcherSource, watcher);
+statusResponse = Error("signal timed out");
+await vm.runInContext("pollSmartRollout()", watcher);
+assert.equal(scheduled.at(-1).delay, 5000);
+assert.equal(notices.length, 1);
+await vm.runInContext("pollSmartRollout()", watcher);
+assert.equal(scheduled.at(-1).delay, 10000);
+assert.equal(notices.length, 1, "repeat timeout should not flood notifications");
+statusResponse = { rollout: {
+  rollout_id: "rollout_test", phase: "paused", status: "active",
+  pause_reason: "canary_command_failed", registered_nodes: 27,
+  nodes_waiting_for_update: 27
+} };
+await vm.runInContext("pollSmartRollout()", watcher);
+assert.equal(scheduled.at(-1).delay, 15000);
+assert.equal(notices.length, 2);
+await vm.runInContext("pollSmartRollout()", watcher);
+assert.equal(notices.length, 2, "unchanged pause reason should be announced once");
 
 const recent = Date.now();
 const stamp = (agoMs) => new Date(recent - agoMs).toISOString();
