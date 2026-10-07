@@ -1986,6 +1986,35 @@ async function startUpdateAllRollout(request, env) {
     });
   }
 
+  // A lost HTTP response must not turn a second click into a new rollout.
+  // A paused rollout is deliberately excluded: clicking again retries with
+  // another canary after the operator has seen the pause reason.
+  const activeRollout = await env.DB.prepare(
+    "SELECT r.rollout_id, r.target_version, p.phase, p.canary_node_id, " +
+    "n.hostname AS canary_hostname FROM agent_rollouts AS r " +
+    "LEFT JOIN agent_rollout_policy AS p ON p.rollout_id = r.rollout_id " +
+    "LEFT JOIN nodes AS n ON n.node_id = p.canary_node_id " +
+    "WHERE r.status = 'active' LIMIT 1"
+  ).first();
+  if (activeRollout?.target_version === LATEST_NODE_RELEASE.version &&
+      ["canary", "fleet"].includes(activeRollout.phase)) {
+    return json({ ok: true, rollout: {
+      rollout_id: activeRollout.rollout_id,
+      target_version: activeRollout.target_version,
+      status: "active",
+      phase: activeRollout.phase,
+      registered_nodes: productionNodes.length,
+      nodes_waiting_for_update: outdatedNodes.length,
+      nodes_updateable_now: updateableNow.length,
+      nodes_deferred: Math.max(0, outdatedNodes.length - updateableNow.length),
+      canary_node_id: activeRollout.canary_node_id,
+      canary_hostname: activeRollout.canary_hostname || activeRollout.canary_node_id,
+      max_parallel: 3,
+      max_failures: 2,
+      reused_existing: true
+    } });
+  }
+
   const previousPolicy = await env.DB.prepare(
     "SELECT p.canary_node_id, p.phase, p.pause_reason " +
     "FROM agent_rollout_policy AS p JOIN agent_rollouts AS r ON r.rollout_id = p.rollout_id " +
