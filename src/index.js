@@ -1933,6 +1933,15 @@ async function ensureRolloutStorage(env) {
   await rolloutSchemaPromise;
 }
 
+export function chooseSmartRolloutCanary(liveOutdated, previousPolicy) {
+  const failedCanary = previousPolicy?.phase === "paused" &&
+    String(previousPolicy.pause_reason || "").startsWith("canary_");
+  if (!failedCanary) return liveOutdated[0] || null;
+  // A deliberate retry should test a different live host instead of sending
+  // the same release to the same failed canary again.
+  return liveOutdated.find((node) => node.node_id !== previousPolicy.canary_node_id) || null;
+}
+
 async function startUpdateAllRollout(request, env) {
   const actor = await authenticateArchitect(request, env);
   await ensureRolloutStorage(env);
@@ -1977,8 +1986,14 @@ async function startUpdateAllRollout(request, env) {
     });
   }
 
-  const canary = updateableNow[0];
-  if (!canary) throw new ApiError(409, "rollout_no_live_canary");
+  const previousPolicy = await env.DB.prepare(
+    "SELECT p.canary_node_id, p.phase, p.pause_reason " +
+    "FROM agent_rollout_policy AS p JOIN agent_rollouts AS r ON r.rollout_id = p.rollout_id " +
+    "ORDER BY datetime(r.created_at) DESC, r.rowid DESC LIMIT 1"
+  ).first();
+  const canary = chooseSmartRolloutCanary(updateableNow, previousPolicy);
+  if (!canary) throw new ApiError(409, updateableNow.length
+    ? "rollout_no_live_alternative_canary" : "rollout_no_live_canary");
   const releaseJson = JSON.stringify(LATEST_NODE_RELEASE);
   const rolloutId = "rollout_" + crypto.randomUUID();
   await env.DB.batch([
@@ -2019,6 +2034,9 @@ async function startUpdateAllRollout(request, env) {
       excluded_test_nodes: Math.max(0, registered.length - productionNodes.length),
       canary_node_id: canary.node_id,
       canary_hostname: canary.hostname || canary.node_id,
+      previous_failed_canary: previousPolicy?.phase === "paused" &&
+        String(previousPolicy.pause_reason || "").startsWith("canary_")
+        ? previousPolicy.canary_node_id : null,
       canary_live_now: operationalNodeState(canary) === "live",
       canary_timeout_seconds: 600,
       max_parallel: 3,
@@ -2178,6 +2196,15 @@ async function architectUpdateRolloutStatus(request, env) {
   const canary = policy?.canary_node_id
     ? production.find((node) => node.node_id === policy.canary_node_id) || null
     : null;
+  const canaryNeedsLogs = policy?.phase === "paused" &&
+    String(policy.pause_reason || "").startsWith("canary_");
+  const canaryCommand = canaryNeedsLogs
+    ? await env.DB.prepare(
+        "SELECT command_id, status FROM commands WHERE node_id = ? " +
+        "AND command_type = 'update' AND datetime(created_at) >= datetime(?) " +
+        "ORDER BY datetime(created_at) DESC, command_id DESC LIMIT 1"
+      ).bind(policy.canary_node_id, rollout.created_at).first()
+    : null;
   return json({
     ok: true,
     rollout: {
@@ -2193,6 +2220,9 @@ async function architectUpdateRolloutStatus(request, env) {
       canary_hostname: canary?.hostname || null,
       canary_agent_version: canary?.agent_version || null,
       canary_live: canary ? operationalNodeState(canary) === "live" : false,
+      canary_command_id: canaryCommand?.command_id || null,
+      canary_command_status: canaryCommand?.status || null,
+      canary_diagnostic_hint: canaryNeedsLogs ? "agent_logs_required" : null,
       registered_nodes: production.length,
       nodes_waiting_for_update: outdated.length,
       nodes_updateable_now: liveOutdated.length,

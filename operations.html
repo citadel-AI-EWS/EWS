@@ -950,14 +950,22 @@ async function pollSmartRollout(){
     const total=Number(r.registered_nodes||0);
     const canary=r.canary_hostname||r.canary_node_id||'—';
     const reason=r.pause_reason?(' · причина '+r.pause_reason):'';
+    const diagnostic=r.canary_diagnostic_hint==='agent_logs_required'
+      ? (' · подробности: '+canary+' → SSH → agent-logs'+
+        (r.canary_command_id?' · команда '+r.canary_command_id:''))
+      : '';
     const text='фаза '+phase+' · канарейка '+canary+' · ждут обновления '+waiting+
       ' · доступны сейчас '+Number(r.nodes_updateable_now||0)+
-      ' · deferred '+Number(r.nodes_deferred||0)+reason;
+      ' · deferred '+Number(r.nodes_deferred||0)+reason+diagnostic;
     const done=phase==='completed'||(r.status==='completed'&&waiting===0);
     const paused=phase==='paused';
     setFleetActivity('Умное автообновление',text,Math.max(0,total-waiting),Math.max(1,total),done||paused);
     if(paused){
-      tell('Rollout остановлен безопасно: '+(r.pause_reason||'unknown')+'. Остальные ноды не обновляются.',true);
+      tell('Rollout остановлен безопасно: '+(r.pause_reason||'unknown')+
+        '. Остальные ноды не обновляются.'+
+        (r.canary_diagnostic_hint==='agent_logs_required'
+          ? ' Причину на узле смотрите через SSH → agent-logs. Повторный запуск выберет другую доступную канарейку.'
+          : ''),true);
       return;
     }
     if(done){

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { persistWakePeerCommand, rolloutCommandOutcome } from "../src/index.js";
+import { chooseSmartRolloutCanary, persistWakePeerCommand, rolloutCommandOutcome } from "../src/index.js";
 
 const index = fs.readFileSync("src/index.js", "utf8");
 const operations = fs.readFileSync("operations.html", "utf8");
@@ -39,6 +39,17 @@ assert.equal(rolloutCommandOutcome(command, { ...newNode, status: "offline" }, "
 assert.equal(rolloutCommandOutcome(command, newNode, "0.3.40", now + 6 * 60_000), "failed");
 assert.equal(rolloutCommandOutcome({ ...command, status: "failed" }, newNode, "0.3.40", now), "failed");
 assert.equal(rolloutCommandOutcome(command, oldNode, "0.3.40", now + 5 * 60_000), "failed");
+
+const liveCandidates = [{ node_id: "node_a22" }, { node_id: "node_b17" }];
+assert.equal(chooseSmartRolloutCanary(liveCandidates, null)?.node_id, "node_a22");
+assert.equal(chooseSmartRolloutCanary(liveCandidates, {
+  phase: "paused", pause_reason: "canary_command_failed", canary_node_id: "node_a22"
+})?.node_id, "node_b17");
+assert.equal(chooseSmartRolloutCanary(liveCandidates.slice(0, 1), {
+  phase: "paused", pause_reason: "canary_command_failed", canary_node_id: "node_a22"
+}), null, "do not silently retry the same failed canary");
+assert.match(index, /canary_diagnostic_hint: canaryNeedsLogs \? "agent_logs_required"/);
+assert.match(operations, /SSH → agent-logs/);
 
 const wakeWrites = [];
 const wakeArgs = {
