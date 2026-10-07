@@ -1553,6 +1553,8 @@ class Agent:
         self._operation_depth = 0
         self._active_lm_connection = None
         self._operation_cancel_requested = threading.Event()
+        # A readiness proof is valid only inside this running Agent process.
+        self.runtime_session_id = uuid.uuid4().hex
         self.config_path = (config_path or Path("config.json")).resolve()
         if os.name == "nt":
             _ensure_windows_enterprise_probe_file()
@@ -1737,30 +1739,38 @@ class Agent:
             "temperature": temperature,
             "max_tokens": max_tokens,
         })
+        timeout_limit = max(1.0, min(float(timeout_seconds), LMSTUDIO_QUERY_TIMEOUT_SECONDS))
         connection = http.client.HTTPConnection(
             "127.0.0.1",
             1234,
-            timeout=max(1.0, min(float(timeout_seconds), LMSTUDIO_QUERY_TIMEOUT_SECONDS)),
+            timeout=timeout_limit,
         )
-        try:
-            connection.request(
-                "POST",
-                "/v1/chat/completions",
-                body=request_body.encode("utf-8"),
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "User-Agent": USER_AGENT,
-                },
-            )
-            response = connection.getresponse()
-            raw = response.read(MAX_RESPONSE_BYTES + 1)
-            if len(raw) > MAX_RESPONSE_BYTES:
-                raise RuntimeError("lmstudio_response_too_large")
-            if response.status != 200:
-                raise RuntimeError(f"lmstudio_http_{response.status}")
-        finally:
-            connection.close()
+        with self.lm_connection_deadline(connection, timeout_limit) as deadline_expired:
+            try:
+                connection.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    body=request_body.encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "User-Agent": USER_AGENT,
+                    },
+                )
+                response = connection.getresponse()
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+                if len(raw) > MAX_RESPONSE_BYTES:
+                    raise RuntimeError("lmstudio_response_too_large")
+                if response.status != 200:
+                    raise RuntimeError(f"lmstudio_http_{response.status}")
+            except Exception as error:
+                if deadline_expired.is_set():
+                    raise RuntimeError("lmstudio_query_timeout") from error
+                raise
+            finally:
+                connection.close()
+        if deadline_expired.is_set():
+            raise RuntimeError("lmstudio_query_timeout")
 
         try:
             decoded = json.loads(raw.decode("utf-8"))
@@ -1806,6 +1816,7 @@ class Agent:
                 inference_model=model,
                 inference_checked_at=now_iso(),
                 inference_error=local_error_code(error),
+                inference_session_id=self.runtime_session_id,
                 last_action="inference_preflight",
                 progress_phase="failed",
                 progress_detail="lmstudio_inference_probe_failed",
@@ -1821,6 +1832,7 @@ class Agent:
             inference_model=model,
             inference_checked_at=now_iso(),
             inference_error=None,
+            inference_session_id=self.runtime_session_id,
             last_action="inference_preflight",
             progress_phase="ready",
             progress_detail=f"LM Studio inference verified in {time.monotonic() - started:.1f}s",
@@ -2405,6 +2417,29 @@ class Agent:
             connection.close()
 
     @contextlib.contextmanager
+    def lm_connection_deadline(self, connection: http.client.HTTPConnection, timeout_seconds: float):
+        """Interrupt a local LM HTTP connection at an absolute wall-clock deadline."""
+        expired = threading.Event()
+        seconds = max(0.1, float(timeout_seconds))
+
+        def expire() -> None:
+            expired.set()
+            sock = getattr(connection, "sock", None)
+            if sock:
+                with contextlib.suppress(OSError):
+                    sock.shutdown(socket.SHUT_RDWR)
+            with contextlib.suppress(OSError):
+                connection.close()
+
+        timer = threading.Timer(seconds, expire)
+        timer.daemon = True
+        timer.start()
+        try:
+            yield expired
+        finally:
+            timer.cancel()
+
+    @contextlib.contextmanager
     def long_operation(self, command_id: str | None = None, *, cancellable: bool = False):
         """Maintain liveness and optionally watch a Controller cancellation request."""
         if self._operation_depth:
@@ -2636,9 +2671,10 @@ class Agent:
             else loaded_models[0] if loaded_models else None
         )
         prior_inference_model = str(state.get("inference_model") or "").strip()
+        same_inference_model = bool(loaded_model and prior_inference_model == loaded_model)
         inference_ready = bool(
-            state.get("inference_ready") and server_running and loaded_model
-            and prior_inference_model == loaded_model
+            state.get("inference_ready") and server_running and same_inference_model
+            and state.get("inference_session_id") == self.runtime_session_id
         )
         snapshot = {
             "installed": installed,
@@ -2646,9 +2682,10 @@ class Agent:
             "loaded_model": loaded_model,
             "server_running": server_running,
             "inference_ready": inference_ready,
-            "inference_model": prior_inference_model if inference_ready else None,
-            "inference_checked_at": state.get("inference_checked_at") if inference_ready else None,
-            "inference_error": state.get("inference_error") if inference_ready else None,
+            "inference_model": prior_inference_model if same_inference_model else None,
+            # Preserve failed-proof evidence while the same model remains loaded.
+            "inference_checked_at": state.get("inference_checked_at") if same_inference_model else None,
+            "inference_error": state.get("inference_error") if same_inference_model else None,
             "last_action": state.get("last_action"),
             "progress_phase": state.get("progress_phase"),
             "progress_current": state.get("progress_current"),
@@ -2672,6 +2709,9 @@ class Agent:
             inference_model=snapshot["inference_model"],
             inference_checked_at=snapshot["inference_checked_at"],
             inference_error=snapshot["inference_error"],
+            inference_session_id=(
+                state.get("inference_session_id") if same_inference_model else None
+            ),
             live_checked_at=snapshot["live_checked_at"],
         )
         return snapshot
@@ -3195,8 +3235,9 @@ class Agent:
         self._active_lm_connection = connection
         last_report = 0.0
         deadline = time.monotonic() + LMSTUDIO_QUERY_TIMEOUT_SECONDS
-        try:
-            connection.request(
+        with self.lm_connection_deadline(connection, LMSTUDIO_QUERY_TIMEOUT_SECONDS) as deadline_expired:
+            try:
+                connection.request(
                 "POST",
                 "/api/v1/chat",
                 body=json_text(body).encode("utf-8"),
@@ -3216,7 +3257,7 @@ class Agent:
                     raise RuntimeError("lmstudio_event_too_large")
                 if not raw_line:
                     break
-                line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+                line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n    ")
                 if line.startswith("event:"):
                     event_type = line[6:].strip()
                     continue
@@ -3255,6 +3296,8 @@ class Agent:
         finally:
             self._active_lm_connection = None
             connection.close()
+\n        if deadline_expired.is_set():
+            raise RuntimeError("lmstudio_query_timeout")
         self.raise_if_stopping()
         if not completed:
             raise RuntimeError("lmstudio_stream_incomplete")
