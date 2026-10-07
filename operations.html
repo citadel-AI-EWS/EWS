@@ -887,6 +887,7 @@ function updateCommandFeedback(node,command){
  }
  if(command.status==='completed'){
    const age=commandElapsedMinutes(command,true);
+   if(age!==null&&age>=10)return {phase:'stalled',spinning:false,error:true,text:'Обновление не подтверждено '+age+' мин: нода '+(node?.status==='online'?'на связи, но сообщает':'последний раз сообщала')+' старую версию '+(node?.agent_version||'—')+'. Проверьте перезапуск службы через SSH → agent-logs.'};
    return {phase:'installed',spinning:true,error:age!==null&&age>=5,text:'Обновление: удалённый агент завершил локальную фазу и проверку файлов; ждём перезапуск и heartbeat '+target+(age!==null&&age>=5?' · нет подтверждения уже '+age+' мин':'')+'.'};
  }
  if(['failed','expired','cancelled'].includes(command.status)){
