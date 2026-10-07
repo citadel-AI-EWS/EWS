@@ -1,4 +1,4 @@
-export const PROJECT_EXPERIENCE_REGISTRY_VERSION = "2026-09-18.1";
+export const PROJECT_EXPERIENCE_REGISTRY_VERSION = "2026-10-07.1";
 
 const ENTRIES = Object.freeze([
   {
@@ -156,6 +156,19 @@ const ENTRIES = Object.freeze([
     decision: "Record the historical lesson without duplicating code.",
     replacement: "Reuse current EWS mechanisms and add regression tests only where the old archive exposed a missing contract.",
     artifact_refs: ["docs/PROJECT_MEMORY.md"]
+  },
+  {
+    id: "CRE-013",
+    date: "2026-10-07",
+    source: "legacy-cre-v19.2.1-august-archive",
+    area: "local-ai",
+    status: "guardrail",
+    severity: "high",
+    problem: "A successful LM Studio model preflight did not predict a successful inference.",
+    evidence: "All 408 August structured cycles failed after two 210-second local inference timeouts; the median cycle was 429.5 seconds with roughly 23 KB of evidence.",
+    decision: "Require a bounded, nonempty end-to-end answer before marking a node ready for work.",
+    replacement: "Keep model loading, prompt size, response timeout and task outcome as separate health states; do not carry the old monolithic loop into EWS.",
+    artifact_refs: ["docs/LEGACY_CRE_AUGUST_2026_REVIEW.md", "src/experience/policy.js"]
   }
 ]);
 
@@ -179,6 +192,7 @@ export function getProjectExperienceRegistry() {
     artifacts: [
       "knowledge/legacy_cre_experience.sql",
       "docs/LEGACY_CRE_REVIEW_2026-09-18.md",
+      "docs/LEGACY_CRE_AUGUST_2026_REVIEW.md",
       "docs/PROJECT_EXPERIENCE_REGISTRY.md"
     ],
     entries: ENTRIES.map((entry) => ({ ...entry, artifact_refs: [...entry.artifact_refs] }))
