@@ -934,15 +934,17 @@ function updateFleetActivityFromData(data){
  if(terminal>=ids.size){const finished=fleetOperation;fleetOperation=null;if(!failedIds.size)setTimeout(()=>{if(!fleetOperation)$('fleetActivity').hidden=true},7000);tell(finished.label+': готово '+completed+' из '+ids.size+(failedIds.size?' · ошибок '+failedIds.size:''),failedIds.size>0)}else if(!activeIds.size&&Date.now()-fleetOperation.startedAt>15000){$('fleetActivityText').textContent=text+' · ожидаю новый heartbeat/статус…'}
 }
 function startFleetWatch(label,type,nodes){fleetOperation={label,type,nodeIds:nodes.map(n=>n.node_id),startedAt:Date.now()};setFleetActivity(label,'Команды отправлены · жду агентов…',0,nodes.length,false);schedule()}
-let smartRolloutTimer=null;
+let smartRolloutTimer=null,smartRolloutPollFailures=0,smartRolloutPauseNotice='';
 function stopSmartRolloutWatch(){if(smartRolloutTimer){clearTimeout(smartRolloutTimer);smartRolloutTimer=null}}
 async function pollSmartRollout(){
   stopSmartRolloutWatch();
   try{
     const d=await api('/update-all');
+    smartRolloutPollFailures=0;
     const r=d.rollout||null;
     if(!r){
       setFleetActivity('Умное автообновление','Активного rollout нет.',0,1,true);
+      sessionStorage.removeItem('citadel-smart-rollout-watch');
       return;
     }
     const phase=String(r.phase||r.status||'unknown');
@@ -961,27 +963,42 @@ async function pollSmartRollout(){
     const paused=phase==='paused';
     setFleetActivity('Умное автообновление',text,Math.max(0,total-waiting),Math.max(1,total),done||paused);
     if(paused){
-      tell('Rollout остановлен безопасно: '+(r.pause_reason||'unknown')+
-        '. Остальные ноды не обновляются.'+
-        (r.canary_diagnostic_hint==='agent_logs_required'
-          ? ' Причину на узле смотрите через SSH → agent-logs. Повторный запуск выберет другую доступную канарейку.'
-          : ''),true);
+      const notice=String(r.rollout_id||'')+':'+String(r.pause_reason||'');
+      if(smartRolloutPauseNotice!==notice){
+        smartRolloutPauseNotice=notice;
+        tell('Rollout остановлен безопасно: '+(r.pause_reason||'unknown')+
+          '. Остальные ноды не обновляются.'+
+          (r.canary_diagnostic_hint==='agent_logs_required'
+            ? ' Причину на узле смотрите через SSH → agent-logs. Повторный запуск выберет другую доступную канарейку.'
+            : ''),true);
+      }
+      // A later verified heartbeat may recover a paused canary on the server.
+      if(token&&!document.hidden)smartRolloutTimer=setTimeout(pollSmartRollout,15000);
       return;
     }
+    smartRolloutPauseNotice='';
     if(done){
+      sessionStorage.removeItem('citadel-smart-rollout-watch');
       tell('Умное автообновление завершено. Heartbeat новой версии подтверждён.');
       return;
     }
     smartRolloutTimer=setTimeout(pollSmartRollout,5000);
   }catch(e){
-    setFleetActivity('Умное автообновление','Статус rollout не получен: '+e.message,0,1,true);
-    tell('Статус rollout не получен: '+e.message,true);
+    const delay=Math.min(30000,5000*Math.pow(2,Math.min(smartRolloutPollFailures++,3)));
+    const message='Статус rollout временно недоступен: '+e.message+
+      ' · повторяю через '+Math.ceil(delay/1000)+' с. Обновление может продолжаться.';
+    if($('fleetActivity').hidden)setFleetActivity('Умное автообновление',message,0,1,false);
+    else $('fleetActivityText').textContent=message;
+    if(smartRolloutPollFailures===1)tell(message,true);
+    if(token&&!document.hidden)smartRolloutTimer=setTimeout(pollSmartRollout,delay);
   }
 }
 async function dispatchFleetCommands(label,type,nodes,{preflight=false}={}){if(fleetOperation)return tell('Сначала дождитесь завершения текущей массовой операции: '+fleetOperation.label,true);if(!nodes.length)return tell('Нет подходящих нод для этой операции.',true);setFleetActivity(label,'Отправляю команды: 0 / '+nodes.length,0,nodes.length,false);let ok=0;const failures=[];for(let i=0;i<nodes.length;i++){const n=nodes[i];try{if(preflight)await api('/nodes/'+encodeURIComponent(n.node_id)+'/lmstudio-preflight');await sendCommand(n,type);optimisticCommand(n,type);ok++}catch(e){failures.push((n.hostname||n.node_id)+': '+e.message)}setFleetActivity(label,'Отправлено '+(i+1)+' / '+nodes.length+' · принято '+ok+(failures.length?' · ошибок '+failures.length:''),i+1,nodes.length,false);renderNodes(lastMachineData)}if(ok){const accepted=nodes.filter(n=>(lastMachineData.commands||[]).some(x=>x.node_id===n.node_id&&x.command_type===type));startFleetWatch(label,type,accepted.length?accepted:nodes.slice(0,ok))}else setFleetActivity(label,'Ни одна команда не принята.',0,nodes.length,true);tell(label+': принято '+ok+' из '+nodes.length+(failures.length?' · '+failures.join(' | '):''),failures.length>0)}
 async function startSmartUpdateAll(){
   if(fleetOperation)return tell('Сейчас уже выполняется массовая операция: '+fleetOperation.label,true);
   stopSmartRolloutWatch();
+  sessionStorage.setItem('citadel-smart-rollout-watch','1');
+  smartRolloutPollFailures=0;
   setFleetActivity('Умное автообновление','Создаю canary rollout…',0,1,false);
   await withButton('updateAll',async()=>{
     try{
@@ -999,12 +1016,18 @@ async function startSmartUpdateAll(){
           ' · затем максимум '+Number(r.max_parallel||3)+' одновременно',
         0,Math.max(1,total),false
       );
-      tell('Rollout '+(r.rollout_id||'')+': канарейка '+canary+
-        '. Остальные ждут подтверждённый heartbeat.');
+      tell((r.reused_existing?'Продолжаю rollout ':'Rollout ')+(r.rollout_id||'')+
+        ': канарейка '+canary+'. Остальные ждут подтверждённый heartbeat.');
       smartRolloutTimer=setTimeout(pollSmartRollout,1500);
     }catch(e){
-      setFleetActivity('Умное автообновление','Не запущено: '+e.message,0,1,true);
-      tell('Умное автообновление не запущено: '+e.message,true);
+      if(e.status){
+        sessionStorage.removeItem('citadel-smart-rollout-watch');
+        setFleetActivity('Умное автообновление','Не запущено: '+e.message,0,1,true);
+        tell('Умное автообновление не запущено: '+e.message,true);
+      }else{
+        setFleetActivity('Умное автообновление','Ответ о запуске не получен. Проверяю статус rollout…',0,1,false);
+        smartRolloutTimer=setTimeout(pollSmartRollout,1500);
+      }
     }
   });
 }
@@ -1146,7 +1169,7 @@ function schedule(){clearTimeout(timer);if(token&&!document.hidden){const active
 function refreshErrorText(error,area){const raw=error?.name==='AbortError'?'время ожидания истекло':String(error?.message||'неизвестная ошибка');const detail=raw==='internal_error'?'серверная ошибка':raw;return area+': '+detail}
 async function refresh(){if(busy||managementBusy||!token||document.hidden)return;busy=true;pageBusy(true);const epoch=generation,revision=managementRevision;aborter=new AbortController();const timeout=setTimeout(()=>aborter?.abort(),20000);tell('Получаю состояние…');try{const projectActive=Boolean(taskSubmission&&!['completed','failed','cancelled'].includes(taskSubmission.status)),needProjects=projectActive||Date.now()-lastProjectsAt>300000;const [machinesResult,projectsResult]=await Promise.allSettled([api('/machines',{signal:aborter.signal}),needProjects?api('/projects',{signal:aborter.signal}):Promise.resolve(null)]);if(epoch!==generation||revision!==managementRevision)return;const failures=[];if(machinesResult.status==='fulfilled'){const data=machinesResult.value;lastMachineData=data;renderNodes(data)}else failures.push(refreshErrorText(machinesResult.reason,'машины'));if(projectsResult.status==='fulfilled'){if(projectsResult.value){lastProjectsAt=Date.now();renderProjects(projectsResult.value.projects||[])}}else failures.push(refreshErrorText(projectsResult.reason,'проекты'));if(Date.now()-lastUsageAt>300000){loadD1Usage();loadGuardian()}if($('nodeDialog').open&&currentNode&&!detailPollTimer)loadNodeDetails(currentNode,true);$('stamp').textContent='Получено: '+new Date().toLocaleTimeString();if(failures.length)tell('Часть данных не обновлена — '+failures.join(' · ')+'. Остальные разделы продолжают работать.',true);else tell('Состояние получено. Подробности IP и LM Studio загружаются только по нажатию «Подробнее».')}finally{clearTimeout(timeout);busy=false;pageBusy(false);aborter=null;schedule()}}
 $('login').onsubmit=async e=>{e.preventDefault();const button=$('loginButton');if(button.disabled)return;token=$('token').value.trim();button.disabled=true;button.setAttribute('aria-busy','true');button.textContent='VERIFYING…';try{await api('/machines');sessionStorage.setItem('citadel-architect-token',token);$('token').value='';route();refresh()}catch(err){token='';tell(err.message,true)}finally{button.disabled=false;button.removeAttribute('aria-busy');button.textContent='LOGIN'}};
-$('logout').onclick=()=>{sshTerminal.close();if($('directSshDialog').open)$('directSshDialog').close();generation++;clearTimeout(timer);clearTimeout(modelSearchTimer);aborter?.abort();token='';clearDetailProgressWatch();nodeOperations.clear();taskSubmission=null;$('taskSubmissionStatus').hidden=true;$('nodeQueryStatus').hidden=true;currentNode=null;selectedNodeIds.clear();fleetOperation=null;detailSequence++;lastUsageAt=0;lastProjectsAt=0;$('d1Percent').textContent='—%';$('guardianState').textContent='Ждёт проверки';$('guardianState').dataset.state='unknown';$('guardianMeta').textContent='Автоконтроль запускается каждые 5 минут.';$('guardianActions').replaceChildren(el('small','Исправлений ещё нет.'));$('d1Progress').value=0;$('d1Gauge').dataset.level='normal';$('d1Status').textContent='Ещё не обновлено.';sessionStorage.removeItem('citadel-architect-token');for(const id of ['nodes','projects'])$(id).replaceChildren();lastMachineData={nodes:[],commands:[],groups:[]};groupNodeIds=[];deleteNodeIds=[];for(const id of ['groupDialog','deleteDialog'])if($(id).open)$(id).close();if($('nodeDialog').open)$('nodeDialog').close();if($('modelDetailsDialog').open)$('modelDetailsDialog').close();if($('sshDialog').open)$('sshDialog').close();$('fleetActivity').hidden=true;route();tell('Вы вышли. Задания продолжают выполняться.')};
+$('logout').onclick=()=>{stopSmartRolloutWatch();sessionStorage.removeItem('citadel-smart-rollout-watch');sshTerminal.close();if($('directSshDialog').open)$('directSshDialog').close();generation++;clearTimeout(timer);clearTimeout(modelSearchTimer);aborter?.abort();token='';clearDetailProgressWatch();nodeOperations.clear();taskSubmission=null;$('taskSubmissionStatus').hidden=true;$('nodeQueryStatus').hidden=true;currentNode=null;selectedNodeIds.clear();fleetOperation=null;detailSequence++;lastUsageAt=0;lastProjectsAt=0;$('d1Percent').textContent='—%';$('guardianState').textContent='Ждёт проверки';$('guardianState').dataset.state='unknown';$('guardianMeta').textContent='Автоконтроль запускается каждые 5 минут.';$('guardianActions').replaceChildren(el('small','Исправлений ещё нет.'));$('d1Progress').value=0;$('d1Gauge').dataset.level='normal';$('d1Status').textContent='Ещё не обновлено.';sessionStorage.removeItem('citadel-architect-token');for(const id of ['nodes','projects'])$(id).replaceChildren();lastMachineData={nodes:[],commands:[],groups:[]};groupNodeIds=[];deleteNodeIds=[];for(const id of ['groupDialog','deleteDialog'])if($(id).open)$(id).close();if($('nodeDialog').open)$('nodeDialog').close();if($('modelDetailsDialog').open)$('modelDetailsDialog').close();if($('sshDialog').open)$('sshDialog').close();$('fleetActivity').hidden=true;route();tell('Вы вышли. Задания продолжают выполняться.')};
 
 $('taskForm').onsubmit=async e=>{e.preventDefault();const text=$('prompt').value.trim();if(!text)return;const epoch=generation,submission={startedAt:Date.now(),status:'sending'};taskSubmission=submission;operationView($('taskSubmissionStatus'),{title:'Отправляю промпт агенту',status:'sending',query:true,startedAt:taskSubmission.startedAt});$('submitTask').disabled=true;try{const d=await api('/projects',{method:'POST',body:JSON.stringify({source_type:$('executionMode').value==='python'?'architect_python':'architect_ee',title:text.slice(0,100),task_text:text,worker_target:$('workerTarget').value,requested_roles:[...selectedProfessionIds]})});if(epoch!==generation||taskSubmission!==submission)return;taskSubmission.projectId=d.project_id||d.project?.project_id||'';taskSubmission.status='queued';operationView($('taskSubmissionStatus'),{title:'Промпт отправлен · ожидаю агента',status:'queued',query:true,startedAt:taskSubmission.startedAt});$('prompt').value='';tell(String(d.execution?.detail||d.project?.execution?.detail||'').includes('waiting')?'Задание сохранено. Оно ждёт готовую ноду/модель: '+taskSubmission.projectId:'Задание принято: '+taskSubmission.projectId);await refresh()}catch(err){if(epoch!==generation||taskSubmission!==submission)return;taskSubmission.status='failed';operationView($('taskSubmissionStatus'),{title:'Промпт не отправлен',detail:err.message,status:'failed',query:true});tell('Задание не запущено: '+err.message,true)}finally{$('submitTask').disabled=false;$('submitTask').textContent='Запустить работу'}};
 
@@ -1239,5 +1262,5 @@ function updateTerminalHud(data){
 }
 setInterval(rotateTerminalPhrase,6500);
 
-updateClock();setInterval(updateClock,1000);window.addEventListener('hashchange',()=>{route();refresh()});document.addEventListener('visibilitychange',()=>{clearTimeout(timer);if(document.hidden){clearDetailProgressWatch();stopReportThreadWatch();generation++;aborter?.abort()}else{if($('nodeDialog').open&&currentNode&&nodeOperations.has(currentNode.node_id))startDetailProgressWatch(currentNode,'',{resume:true});refresh()}});window.addEventListener('pagehide',()=>{if($('directSshDialog').open)$('directSshDialog').close();sshTerminal.close();clearTimeout(timer);generation++;aborter?.abort()});window.addEventListener('pageshow',()=>{route();refresh()});route();refresh();
+updateClock();setInterval(updateClock,1000);window.addEventListener('hashchange',()=>{route();refresh()});document.addEventListener('visibilitychange',()=>{clearTimeout(timer);if(document.hidden){stopSmartRolloutWatch();clearDetailProgressWatch();stopReportThreadWatch();generation++;aborter?.abort()}else{if(token&&sessionStorage.getItem('citadel-smart-rollout-watch')==='1')pollSmartRollout();if($('nodeDialog').open&&currentNode&&nodeOperations.has(currentNode.node_id))startDetailProgressWatch(currentNode,'',{resume:true});refresh()}});window.addEventListener('pagehide',()=>{if($('directSshDialog').open)$('directSshDialog').close();sshTerminal.close();clearTimeout(timer);generation++;aborter?.abort()});window.addEventListener('pageshow',()=>{route();refresh()});route();refresh();if(token&&sessionStorage.getItem('citadel-smart-rollout-watch')==='1')pollSmartRollout();
 </script></body></html>
