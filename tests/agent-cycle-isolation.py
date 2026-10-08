@@ -16,6 +16,7 @@ class IsolationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.agent = v2.Agent(v1.AgentConfig("https://example.invalid", Path(self.temp.name)))
         self.agent.identity.set_node_id("node_test")
+        self.agent.enrollment_confirmed = True
         self.agent._ssh_relay_enabled = True
         self.agent.telemetry.flush = Mock()
         self.ready = threading.Event()
@@ -52,6 +53,24 @@ class IsolationTests(unittest.TestCase):
         self.agent.stop_path.write_text("stop")
         self.agent._start_ssh_relay()
         self.assertIsNone(self.agent._ssh_relay_thread)
+
+    def test_relay_uses_reconciled_identity_after_enrollment(self):
+        self.agent.enrollment_confirmed = False
+        self.agent.api.request = Mock(return_value={"node": {"node_id": "node_reconciled", "node_number": 2}})
+        identities = []
+        self.agent._ssh_relay_worker = lambda node_id: (identities.append(node_id), self.ready.set(), self.release.wait(2))
+        self.agent._start_ssh_relay()
+        self.assertIsNone(self.agent._ssh_relay_thread)
+
+        def failed_cycle(agent):
+            agent.enroll()
+            raise RuntimeError("task failed")
+
+        with patch.object(v1.Agent, "cycle", failed_cycle):
+            with self.assertRaisesRegex(RuntimeError, "task failed"):
+                self.agent.cycle()
+        self.assertTrue(self.ready.wait(1))
+        self.assertEqual(identities, ["node_reconciled"])
 
 
 if __name__ == "__main__":

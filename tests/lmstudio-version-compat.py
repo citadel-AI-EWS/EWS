@@ -116,6 +116,16 @@ class CompatibilityTests(unittest.TestCase):
             self.agent.load_lmstudio_model({"model": "qwen/test-model", "settings": {"flash_attention": True}})
         self.assertFalse(any(c[0] == "load" for c in self.commands))
 
+    def test_installer_revision_remains_in_the_reviewed_repository(self):
+        name = "install_llmstudio_headless.ps1" if node.os.name == "nt" else "install_llmstudio_headless.sh"
+        def payload(revision, owner="citadel-AI-EWS"):
+            return {"asset": {"path": name, "sha256": "a" * 64,
+                "url": f"https://raw.githubusercontent.com/{owner}/EWS/{revision}/agent/lmstudio/{name}"}}
+        self.assertTrue(self.agent.validate_lmstudio_install_payload(payload("main")))
+        self.assertTrue(self.agent.validate_lmstudio_install_payload(payload("a" * 40)))
+        self.assertFalse(self.agent.validate_lmstudio_install_payload(payload("unreviewed-branch")))
+        self.assertFalse(self.agent.validate_lmstudio_install_payload(payload("a" * 40, "different-owner")))
+
 
 if __name__ == "__main__":
     unittest.main()

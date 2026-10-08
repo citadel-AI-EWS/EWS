@@ -13,12 +13,16 @@ import citadel_node_v1 as node
 
 
 def main():
+    revision = os.environ.get("CITADEL_TEST_REVISION") or subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, timeout=30).strip()
+    if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
+        raise RuntimeError("invalid test revision")
     name = "install_llmstudio_headless.ps1" if os.name == "nt" else "install_llmstudio_headless.sh"
     # Match the canonical HTTP helper bytes even on a CRLF Windows checkout.
     helper_bytes = subprocess.check_output(["git", "show", f"HEAD:agent/lmstudio/{name}"],
                                          cwd=ROOT, timeout=30)
     model = "lmstudio-community/Qwen2.5-0.5B-Instruct-GGUF"
-    with tempfile.TemporaryDirectory(prefix="citadel-real-lmstudio-") as directory:
+    with tempfile.TemporaryDirectory(prefix="citadel-lm-", dir=os.environ.get("RUNNER_TEMP")) as directory:
         agent = node.Agent(node.AgentConfig("https://example.invalid", Path(directory)))
         # No Controller or fleet identity is involved in this ephemeral test.
         # Runtime installation, model transfer, load and inference are real.
@@ -26,7 +30,7 @@ def main():
         try:
             agent.install_lmstudio({"asset": {
                 "path": name,
-                "url": f"https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/{name}",
+                "url": f"https://raw.githubusercontent.com/citadel-AI-EWS/EWS/{revision}/agent/lmstudio/{name}",
                 "sha256": hashlib.sha256(helper_bytes).hexdigest(),
             }})
             payload = {"model": model, "source": "huggingface", "quantization": "Q4_K_M"}

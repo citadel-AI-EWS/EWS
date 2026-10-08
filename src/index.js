@@ -55,13 +55,13 @@ const LATEST_NODE_RELEASE = Object.freeze({
   files: [
     {
       path: "citadel_node_v1.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/de11d5fd106d7ba48e1edfb0d29a8da0cb020b90/agent/citadel_node_v1.py",
-      sha256: "5ab19c084c974ed0fefd3d9e217a559c583968d230bc2febb5d0e1ab1b77fd6b"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/229880d84e28137354b5c425da2276199340446b/agent/citadel_node_v1.py",
+      sha256: "1b8429a567454f85bbc2f13de68d4116925eab037edb74291e1ba59db59edf3e"
     },
     {
       path: "citadel_node_v2.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/de11d5fd106d7ba48e1edfb0d29a8da0cb020b90/agent/citadel_node_v2.py",
-      sha256: "fc4c58e8e2f503534434bf5a7b847407abd50feba3641c18ae128e0bfb1a726f"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/229880d84e28137354b5c425da2276199340446b/agent/citadel_node_v2.py",
+      sha256: "c29864aefe5443073ce8bf29ffc3e20c7494a4fd2d8ad454a95f5b6b1ce14a05"
     },
     {
       path: "CitadelSshConsole.cs",
@@ -129,7 +129,7 @@ const LMSTUDIO_INTEGRATION = Object.freeze({
   windows_asset: Object.freeze({
     path: "install_llmstudio_headless.ps1",
     url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/install_llmstudio_headless.ps1",
-    sha256: "0d24fb0ce1d7ba40539b98c30875f2244d93b328dc32358bcf880d4c8cfd78fc"
+    sha256: "5daa9c0d34e57cb03e83b0984585a665fbbafc14df971b4154f94b6d235b8a3a"
   }),
   linux_asset: Object.freeze({
     path: "install_llmstudio_headless.sh",
