@@ -47,11 +47,25 @@ def main():
                 "inference_verified": True, "answer": answer[:160]}))
         finally:
             if agent.find_lms():
-                for argv in (["server", "stop"], ["daemon", "down"]):
+                for argv in (["unload", "--all"], ["server", "stop"], ["daemon", "down"]):
                     try:
                         agent.run_lms(argv, timeout=30)
                     except RuntimeError:
                         pass
+                # Windows releases backend DLL handles after the child workers
+                # exit. Wait only for executables inside this isolated test home.
+                owned = []
+                runtime_home = agent.lmstudio_runtime_home()
+                for process in node.psutil.process_iter(["exe"]):
+                    try:
+                        executable = process.info.get("exe")
+                        if executable and Path(executable).resolve().is_relative_to(runtime_home):
+                            owned.append(process)
+                    except (node.psutil.NoSuchProcess, node.psutil.AccessDenied, OSError):
+                        continue
+                _, alive = node.psutil.wait_procs(owned, timeout=20)
+                if alive:
+                    raise RuntimeError("isolated LM Studio test workers did not stop")
 
 
 if __name__ == "__main__":
