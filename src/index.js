@@ -7,6 +7,7 @@ import { openRouterQualityConfig, reviewWithOpenRouter } from "./quality/openrou
 import { ARCHITECT_ROLE_PERMISSIONS, DEFAULT_ENTERPRISE_POLICY, evaluateEnterpriseNode, normalizeEnterprisePolicy, requiredArchitectPermission, roleHasPermission } from "./enterprise/policy.js";
 import { buildAgentCapabilityContract, buildTaskEnvelope, buildResultEnvelope, verifyProjectResultEnvelope } from "./agent-contracts.js";
 import {issueSshTicket, verifySshTicket, issueSshRelayTicket, verifySshRelayTicket} from "./ssh/tickets.js";
+import {DIAGNOSTIC_NODE_HASH, DIAGNOSTIC_RECOVERY_END, expiredDiagnosticResumeEligible, DIAGNOSTIC_RESUME_REQUEUE_SQL} from './diagnostic-pause-recovery.js';
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -49,17 +50,17 @@ const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "r
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const WAKE_PEER_MIN_AGENT_VERSION = "0.3.6";
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.40",
+  version: "0.3.41",
   files: [
     {
       path: "citadel_node_v1.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/91919785baeaae02e3596728d1f218d244b40f2b/agent/citadel_node_v1.py",
-      sha256: "6e9df9f0b06133fc121ed7170142e17cf5819636e40f41b4107fcbec345196c7"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/de11d5fd106d7ba48e1edfb0d29a8da0cb020b90/agent/citadel_node_v1.py",
+      sha256: "5ab19c084c974ed0fefd3d9e217a559c583968d230bc2febb5d0e1ab1b77fd6b"
     },
     {
       path: "citadel_node_v2.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/9f218de41809af36170c4c41850d072b9064f18e/agent/citadel_node_v2.py",
-      sha256: "b4e50c49bfd75949d0ac78501bed91324f8c904e6e4bd703c29a3cb68b72bc98"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/de11d5fd106d7ba48e1edfb0d29a8da0cb020b90/agent/citadel_node_v2.py",
+      sha256: "fc4c58e8e2f503534434bf5a7b847407abd50feba3641c18ae128e0bfb1a726f"
     },
     {
       path: "CitadelSshConsole.cs",
@@ -6476,6 +6477,32 @@ async function expireStaleNodeCommands(env, nodeId) {
   return expireStaleCommands(env, nodeId);
 }
 
+async function recoverExpiredDiagnosticPause(env, node) {
+  if (node.status !== 'paused' || Date.now() >= Date.parse(DIAGNOSTIC_RECOVERY_END) ||
+      await sha256Hex(node.node_id) !== DIAGNOSTIC_NODE_HASH) return;
+  await expireStaleNodeCommands(env, node.node_id);
+  const latest = await env.DB.prepare(`SELECT c.*,
+    EXISTS (SELECT 1 FROM audit_events a WHERE a.target_id=c.command_id AND a.action='command.queued'
+      AND a.actor_type='controller' AND a.actor_id='diagnostic-pause-20261008') AS owned_resume,
+    EXISTS (SELECT 1 FROM audit_events a WHERE a.target_id=c.command_id AND a.action='command.expired'
+      AND json_extract(a.details_json,'$.previous_status')='pending'
+      AND json_extract(a.details_json,'$.created_at')=c.created_at) AS expired_pending
+    FROM commands c WHERE c.node_id=? ORDER BY datetime(c.created_at) DESC,c.rowid DESC LIMIT 1`).bind(node.node_id).first();
+  if (!expiredDiagnosticResumeEligible(node, latest)) return;
+  const pause = await env.DB.prepare(`SELECT command_id FROM commands WHERE node_id=? AND command_type='pause'
+    ORDER BY datetime(created_at) DESC,rowid DESC LIMIT 1`).bind(node.node_id).first();
+  if (!pause || latest.command_id !== 'command_diagnostic_resume_' + (await sha256Hex(pause.command_id)).slice(0,24)) return;
+  const createdAt = new Date().toISOString();
+  const signature = await signControllerCommand(env, latest.command_id, node.node_id, 'resume', '{}', createdAt);
+  await env.DB.batch([
+    env.DB.prepare(DIAGNOSTIC_RESUME_REQUEUE_SQL).bind(signature,createdAt,latest.command_id,node.node_id,
+      latest.created_at,createdAt,pause.command_id),
+    env.DB.prepare(`INSERT INTO audit_events(actor_type,actor_id,action,target_type,target_id,details_json)
+      SELECT 'controller','diagnostic-pause-20261008','command.requeued','command',?,
+        '{"command_type":"resume","reason":"end_diagnostic_pause_after_offline"}' WHERE changes()=1`).bind(latest.command_id)
+  ]);
+}
+
 async function listCommands(request, env, nodeId, url) {
   const node = await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
   return json(await commandsForNode(env, node));
@@ -6483,6 +6510,7 @@ async function listCommands(request, env, nodeId, url) {
 
 async function commandsForNode(env, node) {
   const nodeId = node.node_id;
+  await recoverExpiredDiagnosticPause(env, node);
   // Current-version nodes cannot benefit from rollout discovery. Skipping the
   // lookup removes one D1 read from every steady-state command poll.
   if (node.agent_version !== LATEST_NODE_RELEASE.version) {

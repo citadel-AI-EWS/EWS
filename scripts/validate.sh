@@ -342,6 +342,7 @@ node tests/experience-registry.mjs
 node tests/architect-ux-guards.mjs
 node tests/smart-rollout-recovery.mjs
 node tests/rollout-evidence.mjs
+node tests/diagnostic-pause-recovery.mjs
 node tests/lmstudio-command-storage.mjs
 node tests/legacy-command-duplicates.mjs
 node tests/enterprise-policy.mjs
@@ -359,6 +360,9 @@ node tests/flow-a-assignment-recovery.mjs
 node tests/controller-error-diagnostics.mjs
 node tests/ten-prompt-routing.mjs
 python tests/lmstudio-local-protocol.py
+python tests/lmstudio-version-compat.py
+python tests/agent-cycle-isolation.py
+python tests/legacy-update-activation.py
 node tests/flow-a-e2e.mjs
 python tests/mini-agents.py
 python tests/lmstudio-progress.py
