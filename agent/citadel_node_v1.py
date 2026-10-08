@@ -2599,18 +2599,53 @@ class Agent:
         return env
 
     def run_lms(self, args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
+        self.raise_if_stopping()
         executable = self.find_lms()
         if not executable:
             raise RuntimeError("lmstudio_not_installed")
-        result = _citadel_subprocess_run(  # nosec B603
-            [executable, *args],
-            timeout=timeout,
-            capture_output=True,
+        argv = [executable, *args]
+        process = _citadel_subprocess_popen(  # nosec B603
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             shell=False,
             stdin=subprocess.DEVNULL,
             env=self.lmstudio_process_env(managed_windows_profile=Path(executable).resolve().is_relative_to(self.lmstudio_runtime_home())),
         )
+        deadline = time.monotonic() + timeout
+        try:
+            while True:
+                self.raise_if_stopping()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                try:
+                    stdout, stderr = process.communicate(timeout=min(0.25, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+        except BaseException:
+            # lms.cmd can own a Node.js child on Windows. Stop this command's
+            # process tree and reap it before propagating STOP/cancel/timeout.
+            children = []
+            with contextlib.suppress(psutil.Error):
+                children = psutil.Process(process.pid).children(recursive=True)
+            for child in reversed(children):
+                with contextlib.suppress(psutil.Error):
+                    child.kill()
+            with contextlib.suppress(OSError):
+                process.kill()
+            psutil.wait_procs(children, timeout=5)
+            with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+                process.wait(timeout=5)
+            raise
+        finally:
+            for stream in (process.stdout, process.stderr):
+                if stream:
+                    with contextlib.suppress(OSError):
+                        stream.close()
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "lms command failed").strip()
             raise RuntimeError(detail[:500])
