@@ -2488,6 +2488,10 @@ async function retryFailedBridgeUpdateForNode(env, node) {
   ).bind(node.node_id).first();
   if (!failedBridgeUpdateNeedsNewRelease(latest, node.agent_version, LATEST_NODE_RELEASE)) return;
 
+  // Stale active commands still occupy the per-node unique command slot.
+  // Reclaim only for a genuinely changed, signed bridge retry (not each poll).
+  await expireStaleNodeCommands(env, node.node_id);
+
   // One retry per changed, hash-pinned release. A second failure with the new
   // payload becomes the latest command and will not pass the predicate again.
   const payload = releaseForAgentVersion(LATEST_NODE_RELEASE, node.agent_version);
