@@ -220,8 +220,6 @@ class Agent(v1.Agent):
         self.api.request("POST", f"/api/v1/nodes/{node_id}/logs", payload)
 
     def cycle(self) -> None:
-        # A failed assignment or LM preflight must not prevent SSH startup.
-        self._start_ssh_relay()
         try:
             super().cycle()
         except Exception:
@@ -236,9 +234,16 @@ class Agent(v1.Agent):
         if self.identity.node_id:
             self.telemetry.flush(self.identity.node_id, self.submit_telemetry)
 
+    def enroll(self) -> str:
+        node_id = super().enroll()
+        # Reconcile a persisted identity before starting a signed transport;
+        # later task failures must not prevent that independent transport.
+        self._start_ssh_relay()
+        return node_id
+
     def _start_ssh_relay(self) -> None:
         node_id = self.identity.node_id
-        if not node_id or self._ssh_relay_stop.is_set() or self.lifecycle_stop_requested() or self.stop_path.exists():
+        if not self.enrollment_confirmed or not node_id or self._ssh_relay_stop.is_set() or self.lifecycle_stop_requested() or self.stop_path.exists():
             return
         if self._ssh_relay_enabled and (not self._ssh_relay_thread or not self._ssh_relay_thread.is_alive()):
             self._ssh_relay_thread = threading.Thread(target=self._ssh_relay_worker,
