@@ -8,7 +8,7 @@ import {d1QuotaResponse} from './d1-availability.js';
 
 let presenceSchemaPromise;
 // D1 charges for repeated conflict probes even when the UPSERT changes no row.
- // Best-effort, per-binding memo: never use it as durable presence or auth state.
+// Best-effort, per-binding memo: never use it as durable presence or auth state.
 const PRESENCE_DEDUP_MS = 4 * 60 * 1000;
 const PRESENCE_MEMO_MAX = 1024;
 const recentPresenceByDb = new WeakMap();
