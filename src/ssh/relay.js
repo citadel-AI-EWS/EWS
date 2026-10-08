@@ -1,5 +1,7 @@
 const MAX_FRAME = 8192;
 const MAX_BUFFERED = 2 * 1024 * 1024;
+// Batch expired replay/telemetry ticket cleanup; expiry still checked at claim time.
+const BOOKKEEPING_SWEEP_SECONDS = 10 * 60;
 
 function attachment(socket) {
   try {return socket.deserializeAttachment() || {};} catch {return {};}
@@ -12,6 +14,12 @@ export class NodeSshRelay {
 
   sockets(role) {
     return this.state.getWebSockets().filter(socket => attachment(socket).role === role);
+  }
+
+  async scheduleBookkeepingSweep() {
+    const target = Date.now() + BOOKKEEPING_SWEEP_SECONDS * 1000;
+    const current = await this.state.storage.getAlarm();
+    if (current === null || current > target) await this.state.storage.setAlarm(target);
   }
 
   async fetch(request) {
@@ -37,9 +45,7 @@ export class NodeSshRelay {
       });
       if (used) return new Response(null, {status: 409});
       try {
-        const currentAlarm = await this.state.storage.getAlarm();
-        const targetAlarm = expires * 1000;
-        if (currentAlarm === null || targetAlarm < currentAlarm) await this.state.storage.setAlarm(targetAlarm);
+        await this.scheduleBookkeepingSweep();
       } catch {
         // Replay protection has already been committed atomically. Cleanup is
         // best-effort and must never force the caller back onto D1.
@@ -64,9 +70,7 @@ export class NodeSshRelay {
       });
       if (duplicate) return new Response(null, {status: 409});
       try {
-        const currentAlarm = await this.state.storage.getAlarm();
-        const targetAlarm = expires * 1000;
-        if (currentAlarm === null || targetAlarm < currentAlarm) await this.state.storage.setAlarm(targetAlarm);
+        await this.scheduleBookkeepingSweep();
       } catch {
         // The coalescing claim is only an observability optimization. If alarm
         // maintenance fails, the stored key simply expires on a later cleanup.
@@ -148,12 +152,19 @@ export class NodeSshRelay {
       if (Number.isFinite(expires) && expires <= now) browser.close(1000, 'session_expired');
       else if (Number.isFinite(expires)) next = next === null ? expires : Math.min(next, expires);
     }
+    let pendingBookkeeping = false;
     for (const prefix of ['ticket:', 'nonce:', 'telemetry:']) {
       const rows = await this.state.storage.list({prefix, limit: 1000});
       for (const [key, value] of rows) {
         if (value <= now) await this.state.storage.delete(key);
-        else next = next === null ? value : Math.min(next, value);
+        else pendingBookkeeping = true;
       }
+    }
+    // WebSocket session expirations remain exact; expired storage keys are
+    // kept until the next bounded sweep, never treated as reusable nonces.
+    if (pendingBookkeeping) {
+      const sweepAt = now + BOOKKEEPING_SWEEP_SECONDS;
+      next = next === null ? sweepAt : Math.min(next, sweepAt);
     }
     if (next !== null) await this.state.storage.setAlarm(next * 1000);
   }
