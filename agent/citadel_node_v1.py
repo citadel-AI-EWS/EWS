@@ -2363,7 +2363,7 @@ class Agent:
             parsed is None
             or parsed.scheme != "https"
             or parsed.hostname != "raw.githubusercontent.com"
-            or parsed.path != f"/citadel-AI-EWS/EWS/main/agent/lmstudio/{name}"
+            or not re.fullmatch(r"/citadel-AI-EWS/EWS/(?:main|[a-f0-9]{40})/agent/lmstudio/" + re.escape(name), parsed.path)
             or not isinstance(digest, str)
             or len(digest) != 64
             or any(char not in "0123456789abcdef" for char in digest)
@@ -2582,12 +2582,20 @@ class Agent:
         home.mkdir(parents=True, exist_ok=True)
         return home
 
-    def lmstudio_process_env(self) -> dict[str, str]:
+    def lmstudio_process_env(self, *, managed_windows_profile: bool = True) -> dict[str, str]:
         env = os.environ.copy()
         runtime_home = str(self.lmstudio_runtime_home())
         env["CITADEL_LMSTUDIO_HOME"] = runtime_home
         env["HOME"] = runtime_home
         env["LMS_NO_MODIFY_PATH"] = "1"
+        if os.name == "nt" and managed_windows_profile:
+            # Node.js uses USERPROFILE rather than HOME on Windows. Keep the
+            # official bootstrap and subsequent CLI in the same managed profile.
+            env["USERPROFILE"] = runtime_home
+            for key, suffix in (("LOCALAPPDATA", "Local"), ("APPDATA", "Roaming")):
+                directory = Path(runtime_home) / "AppData" / suffix
+                directory.mkdir(parents=True, exist_ok=True)
+                env[key] = str(directory)
         return env
 
     def run_lms(self, args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
@@ -2601,7 +2609,7 @@ class Agent:
             text=True,
             shell=False,
             stdin=subprocess.DEVNULL,
-            env=self.lmstudio_process_env(),
+            env=self.lmstudio_process_env(managed_windows_profile=Path(executable).resolve().is_relative_to(self.lmstudio_runtime_home())),
         )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "lms command failed").strip()
@@ -2757,7 +2765,7 @@ class Agent:
             parsed is None
             or parsed.scheme != "https"
             or parsed.hostname != "raw.githubusercontent.com"
-            or parsed.path != f"/citadel-AI-EWS/EWS/main/agent/lmstudio/{name}"
+            or not re.fullmatch(r"/citadel-AI-EWS/EWS/(?:main|[a-f0-9]{40})/agent/lmstudio/" + re.escape(name), parsed.path)
             or not isinstance(digest, str)
             or len(digest) != 64
             or any(char not in "0123456789abcdef" for char in digest)
@@ -2921,6 +2929,9 @@ class Agent:
             (legacy_home / ".lmstudio").resolve(),
             (legacy_home / ".cache" / "lm-studio").resolve(),
         ]
+        if os.name == "nt":
+            candidates.extend((home / "AppData" / "Local" / "lm-studio").resolve()
+                              for home in (runtime_home, legacy_home))
         for home in (runtime_home, legacy_home):
             pointer = home / ".lmstudio-home-pointer"
             if pointer.is_file():
