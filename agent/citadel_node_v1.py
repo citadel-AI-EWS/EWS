@@ -68,7 +68,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.40"
+VERSION = "0.3.41"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -473,6 +473,12 @@ class ControllerApiError(RuntimeError):
 
 class OperationCancelled(RuntimeError):
     """Raised when the Controller cancels one active long-running operation."""
+
+
+class LmStudioApiError(RuntimeError):
+    def __init__(self, status: int, detail: Any = None) -> None:
+        self.status_code = status
+        super().__init__(f"lmstudio_http_{status}:{str(detail)[:300]}")
 
 
 class ApiClient:
@@ -2594,6 +2600,7 @@ class Agent:
             capture_output=True,
             text=True,
             shell=False,
+            stdin=subprocess.DEVNULL,
             env=self.lmstudio_process_env(),
         )
         if result.returncode != 0:
@@ -2624,10 +2631,12 @@ class Agent:
             try:
                 value = json.loads(raw.decode("utf-8")) if raw else {}
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                if not 200 <= response.status < 300:
+                    raise LmStudioApiError(response.status) from exc
                 raise RuntimeError("lmstudio_invalid_json") from exc
             if not 200 <= response.status < 300:
                 detail = value.get("error") if isinstance(value, dict) else None
-                raise RuntimeError(f"lmstudio_http_{response.status}:{str(detail)[:300]}")
+                raise LmStudioApiError(response.status, detail)
             return value if isinstance(value, dict) else {"items": value}
         finally:
             connection.close()
@@ -2636,7 +2645,7 @@ class Agent:
     def _loaded_model_name(item: Any) -> str | None:
         if not isinstance(item, dict):
             return None
-        for key in ("identifier", "modelKey", "model_key", "model", "path", "name", "id"):
+        for key in ("identifier", "modelKey", "model_key", "key", "model", "path", "name", "id"):
             value = item.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
@@ -2660,6 +2669,8 @@ class Agent:
                     decoded = json.loads(loaded.stdout or "[]")
                     rows = decoded if isinstance(decoded, list) else decoded.get("models", []) if isinstance(decoded, dict) else []
                     for item in rows:
+                        if isinstance(item, dict) and item.get("type") in {"embedding", "embeddings"}:
+                            continue
                         name = self._loaded_model_name(item)
                         if name and name not in loaded_models:
                             loaded_models.append(name)
@@ -3054,7 +3065,18 @@ class Agent:
             last_action="model_downloading", progress_phase="model_download",
             progress_bytes=0, progress_total_bytes=None, progress_detail=f"Starting download: {model}",
         )
-        job = self.lmstudio_http_json("POST", "/api/v1/models/download", body, timeout=120)
+        try:
+            job = self.lmstudio_http_json("POST", "/api/v1/models/download", body, timeout=120)
+        except LmStudioApiError as error:
+            if error.status_code != 404:
+                raise
+            # LM Studio 0.3 has no native v1 model-management API. The
+            # official noninteractive CLI remains available on these installs.
+            target = request_model + ("@" + quantization.lower() if quantization else "")
+            self.raise_if_stopping()
+            self.run_lms(["get", target, "--yes"], timeout=3600)
+            self.raise_if_stopping()
+            job = {"status": "completed"}
         status = str(job.get("status") or "")
         job_id = job.get("job_id")
         if status not in {"already_downloaded", "completed"}:
@@ -3109,7 +3131,24 @@ class Agent:
             last_action="model_loading", progress_phase="model_load",
             progress_current=0, progress_total=1, progress_detail=f"Loading {model_key}",
         )
-        loaded = self.lmstudio_http_json("POST", "/api/v1/models/load", body, timeout=1800)
+        try:
+            loaded = self.lmstudio_http_json("POST", "/api/v1/models/load", body, timeout=1800)
+        except LmStudioApiError as error:
+            if error.status_code != 404:
+                raise
+            unsupported = set(settings) - {"context_length"}
+            if unsupported:
+                raise RuntimeError("lmstudio_legacy_load_settings_unsupported") from error
+            argv = ["load", model_key, "--identifier", model, "--yes"]
+            if "context_length" in settings:
+                argv.extend(["--context-length", str(settings["context_length"])])
+            self.raise_if_stopping()
+            self.run_lms(argv, timeout=1800)
+            self.raise_if_stopping()
+            snapshot = self.probe_lmstudio()
+            if model not in snapshot.get("loaded_models", []):
+                raise RuntimeError("lmstudio_model_not_loaded")
+            loaded = {"status": "loaded", "instance_id": model, "load_config": settings}
         if loaded.get("status") != "loaded":
             raise RuntimeError("lmstudio_model_not_loaded")
         load_config = loaded.get("load_config") if isinstance(loaded.get("load_config"), dict) else settings
@@ -3267,6 +3306,29 @@ class Agent:
                     },
                 )
                 response = connection.getresponse()
+                legacy_stream = response.status == 404
+                if legacy_stream:
+                    if "context_length" in settings or settings.get("reasoning") not in {None, "off"}:
+                        raise RuntimeError("lmstudio_legacy_query_settings_unsupported")
+                    # The native chat route starts with LM Studio 0.4. Retry
+                    # only a missing route, before any generation has started.
+                    response.close()
+                    connection.close()
+                    messages = []
+                    if body.get("system_prompt"):
+                        messages.append({"role": "system", "content": body["system_prompt"]})
+                    messages.append({"role": "user", "content": prompt})
+                    compatible = {key: value for key, value in settings.items()
+                                  if key in {"temperature", "top_p", "top_k", "min_p", "repeat_penalty"}}
+                    if "max_output_tokens" in settings:
+                        compatible["max_tokens"] = settings["max_output_tokens"]
+                    connection.request(
+                        "POST", "/v1/chat/completions",
+                        body=json_text({"model": model, "messages": messages,
+                                        "stream": True, **compatible}).encode("utf-8"),
+                        headers={"Content-Type": "application/json", "Accept": "text/event-stream", "User-Agent": USER_AGENT},
+                    )
+                    response = connection.getresponse()
                 if response.status != 200:
                     raw = response.read(4096).decode("utf-8", errors="replace")
                     raise RuntimeError(f"lmstudio_http_{response.status}:{raw[:300]}")
@@ -3286,15 +3348,29 @@ class Agent:
                         continue
                     if not line.startswith("data:"):
                         continue
+                    encoded_event = line[5:].strip()
+                    if legacy_stream and encoded_event == "[DONE]":
+                        completed = True
+                        break
                     try:
-                        event = json.loads(line[5:].strip())
+                        event = json.loads(encoded_event)
                     except json.JSONDecodeError:
                         continue
                     if not isinstance(event, dict):
                         raise RuntimeError("lmstudio_invalid_event")
                     kind = str(event.get("type") or event_type)
-                    if kind == "message.delta":
+                    if legacy_stream and event.get("error"):
+                        raise RuntimeError("lmstudio_chat_error:" + str(event["error"])[:300])
+                    content = None
+                    if legacy_stream:
+                        choices = event.get("choices")
+                        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                            delta = choices[0].get("delta")
+                            if isinstance(delta, dict):
+                                content = delta.get("content")
+                    elif kind == "message.delta":
                         content = event.get("content")
+                    if legacy_stream or kind == "message.delta":
                         if isinstance(content, str):
                             answer += content
                             if len(answer) > 64000:
