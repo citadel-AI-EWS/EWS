@@ -341,6 +341,7 @@ node tests/legacy-experience.mjs
 node tests/experience-registry.mjs
 node tests/architect-ux-guards.mjs
 node tests/smart-rollout-recovery.mjs
+node tests/rollout-evidence.mjs
 node tests/lmstudio-command-storage.mjs
 node tests/legacy-command-duplicates.mjs
 node tests/enterprise-policy.mjs
