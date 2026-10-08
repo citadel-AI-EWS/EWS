@@ -3068,28 +3068,43 @@ class Agent:
             removed=removed[:4],
         )
 
+    @staticmethod
+    def lmstudio_cli_model_rows(raw: str) -> list[dict[str, Any]]:
+        decoded = json.loads(raw or "[]")
+        rows = decoded if isinstance(decoded, list) else decoded.get("models", []) if isinstance(decoded, dict) else []
+        return [item for item in rows if isinstance(item, dict)]
+
+    @staticmethod
+    def lmstudio_quantization_matches(item: dict[str, Any], quantization: str) -> bool:
+        # Parent rows can advertise many variants. Only the concrete row's
+        # key/path/quantization (not its variants list) proves the chosen format.
+        values = [item.get(key) for key in ("modelKey", "model_key", "key", "path", "quantization", "selectedVariant")]
+        encoded = json.dumps(values, ensure_ascii=False).lower().replace("-", "_")
+        quant = quantization.lower().replace("-", "_")
+        return re.search(r"(?<![a-z0-9])" + re.escape(quant) + r"(?![a-z0-9])", encoded) is not None
+
     def resolve_lmstudio_model_key(self, model: str, quantization: str | None = None) -> str:
         try:
             result = self.run_lms(["ls", "--json"], timeout=30)
-            decoded = json.loads(result.stdout or "[]")
-            rows = decoded if isinstance(decoded, list) else decoded.get("models", []) if isinstance(decoded, dict) else []
+            rows = self.lmstudio_cli_model_rows(result.stdout)
             needle = model.lower()
-            quant = (quantization or "").lower()
-            best: str | None = None
             for item in rows:
-                if not isinstance(item, dict):
-                    continue
                 encoded = json.dumps(item, ensure_ascii=False).lower()
                 if needle not in encoded and needle.split("/")[-1] not in encoded:
                     continue
-                if quant and quant not in encoded:
+                candidate = str(item.get("modelKey") or item.get("path") or self._loaded_model_name(item) or "")
+                if not candidate:
                     continue
-                candidate = self._loaded_model_name(item)
-                if candidate:
-                    best = candidate
-                    break
-            if best:
-                return best
+                if quantization and item.get("variants"):
+                    variants = self.run_lms(["ls", candidate, "--json"], timeout=30)
+                    for variant in self.lmstudio_cli_model_rows(variants.stdout):
+                        if self.lmstudio_quantization_matches(variant, quantization):
+                            key = variant.get("modelKey") or variant.get("path") or self._loaded_model_name(variant)
+                            if key:
+                                return str(key)
+                    continue
+                if not quantization or self.lmstudio_quantization_matches(item, quantization):
+                    return candidate
         except Exception as error:
             self.log.write("lmstudio_model_key_resolution_fallback", error=str(error)[:300])
         return model + (("@" + quantization.lower()) if quantization else "")
@@ -3194,6 +3209,16 @@ class Agent:
             snapshot = self.probe_lmstudio()
             if model not in snapshot.get("loaded_models", []):
                 raise RuntimeError("lmstudio_model_not_loaded")
+            if quantization:
+                inventory = self.run_lms(["ps", "--json"], timeout=20)
+                exact = any(
+                    item.get("identifier") == model and
+                    model_key in [item.get(key) for key in ("modelKey", "model_key", "path", "selectedVariant")] and
+                    self.lmstudio_quantization_matches(item, quantization)
+                    for item in self.lmstudio_cli_model_rows(inventory.stdout)
+                )
+                if not exact:
+                    raise RuntimeError("lmstudio_loaded_variant_mismatch")
             loaded = {"status": "loaded", "instance_id": model, "load_config": settings}
         if loaded.get("status") != "loaded":
             raise RuntimeError("lmstudio_model_not_loaded")
