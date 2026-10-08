@@ -26,7 +26,10 @@ def main():
     names = ("citadel_node_v1.py", "citadel_node_v2.py")
     originals = {name: history(name) for name in names}
     assert b'VERSION = "0.3.24"' in originals[names[0]]
-    target = {name: (ROOT / "agent" / name).read_bytes() for name in names}
+    # Windows checkout can convert LF to CRLF. HTTP release downloads contain
+    # the exact Git blob bytes, so exercise those bytes and their pinned hashes.
+    target = {name: subprocess.check_output(["git", "show", f"HEAD:agent/{name}"],
+              cwd=ROOT, timeout=30) for name in names}
     source = (ROOT / "agent" / names[1]).read_text(encoding="utf-8")
     version = source.split('VERSION = "', 1)[1].split('"', 1)[0]
     with tempfile.TemporaryDirectory() as directory:

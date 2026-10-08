@@ -343,6 +343,7 @@ node tests/architect-ux-guards.mjs
 node tests/smart-rollout-recovery.mjs
 node tests/rollout-evidence.mjs
 node tests/diagnostic-pause-recovery.mjs
+node tests/patched-rollout-recovery.mjs
 node tests/lmstudio-command-storage.mjs
 node tests/legacy-command-duplicates.mjs
 node tests/enterprise-policy.mjs

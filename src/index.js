@@ -8,6 +8,7 @@ import { ARCHITECT_ROLE_PERMISSIONS, DEFAULT_ENTERPRISE_POLICY, evaluateEnterpri
 import { buildAgentCapabilityContract, buildTaskEnvelope, buildResultEnvelope, verifyProjectResultEnvelope } from "./agent-contracts.js";
 import {issueSshTicket, verifySshTicket, issueSshRelayTicket, verifySshRelayTicket} from "./ssh/tickets.js";
 import {DIAGNOSTIC_NODE_HASH, DIAGNOSTIC_RECOVERY_END, expiredDiagnosticResumeEligible, DIAGNOSTIC_RESUME_REQUEUE_SQL} from './diagnostic-pause-recovery.js';
+import {recoverPatchedRollout} from './patched-rollout-recovery.js';
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -2318,10 +2319,13 @@ async function ensureRolloutCommandForNode(env, nodeId) {
   await Promise.all([ensureRolloutStorage(env), ensureCommandStorage(env)]);
   // Rollouts are exceptional. On the steady-state polling path, do one indexed
   // lookup and return before touching node/command history.
-  const rollout = await env.DB.prepare(
+  let rollout = await env.DB.prepare(
     "SELECT rollout_id, target_version, release_json, created_at FROM agent_rollouts WHERE status = 'active' ORDER BY created_at DESC LIMIT 1"
   ).first();
   if (!rollout) return;
+  rollout = await recoverPatchedRollout(env, rollout, LATEST_NODE_RELEASE, nodeId,
+    (candidate, policy) => operationalNodeState(candidate) === 'live' &&
+      Boolean(chooseSmartRolloutCanary([candidate], policy)));
   const rolloutPolicy = await reconcileSmartRollout(env, rollout);
   if (!rolloutPolicy || ["paused","completed"].includes(rolloutPolicy.phase)) return;
   if (rolloutPolicy.phase === "canary" && nodeId !== rolloutPolicy.canary_node_id) return;
