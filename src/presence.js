@@ -7,6 +7,11 @@ import {
 import {d1QuotaResponse} from './d1-availability.js';
 
 let presenceSchemaPromise;
+// D1 charges for repeated conflict probes even when the UPSERT changes no row.
+ // Best-effort, per-binding memo: never use it as durable presence or auth state.
+const PRESENCE_DEDUP_MS = 4 * 60 * 1000;
+const PRESENCE_MEMO_MAX = 1024;
+const recentPresenceByDb = new WeakMap();
 
 export async function ensurePresenceStorage(env) {
   if (!presenceSchemaPromise) {
@@ -51,11 +56,21 @@ export async function recordNodePresence(request, env, nodeId) {
   const publicIp = normalizedIp(request);
   if (!publicIp) return;
 
-  await ensurePresenceStorage(env);
   const cf = request.cf || {};
   const country = normalizedCfText(cf.country, 8);
   const colo = normalizedCfText(cf.colo, 16);
   const asn = Number.isInteger(cf.asn) && cf.asn >= 0 ? cf.asn : null;
+  const signature = JSON.stringify([publicIp, country, colo, asn]);
+  let memo = recentPresenceByDb.get(env.DB);
+  if (!memo) {
+    memo = new Map();
+    recentPresenceByDb.set(env.DB, memo);
+  }
+  const previous = memo.get(nodeId);
+  const ageMs = previous ? Date.now() - previous.checkedAt : -1;
+  if (previous?.signature === signature && ageMs >= 0 && ageMs < PRESENCE_DEDUP_MS) return;
+
+  await ensurePresenceStorage(env);
 
   await env.DB.prepare(`
     INSERT INTO node_presence (
@@ -72,6 +87,10 @@ export async function recordNodePresence(request, env, nodeId) {
       OR node_presence.colo IS NOT excluded.colo
       OR node_presence.asn IS NOT excluded.asn
   `).bind(nodeId, publicIp, country, colo, asn).run();
+  // Cache only after the D1 operation succeeds; failures must always retry.
+  memo.delete(nodeId);
+  memo.set(nodeId, {signature, checkedAt: Date.now()});
+  if (memo.size > PRESENCE_MEMO_MAX) memo.delete(memo.keys().next().value);
 }
 
 async function architectPresence(request, env) {
