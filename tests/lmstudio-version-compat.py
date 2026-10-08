@@ -200,6 +200,8 @@ class CliLifecycleTests(unittest.TestCase):
             agent.find_lms = lambda: sys.executable
             result = agent.run_lms(["-c", "print('official-cli-output')"], timeout=5)
             self.assertEqual(result.stdout.strip(), "official-cli-output")
+            result = agent.run_lms(["-c", "import sys;sys.stdout.buffer.write('Привет 🦉'.encode('utf-8'))"], timeout=5)
+            self.assertEqual(result.stdout, "Привет 🦉")
             with self.assertRaisesRegex(RuntimeError, "official-cli-failure"):
                 agent.run_lms(["-c", "import sys;print('official-cli-failure',file=sys.stderr);sys.exit(2)"], timeout=5)
 
