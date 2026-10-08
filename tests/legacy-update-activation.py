@@ -27,7 +27,7 @@ def main():
     originals = {name: history(name) for name in names}
     assert b'VERSION = "0.3.24"' in originals[names[0]]
     target = {name: (ROOT / "agent" / name).read_bytes() for name in names}
-    source = (ROOT / "agent" / names[1]).read_text()
+    source = (ROOT / "agent" / names[1]).read_text(encoding="utf-8")
     version = source.split('VERSION = "', 1)[1].split('"', 1)[0]
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -45,7 +45,7 @@ def main():
                                           "data_dir": str(root / "state")}), encoding="utf-8")
         agent = module.Agent(module.AgentConfig.from_file(config_path), config_path)
         agent.identity.set_node_id("node_historical_fixture")
-        release = (ROOT / "src" / "index.js").read_text().split("const LATEST_NODE_RELEASE =", 1)[1].split("\n});", 1)[0]
+        release = (ROOT / "src" / "index.js").read_text(encoding="utf-8").split("const LATEST_NODE_RELEASE =", 1)[1].split("\n});", 1)[0]
         files = [{"path": name, "url": url, "sha256": digest} for name, url, digest in
                  re.findall(r'path: "([^"]+)",\s+url: "([^"]+)",\s+sha256: "([^"]+)"', release)
                  if name in names]

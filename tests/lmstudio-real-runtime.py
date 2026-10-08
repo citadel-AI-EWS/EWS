@@ -1,7 +1,6 @@
 """Install official llmster and prove a downloaded model generates real tokens."""
 import hashlib
 import json
-import os
 import sys
 import tempfile
 from pathlib import Path
@@ -12,9 +11,6 @@ import citadel_node_v1 as node
 
 
 def main():
-    revision = os.environ["GITHUB_SHA"]
-    if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
-        raise RuntimeError("invalid test revision")
     name = "install_llmstudio_headless.sh"
     helper = ROOT / "agent" / "lmstudio" / name
     model = "lmstudio-community/Qwen2.5-0.5B-Instruct-GGUF"
@@ -25,8 +21,8 @@ def main():
         agent.report_ai_state = agent.save_lmstudio_state
         try:
             agent.install_lmstudio({"asset": {
-                "name": name,
-                "url": f"https://raw.githubusercontent.com/citadel-AI-EWS/EWS/{revision}/agent/lmstudio/{name}",
+                "path": name,
+                "url": f"https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/{name}",
                 "sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
             }})
             payload = {"model": model, "source": "huggingface", "quantization": "Q4_K_M"}
