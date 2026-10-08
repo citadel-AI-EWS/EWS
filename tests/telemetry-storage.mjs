@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import worker from "../src/worker.js";
 
 const architectToken = "test-architect-token-with-enough-entropy";
@@ -379,5 +380,24 @@ assert.equal(data.stats.event_count, 2);
 assert.equal(data.stats.node_count, 1);
 assert.equal(data.stats.retention_days, 7);
 assert.equal(data.stats.per_node_event_cap, 5000);
+
+// The real agent retries a whole rejected batch without advancing its cursor.
+// One omitted event therefore hides all later update-failure diagnostics.
+const agentSource = await readFile(new URL("../agent/citadel_node_v2.py", import.meta.url), "utf8");
+const agentEventBlock = agentSource.match(/ALLOWED_EVENTS = \{([\s\S]*?)\n\}/);
+assert.ok(agentEventBlock, "agent telemetry allow-list missing");
+const agentEventTypes = [...agentEventBlock[1].matchAll(/"([a-z_]+)"/g)].map((match) => match[1]);
+state.rate.clear();
+response = await signedPost({ events: agentEventTypes.map((eventType, index) => ({
+  event_id: `agent_contract_${index}`,
+  event_type: eventType,
+  created_at: new Date().toISOString(),
+  details: { command_id: "command_update_test", error: "updated agent self-test failed" }
+})) });
+assert.equal(response.status, 201, "every event shipped by the agent must be accepted in a signed batch");
+data = await response.json();
+assert.equal(data.received, agentEventTypes.length, "the whole batch must be acknowledged so the cursor can advance");
+assert.ok(state.logs.some((event) => event.event_type === "command_failed" && event.details_json.includes("command_update_test")),
+  "the update failure must survive routine-event filtering");
 
 console.log("Signed bounded telemetry ingestion, redaction, rate limiting, retention and pagination: OK");
