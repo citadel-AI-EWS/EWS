@@ -1,6 +1,8 @@
 """Install official llmster and prove a downloaded model generates real tokens."""
 import hashlib
 import json
+import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -11,8 +13,10 @@ import citadel_node_v1 as node
 
 
 def main():
-    name = "install_llmstudio_headless.sh"
-    helper = ROOT / "agent" / "lmstudio" / name
+    name = "install_llmstudio_headless.ps1" if os.name == "nt" else "install_llmstudio_headless.sh"
+    # Match the canonical HTTP helper bytes even on a CRLF Windows checkout.
+    helper_bytes = subprocess.check_output(["git", "show", f"HEAD:agent/lmstudio/{name}"],
+                                         cwd=ROOT, timeout=30)
     model = "lmstudio-community/Qwen2.5-0.5B-Instruct-GGUF"
     with tempfile.TemporaryDirectory(prefix="citadel-real-lmstudio-") as directory:
         agent = node.Agent(node.AgentConfig("https://example.invalid", Path(directory)))
@@ -23,7 +27,7 @@ def main():
             agent.install_lmstudio({"asset": {
                 "path": name,
                 "url": f"https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/{name}",
-                "sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
+                "sha256": hashlib.sha256(helper_bytes).hexdigest(),
             }})
             payload = {"model": model, "source": "huggingface", "quantization": "Q4_K_M"}
             agent.download_lmstudio_model(payload)

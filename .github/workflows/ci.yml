@@ -386,8 +386,12 @@ jobs:
           Write-Host "Windows installer AST + real SCM round-trip: OK"
 
   lmstudio-real-runtime:
-    name: LM Studio real model inference
-    runs-on: ubuntu-latest
+    name: LM Studio real model inference (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v7
@@ -398,7 +402,7 @@ jobs:
           cache-dependency-path: agent/requirements.txt
       - run: python -m pip install --disable-pip-version-check --requirement agent/requirements.txt
       - name: Install official runtime, download and load a small model, request hi
-        run: timeout 600s python tests/lmstudio-real-runtime.py
+        run: python tests/lmstudio-real-runtime.py
 
   gate:
     name: CI gate
