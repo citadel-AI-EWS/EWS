@@ -11,6 +11,7 @@ python tests/agent-resilience.py
 python tests/agent-quota-retry.py
 python tests/legacy-commands-migration.py
 node tests/d1-availability.mjs
+node tests/durable-cleanup-sweep.mjs
 node tests/ai-response-drive-guards.mjs
 node tests/deployment-smoke.mjs
 
