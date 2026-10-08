@@ -59,7 +59,7 @@ assert.equal(chooseSmartRolloutCanary(liveCandidates.slice(0, 1), {
 assert.match(index, /canary_diagnostic_hint: canaryNeedsLogs \? "agent_logs_required"/);
 assert.match(index, /policy.phase === "canary" \|\| canaryPaused/);
 assert.match(index, /reused_existing: true/);
-assert.match(operations, /SSH → agent-logs/);
+assert.match(operations, /Подробнее → Получить журналы/);
 
 // Exercise the actual browser status watcher: one slow request is not a
 // terminal rollout failure, and a paused canary remains observable.
@@ -72,14 +72,17 @@ const scheduled = [], notices = [], activity = { hidden: true }, activityText = 
 let statusResponse = null;
 const watcher = vm.createContext({
   token: "test", document: { hidden: false },
+  lastMachineData: { nodes: [] },
   api: async () => { if (statusResponse instanceof Error) throw statusResponse; return statusResponse; },
   setTimeout: (fn, delay) => { scheduled.push({ fn, delay }); return scheduled.length; },
   clearTimeout: () => {},
   $: (id) => id === "fleetActivity" ? activity : activityText,
-  setFleetActivity: () => { activity.hidden = false; },
+  setFleetActivity: (_title, text) => { activity.hidden = false; activityText.textContent = text; },
   tell: (message) => notices.push(message),
   sessionStorage: { removeItem: () => {} }
 });
+vm.runInContext(operations.slice(operations.indexOf("function sshVersionAtLeast"), operations.indexOf("function sshSelectedNode")), watcher);
+vm.runInContext(operations.slice(operations.indexOf("function agentLogHint"), operations.indexOf("function updateCommandFeedback")), watcher);
 vm.runInContext(watcherSource, watcher);
 statusResponse = Error("signal timed out");
 await vm.runInContext("pollSmartRollout()", watcher);
@@ -91,13 +94,24 @@ assert.equal(notices.length, 1, "repeat timeout should not flood notifications")
 statusResponse = { rollout: {
   rollout_id: "rollout_test", phase: "paused", status: "active",
   pause_reason: "canary_command_failed", registered_nodes: 27,
+  canary_node_id: "node_legacy_fixture", canary_hostname: "legacy-fixture",
+  canary_agent_version: "0.3.24", canary_diagnostic_hint: "agent_logs_required",
+  canary_command_id: "command_update_fixture",
   nodes_waiting_for_update: 27
 } };
 await vm.runInContext("pollSmartRollout()", watcher);
 assert.equal(scheduled.at(-1).delay, 15000);
 assert.equal(notices.length, 2);
+assert.match(activityText.textContent, /Пробное обновление legacy-fixture завершилось ошибкой/);
+assert.match(activityText.textContent, /Подробнее → Получить журналы/);
+assert.match(activityText.textContent, /agent\.jsonl на узле; консоль требует агент 0\.3\.32\+/);
+assert.doesNotMatch(activityText.textContent, /SSH → agent-logs/);
 await vm.runInContext("pollSmartRollout()", watcher);
 assert.equal(notices.length, 2, "unchanged pause reason should be announced once");
+statusResponse.rollout.canary_agent_version = "0.3.39";
+await vm.runInContext("pollSmartRollout()", watcher);
+assert.match(activityText.textContent, /Консоль агента → agent-logs/);
+assert.doesNotMatch(activityText.textContent, /нужен файл agent\.jsonl/);
 statusResponse = { rollout: {
   rollout_id: "rollout_test", phase: "paused", status: "active",
   pause_reason: "fleet_failure_budget_exceeded", registered_nodes: 27,

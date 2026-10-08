@@ -872,6 +872,7 @@ $('selectAllNodes').onclick=()=>{const nodes=lastMachineData.nodes||[],all=nodes
 function setFleetActivity(title,text,value,total,done=false){$('fleetActivity').hidden=false;$('fleetActivityTitle').textContent=title;$('fleetActivityText').textContent=text;const p=$('fleetProgress');p.max=Math.max(1,total||1);p.value=Math.max(0,Math.min(p.max,value||0));const spinner=$('fleetActivity').querySelector('.spin');if(spinner)spinner.hidden=done}
 function optimisticCommand(node,type){lastMachineData.commands=(lastMachineData.commands||[]).filter(x=>x.node_id!==node.node_id);lastMachineData.commands.unshift({command_id:'local-'+Date.now()+'-'+node.node_id,node_id:node.node_id,command_type:type,status:'pending',created_at:new Date().toISOString()})}
 function commandElapsedMinutes(command,preferCompleted=false){const raw=preferCompleted?(command?.completed_at||command?.created_at):command?.created_at,t=Date.parse(raw||'');return Number.isFinite(t)?Math.max(0,Math.floor((Date.now()-t)/60000)):null}
+function agentLogHint(node){return sshVersionAtLeast(node?.agent_version,'0.3.32')?'Подробнее → Получить журналы или Консоль агента → agent-logs':'Подробнее → Получить журналы. Для свежего локального журнала нужен файл agent.jsonl на узле; консоль требует агент 0.3.32+'}
 function updateCommandFeedback(node,command){
  if(!command||command.command_type!=='update')return null;
  const target=node?.latest_agent_version||'новую версию';
@@ -888,12 +889,12 @@ function updateCommandFeedback(node,command){
  }
  if(command.status==='completed'){
    const age=commandElapsedMinutes(command,true);
-   if(age!==null&&age>=10)return {phase:'stalled',spinning:false,error:true,text:'Обновление не подтверждено '+age+' мин: нода '+(node?.status==='online'?'на связи, но сообщает':'последний раз сообщала')+' старую версию '+(node?.agent_version||'—')+'. Проверьте перезапуск службы через SSH → agent-logs.'};
+   if(age!==null&&age>=10)return {phase:'stalled',spinning:false,error:true,text:'Обновление не подтверждено '+age+' мин: нода '+(node?.status==='online'?'на связи, но сообщает':'последний раз сообщала')+' старую версию '+(node?.agent_version||'—')+'. '+agentLogHint(node)+'.'};
    return {phase:'installed',spinning:true,error:age!==null&&age>=5,text:'Обновление: удалённый агент завершил локальную фазу и проверку файлов; ждём перезапуск и heartbeat '+target+(age!==null&&age>=5?' · нет подтверждения уже '+age+' мин':'')+'.'};
  }
  if(['failed','expired','cancelled'].includes(command.status)){
    const bridge=String(node?.agent_version||'').includes('-bridge.');
-   return {phase:'failed',spinning:false,error:true,text:(bridge?'Промежуточный агент '+node.agent_version+' работает, но переход на '+target+' завершился ошибкой. ':'Обновление не подтверждено: '+label(command.status)+'. ')+ 'Проверьте SSH → agent-logs'+(command.command_id?' · команда '+command.command_id:'')+'.'};
+   return {phase:'failed',spinning:false,error:true,text:(bridge?'Промежуточный агент '+node.agent_version+' работает, но переход на '+target+' завершился ошибкой. ':'Обновление не подтверждено: '+label(command.status)+'. ')+agentLogHint(node)+(command.command_id?' · команда '+command.command_id:'')+'.'};
  }
  return null;
 }
@@ -956,19 +957,20 @@ async function pollSmartRollout(){
     const waiting=Number(r.nodes_waiting_for_update||0);
     const total=Number(r.registered_nodes||0);
     const canary=r.canary_hostname||r.canary_node_id||'—';
+    const canaryNode=(lastMachineData.nodes||[]).find(n=>n.node_id===r.canary_node_id)||{agent_version:r.canary_agent_version};
     const failedNames=(r.failed_nodes||[]).map(n=>n.hostname||n.node_id).filter(Boolean).join(', ');
     const pauseReason=r.pause_reason==='fleet_failure_budget_exceeded'
       ? 'Достигнут лимит сбоев обновления: '+Number(r.failed_node_count||0)+' узла, лимит '+Number(r.max_failures||2)+(failedNames?' ('+failedNames+')':'')
-      : (r.pause_reason||'unknown');
+      : ({canary_command_failed:'Пробное обновление '+canary+' завершилось ошибкой',canary_command_cancelled:'Пробное обновление '+canary+' отменено',canary_command_expired:'Истёк срок команды пробного обновления '+canary,canary_heartbeat_timeout:'После обновления '+canary+' не подтвердил запуск новой версии',canary_update_timeout:'Превышено время ожидания пробного обновления '+canary}[r.pause_reason]||r.pause_reason||'unknown');
     const reason=r.pause_reason?(' · причина '+pauseReason):'';
     const diagnostic=r.canary_diagnostic_hint==='agent_logs_required'
-      ? (' · подробности: '+canary+' → SSH → agent-logs'+
+      ? (' · подробности: '+canary+' → '+agentLogHint(canaryNode)+
         (r.canary_command_id?' · команда '+r.canary_command_id:''))
       : '';
     const text='фаза '+phase+' · канарейка '+canary+' · ждут обновления '+waiting+
       ' · доступны сейчас '+Number(r.nodes_updateable_now||0)+
       ' · deferred '+Number(r.nodes_deferred||0)+reason+diagnostic+
-      (failedNames&&!r.pause_reason?' · ошибки обновления: '+failedNames+' → SSH → agent-logs':'');
+      (failedNames&&!r.pause_reason?' · ошибки обновления: '+failedNames+' → Подробнее → Получить журналы':'');
     const done=phase==='completed'||(r.status==='completed'&&waiting===0);
     const paused=phase==='paused';
     setFleetActivity('Умное автообновление',text,Math.max(0,total-waiting),Math.max(1,total),done||paused);
@@ -979,9 +981,9 @@ async function pollSmartRollout(){
         tell('Rollout остановлен безопасно: '+pauseReason+
           '. Остальные ноды не обновляются.'+
           (r.canary_diagnostic_hint==='agent_logs_required'
-            ? ' Причину на узле смотрите через SSH → agent-logs. Повторный запуск выберет другую доступную канарейку.'
+            ? ' Подробности: '+agentLogHint(canaryNode)+'. Повторный запуск выберет другую доступную канарейку.'
             : (r.pause_reason==='fleet_failure_budget_exceeded'
-              ? ' Подробности: '+(failedNames||'узлы со сбоем')+' → SSH → agent-logs. Статус перепроверяется; после подтверждённого восстановления обновление продолжится.'
+              ? ' Подробности: '+(failedNames||'узлы со сбоем')+' → Подробнее → Получить журналы. Статус перепроверяется; после подтверждённого восстановления обновление продолжится.'
               : '')),true);
       }
       // A later verified heartbeat may recover a canary or fleet pause.
@@ -1121,7 +1123,7 @@ async function loadNodeAgentLogs(){
   try{
     const data=await api('/logs?node_id='+encodeURIComponent(nodeId)+'&limit=50');
     if(!current())return;
-    $('nodeAgentLogs').textContent=(data.logs||[]).map(event=>[event.created_at,event.level,event.event_type,event.message,JSON.stringify(event.details||{})].join(' · ')).join('\n')||'Событий этой ноды в хабе пока нет. Локальный журнал доступен через SSH → agent-logs после обновления агента.';
+    $('nodeAgentLogs').textContent=(data.logs||[]).map(event=>[event.created_at,event.level,event.event_type,event.message,JSON.stringify(event.details||{})].join(' · ')).join('\n')||('Событий этой ноды в хабе пока нет. '+(sshVersionAtLeast(node.agent_version,'0.3.32')?'Локальный журнал: Консоль агента → agent-logs.':'Для локального журнала нужен файл agent.jsonl на узле; консоль требует агент 0.3.32+.'));
   }catch(error){if(current())$('nodeAgentLogs').textContent='Журнал не получен: '+error.message}
   finally{if(current())$('nodeAgentLogsRefresh').disabled=false}
 }
