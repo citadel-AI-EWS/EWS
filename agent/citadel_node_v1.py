@@ -2609,6 +2609,8 @@ class Agent:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             shell=False,
             stdin=subprocess.DEVNULL,
             env=self.lmstudio_process_env(managed_windows_profile=Path(executable).resolve().is_relative_to(self.lmstudio_runtime_home())),
