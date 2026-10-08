@@ -58,8 +58,8 @@ const LATEST_NODE_RELEASE = Object.freeze({
     },
     {
       path: "citadel_node_v2.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/40efd1400194a8c9f13f5128218a195a179486b3/agent/citadel_node_v2.py",
-      sha256: "7f75c80dfb56c789107b24f2312d747e494b4f9b137fc8d0cd834852a9aed97d"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/9f218de41809af36170c4c41850d072b9064f18e/agent/citadel_node_v2.py",
+      sha256: "b4e50c49bfd75949d0ac78501bed91324f8c904e6e4bd703c29a3cb68b72bc98"
     },
     {
       path: "CitadelSshConsole.cs",
@@ -2099,7 +2099,32 @@ export function rolloutCommandOutcome(command, node, targetVersion, now = Date.n
   return "pending";
 }
 
+export function rolloutCommandRetryBlocked(command, node, targetVersion) {
+  return rolloutCommandOutcome(command, node, targetVersion) === "failed" &&
+    updatePayloadReadyForAgent(safeJson(command?.payload_json, {}), node?.agent_version);
+}
+
+async function smartRolloutAttempts(env, rollout) {
+  // A superseded attempt is history, not another failed computer. Keep the
+  // latest update per node, including the legacy bridge's intermediate hop.
+  const rows = await env.DB.prepare(
+    "SELECT c.node_id, c.command_id, c.status, c.created_at, c.completed_at, c.payload_json, " +
+    "n.hostname, n.status AS node_status, n.agent_version, n.last_seen_at FROM commands c " +
+    "JOIN nodes n ON n.node_id = c.node_id WHERE c.command_type = 'update' " +
+    "AND n.status <> 'revoked' AND datetime(c.created_at) >= datetime(?) " +
+    "AND NOT EXISTS (SELECT 1 FROM commands newer WHERE newer.node_id = c.node_id " +
+    "AND newer.command_type = 'update' AND (datetime(newer.created_at) > datetime(c.created_at) " +
+    "OR (datetime(newer.created_at) = datetime(c.created_at) AND newer.rowid > c.rowid)))"
+  ).bind(rollout.created_at).all();
+  return (rows.results || []).filter((row) => {
+    const version = safeJson(row.payload_json, {})?.version;
+    return !isTestNodeRecord(row) &&
+      [rollout.target_version, LEGACY_031_BRIDGE_RELEASE.version].includes(version);
+  });
+}
+
 export async function reconcileSmartRollout(env, rollout) {
+  let failedNodes = [];
   let policy = await env.DB.prepare(
     "SELECT rollout_id, canary_node_id, phase, max_parallel, max_failures, pause_reason, canary_verified_at " +
     "FROM agent_rollout_policy WHERE rollout_id = ?"
@@ -2121,6 +2146,9 @@ export async function reconcileSmartRollout(env, rollout) {
 
   const canaryPaused = policy.phase === "paused" &&
     String(policy.pause_reason || "").startsWith("canary_");
+  const fleetPaused = policy.phase === "paused" &&
+    policy.pause_reason === "fleet_failure_budget_exceeded" &&
+    Boolean(policy.canary_verified_at);
   if (policy.phase === "canary" || canaryPaused) {
     const [canary, command] = await Promise.all([
       env.DB.prepare(
@@ -2181,21 +2209,40 @@ export async function reconcileSmartRollout(env, rollout) {
         ]);
       }
     }
-  } else if (policy.phase === "fleet") {
-    const attempts = await env.DB.prepare(
-      "SELECT c.status, c.created_at, c.completed_at, " +
-      "n.status AS node_status, n.agent_version, n.last_seen_at FROM commands c " +
-      "JOIN nodes n ON n.node_id = c.node_id WHERE c.command_type = 'update' " +
-      "AND datetime(c.created_at) >= datetime(?)"
-    ).bind(rollout.created_at).all();
-    const failures = (attempts.results || []).filter((row) =>
-      rolloutCommandOutcome(row, { ...row, status: row.node_status }, rollout.target_version) === "failed").length;
+  } else if (policy.phase === "fleet" || fleetPaused) {
+    const attempts = await smartRolloutAttempts(env, rollout);
+    const outcomes = attempts.map((row) =>
+      rolloutCommandOutcome(row, { ...row, status: row.node_status }, rollout.target_version));
+    failedNodes = attempts.filter((row, i) => outcomes[i] === "failed").map((row) => ({
+      node_id: row.node_id, hostname: row.hostname || row.node_id,
+      command_id: row.command_id, command_status: row.status,
+      agent_version: row.agent_version || null
+    }));
+    const failures = outcomes.filter((outcome) => outcome === "failed").length;
     if (failures >= Number(policy.max_failures || 2)) {
       const reason = "fleet_failure_budget_exceeded";
-      await env.DB.prepare(
-        "UPDATE agent_rollout_policy SET phase = 'paused', pause_reason = ?, " +
-        "updated_at = CURRENT_TIMESTAMP WHERE rollout_id = ?"
-      ).bind(reason, rollout.rollout_id).run();
+      if (!fleetPaused) {
+        await env.DB.prepare(
+          "UPDATE agent_rollout_policy SET phase = 'paused', pause_reason = ?, " +
+          "updated_at = CURRENT_TIMESTAMP WHERE rollout_id = ?"
+        ).bind(reason, rollout.rollout_id).run();
+      }
+    } else if (fleetPaused && outcomes.includes("verified")) {
+      // Fresh target-version evidence is required to recover the pause. The
+      // same failure budget and parallelism limits still apply after recovery.
+      await env.DB.batch([
+        env.DB.prepare(
+          "UPDATE agent_rollout_policy SET phase = 'fleet', pause_reason = NULL, " +
+          "updated_at = CURRENT_TIMESTAMP WHERE rollout_id = ? AND phase = 'paused' " +
+          "AND pause_reason = 'fleet_failure_budget_exceeded'"
+        ).bind(rollout.rollout_id),
+        env.DB.prepare(
+          "INSERT INTO audit_events (actor_type, actor_id, action, target_type, target_id, details_json) " +
+          "VALUES ('controller', ?, 'agent.rollout.fleet_recovered', 'rollout', ?, ?)"
+        ).bind(rollout.rollout_id, rollout.rollout_id, JSON.stringify({
+          target_version: rollout.target_version, failed_nodes: failures
+        }))
+      ]);
     }
   }
 
@@ -2203,7 +2250,7 @@ export async function reconcileSmartRollout(env, rollout) {
     "SELECT rollout_id, canary_node_id, phase, max_parallel, max_failures, pause_reason, canary_verified_at " +
     "FROM agent_rollout_policy WHERE rollout_id = ?"
   ).bind(rollout.rollout_id).first();
-  return policy;
+  return policy ? { ...policy, failed_node_count: failedNodes.length, failed_nodes: failedNodes.slice(0, 20) } : policy;
 }
 
 async function architectUpdateRolloutStatus(request, env) {
@@ -2246,6 +2293,8 @@ async function architectUpdateRolloutStatus(request, env) {
       status: rollout.status,
       phase: policy?.phase || null,
       pause_reason: policy?.pause_reason || null,
+      failed_node_count: Number(policy?.failed_node_count || 0),
+      failed_nodes: policy?.failed_nodes || [],
       max_parallel: Number(policy?.max_parallel || 0),
       max_failures: Number(policy?.max_failures || 0),
       canary_verified_at: policy?.canary_verified_at || null,
@@ -2276,13 +2325,8 @@ async function ensureRolloutCommandForNode(env, nodeId) {
   if (!rolloutPolicy || ["paused","completed"].includes(rolloutPolicy.phase)) return;
   if (rolloutPolicy.phase === "canary" && nodeId !== rolloutPolicy.canary_node_id) return;
   if (rolloutPolicy.phase === "fleet") {
-    const attempts = await env.DB.prepare(
-      "SELECT c.status, c.created_at, c.completed_at, " +
-      "n.status AS node_status, n.agent_version, n.last_seen_at FROM commands c " +
-      "JOIN nodes n ON n.node_id = c.node_id WHERE c.command_type = 'update' " +
-      "AND datetime(c.created_at) >= datetime(?)"
-    ).bind(rollout.created_at).all();
-    const unverified = (attempts.results || []).filter((row) =>
+    const attempts = await smartRolloutAttempts(env, rollout);
+    const unverified = attempts.filter((row) =>
       rolloutCommandOutcome(row, { ...row, status: row.node_status }, rollout.target_version) === "pending").length;
     if (unverified >= Number(rolloutPolicy.max_parallel || 3)) return;
   }
@@ -2291,7 +2335,7 @@ async function ensureRolloutCommandForNode(env, nodeId) {
   // single-active-command slot. Normal agent polling must not scan for stale
   // commands every 30 seconds.
   await expireStaleNodeCommands(env, nodeId);
-  const [node, pending, recentCompletedUpdate] = await Promise.all([
+  const [node, pending, recentCompletedUpdate, latestUpdate] = await Promise.all([
     env.DB.prepare(
       "SELECT node_id, hostname, status, agent_version, last_seen_at FROM nodes WHERE node_id = ?"
     ).bind(nodeId).first(),
@@ -2304,7 +2348,13 @@ async function ensureRolloutCommandForNode(env, nodeId) {
       "WHERE node_id = ? AND command_type = 'update' AND status = 'completed' " +
       "AND datetime(completed_at) >= datetime('now', '-10 minutes') " +
       "ORDER BY completed_at DESC LIMIT 1"
-    ).bind(nodeId).first()
+    ).bind(nodeId).first(),
+    env.DB.prepare(
+      "SELECT status, payload_json, created_at, completed_at FROM commands " +
+      "WHERE node_id = ? AND command_type = 'update' " +
+      "AND datetime(created_at) >= datetime(?) " +
+      "ORDER BY datetime(created_at) DESC, rowid DESC LIMIT 1"
+    ).bind(nodeId, rollout.created_at).first()
   ]);
   if (
     !node ||
@@ -2315,6 +2365,10 @@ async function ensureRolloutCommandForNode(env, nodeId) {
   ) {
     return;
   }
+  // Counting computers rather than old attempts must not create endless
+  // retries on one broken computer. Retry only a revised pinned payload or a
+  // new operator-started rollout after an unconfirmed/failed installation.
+  if (rolloutCommandRetryBlocked(latestUpdate, node, rollout.target_version)) return;
   if (pending) {
     if (pending.command_type !== "update" || pending.status !== "pending" ||
         updatePayloadReadyForAgent(safeJson(pending.payload_json, {}), node.agent_version)) return;
@@ -2349,6 +2403,9 @@ async function ensureRolloutCommandForNode(env, nodeId) {
         "SELECT ?, ?, 'update', ?, ?, 'pending', ? WHERE (" +
         "SELECT COUNT(*) FROM commands c JOIN nodes n ON n.node_id = c.node_id " +
         "WHERE c.command_type = 'update' AND datetime(c.created_at) >= datetime(?) " +
+        "AND NOT EXISTS (SELECT 1 FROM commands newer WHERE newer.node_id = c.node_id " +
+        "AND newer.command_type = 'update' AND (datetime(newer.created_at) > datetime(c.created_at) " +
+        "OR (datetime(newer.created_at) = datetime(c.created_at) AND newer.rowid > c.rowid))) " +
         "AND ((c.status IN ('pending','accepted') AND datetime(c.created_at) > datetime('now','-10 minutes')) " +
         "OR (c.status = 'completed' AND datetime(COALESCE(c.completed_at,c.created_at)) > datetime('now','-5 minutes'))) " +
         "AND (n.agent_version IS NULL OR n.agent_version <> ? OR n.status <> 'online' " +

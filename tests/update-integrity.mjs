@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { releaseForAgentVersion, updatePayloadReadyForAgent, failedBridgeUpdateNeedsNewRelease } from "../src/index.js";
+import { releaseForAgentVersion, updatePayloadReadyForAgent, failedBridgeUpdateNeedsNewRelease, rolloutCommandRetryBlocked } from "../src/index.js";
 
 const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
 const releaseBlock = source.match(/const LATEST_NODE_RELEASE = Object\.freeze\(\{([\s\S]*?)\n\}\);/);
@@ -53,6 +53,12 @@ const failedOldHop = {
   status: "failed",
   payload_json: JSON.stringify(oldBridgeTarget)
 };
+const oldNode = { agent_version: "0.3.2-bridge.1", status: "online", last_seen_at: new Date().toISOString() };
+assert.equal(rolloutCommandRetryBlocked(failedOldHop, oldNode, currentRelease.version), false,
+  "a corrected pinned payload is eligible for one recovery attempt");
+assert.equal(rolloutCommandRetryBlocked({
+  ...failedOldHop, payload_json: JSON.stringify(releaseForAgentVersion(currentRelease, oldNode.agent_version))
+}, oldNode, currentRelease.version), true, "the same failed payload cannot be retried on every poll");
 assert.equal(failedBridgeUpdateNeedsNewRelease(failedOldHop, "0.3.2-bridge.1", currentRelease), true);
 assert.equal(failedBridgeUpdateNeedsNewRelease(failedOldHop, "0.3.36", currentRelease), false);
 assert.equal(failedBridgeUpdateNeedsNewRelease(

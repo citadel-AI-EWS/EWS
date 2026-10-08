@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
+import { DatabaseSync } from "node:sqlite";
 import {
   chooseSmartRolloutCanary, persistWakePeerCommand,
   reconcileSmartRollout, rolloutCommandOutcome
@@ -97,6 +98,16 @@ assert.equal(scheduled.at(-1).delay, 15000);
 assert.equal(notices.length, 2);
 await vm.runInContext("pollSmartRollout()", watcher);
 assert.equal(notices.length, 2, "unchanged pause reason should be announced once");
+statusResponse = { rollout: {
+  rollout_id: "rollout_test", phase: "paused", status: "active",
+  pause_reason: "fleet_failure_budget_exceeded", registered_nodes: 27,
+  nodes_waiting_for_update: 25, max_failures: 2, failed_node_count: 2,
+  failed_nodes: [{ hostname: "a18" }, { hostname: "a19" }]
+} };
+await vm.runInContext("pollSmartRollout()", watcher);
+assert.match(notices.at(-1), /2 узла, лимит 2 \(a18, a19\)/);
+assert.match(notices.at(-1), /Статус перепроверяется/);
+assert.equal(scheduled.at(-1).delay, 15000);
 
 const recent = Date.now();
 const stamp = (agoMs) => new Date(recent - agoMs).toISOString();
@@ -141,6 +152,101 @@ const recovered = await reconcileSmartRollout({ DB: recoveryDb }, {
 });
 assert.equal(promoted, true, "verified heartbeat must unpause the rollout");
 assert.equal(recovered.phase, "fleet");
+
+// Run the real D1 SQL against SQLite: repeated failures on one computer must
+// not consume two fleet slots, and a paused fleet must recheck live evidence.
+async function fleetFixture({ phase = "fleet", nodes, commands }) {
+  const sqlite = new DatabaseSync(":memory:");
+  sqlite.exec(`
+    CREATE TABLE nodes (node_id TEXT PRIMARY KEY, hostname TEXT, status TEXT,
+      agent_version TEXT, last_seen_at TEXT);
+    CREATE TABLE commands (command_id TEXT PRIMARY KEY, node_id TEXT,
+      command_type TEXT, status TEXT, payload_json TEXT, created_at TEXT, completed_at TEXT);
+    CREATE TABLE agent_rollout_policy (rollout_id TEXT PRIMARY KEY, canary_node_id TEXT,
+      phase TEXT, max_parallel INTEGER, max_failures INTEGER, pause_reason TEXT,
+      canary_verified_at TEXT, updated_at TEXT);
+    CREATE TABLE audit_events (actor_type TEXT, actor_id TEXT, action TEXT,
+      target_type TEXT, target_id TEXT, details_json TEXT);
+  `);
+  const insertNode = sqlite.prepare("INSERT INTO nodes VALUES (?, ?, ?, ?, ?)");
+  for (const n of nodes) insertNode.run(n.id, n.id.replace("node_", ""),
+    n.status || "online", n.version || "0.3.24", n.seen || stamp(10_000));
+  const insertCommand = sqlite.prepare("INSERT INTO commands VALUES (?, ?, 'update', ?, ?, ?, ?)");
+  for (const c of commands) insertCommand.run(c.id, c.node, c.status || "failed",
+    JSON.stringify({ version: c.version || "0.3.40" }),
+    c.created || stamp(80_000), c.completed || stamp(20_000));
+  sqlite.prepare("INSERT INTO agent_rollout_policy VALUES (?, ?, ?, 3, 2, ?, ?, ?)")
+    .run("rollout_test", "node_a17", phase,
+      phase === "paused" ? "fleet_failure_budget_exceeded" : null, stamp(90_000), stamp(20_000));
+  const db = {
+    prepare(sql) {
+      return { bind(...args) {
+        const statement = sqlite.prepare(sql);
+        return {
+          async first() { return statement.get(...args) || null; },
+          async all() { return { results: statement.all(...args) }; },
+          async run() { return { meta: { changes: statement.run(...args).changes } }; }
+        };
+      } };
+    },
+    async batch(statements) { return Promise.all(statements.map((s) => s.run())); }
+  };
+  try {
+    const policy = await reconcileSmartRollout({ DB: db }, {
+      rollout_id: "rollout_test", target_version: "0.3.40", created_at: stamp(120_000)
+    });
+    return { policy, audits: sqlite.prepare("SELECT action FROM audit_events").all() };
+  } finally {
+    sqlite.close();
+  }
+}
+const goodCanary = { id: "node_a17", version: "0.3.40" };
+const canaryAttempt = { id: "canary", node: "node_a17", status: "completed" };
+const oldFailure = { id: "old_failure", node: "node_a18" };
+const repeatedFailure = { ...oldFailure, id: "repeat_failure" };
+let fleet = await fleetFixture({
+  nodes: [goodCanary, { id: "node_a18" }],
+  commands: [canaryAttempt, oldFailure, repeatedFailure]
+});
+assert.equal(fleet.policy.phase, "fleet", "one failed node cannot exhaust a two-node budget");
+assert.equal(fleet.policy.failed_node_count, 1);
+assert.equal(fleet.policy.failed_nodes[0].command_id, "repeat_failure",
+  "same-second attempts must use the later SQLite rowid");
+fleet = await fleetFixture({
+  phase: "paused", nodes: [goodCanary, { id: "node_a18" }],
+  commands: [canaryAttempt, oldFailure, repeatedFailure]
+});
+assert.equal(fleet.policy.phase, "fleet", "old duplicate failures must not trap a verified fleet");
+assert.equal(fleet.policy.pause_reason, null);
+assert.equal(fleet.audits[0].action, "agent.rollout.fleet_recovered");
+
+for (const phase of ["fleet", "paused"]) {
+  fleet = await fleetFixture({
+    phase, nodes: [goodCanary, { id: "node_a18" }, { id: "node_a19" }],
+    commands: [canaryAttempt, oldFailure, { id: "second_failure", node: "node_a19" }]
+  });
+  assert.equal(fleet.policy.phase, "paused", "two distinct failures must retain the safety pause");
+  assert.equal(fleet.policy.failed_node_count, 2);
+  assert.equal(fleet.audits.length, 0, "a continuing failure must not claim recovery");
+}
+fleet = await fleetFixture({
+  phase: "paused", nodes: [goodCanary, { id: "node_a18", version: "0.3.40" }, { id: "node_a19" }],
+  commands: [canaryAttempt, oldFailure, { id: "second_failure", node: "node_a19" }]
+});
+assert.equal(fleet.policy.phase, "fleet", "a fresh target heartbeat must override a failed acknowledgement");
+assert.equal(fleet.policy.failed_node_count, 1);
+
+fleet = await fleetFixture({
+  phase: "paused", nodes: [{ ...goodCanary, seen: stamp(40_000) }, { id: "node_a18" }],
+  commands: [canaryAttempt, oldFailure, { id: "retry", node: "node_a18", status: "pending", completed: null }]
+});
+assert.equal(fleet.policy.phase, "paused", "recovery requires heartbeat evidence newer than completion");
+assert.equal(fleet.audits.length, 0);
+fleet = await fleetFixture({
+  nodes: [goodCanary, { id: "node_a18" }, { id: "node_a19", status: "revoked" }],
+  commands: [canaryAttempt, { ...oldFailure, version: "0.3.39" }, { id: "revoked", node: "node_a19" }]
+});
+assert.equal(fleet.policy.failed_node_count, 0, "unrelated releases and revoked nodes are outside this fleet");
 
 const wakeWrites = [];
 const wakeArgs = {

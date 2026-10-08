@@ -147,6 +147,33 @@ time.sleep(.3)
         with self.assertRaisesRegex(RuntimeError, "not enrolled"):
             node_v2.controller_probe(config_path)
 
+    def test_fresh_install_probe_enrolls_and_verifies_heartbeat_without_work(self):
+        config_path = Path(self.temp.name) / "config.json"
+        config_path.write_text(
+            '{"controller_url":"https://example.invalid","data_dir":'
+            + __import__("json").dumps(self.temp.name) + "}",
+            encoding="utf-8",
+        )
+        self.assertIsNone(self.agent.identity.node_id)
+        with patch.object(node_v2.Agent, "enroll", return_value="node_fresh") as enroll, \
+             patch.object(node_v2.Agent, "heartbeat") as heartbeat, \
+             patch.object(node_v2.Agent, "handle_commands", side_effect=AssertionError("consumed work")):
+            self.assertEqual(node_v2.main(["enroll-probe", "--config", str(config_path)]), 0)
+        enroll.assert_called_once_with()
+        heartbeat.assert_called_once_with()
+
+    def test_fresh_install_probe_propagates_controller_failure(self):
+        config_path = Path(self.temp.name) / "config.json"
+        config_path.write_text(
+            '{"controller_url":"https://example.invalid","data_dir":'
+            + __import__("json").dumps(self.temp.name) + "}",
+            encoding="utf-8",
+        )
+        with patch.object(node_v2.Agent, "enroll", return_value="node_fresh"), \
+             patch.object(node_v2.Agent, "heartbeat", side_effect=RuntimeError("controller unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "controller unavailable"):
+                node_v2.main(["enroll-probe", "--config", str(config_path)])
+
     def test_supervised_update_delegates_restart_without_duplicate_process(self):
         self.agent.identity.set_node_id("node_test")
         self.agent.verify_controller_command = Mock(return_value=True)
