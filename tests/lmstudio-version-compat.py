@@ -60,7 +60,7 @@ class CompatibilityTests(unittest.TestCase):
                 value = {"running": True, "port": 1234}
             elif args[0] == "ps":
                 value = [{"identifier": "embedding-test", "type": "embedding"},
-                         {"identifier": "qwen/test-model", "type": "llm"}]
+                         {"identifier": "qwen/test-model", "type": "llm", "modelKey": "qwen/test-model", "quantization": "Q4_K_M"}]
             else:
                 value = {}
             return SimpleNamespace(stdout=json.dumps(value), returncode=0)
@@ -117,6 +117,33 @@ class CompatibilityTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "lmstudio_legacy_load_settings_unsupported"):
             self.agent.load_lmstudio_model({"model": "qwen/test-model", "settings": {"flash_attention": True}})
         self.assertFalse(any(c[0] == "load" for c in self.commands))
+
+    def test_legacy_load_selects_and_verifies_the_requested_variant(self):
+        base_cli = self.agent.run_lms
+        selected = "qwen/test-model-Q4_K_M.gguf"
+        wrong = "qwen/test-model-Q8_0.gguf"
+        loaded_key = selected
+
+        def cli(args, timeout):
+            if args == ["ls", "--json"]:
+                value = [{"modelKey": "qwen/test-model", "variants": [wrong, selected], "selectedVariant": wrong}]
+            elif args == ["ls", "qwen/test-model", "--json"]:
+                value = [{"modelKey": wrong}, {"modelKey": selected}]
+            elif args == ["ps", "--json"]:
+                value = [{"identifier": "qwen/test-model", "type": "llm", "modelKey": loaded_key}]
+            else:
+                return base_cli(args, timeout)
+            self.commands.append(list(args))
+            return SimpleNamespace(stdout=json.dumps(value), returncode=0)
+
+        self.agent.run_lms = cli
+        payload = {"model": "qwen/test-model", "quantization": "Q4_K_M"}
+        self.agent.load_lmstudio_model(payload)
+        self.assertIn(["load", selected, "--identifier", "qwen/test-model", "--yes"], self.commands)
+        self.assertNotIn(["load", "qwen/test-model", "--identifier", "qwen/test-model", "--yes"], self.commands)
+        loaded_key = wrong
+        with self.assertRaisesRegex(RuntimeError, "lmstudio_loaded_variant_mismatch"):
+            self.agent.load_lmstudio_model(payload)
 
     def test_installer_revision_remains_in_the_reviewed_repository(self):
         name = "install_llmstudio_headless.ps1" if node.os.name == "nt" else "install_llmstudio_headless.sh"

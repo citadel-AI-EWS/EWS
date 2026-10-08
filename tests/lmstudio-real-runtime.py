@@ -42,9 +42,29 @@ def main():
                 {"temperature": 0.0, "max_output_tokens": 16}, "query_real_runtime_1234")
             assert answer.strip(), "real model returned no tokens"
             assert agent.probe_lmstudio()["inference_ready"], "inference proof missing"
+            # Exercise the legacy load route against the real official CLI,
+            # retaining the real runtime and Q4_K_M model. Only the missing
+            # native route is simulated; variant selection and inference are real.
+            agent.run_lms(["unload", "--all"], timeout=30)
+            native_http = agent.lmstudio_http_json
+
+            def missing_load_route(method, path, *args, **kwargs):
+                if method == "POST" and path == "/api/v1/models/load":
+                    raise node.LmStudioApiError(404)
+                return native_http(method, path, *args, **kwargs)
+
+            agent.lmstudio_http_json = missing_load_route
+            try:
+                agent.load_lmstudio_model({**payload, "settings": {"context_length": 2048}})
+            finally:
+                agent.lmstudio_http_json = native_http
+            legacy_answer = agent.stream_lmstudio_answer("Reply with the single word hi.",
+                {"temperature": 0.0, "max_output_tokens": 16}, "query_real_legacy_1234")
+            assert legacy_answer.strip(), "legacy-loaded real model returned no tokens"
             print(json.dumps({"test": "official-llmster-real-model", "platform": sys.platform,
                 "model": model, "downloaded": True, "loaded": True,
-                "inference_verified": True, "answer": answer[:160]}))
+                "inference_verified": True, "answer": answer[:160],
+                "legacy_cli_load_verified": True, "legacy_answer": legacy_answer[:160]}))
         finally:
             if agent.find_lms():
                 for argv in (["unload", "--all"], ["server", "stop"], ["daemon", "down"]):
