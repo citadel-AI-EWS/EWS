@@ -14,7 +14,7 @@ function fixture({status='online',seen=stamp(1000),command=null,reason='canary_c
   const sql=new DatabaseSync(':memory:');
   sql.exec(`PRAGMA foreign_keys=ON;
     CREATE TABLE nodes(node_id TEXT PRIMARY KEY,hostname TEXT,status TEXT,agent_version TEXT,last_seen_at TEXT);
-    CREATE TABLE commands(node_id TEXT,status TEXT,created_at TEXT);
+    CREATE TABLE commands(node_id TEXT,command_type TEXT,status TEXT,created_at TEXT);
     CREATE TABLE agent_rollouts(rollout_id TEXT PRIMARY KEY,target_version TEXT,release_json TEXT,status TEXT,created_at TEXT,updated_at TEXT);
     CREATE UNIQUE INDEX active_rollout ON agent_rollouts(status) WHERE status='active';
     CREATE TABLE agent_rollout_policy(rollout_id TEXT PRIMARY KEY REFERENCES agent_rollouts(rollout_id),
@@ -25,7 +25,7 @@ function fixture({status='online',seen=stamp(1000),command=null,reason='canary_c
   sql.prepare('INSERT INTO agent_rollouts VALUES(?,?,?,?,?,?)').run('old','0.3.40','{}','active',stamp(3600000),stamp(3600000));
   sql.prepare('INSERT INTO agent_rollout_policy VALUES(?,?,?,?,?,?)').run('old','failed','paused',3,2,reason);
   sql.exec("INSERT INTO audit_events VALUES('architect','fixture','agent.rollout.started','rollout','old','{}')");
-  if(command) sql.prepare('INSERT INTO commands VALUES(?,?,?)').run('candidate',command,stamp(2000));
+  if(command) sql.prepare('INSERT INTO commands VALUES(?,?,?,?)').run('candidate','update',command,stamp(2000));
   const db={prepare(text){
     return {bind(...args){
       return {text,args,
@@ -61,6 +61,27 @@ for(const options of [{status:'paused'},{status:'offline'},{seen:stamp(600000)},
   assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM agent_rollouts').get().n,1);
   f.sql.close();
 }
+for (const status of ['pending','accepted']) {
+  const f=fixture();
+  f.sql.prepare('INSERT INTO commands VALUES(?,?,?,?)').run('failed','update',status,stamp(2000));
+  assert.equal((await recoverPatchedRollout(f.env,f.rollout,release,'candidate',canary)).rollout_id,'old',
+    `another node's ${status} update must drain before replacement`);
+  f.sql.prepare("UPDATE commands SET status='completed'").run();
+  assert.equal((await recoverPatchedRollout(f.env,f.rollout,release,'candidate',canary)).target_version,'0.3.41');
+  f.sql.close();
+}
+const stale=fixture();
+stale.sql.prepare('INSERT INTO commands VALUES(?,?,?,?)').run('failed','update','accepted',stamp(1200000));
+assert.equal((await recoverPatchedRollout(stale.env,stale.rollout,release,'candidate',canary)).rollout_id,'old',
+  'an old accepted command is blocked until normal expiry has actually retired it');
+let expiryCalled=0;
+const expire=async()=>{
+  expiryCalled++;
+  stale.sql.prepare("UPDATE commands SET status='failed' WHERE datetime(created_at)<datetime(?,'-15 minutes')").run(stamp(0));
+};
+assert.equal((await recover(stale.env,stale.rollout,release,'candidate',canary,now,expire)).target_version,'0.3.41');
+assert.equal(expiryCalled,1);
+stale.sql.close();
 const owner=fixture();
 owner.sql.exec("UPDATE agent_rollouts SET status='cancelled' WHERE rollout_id='old'");
 assert.equal((await recoverPatchedRollout(owner.env,owner.rollout,release,'candidate',canary)).rollout_id,'old');

@@ -1,9 +1,11 @@
 """HTTP protocol simulation for LM Studio 0.3 and 0.4, with real agent code."""
 import http.server
 import json
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -125,6 +127,54 @@ class CompatibilityTests(unittest.TestCase):
         self.assertTrue(self.agent.validate_lmstudio_install_payload(payload("a" * 40)))
         self.assertFalse(self.agent.validate_lmstudio_install_payload(payload("unreviewed-branch")))
         self.assertFalse(self.agent.validate_lmstudio_install_payload(payload("a" * 40, "different-owner")))
+
+
+class CliLifecycleTests(unittest.TestCase):
+    def test_long_cli_observes_stop_cancel_and_timeout(self):
+        # A real child process stands in for the long official get/load CLI.
+        # It must have exited before run_lms returns the original stop reason.
+        for reason in ("stop", "cancel", "timeout"):
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                agent = node.Agent(node.AgentConfig("https://example.invalid", root))
+                agent.find_lms = lambda: sys.executable
+                ready = root / "child.pid"
+                script = "import os,time,sys;from pathlib import Path;Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(60)"
+                failures = []
+
+                def invoke():
+                    try:
+                        agent.run_lms(["-c", script, str(ready)], timeout=1 if reason == "timeout" else 60)
+                    except BaseException as error:
+                        failures.append(error)
+
+                worker = threading.Thread(target=invoke)
+                worker.start()
+                deadline = time.monotonic() + 5
+                while not ready.exists() and worker.is_alive() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(ready.exists(), "CLI child must start before the stop request")
+                pid = int(ready.read_text())
+                if reason == "stop":
+                    agent.stop_path.write_text("stop")
+                elif reason == "cancel":
+                    agent._operation_cancel_requested.set()
+                worker.join(8)
+                self.assertFalse(worker.is_alive(), "long CLI must stop promptly")
+                self.assertEqual(len(failures), 1)
+                expected = {"stop": SystemExit, "cancel": node.OperationCancelled,
+                            "timeout": subprocess.TimeoutExpired}[reason]
+                self.assertIsInstance(failures[0], expected)
+                self.assertFalse(node.psutil.pid_exists(pid), "CLI child must be reaped")
+
+    def test_cli_preserves_output_and_exit_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            agent = node.Agent(node.AgentConfig("https://example.invalid", Path(directory)))
+            agent.find_lms = lambda: sys.executable
+            result = agent.run_lms(["-c", "print('official-cli-output')"], timeout=5)
+            self.assertEqual(result.stdout.strip(), "official-cli-output")
+            with self.assertRaisesRegex(RuntimeError, "official-cli-failure"):
+                agent.run_lms(["-c", "import sys;print('official-cli-failure',file=sys.stderr);sys.exit(2)"], timeout=5)
 
 
 if __name__ == "__main__":

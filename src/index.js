@@ -55,12 +55,12 @@ const LATEST_NODE_RELEASE = Object.freeze({
   files: [
     {
       path: "citadel_node_v1.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/229880d84e28137354b5c425da2276199340446b/agent/citadel_node_v1.py",
-      sha256: "1b8429a567454f85bbc2f13de68d4116925eab037edb74291e1ba59db59edf3e"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/76be2e412f757afb3d9fb2b420f639e43e5f3f69/agent/citadel_node_v1.py",
+      sha256: "fc6d93230df58a62c8c45b26770d79714eb2dfba5451b40e414feddc77e803a4"
     },
     {
       path: "citadel_node_v2.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/229880d84e28137354b5c425da2276199340446b/agent/citadel_node_v2.py",
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/76be2e412f757afb3d9fb2b420f639e43e5f3f69/agent/citadel_node_v2.py",
       sha256: "c29864aefe5443073ce8bf29ffc3e20c7494a4fd2d8ad454a95f5b6b1ce14a05"
     },
     {
@@ -2325,7 +2325,7 @@ async function ensureRolloutCommandForNode(env, nodeId) {
   if (!rollout) return;
   rollout = await recoverPatchedRollout(env, rollout, LATEST_NODE_RELEASE, nodeId,
     (candidate, policy) => operationalNodeState(candidate) === 'live' &&
-      Boolean(chooseSmartRolloutCanary([candidate], policy)));
+      Boolean(chooseSmartRolloutCanary([candidate], policy)), Date.now(), expireStaleCommands);
   const rolloutPolicy = await reconcileSmartRollout(env, rollout);
   if (!rolloutPolicy || ["paused","completed"].includes(rolloutPolicy.phase)) return;
   if (rolloutPolicy.phase === "canary" && nodeId !== rolloutPolicy.canary_node_id) return;

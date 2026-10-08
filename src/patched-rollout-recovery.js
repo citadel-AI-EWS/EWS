@@ -17,9 +17,11 @@ export const RETIRE_PATCHED_ROLLOUT_SQL = `UPDATE agent_rollouts SET status='com
     AND EXISTS (SELECT 1 FROM nodes n WHERE n.node_id=? AND n.status='online'
       AND datetime(n.last_seen_at)>=datetime(?,'-5 minutes'))
     AND NOT EXISTS (SELECT 1 FROM commands c WHERE c.node_id=?
-      AND c.status IN ('pending','accepted') AND datetime(c.created_at)>=datetime(?,'-15 minutes'))`;
+      AND c.status IN ('pending','accepted') AND datetime(c.created_at)>=datetime(?,'-15 minutes'))
+    AND NOT EXISTS (SELECT 1 FROM commands c WHERE c.command_type='update'
+      AND c.status IN ('pending','accepted') AND datetime(c.created_at)>=datetime(agent_rollouts.created_at))`;
 
-export async function recoverPatchedRollout(env, rollout, release, nodeId, eligibleCanary, now = Date.now()) {
+export async function recoverPatchedRollout(env, rollout, release, nodeId, eligibleCanary, now = Date.now(), expireCommands = null) {
   if (!patchedRolloutEligible(rollout, release, now)) return rollout;
   const policy = await env.DB.prepare('SELECT phase,pause_reason,canary_node_id,max_parallel,max_failures FROM agent_rollout_policy WHERE rollout_id=?')
     .bind(rollout.rollout_id).first();
@@ -28,6 +30,9 @@ export async function recoverPatchedRollout(env, rollout, release, nodeId, eligi
   const node = await env.DB.prepare('SELECT node_id,hostname,status,agent_version,last_seen_at FROM nodes WHERE node_id=?')
     .bind(nodeId).first();
   if (!eligibleCanary(node, policy) || node.agent_version === release.version) return rollout;
+  // Use the normal expiry/audit path first. Every remaining update from the
+  // old rollout must finish before its replacement can consume fleet slots.
+  if (expireCommands) await expireCommands(env);
   const createdAt = new Date(now).toISOString();
   const rolloutId = 'rollout_' + crypto.randomUUID();
   const result = await env.DB.batch([
