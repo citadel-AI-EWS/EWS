@@ -955,14 +955,19 @@ async function pollSmartRollout(){
     const waiting=Number(r.nodes_waiting_for_update||0);
     const total=Number(r.registered_nodes||0);
     const canary=r.canary_hostname||r.canary_node_id||'—';
-    const reason=r.pause_reason?(' · причина '+r.pause_reason):'';
+    const failedNames=(r.failed_nodes||[]).map(n=>n.hostname||n.node_id).filter(Boolean).join(', ');
+    const pauseReason=r.pause_reason==='fleet_failure_budget_exceeded'
+      ? 'Достигнут лимит сбоев обновления: '+Number(r.failed_node_count||0)+' узла, лимит '+Number(r.max_failures||2)+(failedNames?' ('+failedNames+')':'')
+      : (r.pause_reason||'unknown');
+    const reason=r.pause_reason?(' · причина '+pauseReason):'';
     const diagnostic=r.canary_diagnostic_hint==='agent_logs_required'
       ? (' · подробности: '+canary+' → SSH → agent-logs'+
         (r.canary_command_id?' · команда '+r.canary_command_id:''))
       : '';
     const text='фаза '+phase+' · канарейка '+canary+' · ждут обновления '+waiting+
       ' · доступны сейчас '+Number(r.nodes_updateable_now||0)+
-      ' · deferred '+Number(r.nodes_deferred||0)+reason+diagnostic;
+      ' · deferred '+Number(r.nodes_deferred||0)+reason+diagnostic+
+      (failedNames&&!r.pause_reason?' · ошибки обновления: '+failedNames+' → SSH → agent-logs':'');
     const done=phase==='completed'||(r.status==='completed'&&waiting===0);
     const paused=phase==='paused';
     setFleetActivity('Умное автообновление',text,Math.max(0,total-waiting),Math.max(1,total),done||paused);
@@ -970,13 +975,15 @@ async function pollSmartRollout(){
       const notice=String(r.rollout_id||'')+':'+String(r.pause_reason||'');
       if(smartRolloutPauseNotice!==notice){
         smartRolloutPauseNotice=notice;
-        tell('Rollout остановлен безопасно: '+(r.pause_reason||'unknown')+
+        tell('Rollout остановлен безопасно: '+pauseReason+
           '. Остальные ноды не обновляются.'+
           (r.canary_diagnostic_hint==='agent_logs_required'
             ? ' Причину на узле смотрите через SSH → agent-logs. Повторный запуск выберет другую доступную канарейку.'
-            : ''),true);
+            : (r.pause_reason==='fleet_failure_budget_exceeded'
+              ? ' Подробности: '+(failedNames||'узлы со сбоем')+' → SSH → agent-logs. Статус перепроверяется; после подтверждённого восстановления обновление продолжится.'
+              : '')),true);
       }
-      // A later verified heartbeat may recover a paused canary on the server.
+      // A later verified heartbeat may recover a canary or fleet pause.
       if(token&&!document.hidden)smartRolloutTimer=setTimeout(pollSmartRollout,15000);
       return;
     }

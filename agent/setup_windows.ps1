@@ -16,7 +16,7 @@ $ServiceDisplayName = "CITADEL EWS Node"
 $PythonWingetId = "Python.Python.3.14"
 $ReleaseVersion = "0.3.40"
 $ExpectedV1Sha256 = "6e9df9f0b06133fc121ed7170142e17cf5819636e40f41b4107fcbec345196c7"
-$ExpectedV2Sha256 = "c04d60c25621f8f25e511b1b99a7d2b7f9dd721de1f5c35515eb854024e9b094"
+$ExpectedV2Sha256 = "b4e50c49bfd75949d0ac78501bed91324f8c904e6e4bd703c29a3cb68b72bc98"
 $ExpectedServiceHostSha256 = "892c5f388f9b54c0bcbb2956381dd601dfa8065b0e9258ba673e9505c2f81cad"
 $ExpectedServiceHelperSha256 = "e0e66f5a27018a283c65d42e6ead93e382706a163da682e6bd49f2b1fb9b0f99"
 $ExpectedEnterpriseProbeSha256 = "0d056ab71e2216821cd314a97bc14e87f87c60140a0bcf787a24cfa33212c2ee"
@@ -452,7 +452,7 @@ if ($LASTEXITCODE -ne 0) { throw "Agent diagnostics failed." }
 & $VenvPython $AgentScript self-test
 if ($LASTEXITCODE -ne 0) { throw "Agent self-test failed." }
 
-$ProbeOutput = & $VenvPython $AgentScript probe --config $ConfigPath
+$ProbeOutput = & $VenvPython $AgentScript enroll-probe --config $ConfigPath
 if ($LASTEXITCODE -ne 0) { throw "Passive Controller probe failed." }
 try {
   $ProbeState = (($ProbeOutput | Select-Object -Last 1) -as [string]) | ConvertFrom-Json

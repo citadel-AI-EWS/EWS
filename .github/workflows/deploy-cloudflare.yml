@@ -202,6 +202,20 @@ jobs:
           SMOKE_DELAY_MS: "3000"
         run: node scripts/smoke_test.mjs "$CITADEL_BASE_URL"
 
+      - name: Read bounded live fleet update evidence
+        timeout-minutes: 2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          timeout 45s npx wrangler d1 execute citadel-control --remote --json --command "SELECT r.target_version, r.status, p.phase, p.pause_reason, p.max_failures, p.canary_verified_at FROM agent_rollouts r LEFT JOIN agent_rollout_policy p ON p.rollout_id = r.rollout_id ORDER BY datetime(r.created_at) DESC, r.rowid DESC LIMIT 1" > /tmp/citadel-rollout-evidence.json
+          timeout 45s npx wrangler d1 execute citadel-control --remote --json --command "SELECT agent_version, status, COUNT(*) AS node_count, SUM(CASE WHEN datetime(last_seen_at) >= datetime('now', '-5 minutes') THEN 1 ELSE 0 END) AS fresh_heartbeat_nodes FROM nodes WHERE status <> 'revoked' GROUP BY agent_version, status" > /tmp/citadel-fleet-evidence.json
+          node <<'NODE'
+          const fs = require('node:fs');
+          const rollout = JSON.parse(fs.readFileSync('/tmp/citadel-rollout-evidence.json', 'utf8'))[0]?.results?.[0] || null;
+          const versionGroups = JSON.parse(fs.readFileSync('/tmp/citadel-fleet-evidence.json', 'utf8'))[0]?.results || [];
+          console.log(JSON.stringify({ test: 'post-deploy-fleet-evidence', checked_at: new Date().toISOString(), rollout, version_groups: versionGroups }, null, 2));
+          NODE
+
       - name: Deployment summary
         if: success()
         run: |
