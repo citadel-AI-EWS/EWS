@@ -2,7 +2,7 @@ name: Bounded native canary console
 on:
   workflow_dispatch:
   push:
-    branches: [main, fix/live-update-diagnostic-20261009]
+    branches: [main, fix/live-update-diagnostic-20261009, fix/windows-powershell-output-20261009]
     paths:
       - scripts/native_canary_diagnostic.mjs
       - .github/workflows/native-canary-diagnostic.yml
@@ -22,6 +22,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install -r agent/requirements.txt
+      - run: python tests/powershell-output.py
       - name: Staged self-test under inherited Windows service environment
         run: python tests/staged-self-test.py
       - name: Staged self-test as LocalSystem
