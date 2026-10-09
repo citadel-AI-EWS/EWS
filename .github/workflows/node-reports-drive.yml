@@ -2,6 +2,10 @@ name: Node reports Drive and connectivity verification
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: [Deploy Cloudflare TEST]
+    types: [completed]
+    branches: [main]
   push:
     branches: [main, fix/node-reports-drive-20261009]
     paths:
@@ -14,6 +18,7 @@ permissions:
 
 jobs:
   connectivity:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 4
     environment: cloudflare-test
@@ -29,6 +34,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: node scripts/agent_connectivity_evidence.mjs
   drive-write:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 4
     environment: cloudflare-test
