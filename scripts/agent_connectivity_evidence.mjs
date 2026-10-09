@@ -49,6 +49,26 @@ export function jsonObjectStream(onValue) {
   };
 }
 
+export function tailFailureCategories(value) {
+  const messages = [...(value?.exceptions || []).map(item => item.message || ""),
+    ...(value?.logs || []).flatMap(item => item.message || [])]
+    .map(item => typeof item === "string" ? item : JSON.stringify(item)).join("\n");
+  const categories = [];
+  for (const [code, pattern] of [
+    ["storage_daily_read_limit", /daily.*(?:row|storage).*read.*limit|daily row read limit/i],
+    ["storage_daily_write_limit", /daily.*(?:row|storage).*writ.*limit|daily row write limit/i],
+    ["storage_sqlite_limit", /SQLITE_FULL|(?:SQLite|storage).*(?:exceed|quota|limit)/i],
+    ["durable_request_limit", /(?:durable|free tier).*(?:request|operation).*limit/i],
+    ["replay_store_unavailable", /node_replay_store_unavailable/i],
+    ["storage_overloaded", /(?:database|storage|durable).*(?:overloaded|too many requests)/i],
+    ["database_schema_missing", /no such (?:table|column)/i],
+    ["worker_resource_limit", /(?:CPU|memory).*(?:exceed|limit)/i]
+  ]) if (pattern.test(messages)) categories.push(code);
+  if (value?.exceptions?.length && !categories.length) categories.push("uncategorized_exception");
+  const source = value?.entrypoint === "NodeSshRelay" ? "relay" : "worker";
+  return categories.map(code => source + ":" + code);
+}
+
 async function snapshot(config) {
   const account = config.match(/"D1_ANALYTICS_ACCOUNT_ID"\s*:\s*"([^"]+)"/)?.[1];
   const database = config.match(/"database_id"\s*:\s*"([^"]+)"/)?.[1];
@@ -68,7 +88,7 @@ async function main() {
   const account = config.match(/"D1_ANALYTICS_ACCOUNT_ID"\s*:\s*"([^"]+)"/)?.[1];
   const worker = config.match(/"name"\s*:\s*"([^"]+)"/)?.[1];
   const report = {checked_at: new Date().toISOString(), window_seconds: 65, positive_control: false,
-    agent_requests: 0, routes: {}, snapshot: await snapshot(config)};
+    agent_requests: 0, routes: {}, failures: {}, snapshot: await snapshot(config)};
   const child = spawn(process.execPath, ["node_modules/wrangler/bin/wrangler.js", "tail", worker,
     "--format=json"], {detached: true, stdio: ["ignore", "pipe", "pipe"],
     env: {...process.env, CLOUDFLARE_ACCOUNT_ID: account, CI: "true", WRANGLER_SEND_METRICS: "false"}});
@@ -76,6 +96,7 @@ async function main() {
   let diagnostic = "";
   child.stderr.on("data", chunk => {diagnostic = (diagnostic + String(chunk)).slice(-16384);});
   const parse = jsonObjectStream(value => {
+    for (const code of tailFailureCategories(value)) report.failures[code] = (report.failures[code] || 0) + 1;
     const result = classifyTailEvent(value);
     if (!result) return;
     if (result.probe) {report.positive_control = true; return;}
