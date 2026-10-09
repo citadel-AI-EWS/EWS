@@ -1,3 +1,5 @@
+import {ensureNodeReportStorage, staleNodeReportStatement} from './node-reports.js';
+
 const GUARDIAN_INTERVAL_MINUTES = 5;
 const GUARDIAN_DEEP_INTERVAL_MINUTES = 60;
 const GUARDIAN_BATCH_LIMIT = 50;
@@ -112,7 +114,7 @@ async function appendAction(env, action, severity, rowsAffected, details = {}) {
   ).run();
 }
 
-async function markStaleNodesOffline(env, onNodesOffline) {
+export async function markStaleNodesOffline(env, onNodesOffline, archiveNodeDisconnects = false) {
   const statement = env.DB.prepare(`
     UPDATE nodes
     SET status = 'offline'
@@ -124,11 +126,18 @@ async function markStaleNodesOffline(env, onNodesOffline) {
           last_seen_at IS NULL
           OR datetime(last_seen_at) < datetime('now', '-5 minutes')
         )
-      ORDER BY last_seen_at ASC
+      ${archiveNodeDisconnects ? `AND EXISTS (SELECT 1 FROM node_report_outbox o
+        WHERE o.batch_id='disconnect:' || nodes.node_id || ':' || COALESCE(nodes.last_seen_at,'never'))` : ''}
+      ORDER BY last_seen_at ASC, node_id ASC
       LIMIT ?
     )
     ${onNodesOffline ? "RETURNING node_id, hostname, last_seen_at" : ""}
   `).bind(GUARDIAN_BATCH_LIMIT);
+  if (archiveNodeDisconnects) {
+    await ensureNodeReportStorage(env);
+    const results = await env.DB.batch([staleNodeReportStatement(env, GUARDIAN_BATCH_LIMIT), statement]);
+    return changes(results[1]);
+  }
   if (onNodesOffline) {
     const result = await statement.all();
     const nodes = result.results || [];
@@ -335,7 +344,7 @@ export async function runD1Guardian(env, hooks = {}) {
     }
   };
 
-  await repairRule("stale_nodes_offline", () => markStaleNodesOffline(env, hooks.onNodesOffline));
+  await repairRule("stale_nodes_offline", () => markStaleNodesOffline(env, hooks.onNodesOffline, hooks.archiveNodeDisconnects));
   if (typeof hooks.expireStaleCommands === "function") {
     await repairRule("stale_commands_expired", () => hooks.expireStaleCommands(env, null, GUARDIAN_BATCH_LIMIT));
   }

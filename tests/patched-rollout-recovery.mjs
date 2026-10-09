@@ -8,7 +8,10 @@ const release={version:'0.3.41',files:[]};
 assert.equal(patchedRolloutEligible({target_version:'0.3.40'},release,Date.parse('2026-10-08T19:00:00Z')),true);
 assert.equal(patchedRolloutEligible({target_version:'0.3.40'},release,Date.parse('2026-10-15T00:00:00Z')),false);
 assert.equal(patchedRolloutEligible({target_version:'0.3.41'},release),false);
-assert.equal(patchedRolloutEligible({target_version:'0.3.40'},{version:'0.3.42'}),false);
+assert.equal(patchedRolloutEligible({target_version:'0.3.40'},{version:'0.3.42'},now),true);
+assert.equal(patchedRolloutEligible({target_version:'0.3.41'},{version:'0.3.42'},now),true);
+assert.equal(patchedRolloutEligible({target_version:'0.3.42'},{version:'0.3.42'},now),false);
+assert.equal(patchedRolloutEligible({target_version:'0.3.41'},{version:'0.3.43'},now),false);
 
 function fixture({status='online',seen=stamp(1000),command=null,reason='canary_command_failed'}={}) {
   const sql=new DatabaseSync(':memory:');
@@ -94,4 +97,10 @@ const unauthorized=fixture();
 unauthorized.sql.exec('DELETE FROM audit_events');
 assert.equal((await recoverPatchedRollout(unauthorized.env,unauthorized.rollout,release,'candidate',canary)).rollout_id,'old');
 unauthorized.sql.close();
+const auditRepair=fixture();
+auditRepair.sql.exec("UPDATE agent_rollouts SET target_version='0.3.41' WHERE rollout_id='old'");
+auditRepair.rollout=auditRepair.sql.prepare("SELECT * FROM agent_rollouts WHERE rollout_id='old'").get();
+assert.equal((await recoverPatchedRollout(auditRepair.env,auditRepair.rollout,{version:'0.3.42',files:[]},'candidate',canary)).target_version,'0.3.42');
+assert.equal(auditRepair.sql.prepare('SELECT COUNT(*) AS n FROM commands').get().n,0);
+auditRepair.sql.close();
 console.log('Patched rollout recovery: live alternative canary, preserved history/limits, owner commands and atomic idempotency PASS');

@@ -6,12 +6,14 @@
   "vars": {
     "D1_ANALYTICS_ACCOUNT_ID": "0da9116584d7b2c858471767d5dd58c8",
     "D1_ANALYTICS_DATABASE_ID": "8e7855f0-905d-4ca4-96e7-4df015ada1c7",
-    "D1_USAGE_PLAN": "free"
+    "D1_USAGE_PLAN": "free",
+    "NODE_REPLAY_BACKEND": "d1_compact"
   },
   "triggers": {
     // Telemetry retention keeps its legacy schedule: "crons": ["17 * * * *"].
-    // D1 Guardian adds the separate five-minute trigger below.
-    "crons": ["*/5 * * * *", "17 * * * *"]
+    // Report bundles have a separate minute trigger so Guardian does not use
+    // their per-invocation query budget.
+    "crons": ["*/5 * * * *", "* * * * *", "17 * * * *"]
   },
   "assets": {
     "directory": "./public",

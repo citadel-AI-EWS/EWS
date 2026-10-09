@@ -7,7 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
-import worker from "../src/worker.js";
+import {build} from 'esbuild';
+let worker;
 
 const SENTINEL = "FLOW_A_SENTINEL_169";
 const ARCHITECT_TOKEN = "citadel-test-architect-token";
@@ -247,16 +248,35 @@ const agentEnv = {
   PATH: binDir + path.delimiter + (process.env.PATH || "")
 };
 
+const controllerKeys=await crypto.subtle.generateKey({name:'Ed25519'},true,['sign','verify']);
+env.CONTROLLER_COMMAND_PRIVATE_JWK=JSON.stringify(await crypto.subtle.exportKey('jwk',controllerKeys.privateKey));
+const configured=JSON.parse(await fsPromises.readFile(configPath,'utf8'));
+configured.controller_public_x=(await crypto.subtle.exportKey('jwk',controllerKeys.publicKey)).x;
+await fsPromises.writeFile(configPath,JSON.stringify(configured));
+// Replace only the trust root in an isolated test bundle. Production still
+// requires its pinned controller key; activation exercises real signatures.
+const bundled=await build({entryPoints:['src/worker.js'],bundle:true,format:'esm',write:false});
+const testSource=bundled.outputFiles[0].text.replaceAll('erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0',configured.controller_public_x);
+worker=(await import('data:text/javascript;base64,'+Buffer.from(testSource).toString('base64'))).default;
+
 try {
   await runAgent(configPath, agentEnv);
 
   const nodes = sqlite.prepare("SELECT node_id, status, agent_version FROM nodes").all();
   assert.equal(nodes.length, 1, "first agent cycle must enroll exactly one node");
   const nodeId = nodes[0].node_id;
+  assert.equal(nodes[0].status,'paused','new public registrations require operator activation');
   const ai = sqlite.prepare("SELECT installed, server_running, loaded_model FROM node_ai_state WHERE node_id = ?").get(nodeId);
   assert.equal(Number(ai?.installed), 1, "LM Studio must be scheduler-visible as installed");
   assert.equal(Number(ai?.server_running), 1, "LM Studio fake server must be scheduler-visible as running");
   assert.equal(ai?.loaded_model, "citadel/test-model");
+
+  const activation=await nativeFetch(controllerUrl+`/api/v1/architect/nodes/${nodeId}/commands`,{
+    method:'POST',headers:{authorization:'Bearer '+ARCHITECT_TOKEN,'content-type':'application/json'},
+    body:JSON.stringify({command_type:'resume'})});
+  assert.equal(activation.status,201,await activation.clone().text());
+  await runAgent(configPath,agentEnv);
+  assert.equal(sqlite.prepare('SELECT status FROM nodes WHERE node_id=?').get(nodeId).status,'online');
 
   const createResponse = await nativeFetch(controllerUrl + "/api/v1/architect/projects", {
     method: "POST",

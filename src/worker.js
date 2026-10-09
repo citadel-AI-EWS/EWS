@@ -3,6 +3,8 @@ import {withD1Availability, addD1RetryHint} from './d1-availability.js';
 export {NodeSshRelay} from './ssh/relay.js';
 import { runD1Guardian } from "./d1-guardian.js";
 import {nodeReportsEnabled, enqueueControllerReport, drainNodeReports} from "./node-reports.js";
+import {compactReplayStatus} from './compact-replay.js';
+import {sshRelayAvailability} from './ssh/availability.js';
 import { pruneExpiredD1Bookkeeping } from "./d1-retention.js";
 import { json, pruneNodeRequestNonces } from "./telemetry/common.js";
 import { isTelemetryPath, handleTelemetryRequest } from "./telemetry/router.js";
@@ -28,21 +30,16 @@ const worker = {
           expireStaleCommands,
           recoverStaleProjectAssignments,
           pruneExpiredD1Bookkeeping,
-          onNodesOffline: reporting ? async nodes => {
-            for (const node of nodes) {
-              await enqueueControllerReport(env, node.node_id, "node_disconnected",
-                {reason: "heartbeat_stale", last_seen_at: node.last_seen_at}, undefined, node.hostname);
-            }
-          } : undefined
+          archiveNodeDisconnects: reporting
         });
       } catch (error) {
         console.error("D1 Guardian scheduled maintenance failed", error);
       }
-      if (reporting) {
-        try {
-          console.log("node_report_delivery", JSON.stringify(await drainNodeReports(env)));
-        } catch {console.error("node_report_delivery_unavailable");}
-      }
+    }
+    if (controller?.cron === "* * * * *") {
+      try {
+        console.log("node_report_delivery", JSON.stringify(await drainNodeReports(env)));
+      } catch {console.error("node_report_delivery_unavailable");}
     }
     if (controller?.cron === "17 * * * *") {
       await Promise.all([pruneExpiredTelemetry(env), pruneNodeRequestNonces(env)]);
@@ -65,7 +62,7 @@ const worker = {
       return handlePresenceRequest(request, env);
     }
 
-    if (url.pathname === "/api/health") {
+    if (url.pathname === "/api/health" || url.pathname === "/api/readiness") {
       const engineeringExperience = validateEngineeringExperience();
       const [telemetryStorage, presenceStorage] = await Promise.all([
         ensureTelemetryStorage(env)
@@ -75,7 +72,9 @@ const worker = {
           .then(() => "ready")
           .catch(() => "unavailable")
       ]);
-      const response = await baseWorker.fetch(request, env, executionCtx);
+      const healthUrl = new URL(request.url);
+      healthUrl.pathname = '/api/health';
+      const response = await baseWorker.fetch(new Request(healthUrl, request), env, executionCtx);
       let body;
       try {
         body = await response.json();
@@ -91,7 +90,20 @@ const worker = {
         telemetryStorage === "ready" &&
         presenceStorage === "ready" &&
         engineeringExperience.ok;
-      return json(body, response.status);
+      body.node_control = await compactReplayStatus(env);
+      body.ssh_transport = sshRelayAvailability(env);
+      body.ready = body.ok && body.node_control.status === 'ready' &&
+        body.payload_storage === 'ready' && body.node_reports_archive === 'enabled' &&
+        body.project_execution === 'ready' && body.ssh_transport.status === 'ready';
+      body.readiness_failures = [
+        !body.ok && 'controller',
+        body.node_control.status !== 'ready' && 'node_control',
+        body.payload_storage !== 'ready' && 'google_drive_payloads',
+        body.node_reports_archive !== 'enabled' && 'google_drive_reports',
+        body.project_execution !== 'ready' && 'lmstudio_live_worker',
+        body.ssh_transport.status !== 'ready' && 'ssh_transport'
+      ].filter(Boolean);
+      return json(body, url.pathname === '/api/readiness' ? (body.ready ? 200 : 503) : response.status);
     }
 
     const response = await baseWorker.fetch(request, env, executionCtx);

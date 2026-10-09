@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import {DatabaseSync} from "node:sqlite";
 import {googleDriveNodeReportWriteTest, googleDriveNodeReportFingerprint} from "../src/index.js";
-import {enqueueNodeReports, drainNodeReports, nodeReportsEnabled, REPORT_LIMITS} from "../src/node-reports.js";
+import {enqueueNodeReports, enqueueControllerReport, drainNodeReports, nodeReportsEnabled, REPORT_LIMITS} from "../src/node-reports.js";
+import {markStaleNodesOffline} from '../src/d1-guardian.js';
 import {classifyTailEvent, jsonObjectStream, tailFailureCategories} from "../scripts/agent_connectivity_evidence.mjs";
 import {ingestNodeLogs} from "../src/telemetry/ingest.js";
 import {sha256Hex} from "../src/telemetry/common.js";
 
 const sqlite = new DatabaseSync(":memory:");
+sqlite.exec('PRAGMA foreign_keys=ON');
 sqlite.exec("CREATE TABLE nodes (node_id TEXT PRIMARY KEY, hostname TEXT); INSERT INTO nodes VALUES ('node_a15', 'a15')");
 function statement(sql, args = []) {
   return {bind: (...values) => statement(sql, values),
@@ -14,9 +16,13 @@ function statement(sql, args = []) {
     async first() {return sqlite.prepare(sql).get(...args) || null;},
     async all() {return {results: sqlite.prepare(sql).all(...args)};}};
 }
+let failOfflineTransition=false;
 const DB = {prepare: statement, async batch(statements) {
   sqlite.exec("BEGIN");
-  try {const result = []; for (const stmt of statements) result.push(await stmt.run()); sqlite.exec("COMMIT"); return result;}
+  try {const result = []; for (const stmt of statements) {
+    if(failOfflineTransition && result.length===1) throw Error('injected_transition_failure');
+    result.push(await stmt.run());
+  } sqlite.exec("COMMIT"); return result;}
   catch (error) {sqlite.exec("ROLLBACK"); throw error;}
 }};
 const env = {DB, GOOGLE_DRIVE_ACCESS_TOKEN: "fixture-only-token", GOOGLE_DRIVE_AI_REPORTS_FOLDER_ID: "root-folder"};
@@ -58,6 +64,7 @@ const events = [{event_id: "event-1", event_type: "lmstudio_model_loaded", level
   created_at: "2026-10-09T07:20:00Z", message: "Модель загружена token=private-value",
   details: {model: "Qwen", private_key: "fixture-private", connection: "ok"}}];
 const row = () => sqlite.prepare("SELECT * FROM node_report_outbox WHERE node_id = 'node_a15'").get();
+const delivery = () => sqlite.prepare("SELECT * FROM node_report_deliveries WHERE node_id = 'node_a15'").get();
 try {
   assert.equal(await nodeReportsEnabled(env), false);
   assert.deepEqual(await enqueueNodeReports(env, "node_a15", events), {status: "awaiting_write_test"});
@@ -91,12 +98,14 @@ try {
   const first = await drainNodeReports(env, {now: now + REPORT_LIMITS.lease_ms + 1});
   assert.equal(first.failed, 1);
   assert.equal(row().report_json, originalBody);
-  assert.equal(row().last_error_code, "drive_payload_storage_unavailable");
-  assert.ok(row().drive_file_id);
+  assert.equal(delivery().last_error_code, "drive_payload_storage_unavailable");
+  assert.ok(delivery().drive_file_id);
+  const originalDeliveryBody = delivery().report_json;
   assert.equal(creates, initialCreates + 1);
   mode = "ok";
-  assert.equal((await drainNodeReports(env, {now: row().next_attempt_at - 1})).delivered, 0);
-  assert.equal((await drainNodeReports(env, {now: row().next_attempt_at})).delivered, 1);
+  assert.equal((await drainNodeReports(env, {now: delivery().next_attempt_at - 1})).delivered, 0);
+  assert.equal(delivery().report_json, originalDeliveryBody, 'retry never changes an immutable bundle');
+  assert.equal((await drainNodeReports(env, {now: delivery().next_attempt_at})).delivered, 1);
   assert.equal(creates, initialCreates + 1, "retry reuses the persisted file ID");
   assert.equal(row().report_json, "", "temporary body removed only after hash verification");
   assert.equal(row().size_bytes, 0);
@@ -110,7 +119,7 @@ try {
   assert.equal((await enqueueNodeReports(env, "node_a15", events)).duplicate, true);
   // Exercise the signed HTTP ingestion boundary with real SQLite and Ed25519.
   // Routine events discarded by local retention must still reach the outbox.
-  sqlite.exec("ALTER TABLE nodes ADD COLUMN public_key TEXT; ALTER TABLE nodes ADD COLUMN status TEXT DEFAULT 'online'; ALTER TABLE nodes ADD COLUMN agent_version TEXT DEFAULT '0.3.41'");
+  sqlite.exec("ALTER TABLE nodes ADD COLUMN public_key TEXT; ALTER TABLE nodes ADD COLUMN status TEXT DEFAULT 'online'; ALTER TABLE nodes ADD COLUMN agent_version TEXT DEFAULT '0.3.42'; ALTER TABLE nodes ADD COLUMN last_seen_at TEXT");
   const keys = await crypto.subtle.generateKey({name: "Ed25519"}, true, ["sign", "verify"]);
   sqlite.prepare("UPDATE nodes SET public_key = ? WHERE node_id = 'node_a15'")
     .run(JSON.stringify(await crypto.subtle.exportKey("jwk", keys.publicKey)));
@@ -129,7 +138,19 @@ try {
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM node_report_outbox").get().n, 2);
   const blocked = await signedLogs("blocked-routine");
   await assert.rejects(ingestNodeLogs(blocked, env, "node_a15", new URL(blocked.url)), error => error.code === "node_report_queue_full");
+  await enqueueControllerReport(env,'node_a15','ssh_browser_disconnected',{reason:'queue-full-test'});
+  const before=sqlite.prepare('SELECT COUNT(*) AS n FROM node_report_outbox').get().n;
+  failOfflineTransition=true;
+  await assert.rejects(markStaleNodesOffline(env,undefined,true),/injected_transition_failure/);
+  failOfflineTransition=false;
+  assert.equal(sqlite.prepare('SELECT status FROM nodes').get().status,'online');
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM node_report_outbox').get().n,before,'transition journal rolled back with state');
+  assert.equal(await markStaleNodesOffline(env,undefined,true),1);
+  assert.equal(sqlite.prepare('SELECT status FROM nodes').get().status,'offline');
+  assert.equal(await markStaleNodesOffline(env,undefined,true),0);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM node_report_outbox WHERE batch_id LIKE 'disconnect:%'").get().n,1);
   sqlite.exec("DELETE FROM node_report_outbox WHERE batch_id = 'full'");
+  await drainNodeReports(env);
   const signed = await signedLogs("routine-archived");
   const accepted = await ingestNodeLogs(signed, env, "node_a15", new URL(signed.url));
   const result = await accepted.json();
@@ -137,6 +158,32 @@ try {
   assert.equal(result.drive_archive.status, "queued");
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM node_logs").get().n, 0);
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM node_report_outbox WHERE state='pending'").get().n, 1);
+
+  // Simulate 27 agents each producing one report batch per minute for an hour.
+  // This is the arrival rate which overflowed the former 36-batches/hour drain.
+  const actualNow=Date.now;
+  let simulated=actualNow()+86400000;
+  Date.now=()=>simulated;
+  const initialFileCount=creates;
+  let processed=0,largestQueue=0;
+  try {
+    for(let minute=0;minute<60;minute++) {
+      for(let node=0;node<27;node++) await enqueueNodeReports(env,'node_sim_'+node,[{
+        ...events[0],event_id:`sim_${minute}_${node}`,created_at:new Date(simulated).toISOString()}],'sim-'+node);
+      processed+=(await drainNodeReports(env,{now:simulated})).delivered;
+      largestQueue=Math.max(largestQueue,sqlite.prepare("SELECT COUNT(*) AS n FROM node_report_outbox WHERE state='pending'").get().n);
+      simulated+=60000;
+    }
+    for(let minute=0;minute<10;minute++) {processed+=(await drainNodeReports(env,{now:simulated})).delivered;simulated+=60000;}
+  } finally {Date.now=actualNow;}
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM node_report_outbox WHERE state='pending'").get().n,0);
+  assert.ok(processed>=1620);
+  assert.ok(largestQueue<=300,`queue remains bounded, got ${largestQueue}`);
+  assert.ok(creates-initialFileCount<=210,'at most three immutable bundle files per minute');
+  for(const body of files.values()) {
+    const report=JSON.parse(body);
+    if(report.schema==='citadel-node-report/v2') assert.ok(report.batches.every(batch=>batch.node_id===report.node_id));
+  }
 
   const privateTail = {event: {request: {url: "https://hub/api/v1/nodes/private-node/sync?token=secret",
     method: "POST", headers: {authorization: "secret"}}, response: {status: 401}}, outcome: "ok"};

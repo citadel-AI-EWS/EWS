@@ -10,6 +10,8 @@ import {issueSshTicket, verifySshTicket, issueSshRelayTicket, verifySshRelayTick
 import {DIAGNOSTIC_NODE_HASH, DIAGNOSTIC_RECOVERY_END, expiredDiagnosticResumeEligible, DIAGNOSTIC_RESUME_REQUEUE_SQL} from './diagnostic-pause-recovery.js';
 import {recoverPatchedRollout} from './patched-rollout-recovery.js';
 import {replayFailureCode} from './replay-diagnostics.js';
+import {compactReplayConfigured, claimCompactReplay, ReplayStoreError} from './compact-replay.js';
+import {invokeSshRelay} from './ssh/availability.js';
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -52,17 +54,17 @@ const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "r
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const WAKE_PEER_MIN_AGENT_VERSION = "0.3.6";
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.41",
+  version: "0.3.42",
   files: [
     {
       path: "citadel_node_v1.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/5f5737500394c24ac5ea065034f410680be2f700/agent/citadel_node_v1.py",
-      sha256: "4e4c27d0f3b46e4024c89b205b6192dce31f3a3837e8e88777e3fc4cfefa2a76"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/d4a3c957600980124983c8ce8e84cae3d6604f69/agent/citadel_node_v1.py",
+      sha256: "1e2f85e0815955e79e429019c1dcf023ae00136e3a046e989b8773904d31a505"
     },
     {
       path: "citadel_node_v2.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/5f5737500394c24ac5ea065034f410680be2f700/agent/citadel_node_v2.py",
-      sha256: "c29864aefe5443073ce8bf29ffc3e20c7494a4fd2d8ad454a95f5b6b1ce14a05"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/d4a3c957600980124983c8ce8e84cae3d6604f69/agent/citadel_node_v2.py",
+      sha256: "9073847fe0e164d62d5a70e567470192a9c78ed2d933feaa976fb9632ca69d4d"
     },
     {
       path: "CitadelSshConsole.cs",
@@ -1676,7 +1678,7 @@ function relayStub(env, nodeId) {
 
 async function relayStatus(env, nodeId) {
   try {
-    const response = await relayStub(env, nodeId).fetch('https://relay.internal/status',
+    const response = await invokeSshRelay(env, nodeId, 'https://relay.internal/status',
       {headers: {'x-citadel-relay-role': 'status'}});
     return response.ok ? response.json() : null;
   } catch {return null;}
@@ -1699,7 +1701,7 @@ async function architectSshRelayConnect(request, env) {
   catch {throw new ApiError(401, 'invalid_ssh_ticket');}
   const node = await env.DB.prepare("SELECT node_id FROM nodes WHERE node_id = ? AND status != 'revoked'").bind(claims.node_id).first();
   if (!node) throw new ApiError(404, 'node_not_found');
-  const response = await relayStub(env, claims.node_id).fetch('https://relay.internal/attach', {headers: {
+  const response = await invokeSshRelay(env, claims.node_id, 'https://relay.internal/attach', {headers: {
     upgrade: 'websocket', 'x-citadel-relay-role': 'browser',
     'x-citadel-relay-node-id': claims.node_id,
     'x-citadel-relay-jti': claims.jti, 'x-citadel-relay-ticket-expires': String(claims.exp),
@@ -1714,7 +1716,7 @@ async function nodeSshRelayConnect(request, env, nodeId, url) {
     throw new ApiError(426, 'ssh_websocket_required');
   }
   await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
-  const response = await relayStub(env, nodeId).fetch('https://relay.internal/attach', {
+  const response = await invokeSshRelay(env, nodeId, 'https://relay.internal/attach', {
     headers: {upgrade: 'websocket', 'x-citadel-relay-role': 'agent', 'x-citadel-relay-node-id': nodeId}});
   if (response.status !== 101) throw new ApiError(503, 'ssh_relay_unavailable');
   return response;
@@ -4960,10 +4962,12 @@ async function authenticateNode(request, env, nodeId, url, bodyBytes) {
   if (!verified) throw new ApiError(401, "invalid_signature");
 
   if (requestId) {
-    // Use the per-node Durable Object as the primary atomic replay store for
-    // every signed modern node request. D1-only deployments remain compatible;
-    // a configured but unavailable DO fails closed instead of switching stores.
-    const durableClaim = await claimSyncReplayNonce(env, nodeId, requestId, timestampSeconds);
+    // One explicitly selected authority covers every signed node route. The
+    // compact D1 migration has a permanent timestamp boundary; DO failures
+    // never trigger an automatic switch to a different replay store.
+    const durableClaim = compactReplayConfigured(env)
+      ? await claimCompactReplay(env, nodeId, requestId, timestampSeconds)
+      : await claimSyncReplayNonce(env, nodeId, requestId, timestampSeconds);
     if (durableClaim === false) {
       throw new ApiError(409, "replayed_request");
     }
@@ -5089,7 +5093,7 @@ async function enrollNode(request, env) {
     hostname,
     os_name: osName,
     agent_version: agentVersion,
-    enrollment: "automatic"
+    enrollment: "awaiting_architect_activation"
   });
 
   await ensureAutoEnrollmentStorage(env);
@@ -5141,7 +5145,7 @@ async function enrollNode(request, env) {
         INSERT INTO nodes (
           node_id, public_key, hostname, os_name, os_version,
           architecture, agent_version, status, capabilities_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'online', ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'paused', ?)
       `).bind(nodeId, publicKey, hostname, osName, osVersion, architecture, agentVersion, capabilitiesJson),
       env.DB.prepare(`
         INSERT INTO node_numbers (node_id, public_key)
@@ -5177,7 +5181,7 @@ async function enrollNode(request, env) {
   if (!assigned?.node_number) {
     throw new ApiError(500, "node_number_assignment_failed");
   }
-  return enrollmentResponse(nodeId, assigned.node_number);
+  return enrollmentResponse(nodeId, assigned.node_number, 'paused');
 }
 
 async function heartbeat(request, env, nodeId, url) {
@@ -5422,7 +5426,7 @@ async function syncNode(request, env, nodeId, url) {
     ? { assignments: [] }
     : await assignmentsForNode(env, node);
   return json({ ok: true, node_status: node.status, commands: commands.commands,
-    assignments: work.assignments });
+    assignments: work.assignments, idle_poll_seconds: compactReplayConfigured(env) ? 90 : 30 });
 }
 
 async function acceptAssignment(request, env, nodeId, assignmentId, url) {
@@ -9782,6 +9786,10 @@ export default {
     try {
       return await handleApi(request, env, url, executionCtx);
     } catch (error) {
+      if (error instanceof ReplayStoreError) {
+        return json({ok: false, error: error.code, retry_after_seconds: error.retry_after_seconds}, error.status,
+          error.retry_after_seconds ? {'retry-after': String(error.retry_after_seconds)} : {});
+      }
       if (error instanceof ApiError) {
         if (error.status === 503 && url.pathname.startsWith("/api/v1/nodes/") && /^[a-z_]{1,80}$/.test(error.code)) {
           console.warn("node_control_request_failed", error.code);
