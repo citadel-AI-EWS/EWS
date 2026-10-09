@@ -2,11 +2,12 @@
 // No command is sent before a real, alternative canary returns online.
 export function patchedRolloutEligible(rollout, release, now = Date.now()) {
   return now < Date.parse('2026-10-15T00:00:00Z') &&
-    rollout?.target_version === '0.3.40' && release?.version === '0.3.41';
+    ((rollout?.target_version === '0.3.40' && release?.version === '0.3.41') ||
+      (['0.3.40','0.3.41'].includes(rollout?.target_version) && release?.version === '0.3.42'));
 }
 
 export const RETIRE_PATCHED_ROLLOUT_SQL = `UPDATE agent_rollouts SET status='completed',updated_at=?
-  WHERE rollout_id=? AND status='active' AND target_version='0.3.40' AND created_at=?
+  WHERE rollout_id=? AND status='active' AND target_version=? AND created_at=?
     AND datetime(?) < datetime('2026-10-15T00:00:00Z')
     AND EXISTS (SELECT 1 FROM audit_events a WHERE a.target_id=agent_rollouts.rollout_id
       AND a.action='agent.rollout.started' AND a.actor_type='architect')
@@ -36,7 +37,7 @@ export async function recoverPatchedRollout(env, rollout, release, nodeId, eligi
   const createdAt = new Date(now).toISOString();
   const rolloutId = 'rollout_' + crypto.randomUUID();
   const result = await env.DB.batch([
-    env.DB.prepare(RETIRE_PATCHED_ROLLOUT_SQL).bind(createdAt,rollout.rollout_id,rollout.created_at,
+    env.DB.prepare(RETIRE_PATCHED_ROLLOUT_SQL).bind(createdAt,rollout.rollout_id,rollout.target_version,rollout.created_at,
       createdAt,nodeId,nodeId,createdAt,nodeId,createdAt),
     env.DB.prepare(`INSERT INTO agent_rollouts(rollout_id,target_version,release_json,status,created_at,updated_at)
       SELECT ?,?,?, 'active',?,? WHERE changes()=1`)
@@ -45,7 +46,7 @@ export async function recoverPatchedRollout(env, rollout, release, nodeId, eligi
       SELECT ?,?,'canary',?,? WHERE changes()=1`)
       .bind(rolloutId,nodeId,policy.max_parallel,policy.max_failures),
     env.DB.prepare(`INSERT INTO audit_events(actor_type,actor_id,action,target_type,target_id,details_json)
-      SELECT 'controller','authorized-rollout-repair-20261008','agent.rollout.patched_release_started','rollout',?,?
+      SELECT 'controller','authorized-rollout-repair-20261009','agent.rollout.patched_release_started','rollout',?,?
       WHERE changes()=1`).bind(rolloutId,JSON.stringify({previous_rollout_id:rollout.rollout_id,
         target_version:release.version,canary_node_id:nodeId}))
   ]);

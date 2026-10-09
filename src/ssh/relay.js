@@ -1,4 +1,4 @@
-import {enqueueControllerReport} from '../node-reports.js';
+import {enqueueControllerReport, nodeReportsEnabled} from '../node-reports.js';
 
 const MAX_FRAME = 8192;
 const MAX_BUFFERED = 2 * 1024 * 1024;
@@ -15,9 +15,22 @@ export class NodeSshRelay {
   constructor(state, env = {}) {this.state = state; this.env = env;}
 
   async report(info, eventType, details) {
-    if (!info.node_id) return;
-    try {await enqueueControllerReport(this.env, info.node_id, eventType, details);}
+    if (!info.node_id || !await nodeReportsEnabled(this.env)) return;
+    const id = crypto.randomUUID();
+    const entry = {node_id: info.node_id, eventType, details, createdAt: new Date().toISOString(), id};
+    try {
+      await this.state.storage.put('report:' + id, entry);
+      await this.deliverReport('report:' + id, entry);
+    }
     catch {console.error('ssh_report_queue_unavailable');}
+    try {await this.scheduleBookkeepingSweep();} catch {console.error('ssh_report_retry_schedule_unavailable');}
+  }
+
+  async deliverReport(key, entry) {
+    const result = await enqueueControllerReport(this.env, entry.node_id, entry.eventType,
+      entry.details, entry.createdAt, null, entry.id);
+    if (result.status === 'queued') {await this.state.storage.delete(key); return true;}
+    return false;
   }
 
   sockets(role) {
@@ -164,6 +177,12 @@ export class NodeSshRelay {
       else if (Number.isFinite(expires)) next = next === null ? expires : Math.min(next, expires);
     }
     let pendingBookkeeping = false;
+    const reports = await this.state.storage.list({prefix: 'report:', limit: 20});
+    for (const [key, entry] of reports) {
+      try {if (!await this.deliverReport(key, entry)) pendingBookkeeping = true;}
+      catch {pendingBookkeeping = true;}
+    }
+    if (reports.size >= 20) pendingBookkeeping = true;
     for (const prefix of ['ticket:', 'nonce:', 'telemetry:']) {
       const rows = await this.state.storage.list({prefix, limit: 1000});
       for (const [key, value] of rows) {

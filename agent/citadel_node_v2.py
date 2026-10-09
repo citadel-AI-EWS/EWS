@@ -24,7 +24,7 @@ from typing import Any, Callable
 
 import citadel_node_v1 as v1
 
-VERSION = "0.3.41"
+VERSION = "0.3.42"
 v1.VERSION = VERSION
 v1.USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 
@@ -34,6 +34,7 @@ WARN_EVENTS = {
     "assignment_rejected_local",
     "result_queued",
     "command_signature_rejected",
+    "ssh_relay_disconnected",
 }
 ERROR_EVENTS = {
     "cycle_error",
@@ -41,6 +42,7 @@ ERROR_EVENTS = {
     "operation_cancel_check_failed",
     "command_failed",
     "command_failure_ack_failed",
+    "ssh_relay_error",
 }
 ALLOWED_EVENTS = {
     "agent_start",
@@ -86,6 +88,11 @@ ALLOWED_EVENTS = {
     "lmstudio_model_key_resolution_fallback",
     "command_failure_ack_failed",
     "command_failed",
+    "ssh_relay_connected",
+    "ssh_relay_disconnected",
+    "ssh_relay_error",
+    "ssh_relay_local_ready",
+    "agent_update_noop",
 }
 MAX_BATCH_EVENTS = 50
 MAX_PAYLOAD_BYTES = 60 * 1024
@@ -202,11 +209,17 @@ class Agent(v1.Agent):
         super().__init__(config, config_path)
         self.telemetry = TelemetryCursor(
             config.data_dir / "agent.jsonl",
-            config.data_dir / "telemetry-cursor.json",
+            # Replay retained local history once for the archive-aware cursor,
+            # including SSH events skipped by the pre-0.3.42 allowlist.
+            config.data_dir / "telemetry-archive-cursor.json",
         )
         self._ssh_relay_stop = threading.Event()
         self._ssh_relay_thread: threading.Thread | None = None
         self._ssh_relay_enabled = False
+        self.telemetry_api = v1.ApiClient(config, self.identity)
+        self._telemetry_retry_at = 0.0
+        self._telemetry_backoff = 2.0
+        self._ssh_retry_at = 0.0
 
     def run(self, once: bool = False) -> int:
         self._ssh_relay_enabled = not once
@@ -217,7 +230,28 @@ class Agent(v1.Agent):
 
     def submit_telemetry(self, payload: dict[str, Any]) -> None:
         node_id = self.require_node_id()
-        self.api.request("POST", f"/api/v1/nodes/{node_id}/logs", payload)
+        response = self.telemetry_api.request("POST", f"/api/v1/nodes/{node_id}/logs", payload)
+        if (response.get("drive_archive") or {}).get("status") == "awaiting_write_test":
+            # Keep the original local events until the archive can commit them.
+            # A disabled archive is not a successful report delivery.
+            raise v1.ControllerApiError(503, "node_report_archive_not_ready", 900)
+
+    def flush_telemetry(self) -> None:
+        """Reporting retains its cursor and retries without delaying node control."""
+        if not self.identity.node_id or time.monotonic() < self._telemetry_retry_at:
+            return
+        # A known shared-controller outage must not generate another request.
+        if self.api.retry_delay():
+            return
+        try:
+            self.telemetry.flush(self.identity.node_id, self.submit_telemetry)
+        except Exception as error:
+            retry = error.retry_after_seconds if isinstance(error, v1.ControllerApiError) else 0
+            self._telemetry_retry_at = time.monotonic() + min(86400, max(self._telemetry_backoff, retry))
+            self._telemetry_backoff = min(300, self._telemetry_backoff * 2)
+        else:
+            self._telemetry_retry_at = 0.0
+            self._telemetry_backoff = 2.0
 
     def cycle(self) -> None:
         try:
@@ -226,13 +260,10 @@ class Agent(v1.Agent):
             # Flush failure evidence even when the main cycle failed, preserving
             # its original exception and Controller quota backoff.
             self._start_ssh_relay()
-            if self.identity.node_id and not self.api.retry_delay():
-                with contextlib.suppress(Exception):
-                    self.telemetry.flush(self.identity.node_id, self.submit_telemetry)
+            self.flush_telemetry()
             raise
         self._start_ssh_relay()
-        if self.identity.node_id:
-            self.telemetry.flush(self.identity.node_id, self.submit_telemetry)
+        self.flush_telemetry()
 
     def enroll(self) -> str:
         node_id = super().enroll()
@@ -315,7 +346,7 @@ class Agent(v1.Agent):
         try:
             delay = 2
             while not self._ssh_relay_stop.is_set():
-                quota_pause = self.api.retry_delay()
+                quota_pause = max(self.api.retry_delay(),getattr(self, '_ssh_retry_at', 0.0)-time.monotonic())
                 if quota_pause:
                     await asyncio.to_thread(self._ssh_relay_stop.wait, min(60, quota_pause))
                     continue
@@ -340,6 +371,14 @@ class Agent(v1.Agent):
                         await self._ssh_relay_session(socket, node_id, port, client_key, known_hosts, asyncssh)
                 except Exception as error:
                     self.log.write("ssh_relay_disconnected", reason=type(error).__name__)
+                    response = getattr(error, 'response', None)
+                    if getattr(response, 'status_code', 0) in {429, 503}:
+                        try:
+                            retry = float(response.headers.get('Retry-After', '0'))
+                            if 0 < retry <= 86400:
+                                self._ssh_retry_at = time.monotonic() + retry
+                        except (TypeError, ValueError, AttributeError):
+                            pass
                 await asyncio.to_thread(self._ssh_relay_stop.wait, delay)
                 delay = min(60, delay * 2)
         finally:

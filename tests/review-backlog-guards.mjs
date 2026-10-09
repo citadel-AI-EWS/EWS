@@ -39,8 +39,8 @@ need(index.includes("LEFT JOIN node_numbers AS nn"), "Architect node number join
 need(!readme.includes("-EnrollmentToken"), "README still documents EnrollmentToken");
 need(!nodeTest.includes("enrollment_token"), "browser still sends enrollment_token");
 need(!nodeTest.includes("tokenInput"), "browser still depends on token input");
-need(agentV1.includes('VERSION = "0.3.41"'), "v1 release not bumped");
-need(agentV2.includes('VERSION = "0.3.41"'), "v2 release not bumped");
+need(agentV1.includes('VERSION = "0.3.42"'), "v1 release not bumped");
+need(agentV2.includes('VERSION = "0.3.42"'), "v2 release not bumped");
 need(!agentV1.includes("tailscale_ipv4"), "agent must not report Tailscale telemetry");
 need(agentV1.includes("WINDOWS_CREATE_NO_WINDOW = 0x08000000"), "Windows child-process no-window flag missing");
 need(agentV1.includes("def _citadel_subprocess_run") && agentV1.includes("def _citadel_subprocess_popen"), "Windows no-window subprocess wrappers missing");
@@ -238,12 +238,12 @@ need(agentV1.includes("validate_lmstudio_model_payload"), "LM Studio model valid
 need(agentV1.includes("windows_sleep_hibernate_inhibit"), "sleep/hibernate inhibition missing");
 need(telemetryCommon.includes("replayed_request"), "telemetry replay rejection missing");
 need(index.includes("node_request_nonces"), "Controller request nonce storage missing");
-need(index.includes("const durableClaim = await claimSyncReplayNonce(env, nodeId, requestId, timestampSeconds);"),
-  "Controller signed routes must prefer the per-node Durable Object replay store");
+need(index.includes("compactReplayConfigured(env)") && index.includes("await claimCompactReplay(env, nodeId, requestId, timestampSeconds)") && index.includes("await claimSyncReplayNonce(env, nodeId, requestId, timestampSeconds)"),
+  "Controller signed routes must select one explicit replay authority");
 need(!index.includes('url.pathname.endsWith("/sync")\n      ? await claimSyncReplayNonce'),
   "Controller durable replay protection must not be limited to /sync");
-need(telemetryCommon.includes("const durableClaim = await claimDurableReplayNonce(env, nodeId, requestId, timestampSeconds);"),
-  "telemetry signed routes must prefer the per-node Durable Object replay store");
+need(telemetryCommon.includes("compactReplayConfigured(env)") && telemetryCommon.includes("await claimCompactReplay(env, nodeId, requestId, timestampSeconds)") && telemetryCommon.includes("await claimDurableReplayNonce(env, nodeId, requestId, timestampSeconds)"),
+  "telemetry signed routes must select the same explicit replay authority");
 need(!telemetryCommon.includes('url.pathname.endsWith("/sync")'),
   "telemetry durable replay protection must not be limited to /sync");
 need(index.includes("agentRequiresRequestId"), "Controller compatibility gate for replay protection missing");
@@ -340,9 +340,9 @@ const hubLoginEnd = hub.indexOf('logoutButton.addEventListener("click"', hubLogi
 const hubLoginBlock = hub.slice(hubLoginStart, hubLoginEnd);
 need(hubLoginStart >= 0 && hubLoginEnd > hubLoginStart, "Hub login handler missing");
 need(hubLoginBlock.indexOf("await waitForRefreshIdle()") < hubLoginBlock.indexOf("architectToken=value"), "Hub assigns replacement token before stale refresh is idle");
-need(index.includes('version: "0.3.41"'), "Controller release not bumped");
-need(index.includes('path: "CitadelSshConsole.cs"'), "0.3.41 release must deliver the restricted SSH console source");
-need(index.includes('path: "configure_restricted_ssh.ps1"'), "0.3.41 release must deliver the restricted SSH bootstrap");
+need(index.includes('version: "0.3.42"'), "Controller release not bumped");
+need(index.includes('path: "CitadelSshConsole.cs"'), "0.3.42 release must deliver the restricted SSH console source");
+need(index.includes('path: "configure_restricted_ssh.ps1"'), "0.3.42 release must deliver the restricted SSH bootstrap");
 need(index.includes('"ssh_console"'), "inline SSH command missing from Controller allow-list");
 need(agentV1.includes('"ssh_console"'), "inline SSH command missing from node allow-list");
 need(agentV1.includes("validate_ssh_console_payload"), "inline SSH payload allow-list validation missing");

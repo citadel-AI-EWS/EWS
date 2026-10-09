@@ -68,7 +68,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.41"
+VERSION = "0.3.42"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -512,7 +512,8 @@ class ApiClient:
                 raise ControllerApiError(status, code, remaining)
 
     def _quota_retry(self, response, value, code: str) -> float:
-        if response.status != 503 or not re.search(r"d1_daily_(read|write)_limit_exceeded", code):
+        daily_quota = response.status == 503 and bool(re.search(r"d1_daily_(read|write)_limit_exceeded", code))
+        if response.status not in {429, 503}:
             return 0
         header = response.getheader("Retry-After") if hasattr(response, "getheader") else None
         delay = None
@@ -529,14 +530,19 @@ class ApiClient:
             raw = value.get("retry_after_seconds")
             if isinstance(raw, (int, float)) and not isinstance(raw, bool):
                 delay = float(raw)
+        if delay is None and not daily_quota:
+            return 0
         if delay is None or not 0 <= delay <= 86400:
+            if not daily_quota:
+                return 0
             utc = dt.datetime.now(dt.timezone.utc)
             reset = (utc + dt.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
             delay = (reset - utc).total_seconds()
         delay = max(1.0, min(86400.0, delay))
-        with self._retry_lock:
-            self._retry_until = max(self._retry_until, time.monotonic() + delay)
-            self._retry_error = (response.status, code)
+        if daily_quota:
+            with self._retry_lock:
+                self._retry_until = max(self._retry_until, time.monotonic() + delay)
+                self._retry_error = (response.status, code)
         return delay
 
     def request(
@@ -4300,6 +4306,9 @@ class Agent:
             self.log.write("queued_results_flushed", count=sent)
         response = self.sync_cycle()
         if response is not None:
+            poll_hint = response.get("idle_poll_seconds")
+            if isinstance(poll_hint, int) and not isinstance(poll_hint, bool) and 5 <= poll_hint <= 300:
+                self._controller_poll_seconds = poll_hint
             self.handle_commands(response)
             if not self.paused_path.exists() and response.get("node_status") != "paused":
                 for assignment in response.get("assignments") or []:
@@ -4365,7 +4374,7 @@ class Agent:
                     backoff = 2
                     if once:
                         return 0
-                    self.interruptible_sleep(self.config.poll_seconds)
+                    self.interruptible_sleep(max(self.config.poll_seconds, getattr(self, "_controller_poll_seconds", 0)))
                 except SystemExit as exit_request:
                     code = exit_request.code if isinstance(exit_request.code, int) else 0
                     reason = (

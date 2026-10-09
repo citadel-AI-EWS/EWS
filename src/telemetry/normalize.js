@@ -51,7 +51,12 @@ export const ALLOWED_EVENT_TYPES = new Set([
   "python_mode_calculation_fallback",
   "lmstudio_model_key_resolution_fallback",
   "command_failure_ack_failed",
-  "command_failed"
+  "command_failed",
+  "ssh_relay_connected",
+  "ssh_relay_disconnected",
+  "ssh_relay_error",
+  "ssh_relay_local_ready",
+  "agent_update_noop"
 ]);
 
 export function normalizeTelemetryEvent(raw) {

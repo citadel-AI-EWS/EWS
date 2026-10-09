@@ -264,7 +264,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
     function setState(text){$("refreshState").textContent=text}
     function relativeTime(value){if(!value)return"—";const t=Date.parse(value.endsWith?.("Z")||/[+-]\d\d:\d\d$/.test(value)?value:value.replace(" ","T")+"Z");if(!Number.isFinite(t))return esc(value);const sec=Math.max(0,Math.floor((Date.now()-t)/1000));if(sec<10)return lang==="he"?"עכשיו":lang==="en"?"now":"сейчас";if(sec<60)return `${sec}s`;const m=Math.floor(sec/60);if(m<60)return `${m}m`;const h=Math.floor(m/60);if(h<24)return `${h}h`;return `${Math.floor(h/24)}d`}
     function parseTimestamp(value){const raw=String(value||"").trim();if(!raw)return NaN;const normalized=raw.replace(" ","T");const hasZone=/(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized);return Date.parse(hasZone?normalized:`${normalized}Z`)}
-    function freshness(node){if(node.status==="revoked")return"revoked";const t=parseTimestamp(node.last_seen_at);if(Number.isFinite(t)&&Date.now()-t>120000)return"stale";return node.status==="online"?"online":"stale"}
+    function freshness(node){if(node.status==="revoked")return"revoked";const t=parseTimestamp(node.last_seen_at);if(!Number.isFinite(t)||Date.now()-t>300000)return"stale";return["online","paused"].includes(node.status)?node.status:"stale"}
     function pct(v){const n=Number(v);return Number.isFinite(n)?Math.max(0,Math.min(100,n)):0}
     function safeHost(value){const host=String(value||"").trim().toLowerCase();return /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(host)&&host.includes(".")?host:""}
     function safeUser(value){const u=String(value||"").trim();return /^[a-zA-Z0-9._-]{1,64}$/.test(u)?u:""}
@@ -582,7 +582,7 @@ function operationView(root,{title,detail='',status='running',ai={},startedAt=0,
       add("LM Studio","cyan",()=>openLmstudio(node),!live||pending);
       if(current)add("Python / AI","good",()=>openHybrid(node),!live||pending);
       add(current?(lang==="he"?"מעודכן":lang==="en"?"Up to date":"Актуально"):(lang==="he"?"עדכון":lang==="en"?"Update":"Обновить"),"good",()=>sendCommand(node.node_id,"update"),!live||pending||current);
-      if(node.status==="paused")add(lang==="he"?"המשך":lang==="en"?"Resume":"Продолжить","",()=>sendCommand(node.node_id,"resume"),!live||pending);
+      if(node.status==="paused")add(lang==="he"?"המשך":lang==="en"?"Resume":"Продолжить","",()=>sendCommand(node.node_id,"resume"),state!=="paused"||pending);
       else add(lang==="he"?"השהה":lang==="en"?"Pause":"Пауза","warn",()=>sendCommand(node.node_id,"pause"),!live||pending);
       add(lang==="he"?"הפעל agent מחדש":lang==="en"?"Restart agent":"Перезапустить агент","warn",()=>sendCommand(node.node_id,"restart"),!live||pending);
       add(lang==="he"?"אתחל מחשב":lang==="en"?"Reboot host":"Перезагрузить ПК","warn",()=>sendCommand(node.node_id,"system_reboot"),!live||pending);

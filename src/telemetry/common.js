@@ -1,4 +1,5 @@
 import {replayFailureCode} from '../replay-diagnostics.js';
+import {compactReplayConfigured, claimCompactReplay, ReplayStoreError} from '../compact-replay.js';
 
 export const TELEMETRY_LIMITS = Object.freeze({
   request_bytes: 64 * 1024,
@@ -419,7 +420,16 @@ export async function authenticateNode(request, env, nodeId, url, bodyBytes) {
     // Use the per-node Durable Object as the primary atomic replay store for
     // every signed modern node request. Only deployments without a DO binding
     // use D1; a configured DO outage fails closed without changing replay stores.
-    const durableClaim = await claimDurableReplayNonce(env, nodeId, requestId, timestampSeconds);
+    let durableClaim;
+    try {
+      durableClaim = compactReplayConfigured(env)
+        ? await claimCompactReplay(env, nodeId, requestId, timestampSeconds)
+        : await claimDurableReplayNonce(env, nodeId, requestId, timestampSeconds);
+    } catch (error) {
+      if (!(error instanceof ReplayStoreError)) throw error;
+      throw new TelemetryError(error.status, error.code, error.retry_after_seconds
+        ? {'retry-after': String(error.retry_after_seconds)} : {});
+    }
     if (durableClaim === false) {
       throw new TelemetryError(409, "replayed_request");
     }

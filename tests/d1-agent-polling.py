@@ -57,6 +57,17 @@ class PollingTest(unittest.TestCase):
         self.agent.cycle()
         self.assertIn("ai", self.calls[-1][2], "unchanged AI state needs a five-minute refresh")
 
+    def test_server_budget_hint_controls_idle_wait(self):
+        self.reply['idle_poll_seconds'] = 90
+        waits=[]
+        def stop(seconds):
+            waits.append(seconds)
+            raise KeyboardInterrupt()
+        self.agent.interruptible_sleep = stop
+        self.assertEqual(self.agent.run(),0)
+        self.assertEqual(waits,[90])
+        self.assertEqual(len(self.calls),1)
+
     def test_ssh_and_hardware_snapshots_retry_until_sync_acknowledges(self):
         self.agent.heartbeat_payload = agent_module.Agent.heartbeat_payload.__get__(self.agent)
         self.error = "controller HTTP 503: unavailable"

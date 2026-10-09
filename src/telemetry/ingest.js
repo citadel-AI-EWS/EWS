@@ -10,6 +10,7 @@ import {
 } from "./common.js";
 import { normalizeTelemetryEvent } from "./normalize.js";
 import { enqueueNodeReports } from "../node-reports.js";
+import {compactReplayConfigured} from '../compact-replay.js';
 import {
   enforceTelemetryRateLimit,
   ensureTelemetryStorage
@@ -23,11 +24,26 @@ const ERROR_COALESCE_SECONDS = 300;
 
 async function claimNoisyErrorWindow(env, nodeId, event) {
   if (!COALESCED_ERROR_TYPES.has(event.event_type)) return true;
-  if (!env.SSH_RELAY || typeof env.SSH_RELAY.idFromName !== "function") return true;
   const fingerprint = await sha256Hex(
     event.event_type + "\n" + event.message + "\n" + event.details_json
   );
   const expires = Math.floor(Date.now() / 1000) + ERROR_COALESCE_SECONDS;
+  if (compactReplayConfigured(env)) {
+    const now=expires-ERROR_COALESCE_SECONDS,path='$."'+fingerprint+'"';
+    try {
+      const claim=await env.DB.prepare(`INSERT INTO node_error_windows(node_id,windows_json) VALUES (?,json_object(?,?))
+        ON CONFLICT(node_id) DO UPDATE SET windows_json=json_set(
+          (SELECT COALESCE(json_group_object(key,value),'{}') FROM json_each(windows_json) WHERE value>?),?,?)
+        WHERE (COALESCE(json_extract(windows_json,?),0)<=?)
+          AND (SELECT COUNT(*) FROM json_each(windows_json) WHERE value>?)<64 RETURNING node_id`)
+        .bind(nodeId,fingerprint,expires,now,path,expires,path,now,now).first();
+      if(claim) return true;
+      const previous=await env.DB.prepare('SELECT json_extract(windows_json,?) AS expiry FROM node_error_windows WHERE node_id=?')
+        .bind(path,nodeId).first();
+      return Number(previous?.expiry||0)<=now;
+    } catch {return true;}
+  }
+  if (!env.SSH_RELAY || typeof env.SSH_RELAY.idFromName !== "function") return true;
   try {
     const stub = env.SSH_RELAY.get(env.SSH_RELAY.idFromName(nodeId));
     const response = await stub.fetch("https://citadel.internal/telemetry-dedupe", {

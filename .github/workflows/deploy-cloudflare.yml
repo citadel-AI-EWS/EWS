@@ -28,7 +28,7 @@ jobs:
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     environment: cloudflare-test
     env:
       DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
@@ -183,6 +183,12 @@ jobs:
             echo "Command table already accepts current command types."
           fi
 
+      - name: Create compact replay migration tables
+        timeout-minutes: 2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: timeout 90s npx wrangler d1 execute citadel-control --remote --yes --file migrations/0030_compact_replay.sql
+
       - name: Deploy TEST site and Worker
         uses: cloudflare/wrangler-action@v4
         with:
@@ -194,6 +200,13 @@ jobs:
         env:
           ARCHITECT_TOKEN_HASH: ${{ secrets.ARCHITECT_TOKEN_HASH }}
           CONTROLLER_COMMAND_PRIVATE_JWK: ${{ secrets.CONTROLLER_COMMAND_PRIVATE_JWK }}
+
+      - name: Drain old replay authority and verify deployed signed requests
+        timeout-minutes: 13
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CITADEL_BASE_URL: https://citadel-ai.init1.workers.dev
+        run: node scripts/initialize_compact_replay.mjs
 
       - name: Verify deployed TEST against real endpoints
         env:
