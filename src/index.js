@@ -7980,6 +7980,7 @@ async function publicHubNodes(env) {
   return json({
     ok: true,
     refreshed_at: new Date().toISOString(),
+    latest_agent_version: LATEST_NODE_RELEASE.version,
     nodes: rows.map((node, index) => {
       const seenAt = parseControllerTimestamp(node.last_seen_at);
       const status = node.status === "online" && (seenAt === null || seenAt < liveCutoff)
