@@ -1,6 +1,7 @@
 import {readFile} from "node:fs/promises";
 import {spawn} from "node:child_process";
 import {fileURLToPath} from "node:url";
+import {REPLAY_HINT_CODES} from "../src/replay-diagnostics.js";
 
 // The tail may contain request headers, IPs and console details. Keep only
 // aggregate counters in memory; never print or write the original events.
@@ -56,8 +57,8 @@ export function tailFailureCategories(value) {
   const categories = [];
   for (const code of ["replay_d1_daily_read_limit", "replay_d1_daily_write_limit",
     "replay_storage_daily_write_limit", "replay_storage_daily_read_limit", "replay_storage_sqlite_limit",
-    "replay_durable_request_limit", "replay_database_schema_missing", "replay_storage_overloaded",
-    "replay_transport_unavailable"]) if (messages.includes(code)) categories.push(code);
+    "replay_durable_request_limit", "replay_durable_duration_limit", "replay_database_schema_missing", "replay_storage_overloaded",
+    "replay_transport_unavailable", ...REPLAY_HINT_CODES]) if (messages.includes(code)) categories.push(code);
   for (const status of [400, 401, 403, 404, 429, 500, 503]) {
     if (messages.includes("replay_relay_http_" + status)) categories.push("replay_relay_http_" + status);
   }

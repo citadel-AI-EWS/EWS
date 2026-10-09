@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import worker from "../src/index.js";
 import {authenticateNode, sha256Hex} from "../src/telemetry/common.js";
-import {replayFailureCode} from "../src/replay-diagnostics.js";
+import {replayFailureCode, replayFailureHints, REPLAY_HINT_CODES} from "../src/replay-diagnostics.js";
+import {tailFailureCategories} from "../scripts/agent_connectivity_evidence.mjs";
 
 const keys = await crypto.subtle.generateKey({name: "Ed25519"}, true, ["sign", "verify"]);
 const node = {node_id: "node_diagnostics", public_key: JSON.stringify(await crypto.subtle.exportKey("jwk", keys.publicKey)),
@@ -39,5 +40,18 @@ try {
   assert.ok(reads.every(sql => !/INSERT|UPDATE|DELETE/.test(sql)), "an ambiguous DO failure must never fall back to D1 writes");
   assert.equal(replayFailureCode(new Error("D1_ERROR: daily row read limit exceeded")), "replay_d1_daily_read_limit");
   assert.equal(replayFailureCode(new Error("private unknown diagnostics")), "replay_transport_unavailable");
+  assert.equal(replayFailureCode(new Error("Your account has exceeded its daily limit of requests to Durable Objects")),
+    "replay_durable_request_limit", "quota wording may place limit before Durable Objects");
+  assert.equal(replayFailureCode(new Error("Your account has exceeded its daily limit of Durable Objects compute duration")),
+    "replay_durable_duration_limit");
+  const unknown = new TypeError("Invalid namespace binding; https://private.invalid/token-secret Bearer super-private-secret");
+  const hints = replayFailureHints(unknown);
+  assert.ok(hints.includes("replay_hint_binding") && hints.includes("replay_kind_type_error"));
+  assert.ok(hints.every(hint => REPLAY_HINT_CODES.includes(hint)), "only fixed hints leave the exception handler");
+  assert.ok(!JSON.stringify(hints).includes("private") && !JSON.stringify(hints).includes("secret"));
+  assert.equal(replayFailureCode(unknown), "replay_transport_unavailable");
+  assert.ok(!JSON.stringify(logs).includes("super-private-secret"));
+  assert.ok(tailFailureCategories({logs: [{message: ["node_replay_failure_hints", hints]}]})
+    .includes("worker:replay_hint_binding"), "live evidence must preserve fixed unknown-error hints");
 } finally {console.warn = originalWarn;}
 console.log("Signed control and telemetry: private replay failure diagnostics, unchanged fail-closed auth, no D1 fallback: PASS");
