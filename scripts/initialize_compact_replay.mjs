@@ -47,7 +47,11 @@ for (;;) {
 // credentials. It tests the REAL deployed signature boundary and is removed.
 const nodeId='node_replay_canary_'+crypto.randomUUID();
 const keys=await crypto.subtle.generateKey({name:'Ed25519'},true,['sign','verify']);
-const publicKey=JSON.stringify(await crypto.subtle.exportKey('jwk',keys.publicKey));
+// Match the enrollment boundary: Node's exported JWK adds an alg field whose
+// accepted spelling differs between WebCrypto runtimes. Store the same minimal
+// public JWK as normalizePublicKey; no private material enters SQL or logs.
+const exportedPublicKey=await crypto.subtle.exportKey('jwk',keys.publicKey);
+const publicKey=JSON.stringify({kty:'OKP',crv:'Ed25519',x:exportedPublicKey.x});
 const now=Math.floor(Date.now()/1000);
 async function signed(path,id,ts=now,method='GET',body='') {
   const hash=Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(body))).toString('hex');
@@ -61,11 +65,20 @@ try {
   await sql(`INSERT INTO nodes(node_id,public_key,hostname,os_name,agent_version,status,capabilities_json)
     VALUES (?,?,'test-replay-canary','Linux','0.3.42','paused','[]')`,[nodeId,publicKey]);
   const path=`/api/v1/nodes/${nodeId}/commands`,id=crypto.randomUUID();
-  const statuses=[];
-  statuses.push((await signed(path,id)).status);
-  statuses.push((await signed(path,id)).status);
+  const outcomes=[];
+  async function outcome(response) {
+    let error;
+    if(!response.ok) {
+      try {const code=(await response.json()).error;if(typeof code==='string'&&/^[a-z0-9_]{1,80}$/.test(code)) error=code;} catch {}
+    }
+    outcomes.push({status:response.status,...(error?{error}:{})});
+  }
+  await outcome(await signed(path,id));
+  await outcome(await signed(path,id));
   // Both control and telemetry MUST claim IDs in the same database authority.
-  statuses.push((await signed(`/api/v1/nodes/${nodeId}/logs`,id,now,'POST','{"events":[]}')).status);
+  await outcome(await signed(`/api/v1/nodes/${nodeId}/logs`,id,now,'POST','{"events":[]}'));
+  const statuses=outcomes.map(result=>result.status);
+  console.log(JSON.stringify({test:'deployed-signed-replay-responses',outcomes}));
   if (JSON.stringify(statuses)!=='[200,409,409]') throw Error('replay_live_canary_failed');
   if (now-marker.not_before<290) {
     const stale=await signed(path,crypto.randomUUID(),marker.not_before-1);
