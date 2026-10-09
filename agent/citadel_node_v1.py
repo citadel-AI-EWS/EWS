@@ -47,6 +47,10 @@ def _citadel_subprocess_run(*args, **kwargs):
     """Run child tools without opening transient Windows console windows."""
     if os.name == "nt":
         kwargs.setdefault("creationflags", WINDOWS_CREATE_NO_WINDOW)
+        if kwargs.get("text") or kwargs.get("universal_newlines") or kwargs.get("encoding"):
+            # A decode error in Windows Popen's reader thread otherwise leaves
+            # stdout=None despite capture_output=True, hiding the real result.
+            kwargs.setdefault("errors", "replace")
     return subprocess.run(*args, **kwargs)  # nosec B603
 
 
@@ -68,7 +72,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.43"
+VERSION = "0.3.44"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -746,18 +750,22 @@ def _doctor_powershell_json(command: str, timeout: int = 12) -> Any:
         return None
     try:
         result = _citadel_subprocess_run(  # nosec B603
-            [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+            [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+             "$OutputEncoding=[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);" + command],
             timeout=timeout,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             shell=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    if result.returncode != 0 or not result.stdout.strip():
+    output = result.stdout or ""
+    if result.returncode != 0 or not output.strip():
         return None
     try:
-        return json.loads(result.stdout)
+        return json.loads(output)
     except json.JSONDecodeError:
         return None
 
@@ -1398,7 +1406,7 @@ def windows_enterprise_probe() -> dict[str, Any]:
         }
 
     try:
-        payload = json.loads(result.stdout.strip())
+        payload = json.loads((result.stdout or "").strip())
     except (json.JSONDecodeError, TypeError):
         return {
             "supported": True,
