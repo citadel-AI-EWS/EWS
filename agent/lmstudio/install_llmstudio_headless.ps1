@@ -24,17 +24,19 @@ try {
     throw "LM Studio installer exited with code $LASTEXITCODE."
   }
 
-  $Candidates = @(
-    (Join-Path $RuntimeHome ".lmstudio\bin\lms.exe"),
-    (Join-Path $RuntimeHome ".lmstudio\bin\lms")
-  )
+  $Roots = @((Join-Path $RuntimeHome ".lmstudio"), (Join-Path $RuntimeHome "AppData\Local\lm-studio"))
+  $Pointer = Join-Path $RuntimeHome ".lmstudio-home-pointer"
+  if (Test-Path -LiteralPath $Pointer) {
+    $Target = [IO.Path]::GetFullPath((Get-Content -LiteralPath $Pointer -Raw).Trim())
+    $Prefix = [IO.Path]::GetFullPath($RuntimeHome).TrimEnd('\') + '\'
+    if ($Target.StartsWith($Prefix, [StringComparison]::OrdinalIgnoreCase)) { $Roots += $Target }
+  }
+  $Candidates = foreach ($Root in $Roots) {
+    foreach ($Name in @("lms.exe", "lms.cmd", "lms")) { Join-Path $Root ("bin\" + $Name) }
+  }
   $Lms = $null
   foreach ($Candidate in $Candidates) {
     if (Test-Path -LiteralPath $Candidate) { $Lms = $Candidate; break }
-  }
-  if ($null -eq $Lms) {
-    $Command = Get-Command lms -ErrorAction SilentlyContinue
-    if ($null -ne $Command) { $Lms = $Command.Source }
   }
   if ($null -eq $Lms) { throw "lms CLI was not found after installation." }
   Write-Host "[CITADEL] LM Studio / llmster is installed; CITADEL agent will start daemon/server."

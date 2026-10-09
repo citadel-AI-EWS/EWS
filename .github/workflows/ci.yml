@@ -182,6 +182,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/ssh-relay-agent.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/lmstudio-version-compat.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/agent-cycle-isolation.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/legacy-update-activation.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Validate Windows Enterprise Probe and legacy-upgrade bootstrap
         shell: pwsh
         run: |
@@ -379,10 +385,33 @@ jobs:
           }
           Write-Host "Windows installer AST + real SCM round-trip: OK"
 
+  lmstudio-real-runtime:
+    name: LM Studio real model inference (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    timeout-minutes: 12
+    env:
+      CITADEL_TEST_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: agent/requirements.txt
+      - run: python -m pip install --disable-pip-version-check --requirement agent/requirements.txt
+      - name: Install official runtime, download and load a small model, request hi
+        run: python tests/lmstudio-real-runtime.py
+
   gate:
     name: CI gate
     if: always()
-    needs: [validate-linux, agent-package, windows-agent, ssh-terminal-browser]
+    needs: [validate-linux, agent-package, windows-agent, ssh-terminal-browser, lmstudio-real-runtime]
     runs-on: ubuntu-latest
     steps:
       - name: Require every CI job to pass
@@ -391,4 +420,5 @@ jobs:
           test "${{ needs.agent-package.result }}" = "success"
           test "${{ needs.windows-agent.result }}" = "success"
           test "${{ needs.ssh-terminal-browser.result }}" = "success"
+          test "${{ needs.lmstudio-real-runtime.result }}" = "success"
           echo "All CI gates passed."

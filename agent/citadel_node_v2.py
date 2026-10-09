@@ -24,7 +24,7 @@ from typing import Any, Callable
 
 import citadel_node_v1 as v1
 
-VERSION = "0.3.40"
+VERSION = "0.3.41"
 v1.VERSION = VERSION
 v1.USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 
@@ -220,13 +220,35 @@ class Agent(v1.Agent):
         self.api.request("POST", f"/api/v1/nodes/{node_id}/logs", payload)
 
     def cycle(self) -> None:
-        super().cycle()
-        node_id = self.require_node_id()
+        try:
+            super().cycle()
+        except Exception:
+            # Flush failure evidence even when the main cycle failed, preserving
+            # its original exception and Controller quota backoff.
+            self._start_ssh_relay()
+            if self.identity.node_id and not self.api.retry_delay():
+                with contextlib.suppress(Exception):
+                    self.telemetry.flush(self.identity.node_id, self.submit_telemetry)
+            raise
+        self._start_ssh_relay()
+        if self.identity.node_id:
+            self.telemetry.flush(self.identity.node_id, self.submit_telemetry)
+
+    def enroll(self) -> str:
+        node_id = super().enroll()
+        # Reconcile a persisted identity before starting a signed transport;
+        # later task failures must not prevent that independent transport.
+        self._start_ssh_relay()
+        return node_id
+
+    def _start_ssh_relay(self) -> None:
+        node_id = self.identity.node_id
+        if not self.enrollment_confirmed or not node_id or self._ssh_relay_stop.is_set() or self.lifecycle_stop_requested() or self.stop_path.exists():
+            return
         if self._ssh_relay_enabled and (not self._ssh_relay_thread or not self._ssh_relay_thread.is_alive()):
             self._ssh_relay_thread = threading.Thread(target=self._ssh_relay_worker,
                 args=(node_id,), name="citadel-ssh-relay", daemon=True)
             self._ssh_relay_thread.start()
-        self.telemetry.flush(node_id, self.submit_telemetry)
 
     def _ssh_relay_worker(self, node_id: str) -> None:
         try:
