@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {DatabaseSync} from "node:sqlite";
 import {googleDriveNodeReportWriteTest, googleDriveNodeReportFingerprint} from "../src/index.js";
 import {enqueueNodeReports, drainNodeReports, nodeReportsEnabled, REPORT_LIMITS} from "../src/node-reports.js";
-import {classifyTailEvent, jsonObjectStream} from "../scripts/agent_connectivity_evidence.mjs";
+import {classifyTailEvent, jsonObjectStream, tailFailureCategories} from "../scripts/agent_connectivity_evidence.mjs";
 import {ingestNodeLogs} from "../src/telemetry/ingest.js";
 import {sha256Hex} from "../src/telemetry/common.js";
 
@@ -150,5 +150,9 @@ try {
   assert.equal(classifyTailEvent({event: {request: {url: "https://hub/api/health?connectivity_probe=1"}}}).probe, true);
   assert.equal(classifyTailEvent({event: {request: {url: "https://hub/api/v1/nodes/private-node/ai-state"}}}).route, "ai-state");
   assert.equal(classifyTailEvent({event: {request: {url: "https://hub/api/v1/nodes/private-node/future/private-id"}}}).route, "other_node_route");
+  assert.deepEqual(tailFailureCategories({entrypoint: "NodeSshRelay", exceptions: [
+    {message: "SQLITE_FULL: private diagnostics Bearer private-secret"}]}), ["relay:storage_sqlite_limit"]);
+  assert.deepEqual(tailFailureCategories({exceptions: [{message: "D1_ERROR: daily row write limit exceeded"}]}),
+    ["worker:storage_daily_write_limit"]);
 } finally {globalThis.fetch = originalFetch; sqlite.close();}
 console.log("Node reports: write/readback gate, secret redaction, durable retry, deduplication, lease and backpressure: OK");

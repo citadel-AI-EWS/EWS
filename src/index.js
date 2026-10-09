@@ -9,6 +9,7 @@ import { buildAgentCapabilityContract, buildTaskEnvelope, buildResultEnvelope, v
 import {issueSshTicket, verifySshTicket, issueSshRelayTicket, verifySshRelayTicket} from "./ssh/tickets.js";
 import {DIAGNOSTIC_NODE_HASH, DIAGNOSTIC_RECOVERY_END, expiredDiagnosticResumeEligible, DIAGNOSTIC_RESUME_REQUEUE_SQL} from './diagnostic-pause-recovery.js';
 import {recoverPatchedRollout} from './patched-rollout-recovery.js';
+import {replayFailureCode} from './replay-diagnostics.js';
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -134,7 +135,7 @@ const LMSTUDIO_INTEGRATION = Object.freeze({
   linux_asset: Object.freeze({
     path: "install_llmstudio_headless.sh",
     url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/install_llmstudio_headless.sh",
-    sha256: "3d112dfa579562953919cfeccb6203d86333a99a473aaf4b76bdd2c39b70f67b"
+    sha256: "205e1cfc25aa894793862abaae8435061bf2e1aa58c751d95d244d49e400408b"
   }),
   model_presets: Object.freeze([
     { id: "ibm/granite-4-micro", label: "IBM Granite 4 Micro" },
@@ -4882,7 +4883,9 @@ async function claimSyncReplayNonce(env, nodeId, requestId, timestampSeconds) {
     });
     if (response.status === 409) return false;
     if (response.status === 201) return true;
-  } catch {
+    console.warn("node_replay_claim_failed", "replay_relay_http_" + response.status);
+  } catch (error) {
+    console.warn("node_replay_claim_failed", replayFailureCode(error));
     // The claim may have committed before a response was lost. Switching to
     // an independent D1 store here would accept a replay already used in DO.
   }
@@ -9780,6 +9783,9 @@ export default {
       return await handleApi(request, env, url, executionCtx);
     } catch (error) {
       if (error instanceof ApiError) {
+        if (error.status === 503 && url.pathname.startsWith("/api/v1/nodes/") && /^[a-z_]{1,80}$/.test(error.code)) {
+          console.warn("node_control_request_failed", error.code);
+        }
         return json({ ok: false, error: error.code }, error.status);
       }
 
