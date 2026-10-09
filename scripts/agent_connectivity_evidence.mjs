@@ -70,7 +70,7 @@ async function main() {
   const report = {checked_at: new Date().toISOString(), window_seconds: 65, positive_control: false,
     agent_requests: 0, routes: {}, snapshot: await snapshot(config)};
   const child = spawn(process.execPath, ["node_modules/wrangler/bin/wrangler.js", "tail", worker,
-    "--format=json", "--sampling-rate=1"], {detached: true, stdio: ["ignore", "pipe", "pipe"],
+    "--format=json"], {detached: true, stdio: ["ignore", "pipe", "pipe"],
     env: {...process.env, CLOUDFLARE_ACCOUNT_ID: account, CI: "true", WRANGLER_SEND_METRICS: "false"}});
   const stop = () => {try {process.kill(-child.pid, "SIGTERM");} catch {}};
   let diagnostic = "";
@@ -96,7 +96,11 @@ async function main() {
       signal: AbortSignal.timeout(5000), redirect: "error"});} catch {}
     if (report.positive_control) break;
   }
-  await Promise.race([finished, new Promise(resolve => setTimeout(resolve, Math.max(0, 65000 - (Date.now() - started))))]);
+  let windowTimer;
+  await Promise.race([finished, new Promise(resolve => {
+    windowTimer = setTimeout(resolve, Math.max(0, 65000 - (Date.now() - started)));
+  })]);
+  clearTimeout(windowTimer);
   stop();
   const killTimer = setTimeout(() => {try {process.kill(-child.pid, "SIGKILL");} catch {}}, 5000);
   await finished;
