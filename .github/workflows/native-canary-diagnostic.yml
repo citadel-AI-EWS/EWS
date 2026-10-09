@@ -50,6 +50,7 @@ jobs:
             Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
           }
   diagnostic:
+    needs: windows-staging
     runs-on: ubuntu-latest
     timeout-minutes: 6
     environment: cloudflare-test

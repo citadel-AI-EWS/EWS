@@ -30,6 +30,23 @@ def main():
                           "stdout": result.stdout[-4000:], "stderr": result.stderr[-8000:]}))
         if result.returncode:
             raise RuntimeError("staged self-test failed")
+        journal = root / "agent.jsonl"
+        journal.write_text("", encoding="utf-8")
+        core = stage / "citadel_node_v1.py"
+        core.write_text(core.read_text(encoding="utf-8").replace(
+            "def self_test() -> int:\n", "def self_test() -> int:\n    raise RuntimeError('synthetic-secret-profile')\n", 1), encoding="utf-8")
+        failed = subprocess.run([sys.executable, str(stage / "citadel_node_v2.py"), "self-test"],
+                                cwd=stage, env=env, capture_output=True, text=True, timeout=120)
+        assert failed.returncode != 0, "failed self-test must reject activation"
+        text = journal.read_text(encoding="utf-8")
+        proof = json.loads(text)
+        assert proof["event"] == "agent_update_preflight_failed"
+        assert proof["exception_type"] == "RuntimeError"
+        assert proof["source_locations"]
+        assert "synthetic-secret-profile" not in text
+        assert str(root) not in text
+        print(json.dumps({"test": "staged-failure-evidence", "failed_activation_rejected": True,
+                          "source_locations_retained": True, "exception_text_redacted": True}))
 
 
 if __name__ == "__main__":
