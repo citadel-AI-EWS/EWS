@@ -9,6 +9,7 @@ import { buildAgentCapabilityContract, buildTaskEnvelope, buildResultEnvelope, v
 import {issueSshTicket, verifySshTicket, issueSshRelayTicket, verifySshRelayTicket} from "./ssh/tickets.js";
 import {DIAGNOSTIC_NODE_HASH, DIAGNOSTIC_RECOVERY_END, expiredDiagnosticResumeEligible, DIAGNOSTIC_RESUME_REQUEUE_SQL} from './diagnostic-pause-recovery.js';
 import {recoverPatchedRollout} from './patched-rollout-recovery.js';
+import {replayFailureCode} from './replay-diagnostics.js';
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -4882,7 +4883,9 @@ async function claimSyncReplayNonce(env, nodeId, requestId, timestampSeconds) {
     });
     if (response.status === 409) return false;
     if (response.status === 201) return true;
-  } catch {
+    console.warn("node_replay_claim_failed", "replay_relay_http_" + response.status);
+  } catch (error) {
+    console.warn("node_replay_claim_failed", replayFailureCode(error));
     // The claim may have committed before a response was lost. Switching to
     // an independent D1 store here would accept a replay already used in DO.
   }
@@ -9780,6 +9783,9 @@ export default {
       return await handleApi(request, env, url, executionCtx);
     } catch (error) {
       if (error instanceof ApiError) {
+        if (error.status === 503 && url.pathname.startsWith("/api/v1/nodes/") && /^[a-z_]{1,80}$/.test(error.code)) {
+          console.warn("node_control_request_failed", error.code);
+        }
         return json({ ok: false, error: error.code }, error.status);
       }
 

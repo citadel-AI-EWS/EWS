@@ -54,6 +54,13 @@ export function tailFailureCategories(value) {
     ...(value?.logs || []).flatMap(item => item.message || [])]
     .map(item => typeof item === "string" ? item : JSON.stringify(item)).join("\n");
   const categories = [];
+  for (const code of ["replay_d1_daily_read_limit", "replay_d1_daily_write_limit",
+    "replay_storage_daily_write_limit", "replay_storage_daily_read_limit", "replay_storage_sqlite_limit",
+    "replay_durable_request_limit", "replay_database_schema_missing", "replay_storage_overloaded",
+    "replay_transport_unavailable"]) if (messages.includes(code)) categories.push(code);
+  for (const status of [400, 401, 403, 404, 429, 500, 503]) {
+    if (messages.includes("replay_relay_http_" + status)) categories.push("replay_relay_http_" + status);
+  }
   for (const [code, pattern] of [
     ["storage_daily_read_limit", /daily.*(?:row|storage).*read.*limit|daily row read limit/i],
     ["storage_daily_write_limit", /daily.*(?:row|storage).*writ.*limit|daily row write limit/i],

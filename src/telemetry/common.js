@@ -1,3 +1,5 @@
+import {replayFailureCode} from '../replay-diagnostics.js';
+
 export const TELEMETRY_LIMITS = Object.freeze({
   request_bytes: 64 * 1024,
   batch_events: 50,
@@ -41,7 +43,9 @@ async function claimDurableReplayNonce(env, nodeId, requestId, timestampSeconds)
     });
     if (response.status === 409) return false;
     if (response.status === 201) return true;
-  } catch {
+    console.warn("node_replay_claim_failed", "replay_relay_http_" + response.status);
+  } catch (error) {
+    console.warn("node_replay_claim_failed", replayFailureCode(error));
     // A lost DO response may follow a committed claim. An independent D1
     // fallback cannot safely determine whether that request was already used.
   }
