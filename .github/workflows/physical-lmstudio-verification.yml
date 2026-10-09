@@ -6,6 +6,7 @@ on:
     paths:
       - scripts/physical_lmstudio_verification.mjs
       - scripts/physical_status_observation.mjs
+      - scripts/physical_failure_diagnostic.mjs
       - .github/workflows/physical-lmstudio-verification.yml
 permissions:
   contents: read
@@ -40,3 +41,18 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: node scripts/physical_status_observation.mjs
+  failure-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment: cloudflare-test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: node --check scripts/physical_failure_diagnostic.mjs
+      - name: Read bounded failure reasons without raw logs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CONTROLLER_COMMAND_PRIVATE_JWK: ${{ secrets.CONTROLLER_COMMAND_PRIVATE_JWK }}
+        run: node scripts/physical_failure_diagnostic.mjs
