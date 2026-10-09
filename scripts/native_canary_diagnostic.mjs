@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import {createHash,createPrivateKey,createPublicKey,sign} from 'node:crypto';
 import {failureCode} from './rollout_evidence.mjs';
+import {updatePayloadReadyForAgent} from '../src/index.js';
 const publicX='erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0';
 const config=fs.readFileSync('wrangler.jsonc','utf8');
 const account=config.match(/"D1_ANALYTICS_ACCOUNT_ID"\s*:\s*"([^"]+)"/)?.[1];
@@ -33,13 +34,42 @@ async function main() {
   if(!candidate){console.log('{"status":"no_live_failed_canary"}');return;}
   const version=String(candidate.agent_version).split('.').map(Number);
   if(version[0]!==0||version[1]!==3||version[2]<32){console.log('{"status":"console_not_supported"}');return;}
-  const failed=(await query(`SELECT command_id,created_at FROM commands WHERE node_id=? AND command_type='update' AND status='failed'
-    ORDER BY datetime(created_at) DESC,rowid DESC LIMIT 1`,[candidate.node_id])).results[0];
+  const retryId='command_audit_retry_'+digest(candidate.rollout_id).slice(0,24);
+  let failed=(await query(`SELECT command_id,created_at,payload_json FROM commands WHERE node_id=? AND command_type='update' AND status='failed'
+    AND command_id<>? ORDER BY datetime(created_at) DESC,rowid DESC LIMIT 1`,[candidate.node_id,retryId])).results[0];
   if(!failed){console.log('{"status":"failed_update_not_found"}');return;}
+  const retry=(await query('SELECT status FROM commands WHERE command_id=?',[retryId])).results[0];
+  if(!retry) {
+    const payload=JSON.parse(failed.payload_json);
+    if(payload.version!=='0.3.42'||!updatePayloadReadyForAgent(payload,candidate.agent_version))
+      throw Error('diagnostic_release_pins_mismatch');
+    const createdAt=new Date().toISOString();
+    const canonical=['CITADEL-COMMAND-V1',retryId,candidate.node_id,'update',digest(failed.payload_json),createdAt].join('\n');
+    const signature=sign(null,Buffer.from(canonical),controllerKey()).toString('base64url');
+    await query(`INSERT OR IGNORE INTO commands(command_id,node_id,command_type,payload_json,signature,status,created_at)
+      SELECT ?,n.node_id,'update',?,?,'pending',? FROM nodes n JOIN agent_rollout_policy p ON p.canary_node_id=n.node_id
+      JOIN agent_rollouts r ON r.rollout_id=p.rollout_id
+      WHERE n.node_id=? AND n.status='online' AND datetime(n.last_seen_at)>=datetime('now','-5 minutes')
+        AND r.rollout_id=? AND r.status='active' AND p.phase='paused' AND p.pause_reason='canary_command_failed'
+        AND NOT EXISTS(SELECT 1 FROM commands c WHERE c.node_id=n.node_id AND c.status IN('pending','accepted'))`,
+      [retryId,failed.payload_json,signature,createdAt,candidate.node_id,candidate.rollout_id]);
+    await query(`INSERT INTO audit_events(actor_type,actor_id,action,target_type,target_id,details_json)
+      SELECT 'controller','audit-native-console-20261009','command.queued','command',?,'{"command_type":"update","reason":"single_canary_retry_for_fresh_failure_evidence"}'
+      WHERE EXISTS(SELECT 1 FROM commands WHERE command_id=?) AND NOT EXISTS(SELECT 1 FROM audit_events WHERE target_id=? AND action='command.queued')`,[retryId,retryId,retryId]);
+  }
+  let retried;const retryDeadline=Date.now()+150000;
+  do {
+    retried=(await query('SELECT command_id,status,created_at FROM commands WHERE command_id=?',[retryId])).results[0];
+    if(!retried||!['pending','accepted'].includes(retried.status))break;
+    await new Promise(resolve=>setTimeout(resolve,5000));
+  }while(Date.now()<retryDeadline);
+  console.log(JSON.stringify({test:'single-failed-canary-retry',status:retried?.status||'not_queued'}));
+  if(retried?.status!=='failed')return;
+  failed={...failed,...retried};
   const acknowledgements=(await query("SELECT details_json FROM audit_events WHERE target_id=? AND action='command.acknowledged' ORDER BY created_at,rowid LIMIT 10",[failed.command_id])).results;
   const ackStatuses=acknowledgements.map(row=>{try{return JSON.parse(row.details_json).status;}catch{return null;}})
     .filter(x=>['accepted','completed','failed','cancelled'].includes(x));
-  const commandId='command_audit_logs_'+digest(failed.command_id).slice(0,24);
+  const commandId='command_audit_retry_logs_'+digest(candidate.rollout_id).slice(0,24);
   const existing=(await query('SELECT status FROM commands WHERE command_id=?',[commandId])).results[0];
   if(!existing) {
     const createdAt=new Date().toISOString(),payload='{"command":"agent-logs"}';
