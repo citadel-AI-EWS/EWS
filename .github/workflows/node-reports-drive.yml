@@ -1,0 +1,59 @@
+name: Node reports Drive and connectivity verification
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, fix/node-reports-drive-20261009]
+    paths:
+      - .github/workflows/node-reports-drive.yml
+      - scripts/google_drive_write_test.mjs
+      - scripts/agent_connectivity_evidence.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  connectivity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    environment: cloudflare-test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Observe actual node requests for 65 seconds
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/agent_connectivity_evidence.mjs
+  drive-write:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    environment: cloudflare-test
+    concurrency:
+      group: cloudflare-test
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Write report and verify downloaded bytes
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GOOGLE_DRIVE_ACCESS_TOKEN: ${{ secrets.GOOGLE_DRIVE_ACCESS_TOKEN }}
+          GOOGLE_DRIVE_CLIENT_ID: ${{ secrets.GOOGLE_DRIVE_CLIENT_ID }}
+          GOOGLE_DRIVE_CLIENT_SECRET: ${{ secrets.GOOGLE_DRIVE_CLIENT_SECRET }}
+          GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
+          GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_DRIVE_AI_REPORTS_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_AI_REPORTS_FOLDER_ID }}
+        run: |
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            node scripts/google_drive_write_test.mjs --activate
+          else
+            node scripts/google_drive_write_test.mjs
+          fi

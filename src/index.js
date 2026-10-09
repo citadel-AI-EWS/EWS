@@ -615,7 +615,7 @@ async function googleDriveServiceAccountToken(serviceAccount) {
   const assertion = signingInput + "." + bytesToBase64Url(signature);
   let response;
   try {
-    response = await fetch(GOOGLE_OAUTH_TOKEN_URL, {
+    response = await driveReportFetch(GOOGLE_OAUTH_TOKEN_URL, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -666,15 +666,15 @@ async function ensureDriveChildFolder(env, token, parentId, name) {
   ].join(" and ");
   let response;
   try {
-    response = await fetch(
+    response = await driveReportFetch(
       "https://www.googleapis.com/drive/v3/files?q=" + encodeURIComponent(query) +
-      "&spaces=drive&pageSize=10&fields=files(id,name)",
+      "&spaces=drive&pageSize=10&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true",
       { headers: { authorization: "Bearer " + token } }
     );
   } catch {
     throw new ApiError(503, "drive_payload_upload_failed");
   }
-  if (!response.ok) throw new ApiError(503, "drive_payload_upload_failed");
+  if (!response.ok) throw await driveReportError(response);
   const found = await response.json().catch(() => ({}));
   const existing = Array.isArray(found.files)
     ? found.files.find((item) => item && item.name === safeName && typeof item.id === "string")
@@ -682,7 +682,7 @@ async function ensureDriveChildFolder(env, token, parentId, name) {
   if (existing?.id) return existing.id;
 
   try {
-    response = await fetch("https://www.googleapis.com/drive/v3/files?fields=id,name", {
+    response = await driveReportFetch("https://www.googleapis.com/drive/v3/files?fields=id,name&supportsAllDrives=true", {
       method: "POST",
       headers: {
         authorization: "Bearer " + token,
@@ -697,7 +697,7 @@ async function ensureDriveChildFolder(env, token, parentId, name) {
   } catch {
     throw new ApiError(503, "drive_payload_upload_failed");
   }
-  if (!response.ok) throw new ApiError(503, "drive_payload_upload_failed");
+  if (!response.ok) throw await driveReportError(response);
   const created = await response.json().catch(() => ({}));
   if (typeof created.id !== "string" || !created.id) {
     throw new ApiError(503, "drive_payload_upload_failed");
@@ -717,8 +717,8 @@ async function googleDriveAccessToken(env) {
   if (!config.configured) throw new ApiError(503, "drive_payload_storage_unavailable");
   if (config.access_token) return config.access_token;
 
-  const serviceAccount = googleDriveServiceAccount(config);
   const oauthConfigured = Boolean(config.client_id && config.client_secret && config.refresh_token);
+  const serviceAccount = oauthConfigured ? null : googleDriveServiceAccount(config);
   // Cache tokens by credential fingerprint so rotation takes effect immediately.
   const sourceKey = oauthConfigured
     ? "oauth:" + await sha256Hex(JSON.stringify([config.client_id, config.client_secret, config.refresh_token]))
@@ -744,7 +744,7 @@ async function googleDriveAccessToken(env) {
     });
     let response;
     try {
-      response = await fetch(GOOGLE_OAUTH_TOKEN_URL, {
+      response = await driveReportFetch(GOOGLE_OAUTH_TOKEN_URL, {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
         body
@@ -778,7 +778,7 @@ async function googleDriveAccessToken(env) {
 async function googleDriveFolderWritable(token, folderId) {
   let response;
   try {
-    response = await fetch(
+    response = await driveReportFetch(
       "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(folderId) +
       "?fields=id,name,mimeType,capabilities(canEdit)&supportsAllDrives=true",
       { headers: { authorization: "Bearer " + token } }
@@ -811,6 +811,121 @@ export async function googleDriveWritablePreflight(env) {
     checked.push(await googleDriveFolderWritable(token, folderId));
   }
   return { ok: true, folders: checked };
+}
+
+// Operational archives are enabled only by a write/readback proof for the
+// currently selected credentials and destination. A token rotation invalidates
+// the proof; no Google credential is sent to an agent or included in a report.
+export async function googleDriveNodeReportFingerprint(env) {
+  const config = googleDrivePayloadConfig(env);
+  if (!config.configured) return null;
+  const source = config.access_token ? ["access", config.access_token]
+    : config.client_id && config.client_secret && config.refresh_token
+      ? ["oauth", config.client_id, config.client_secret, config.refresh_token]
+      : ["service", config.service_account_json];
+  return sha256Hex(JSON.stringify([source, googleDriveAiReportsFolderId(env)]));
+}
+
+async function driveReportError(response) {
+  const error = await response.json().catch(() => ({}));
+  const reasons = error.error?.errors?.map(item => item.reason) || [];
+  const code = response.status === 401 ? "drive_payload_auth_failed"
+    : reasons.includes("storageQuotaExceeded") ? "drive_storage_quota_exceeded"
+    : response.status === 403 ? "drive_payload_write_denied"
+    : "drive_payload_upload_failed";
+  return new ApiError(503, code);
+}
+
+async function driveReportFetch(url, init = {}) {
+  try {
+    return await fetch(url, {...init, signal: AbortSignal.timeout(15000)});
+  } catch {
+    throw new ApiError(503, "drive_payload_storage_unavailable");
+  }
+}
+
+export async function googleDriveAllocateReportId(env) {
+  const token = await googleDriveAccessToken(env);
+  const response = await driveReportFetch(
+    "https://www.googleapis.com/drive/v3/files/generateIds?count=1&space=drive&type=files",
+    {headers: {authorization: "Bearer " + token}}
+  );
+  if (!response.ok) throw await driveReportError(response);
+  const data = await response.json();
+  const id = data.ids?.[0];
+  if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) {
+    throw new ApiError(503, "drive_payload_upload_failed");
+  }
+  return id;
+}
+
+export async function googleDriveWriteNodeReport(env, report) {
+  const token = await googleDriveAccessToken(env);
+  const folderId = await ensureDriveChildFolder(env, token, googleDriveAiReportsFolderId(env),
+    (report.node_name || report.node_id) + "__" + report.node_id);
+  const metadata = {
+    id: report.file_id,
+    name: timestampedAiReportFileName("node_report", report.batch_id, new Date(report.created_at)),
+    mimeType: "application/json",
+    parents: [folderId],
+    appProperties: {citadel_node_id: report.node_id, citadel_batch_id: report.batch_id,
+      citadel_sha256: report.sha256}
+  };
+  const boundary = "citadel-report-" + crypto.randomUUID();
+  const body = "--" + boundary + "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n" +
+    JSON.stringify(metadata) + "\r\n--" + boundary +
+    "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n" + report.report_json +
+    "\r\n--" + boundary + "--";
+  const uploaded = await driveReportFetch(
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id&supportsAllDrives=true",
+    {method: "POST", headers: {authorization: "Bearer " + token,
+      "content-type": "multipart/related; boundary=" + boundary}, body}
+  );
+  // A persisted, pre-generated file ID makes retries safe after a lost upload
+  // response. A 409 is accepted only if the stored bytes match this report.
+  if (!uploaded.ok && uploaded.status !== 409) throw await driveReportError(uploaded);
+  if (uploaded.ok) {
+    const value = await uploaded.json();
+    if (value.id !== report.file_id) throw new ApiError(503, "drive_report_id_mismatch");
+  }
+  const downloaded = await driveReportFetch(
+    "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(report.file_id) +
+    "?alt=media&supportsAllDrives=true", {headers: {authorization: "Bearer " + token}}
+  );
+  if (!downloaded.ok) throw await driveReportError(downloaded);
+  const bytes = new Uint8Array(await downloaded.arrayBuffer());
+  if (bytes.length !== new TextEncoder().encode(report.report_json).length ||
+      await sha256Hex(bytes) !== report.sha256) {
+    throw new ApiError(503, "drive_report_readback_mismatch");
+  }
+  return {file_id: report.file_id, folder_id: folderId, sha256: report.sha256};
+}
+
+export async function googleDriveNodeReportWriteTest(env) {
+  const fingerprint = await googleDriveNodeReportFingerprint(env);
+  if (!fingerprint) throw new ApiError(503, "drive_credentials_missing");
+  const createdAt = new Date().toISOString();
+  const reportJson = JSON.stringify({schema: "citadel-node-report/v1", node_id: "drive-write-test",
+    created_at: createdAt, events: [{event_type: "drive_write_test", message: "Проверка записи и чтения отчёта"}]});
+  const sha = await sha256Hex(reportJson);
+  const uploaded = await googleDriveWriteNodeReport(env, {
+    file_id: await googleDriveAllocateReportId(env), node_id: "drive-write-test",
+    node_name: "Проверка записи", batch_id: sha, sha256: sha,
+    report_json: reportJson, created_at: createdAt
+  });
+  return {live_write_verified: true, fingerprint, checked_at: createdAt, ...uploaded};
+}
+
+async function recordOperationalReport(env, nodeId, eventType, details, createdAt = new Date().toISOString()) {
+  if (typeof env.__CITADEL_REPORT_EVENT !== "function") return;
+  try {
+    await env.__CITADEL_REPORT_EVENT(nodeId, eventType, details, createdAt);
+  } catch (error) {
+    // Connection and command acknowledgement remain available if the archive
+    // queue is unavailable. The signed /logs endpoint instead fails closed so
+    // the agent retains its durable local telemetry cursor for retry.
+    console.error("node_report_observer_failed", error?.code || "report_queue_unavailable");
+  }
 }
 
 async function ensurePayloadStorage(env) {
@@ -893,7 +1008,7 @@ async function deleteDriveFileBestEffort(env, fileId) {
   if (!fileId) return true;
   try {
     const token = await googleDriveAccessToken(env);
-    const response = await fetch("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(fileId), {
+    const response = await driveReportFetch("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(fileId) + "?supportsAllDrives=true", {
       method: "DELETE",
       headers: { authorization: "Bearer " + token }
     });
@@ -968,8 +1083,8 @@ async function persistDrivePayload(env, { owner_type, owner_id, kind, value, nod
     "--" + boundary + "--";
   let response;
   try {
-    response = await fetch(
-      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,size",
+    response = await driveReportFetch(
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,size&supportsAllDrives=true",
       {
         method: "POST",
         headers: {
@@ -1009,8 +1124,8 @@ async function readDrivePayload(env, payloadId) {
   const token = await googleDriveAccessToken(env);
   let response;
   try {
-    response = await fetch(
-      "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(row.drive_file_id) + "?alt=media",
+    response = await driveReportFetch(
+      "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(row.drive_file_id) + "?alt=media&supportsAllDrives=true",
       { headers: { authorization: "Bearer " + token } }
     );
   } catch {
@@ -1585,6 +1700,7 @@ async function architectSshRelayConnect(request, env) {
   if (!node) throw new ApiError(404, 'node_not_found');
   const response = await relayStub(env, claims.node_id).fetch('https://relay.internal/attach', {headers: {
     upgrade: 'websocket', 'x-citadel-relay-role': 'browser',
+    'x-citadel-relay-node-id': claims.node_id,
     'x-citadel-relay-jti': claims.jti, 'x-citadel-relay-ticket-expires': String(claims.exp),
     'x-citadel-relay-session-expires': String(claims.session_exp)}});
   if (response.status !== 101) throw new ApiError(503, 'ssh_agent_not_connected');
@@ -1598,7 +1714,7 @@ async function nodeSshRelayConnect(request, env, nodeId, url) {
   }
   await authenticateNode(request, env, nodeId, url, new Uint8Array(0));
   const response = await relayStub(env, nodeId).fetch('https://relay.internal/attach', {
-    headers: {upgrade: 'websocket', 'x-citadel-relay-role': 'agent'}});
+    headers: {upgrade: 'websocket', 'x-citadel-relay-role': 'agent', 'x-citadel-relay-node-id': nodeId}});
   if (response.status !== 101) throw new ApiError(503, 'ssh_relay_unavailable');
   return response;
 }
@@ -1809,7 +1925,7 @@ async function upsertNodeAiState(env, nodeId, state) {
   if (!state) return;
   await ensureNodeAiStorage(env);
   const stateJson = JSON.stringify(state);
-  await env.DB.batch([
+  const saved = await env.DB.batch([
     env.DB.prepare(`
       INSERT INTO node_ai_state (
         node_id, installed, selected_model, loaded_model, server_running, last_action, updated_at
@@ -1849,6 +1965,9 @@ async function upsertNodeAiState(env, nodeId, state) {
           AND node_ai_runtime_state.updated_at <= datetime('now', '-60 seconds'))
     `).bind(nodeId, stateJson)
   ]);
+  if (saved[1]?.meta?.changes) {
+    await recordOperationalReport(env, nodeId, "lmstudio_state", state);
+  }
 }
 
 async function nodeAiStateResponse(env, nodeId) {
@@ -5210,6 +5329,9 @@ async function persistHeartbeat(env, node, body, coalesce = false) {
   // only preserve paused or move a non-revoked node to online, so a second
   // point SELECT just to echo the heartbeat would double-read this hot path.
   const status = node.status === "paused" ? "paused" : "online";
+  if (node.status === "offline" && results[0]?.meta?.changes === 1) {
+    await recordOperationalReport(env, nodeId, "node_connected", {agent_version: agentVersion || node.agent_version}, heartbeatAt);
+  }
   return { ok: true, node_id: nodeId, status, last_seen_at: heartbeatAt };
 }
 
@@ -6673,6 +6795,8 @@ async function acknowledgeCommand(request, env, nodeId, commandId, url) {
   if ((results[0]?.meta?.changes || 0) !== 1) {
     throw new ApiError(409, "invalid_command_transition");
   }
+  await recordOperationalReport(env, nodeId, "command_" + status,
+    {command_id: commandId, command_type: current.command_type, status, result: commandResult});
 
   let projectAssignmentsCreated = 0;
   if (status === "completed" && current.command_type === "lmstudio_model_load") {

@@ -129,6 +129,7 @@ try {
     GOOGLE_DRIVE_AI_REPORTS_FOLDER_ID: "oauth-ai-folder"
   };
   await googleDriveWritablePreflight(oauthEnv);
+  await googleDriveWritablePreflight({...oauthEnv, GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON: "truncated-invalid-json"});
   await googleDriveWritablePreflight(oauthEnv);
   assert.equal(tokenRequests, 3, "unchanged OAuth credentials should reuse the token");
   await googleDriveWritablePreflight({ ...oauthEnv, GOOGLE_DRIVE_REFRESH_TOKEN: "rotated" });

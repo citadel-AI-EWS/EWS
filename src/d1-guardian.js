@@ -112,8 +112,8 @@ async function appendAction(env, action, severity, rowsAffected, details = {}) {
   ).run();
 }
 
-async function markStaleNodesOffline(env) {
-  const result = await env.DB.prepare(`
+async function markStaleNodesOffline(env, onNodesOffline) {
+  const statement = env.DB.prepare(`
     UPDATE nodes
     SET status = 'offline'
     WHERE node_id IN (
@@ -127,7 +127,15 @@ async function markStaleNodesOffline(env) {
       ORDER BY last_seen_at ASC
       LIMIT ?
     )
-  `).bind(GUARDIAN_BATCH_LIMIT).run();
+    ${onNodesOffline ? "RETURNING node_id, hostname, last_seen_at" : ""}
+  `).bind(GUARDIAN_BATCH_LIMIT);
+  if (onNodesOffline) {
+    const result = await statement.all();
+    const nodes = result.results || [];
+    try {await onNodesOffline(nodes);} catch {console.error("node_disconnect_report_unavailable");}
+    return nodes.length;
+  }
+  const result = await statement.run();
   return changes(result);
 }
 
@@ -327,7 +335,7 @@ export async function runD1Guardian(env, hooks = {}) {
     }
   };
 
-  await repairRule("stale_nodes_offline", () => markStaleNodesOffline(env));
+  await repairRule("stale_nodes_offline", () => markStaleNodesOffline(env, hooks.onNodesOffline));
   if (typeof hooks.expireStaleCommands === "function") {
     await repairRule("stale_commands_expired", () => hooks.expireStaleCommands(env, null, GUARDIAN_BATCH_LIMIT));
   }

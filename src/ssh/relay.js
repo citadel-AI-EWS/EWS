@@ -1,3 +1,5 @@
+import {enqueueControllerReport} from '../node-reports.js';
+
 const MAX_FRAME = 8192;
 const MAX_BUFFERED = 2 * 1024 * 1024;
 // Batch expired replay/telemetry ticket cleanup; expiry still checked at claim time.
@@ -10,7 +12,13 @@ function attachment(socket) {
 // One Durable Object per registered node. Only the authenticated Worker can
 // invoke fetch(); the browser and agent never receive a Durable Object URL.
 export class NodeSshRelay {
-  constructor(state) {this.state = state;}
+  constructor(state, env = {}) {this.state = state; this.env = env;}
+
+  async report(info, eventType, details) {
+    if (!info.node_id) return;
+    try {await enqueueControllerReport(this.env, info.node_id, eventType, details);}
+    catch {console.error('ssh_report_queue_unavailable');}
+  }
 
   sockets(role) {
     return this.state.getWebSockets().filter(socket => attachment(socket).role === role);
@@ -103,8 +111,9 @@ export class NodeSshRelay {
     const pair = new WebSocketPair();
     const client = pair[0], server = pair[1];
     this.state.acceptWebSocket(server);
-    server.serializeAttachment({role, jti: role === 'browser' ? jti : null,
-      session_exp: role === 'browser' ? sessionExpires : null});
+    const info = {role, node_id: request.headers.get('x-citadel-relay-node-id'), jti: role === 'browser' ? jti : null,
+      session_exp: role === 'browser' ? sessionExpires : null};
+    server.serializeAttachment(info);
     if (role === 'agent') {
       for (const previous of peers) previous.close(4001, 'agent_replaced');
     } else {
@@ -113,6 +122,7 @@ export class NodeSshRelay {
       if (currentAlarm === null || sessionAlarm < currentAlarm) await this.state.storage.setAlarm(sessionAlarm);
       this.sockets('agent')[0]?.send(JSON.stringify({type: 'start', session_id: jti, expires_at: sessionExpires}));
     }
+    await this.report(info, 'ssh_' + role + '_connected', {session_id: info.jti});
     return new Response(null, {status: 101, webSocket: client,
       headers: {'sec-websocket-protocol': role === 'agent' ? 'citadel-ssh-agent-v1' : 'citadel-ssh-v1'}});
   }
@@ -134,15 +144,16 @@ export class NodeSshRelay {
     }
   }
 
-  webSocketClose(socket) {
+  async webSocketClose(socket, code, reason) {
     const info = attachment(socket);
     for (const peer of this.sockets(info.role === 'agent' ? 'browser' : 'agent')) {
       if (info.role === 'agent') peer.close(1011, 'agent_disconnected');
       else peer.send(JSON.stringify({type: 'stop', session_id: info.jti}));
     }
+    await this.report(info, 'ssh_' + info.role + '_disconnected', {session_id: info.jti, code, reason});
   }
 
-  webSocketError(socket) {this.webSocketClose(socket);}
+  async webSocketError(socket) {await this.webSocketClose(socket, 1011, 'websocket_error');}
 
   async alarm() {
     const now = Date.now() / 1000;
