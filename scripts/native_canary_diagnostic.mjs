@@ -112,6 +112,31 @@ async function main() {
   if(result?.status==='pending') {
     await query("UPDATE commands SET status='cancelled',completed_at=CURRENT_TIMESTAMP WHERE command_id=? AND status='pending'",[commandId]);
   }
+  for (const verb of ['python --version', 'lmstudio-status']) {
+    const id='command_audit_runtime_'+digest(candidate.rollout_id+verb).slice(0,24);
+    const payload=JSON.stringify({command:verb});
+    const createdAt=new Date().toISOString();
+    const signature=sign(null,Buffer.from(['CITADEL-COMMAND-V1',id,candidate.node_id,'ssh_console',digest(payload),createdAt].join('\n')),controllerKey()).toString('base64url');
+    await query(`INSERT OR IGNORE INTO commands(command_id,node_id,command_type,payload_json,signature,status,created_at)
+      SELECT ?,n.node_id,'ssh_console',?,?,'pending',? FROM nodes n
+      JOIN agent_rollout_policy p ON p.canary_node_id=n.node_id JOIN agent_rollouts r ON r.rollout_id=p.rollout_id
+      WHERE n.node_id=? AND n.status='online' AND datetime(n.last_seen_at)>=datetime('now','-5 minutes')
+        AND r.rollout_id=? AND r.status='active' AND p.phase='paused' AND p.pause_reason='canary_command_failed'
+        AND NOT EXISTS(SELECT 1 FROM commands c WHERE c.node_id=n.node_id AND c.status IN('pending','accepted'))`,
+      [id,payload,signature,createdAt,candidate.node_id,candidate.rollout_id]);
+    let proof; const until=Date.now()+60000;
+    do {
+      proof=(await query('SELECT c.status,r.output,r.exit_code FROM commands c LEFT JOIN ssh_console_results r ON r.command_id=c.command_id WHERE c.command_id=?',[id])).results[0];
+      if(!proof||!['pending','accepted'].includes(proof.status))break;
+      await new Promise(resolve=>setTimeout(resolve,5000));
+    }while(Date.now()<until);
+    const output=String(proof?.output||'');
+    console.log(JSON.stringify({test:'native-runtime-readiness',command:verb,status:proof?.status||'not_queued',
+      python_version:verb==='python --version'?(output.match(/^Python (\d+\.\d+\.\d+)/)?.[1]||null):undefined,
+      lmstudio_http_status:verb==='lmstudio-status'?(Number(output.match(/^HTTP (\d{3})/)?.[1])||null):undefined,
+      lmstudio_connection_available:verb==='lmstudio-status'?/^HTTP 200\b/.test(output):undefined}));
+    if(proof?.status==='pending')await query("UPDATE commands SET status='cancelled',completed_at=CURRENT_TIMESTAMP WHERE command_id=? AND status='pending'",[id]);
+  }
 }
 main().catch(error=>{
   const code=/^diagnostic_[a-z_]+$/.test(error?.message||'')?error.message:'diagnostic_unavailable';
