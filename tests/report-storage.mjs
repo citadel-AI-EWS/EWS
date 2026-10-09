@@ -35,7 +35,7 @@ globalThis.fetch = async (input, init = {}) => {
       status: 200, headers: { "content-type": "application/json" }
     });
   }
-  if (url === "https://www.googleapis.com/drive/v3/files?fields=id,name" &&
+  if (url === "https://www.googleapis.com/drive/v3/files?fields=id,name&supportsAllDrives=true" &&
       String(init.method || "GET").toUpperCase() === "POST") {
     const metadata = JSON.parse(String(init.body || "{}"));
     return new Response(JSON.stringify({ id: "folder_" + metadata.name, name: metadata.name }), {
@@ -60,7 +60,7 @@ globalThis.fetch = async (input, init = {}) => {
     return value === undefined ? new Response("missing", { status: 404 }) : new Response(value, { status: 200 });
   }
   if (url.includes("/drive/v3/files/") && init.method === "DELETE") {
-    const fileId = decodeURIComponent(url.split("/").pop());
+    const fileId = decodeURIComponent(new URL(url).pathname.split("/").pop());
     state.drive.delete(fileId);
     return new Response(null, { status: 204 });
   }

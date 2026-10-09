@@ -9,6 +9,7 @@ import {
   sha256Hex
 } from "./common.js";
 import { normalizeTelemetryEvent } from "./normalize.js";
+import { enqueueNodeReports } from "../node-reports.js";
 import {
   enforceTelemetryRateLimit,
   ensureTelemetryStorage
@@ -63,6 +64,9 @@ export async function ingestNodeLogs(request, env, nodeId, url) {
     throw new TelemetryError(413, "too_many_events");
   }
   const normalized = body.events.map(normalizeTelemetryEvent);
+  // Archive the complete, validated batch before D1 retention/coalescing and
+  // before advancing the agent's local cursor. Drive delivery is asynchronous.
+  const archive = await enqueueNodeReports(env, nodeId, normalized);
   const retained = normalized.filter(keepOperationalEvent);
   const events = [];
   let coalesced = 0;
@@ -112,6 +116,7 @@ export async function ingestNodeLogs(request, env, nodeId, url) {
 
   return json({
     ok: true,
+    drive_archive: archive,
     received: normalized.length,
     discarded: normalized.length - retained.length,
     coalesced,

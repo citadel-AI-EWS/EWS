@@ -2,6 +2,7 @@ import baseWorker, { expireStaleCommands, recoverStaleProjectAssignments } from 
 import {withD1Availability, addD1RetryHint} from './d1-availability.js';
 export {NodeSshRelay} from './ssh/relay.js';
 import { runD1Guardian } from "./d1-guardian.js";
+import {nodeReportsEnabled, enqueueControllerReport, drainNodeReports} from "./node-reports.js";
 import { pruneExpiredD1Bookkeeping } from "./d1-retention.js";
 import { json, pruneNodeRequestNonces } from "./telemetry/common.js";
 import { isTelemetryPath, handleTelemetryRequest } from "./telemetry/router.js";
@@ -21,14 +22,26 @@ const worker = {
   async scheduled(_controller, env) {
     const controller = _controller;
     if (controller?.cron === "*/5 * * * *") {
+      const reporting = await nodeReportsEnabled(env);
       try {
         await runD1Guardian(env, {
           expireStaleCommands,
           recoverStaleProjectAssignments,
-          pruneExpiredD1Bookkeeping
+          pruneExpiredD1Bookkeeping,
+          onNodesOffline: reporting ? async nodes => {
+            for (const node of nodes) {
+              await enqueueControllerReport(env, node.node_id, "node_disconnected",
+                {reason: "heartbeat_stale", last_seen_at: node.last_seen_at}, undefined, node.hostname);
+            }
+          } : undefined
         });
       } catch (error) {
         console.error("D1 Guardian scheduled maintenance failed", error);
+      }
+      if (reporting) {
+        try {
+          console.log("node_report_delivery", JSON.stringify(await drainNodeReports(env)));
+        } catch {console.error("node_report_delivery_unavailable");}
       }
     }
     if (controller?.cron === "17 * * * *") {
@@ -37,6 +50,12 @@ const worker = {
   },
 
   async fetch(request, env, executionCtx) {
+    // This internal callback cannot be provided by the HTTP client.
+    if (await nodeReportsEnabled(env)) {
+      const original = env;
+      env = {...env, __CITADEL_REPORT_EVENT: (nodeId, eventType, details, createdAt) =>
+        enqueueControllerReport(original, nodeId, eventType, details, createdAt)};
+    }
     const url = new URL(request.url);
     if (isTelemetryPath(url.pathname)) {
       return handleTelemetryRequest(request, env, url);
@@ -65,6 +84,7 @@ const worker = {
       }
       body.telemetry_storage = telemetryStorage;
       body.presence_storage = presenceStorage;
+      body.node_reports_archive = await nodeReportsEnabled(env) ? "enabled" : "awaiting_write_test";
       body.engineering_experience = engineeringExperience.ok ? "ready" : "invalid";
       body.engineering_experience_version = ENGINEERING_EXPERIENCE_VERSION;
       body.ok = Boolean(body.ok) &&

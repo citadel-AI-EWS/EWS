@@ -153,7 +153,7 @@ globalThis.fetch = async (input, init = {}) => {
       status: 200, headers: { "content-type": "application/json" }
     });
   }
-  if (url === "https://www.googleapis.com/drive/v3/files?fields=id,name" &&
+  if (url === "https://www.googleapis.com/drive/v3/files?fields=id,name&supportsAllDrives=true" &&
       String(init.method || "GET").toUpperCase() === "POST") {
     const metadata = JSON.parse(String(init.body || "{}"));
     const id = "drive_folder_" + (++driveSequence);
@@ -177,13 +177,13 @@ globalThis.fetch = async (input, init = {}) => {
       headers: { "content-type": "application/json" }
     });
   }
-  const media = /^https:\/\/www\.googleapis\.com\/drive\/v3\/files\/([^?]+)\?alt=media$/.exec(url);
+  const media = /^https:\/\/www\.googleapis\.com\/drive\/v3\/files\/([^?]+)\?alt=media&supportsAllDrives=true$/.exec(url);
   if (media) {
     const id = decodeURIComponent(media[1]);
     if (!driveFiles.has(id)) return new Response("missing", { status: 404 });
     return new Response(driveFiles.get(id), { status: 200, headers: { "content-type": "application/json" } });
   }
-  const deletion = /^https:\/\/www\.googleapis\.com\/drive\/v3\/files\/([^?]+)$/.exec(url);
+  const deletion = /^https:\/\/www\.googleapis\.com\/drive\/v3\/files\/([^?]+)\?supportsAllDrives=true$/.exec(url);
   if (deletion && String(init.method || "GET").toUpperCase() === "DELETE") {
     driveFiles.delete(decodeURIComponent(deletion[1]));
     return new Response(null, { status: 204 });

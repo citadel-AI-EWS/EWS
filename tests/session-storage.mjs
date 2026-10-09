@@ -35,7 +35,7 @@ globalThis.fetch = async (input, init = {}) => {
   }
   if (url.includes("/drive/v3/files/") && init.method === "DELETE") {
     if (failDriveDeletes) return new Response("temporary delete failure", { status: 503 });
-    drive.delete(decodeURIComponent(url.split("/").pop()));
+    drive.delete(decodeURIComponent(new URL(url).pathname.split("/").pop()));
     return new Response(null, { status: 204 });
   }
   return originalFetch(input, init);

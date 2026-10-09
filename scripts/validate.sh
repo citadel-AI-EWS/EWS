@@ -319,6 +319,7 @@ node --check /tmp/ews-operations.js
 node --check src/index.js
 node --check src/quality/openrouter.js
 node --check src/worker.js
+node --check src/node-reports.js
 node --check src/experience/policy.js
 node --check src/experience/registry.js
 node --check src/enterprise/policy.js
@@ -333,6 +334,7 @@ node --check src/telemetry/router.js
 
 node tests/node-management.mjs
 node tests/report-storage.mjs
+node tests/node-reports-drive.mjs
 node tests/session-storage.mjs
 node tests/telemetry-storage.mjs
 node tests/presence-storage.mjs
