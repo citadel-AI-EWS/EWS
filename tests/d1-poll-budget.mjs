@@ -174,7 +174,7 @@ function writeProjection(nodes, sync = true) {
   // request, no nonce indexes or later nonce DELETE. New agents honor the
   // server's 90s idle hint; legacy agents remain at 30s until updated.
   const nonceWrites = 86_400 / (sync ? 90 : 30);
-  const heartbeatWrites = (86_400 / (sync ? 240 : 30)) * 3;
+  const heartbeatWrites = (86_400 / (sync ? 180 : 30)) * 3;
   const aiWrites = (86_400 / (sync ? 300 : 30)) * 3; // summary + updated_at index + runtime
   const sshWrites = 0; // unchanged probes are now conditional, on sync and legacy heartbeat
   const legacySnapshots = sync ? 0 : POLLS_PER_DAY * 3; // network + presence table/index
@@ -184,9 +184,9 @@ function writeProjection(nodes, sync = true) {
     within_free_daily_write_limit: total <= FREE_DAILY_ROWS_WRITTEN};
 }
 const syncFour = writeProjection(4);
-assert.ok(syncFour.projected_rows_written <= FREE_DAILY_ROWS_WRITTEN * 0.12,
-  'four idle sync nodes must use <=12% of the daily D1 write limit');
-assert.equal(writeProjection(27).projected_rows_written,78_408);
+assert.ok(syncFour.projected_rows_written <= FREE_DAILY_ROWS_WRITTEN * 0.14,
+  'four idle sync nodes must use <=14% of the daily D1 write limit');
+assert.equal(writeProjection(27).projected_rows_written,88_128);
 assert.equal(writeProjection(27).within_free_daily_write_limit,true);
 assert.equal(writeProjection(50).within_free_daily_write_limit,false,
   'capacity checks must not claim fifty nodes fit after including compact replay writes');
@@ -204,7 +204,7 @@ console.log(JSON.stringify({
     machine_row_equivalents_per_node: MACHINE_ROW_EQUIVALENTS_PER_NODE,
     presence_row_equivalents_per_node: PRESENCE_ROW_EQUIVALENTS_PER_NODE,
     idle_sync_seconds:90,
-    note: "Read projection retains the legacy three-poll estimate for comparison. Writes include one compact replay row per 90s sync, 4m persisted heartbeat and 5m AI refresh including its index. 27 updated stable nodes use 78,408 writes/day before guardian, tasks, reports, startup, browser auth and other databases. Old agents at 30s cost more until updated; heavy report traffic or fifty nodes exceed Free capacity. Production Cloudflare Analytics remains authoritative."
+    note: "Read projection retains the legacy three-poll estimate for comparison. Writes include one compact replay row per 90s sync, 3m persisted heartbeat and 5m AI refresh including its index. 27 updated stable nodes use 88,128 writes/day before guardian, tasks, reports, startup, browser auth and other databases. Persisting heartbeat within 3m leaves margin before the 5m stale threshold. Old agents at 30s cost more until updated; heavy report traffic or fifty nodes exceed Free capacity. Production Cloudflare Analytics remains authoritative."
   },
   fleets: [four, twenty],
   writes: {legacy_four_nodes: writeProjection(4, false), sync_four_nodes: syncFour,

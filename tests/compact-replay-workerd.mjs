@@ -72,6 +72,12 @@ try {
   assert.equal(response.status,200,await response.clone().text());
   const synced=await response.json();assert.equal(synced.node_status,'paused');assert.deepEqual(synced.assignments,[]);
   assert.equal(synced.idle_poll_seconds,90);
+  await db.prepare("UPDATE nodes SET last_seen_at=datetime('now','-210 seconds') WHERE node_id=?").bind(node.node_id).run();
+  response=await request(`/api/v1/nodes/${node.node_id}/sync`,crypto.randomUUID(),now,'POST',
+    '{"heartbeat":{"agent_version":"0.3.42"}}');
+  assert.equal(response.status,200);
+  assert.equal((await db.prepare("SELECT CASE WHEN datetime(last_seen_at)>=datetime('now','-60 seconds') THEN 1 ELSE 0 END AS fresh FROM nodes WHERE node_id=?").bind(node.node_id).first()).fresh,1,
+    'heartbeat persistence leaves margin before the five-minute stale threshold');
   assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM node_request_nonces').first()).n,0);
   response=await mf.dispatchFetch('https://local.test/api/readiness');
   assert.equal(response.status,503);

@@ -5217,7 +5217,7 @@ async function persistHeartbeat(env, node, body, coalesce = false) {
           status = CASE WHEN status = 'paused' THEN 'paused' ELSE 'online' END,
           last_seen_at = ?
       WHERE node_id = ? AND status != 'revoked'
-        AND (? = 0 OR datetime(last_seen_at) <= datetime(?, '-240 seconds')
+        AND (? = 0 OR datetime(last_seen_at) <= datetime(?, '-${compactReplayConfigured(env) ? 180 : 240} seconds')
           OR status NOT IN ('online','paused')
           OR agent_version IS NOT COALESCE(?, agent_version)
           OR capabilities_json IS NOT COALESCE(?, capabilities_json))
