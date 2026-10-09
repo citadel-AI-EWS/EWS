@@ -367,6 +367,7 @@ node tests/controller-error-diagnostics.mjs
 node tests/ten-prompt-routing.mjs
 python tests/lmstudio-local-protocol.py
 python tests/lmstudio-version-compat.py
+python tests/lmstudio-installer-ready.py
 python tests/agent-cycle-isolation.py
 python tests/legacy-update-activation.py
 node tests/flow-a-e2e.mjs

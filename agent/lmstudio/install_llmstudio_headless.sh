@@ -12,7 +12,8 @@ export LMS_NO_MODIFY_PATH=1
 
 official_installer="https://lmstudio.ai/install.sh"
 tmp="$(mktemp -t citadel-lmstudio.XXXXXX.sh)"
-cleanup(){ rm -f "$tmp"; }
+lms_output="$(mktemp -t citadel-lms-output.XXXXXX)"
+cleanup(){ rm -f "$tmp" "$lms_output"; }
 trap cleanup EXIT
 
 curl -fsSL "$official_installer" -o "$tmp"
@@ -33,4 +34,26 @@ if [ -z "$lms_bin" ] || [ ! -x "$lms_bin" ]; then
   exit 1
 fi
 
-echo "[CITADEL] LM Studio / llmster is installed; CITADEL agent will start daemon/server."
+# The first daemon launch can replace the CLI asynchronously. Do not return a
+# half-ready runtime while the next agent command would hit Linux ETXTBSY.
+run_lms_ready(){
+  local deadline=$((SECONDS + 35))
+  local command_status
+  while true; do
+    if timeout 120 "$lms_bin" "$@" < /dev/null > "$lms_output" 2>&1; then
+      cat "$lms_output"
+      return 0
+    else
+      command_status=$?
+    fi
+    if ! grep -qi 'Text file busy' "$lms_output" || [ "$SECONDS" -ge "$deadline" ]; then
+      cat "$lms_output" >&2
+      return "$command_status"
+    fi
+    sleep 0.25
+  done
+}
+
+run_lms_ready daemon up
+run_lms_ready server start --port 1234
+echo "[CITADEL] LM Studio / llmster daemon and localhost:1234 server are ready."

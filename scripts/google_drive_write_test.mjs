@@ -16,8 +16,9 @@ async function putSecrets(values) {
   } finally {clearTimeout(timer);}
 }
 
+let proof;
 try {
-  const proof = await googleDriveNodeReportWriteTest(process.env);
+  proof = await googleDriveNodeReportWriteTest(process.env);
   if (process.argv.includes("--activate")) {
     // Use exactly the tested credential selection in the Worker. Explicitly
     // clear higher-priority stale credentials so the fingerprint also matches.
@@ -32,6 +33,7 @@ try {
 } catch (error) {
   const code = /^drive_[a-z_]+$/.test(error?.code || error?.message || "")
     ? error.code || error.message : "drive_write_test_failed";
-  console.log(JSON.stringify({status: "blocked", live_write_verified: false, error: code}, null, 2));
+  console.log(JSON.stringify({status: proof ? "activation_failed" : "blocked",
+    live_write_verified: Boolean(proof), activated: false, file_id: proof?.file_id, error: code}, null, 2));
   process.exitCode = 2;
 }

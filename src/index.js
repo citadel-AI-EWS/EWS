@@ -135,7 +135,7 @@ const LMSTUDIO_INTEGRATION = Object.freeze({
   linux_asset: Object.freeze({
     path: "install_llmstudio_headless.sh",
     url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/main/agent/lmstudio/install_llmstudio_headless.sh",
-    sha256: "3d112dfa579562953919cfeccb6203d86333a99a473aaf4b76bdd2c39b70f67b"
+    sha256: "205e1cfc25aa894793862abaae8435061bf2e1aa58c751d95d244d49e400408b"
   }),
   model_presets: Object.freeze([
     { id: "ibm/granite-4-micro", label: "IBM Granite 4 Micro" },
