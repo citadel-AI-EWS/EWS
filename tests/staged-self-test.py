@@ -19,6 +19,7 @@ def main():
             shutil.copy2(ROOT / "agent" / name, stage / name)
         env = dict(os.environ)
         env["CITADEL_SERVICE_MANAGED"] = "1"
+        env["USERPROFILE" if os.name == "nt" else "HOME"] = str(root / "uncreated-service-profile")
         for flag in ("STOP", "HOLD", "READY"):
             env[f"CITADEL_SERVICE_{flag}_FILE"] = str(root / flag)
         result = subprocess.run([sys.executable, str(stage / "citadel_node_v2.py"), "self-test"],

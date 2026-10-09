@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 import urllib.parse
 import uuid
 from pathlib import Path
@@ -24,7 +25,7 @@ from typing import Any, Callable
 
 import citadel_node_v1 as v1
 
-VERSION = "0.3.42"
+VERSION = "0.3.43"
 v1.VERSION = VERSION
 v1.USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 
@@ -539,7 +540,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.command == "self-test":
-        return self_test()
+        try:
+            return self_test()
+        except Exception as error:
+            # Historical updaters discard child stderr and remove staging.
+            # Preserve only source locations and fixed assertion labels, never
+            # exception text, paths, credentials or test identity key material.
+            stage = Path(__file__).resolve().parent
+            journal = stage.parent / "agent.jsonl"
+            if stage.name.startswith("citadel-update-") and journal.is_file():
+                frames = [frame for frame in traceback.extract_tb(error.__traceback__)
+                          if Path(frame.filename).name in {"citadel_node_v1.py", "citadel_node_v2.py"}]
+                label = str(error)
+                assertion = label.removeprefix("self-test failed: ") if label.startswith("self-test failed: ") else None
+                with contextlib.suppress(OSError):
+                    v1.JsonlLogger(journal).write("agent_update_preflight_failed", version=VERSION,
+                        exception_type=type(error).__name__, assertion=assertion,
+                        source_locations=[{"file": Path(frame.filename).name, "line": frame.lineno,
+                                           "function": frame.name} for frame in frames[-6:]])
+            raise
     if args.command == "startup-check":
         return startup_check(Path(args.config))
     if args.command == "probe":

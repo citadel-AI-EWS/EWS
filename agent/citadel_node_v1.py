@@ -68,7 +68,7 @@ except ImportError as exc:
         "Missing dependencies. Run: python -m pip install -r agent/requirements.txt"
     ) from exc
 
-VERSION = "0.3.42"
+VERSION = "0.3.43"
 USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 DEFAULT_CONTROLLER_PUBLIC_X = "erXWuWm8Yhk-p9aQARBND17jGkQ5_kUKetaliE1isy0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -1498,7 +1498,17 @@ def hardware_snapshot() -> dict[str, Any]:
 
 
 def system_inventory(payload: dict[str, Any]) -> dict[str, Any]:
-    disk = shutil.disk_usage(Path.home())
+    # Service accounts can have a configured profile that has never been created.
+    # Inventory must still describe a real accessible filesystem in that case.
+    disk = None
+    for location in (Path.home(), Path(__file__).resolve().parent, Path.cwd()):
+        try:
+            disk = shutil.disk_usage(location)
+            break
+        except OSError:
+            continue
+    if disk is None:
+        raise RuntimeError("inventory_disk_unavailable")
     memory = psutil.virtual_memory()
     requested_task = str(payload.get("task_text") or "").strip()[:2000]
     return {
