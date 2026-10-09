@@ -105,4 +105,17 @@ auditRepair.rollout=auditRepair.sql.prepare("SELECT * FROM agent_rollouts WHERE 
 assert.equal((await recoverPatchedRollout(auditRepair.env,auditRepair.rollout,{version:'0.3.42',files:[]},'candidate',canary)).target_version,'0.3.42');
 assert.equal(auditRepair.sql.prepare('SELECT COUNT(*) AS n FROM commands').get().n,0);
 auditRepair.sql.close();
+for (const authorized of [true,false]) {
+  const chained=fixture();
+  chained.sql.exec("UPDATE agent_rollouts SET status='completed' WHERE rollout_id='old'");
+  if(!authorized)chained.sql.exec('DELETE FROM audit_events');
+  chained.sql.prepare('INSERT INTO agent_rollouts VALUES(?,?,?,?,?,?)').run('patched','0.3.42','{}','active',stamp(300000),stamp(300000));
+  chained.sql.prepare('INSERT INTO agent_rollout_policy VALUES(?,?,?,?,?,?)').run('patched','failed','paused',3,2,'canary_command_failed');
+  chained.sql.prepare('INSERT INTO audit_events VALUES(?,?,?,?,?,?)').run('controller','authorized-rollout-repair-20261009',
+    'agent.rollout.patched_release_started','rollout','patched',JSON.stringify({previous_rollout_id:'old',target_version:'0.3.42'}));
+  const current=chained.sql.prepare("SELECT * FROM agent_rollouts WHERE rollout_id='patched'").get();
+  const next=await recoverPatchedRollout(chained.env,current,{version:'0.3.43',files:[]},'candidate',canary);
+  assert.equal(next.target_version,authorized?'0.3.43':'0.3.42','repair lineage must preserve original owner authorization');
+  chained.sql.close();
+}
 console.log('Patched rollout recovery: live alternative canary, preserved history/limits, owner commands and atomic idempotency PASS');

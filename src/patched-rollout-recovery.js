@@ -10,8 +10,22 @@ export function patchedRolloutEligible(rollout, release, now = Date.now()) {
 export const RETIRE_PATCHED_ROLLOUT_SQL = `UPDATE agent_rollouts SET status='completed',updated_at=?
   WHERE rollout_id=? AND status='active' AND target_version=? AND created_at=?
     AND datetime(?) < datetime('2026-10-15T00:00:00Z')
-    AND EXISTS (SELECT 1 FROM audit_events a WHERE a.target_id=agent_rollouts.rollout_id
-      AND a.action='agent.rollout.started' AND a.actor_type='architect')
+    AND EXISTS (
+      WITH RECURSIVE authorized_lineage(rollout_id,depth) AS (
+        SELECT agent_rollouts.rollout_id,0
+        UNION ALL
+        SELECT json_extract(CASE WHEN json_valid(a.details_json) THEN a.details_json ELSE '{}' END,'$.previous_rollout_id'),l.depth+1
+        FROM authorized_lineage l JOIN audit_events a ON a.target_id=l.rollout_id
+        JOIN agent_rollouts child ON child.rollout_id=l.rollout_id
+        JOIN agent_rollouts parent ON parent.rollout_id=json_extract(CASE WHEN json_valid(a.details_json) THEN a.details_json ELSE '{}' END,'$.previous_rollout_id')
+        WHERE l.depth<4 AND a.actor_type='controller' AND a.actor_id='authorized-rollout-repair-20261009'
+          AND a.action='agent.rollout.patched_release_started' AND parent.status='completed'
+          AND json_extract(CASE WHEN json_valid(a.details_json) THEN a.details_json ELSE '{}' END,'$.target_version')=child.target_version
+          AND ((parent.target_version='0.3.40' AND child.target_version IN('0.3.41','0.3.42'))
+            OR (parent.target_version='0.3.41' AND child.target_version='0.3.42')
+            OR (parent.target_version='0.3.42' AND child.target_version='0.3.43'))
+      ) SELECT 1 FROM authorized_lineage l JOIN audit_events a ON a.target_id=l.rollout_id
+        WHERE a.action='agent.rollout.started' AND a.actor_type='architect')
     AND EXISTS (SELECT 1 FROM agent_rollout_policy p WHERE p.rollout_id=agent_rollouts.rollout_id
       AND p.phase='paused' AND p.pause_reason IN ('canary_command_failed','canary_update_timeout',
         'canary_heartbeat_timeout','fleet_failure_budget_exceeded')
