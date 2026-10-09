@@ -148,5 +148,7 @@ try {
   assert.equal(parsed.length, 1);
   assert.ok(!JSON.stringify(parsed).includes("secret"));
   assert.equal(classifyTailEvent({event: {request: {url: "https://hub/api/health?connectivity_probe=1"}}}).probe, true);
+  assert.equal(classifyTailEvent({event: {request: {url: "https://hub/api/v1/nodes/private-node/ai-state"}}}).route, "ai-state");
+  assert.equal(classifyTailEvent({event: {request: {url: "https://hub/api/v1/nodes/private-node/future/private-id"}}}).route, "other_node_route");
 } finally {globalThis.fetch = originalFetch; sqlite.close();}
 console.log("Node reports: write/readback gate, secret redaction, durable retry, deduplication, lease and backpressure: OK");

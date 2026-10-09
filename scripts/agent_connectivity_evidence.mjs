@@ -10,9 +10,12 @@ export function classifyTailEvent(value) {
   let url;
   try {url = new URL(request.url);} catch {return null;}
   if (url.pathname === "/api/health" && url.searchParams.get("connectivity_probe") === "1") return {probe: true};
-  const match = url.pathname.match(/^\/api\/v1\/nodes\/[^/]+\/(sync|heartbeat|logs|ai|ssh(?:\/[^/]+)?|commands(?:\/[^/]+\/ack)?)$/);
+  const match = url.pathname.match(/^\/api\/v1\/nodes\/[^/]+\/(.+)$/);
   if (!match && url.pathname !== "/api/v1/nodes/enroll") return null;
-  const route = match ? match[1].replace(/commands\/[^/]+\/ack/, "commands/ack") : "enroll";
+  const rawRoute = match?.[1].replace(/commands\/[^/]+\/ack$/, "commands/ack");
+  const route = !match ? "enroll" :
+    ["sync", "heartbeat", "logs", "ai-state", "ssh/relay", "commands", "commands/ack", "assignments", "results"]
+      .includes(rawRoute) ? rawRoute : "other_node_route";
   const status = Number(value.event?.response?.status || 0);
   return {route, method: ["GET", "POST", "PUT", "DELETE"].includes(request.method) ? request.method : "other",
     status, outcome: ["ok", "exception", "exceededCpu", "exceededMemory", "canceled"].includes(value.outcome)
@@ -62,14 +65,16 @@ async function snapshot(config) {
 
 async function main() {
   const config = await readFile("wrangler.jsonc", "utf8");
+  const account = config.match(/"D1_ANALYTICS_ACCOUNT_ID"\s*:\s*"([^"]+)"/)?.[1];
   const worker = config.match(/"name"\s*:\s*"([^"]+)"/)?.[1];
   const report = {checked_at: new Date().toISOString(), window_seconds: 65, positive_control: false,
     agent_requests: 0, routes: {}, snapshot: await snapshot(config)};
   const child = spawn(process.execPath, ["node_modules/wrangler/bin/wrangler.js", "tail", worker,
     "--format=json", "--sampling-rate=1"], {detached: true, stdio: ["ignore", "pipe", "pipe"],
-    env: {...process.env, CI: "true", WRANGLER_SEND_METRICS: "false"}});
+    env: {...process.env, CLOUDFLARE_ACCOUNT_ID: account, CI: "true", WRANGLER_SEND_METRICS: "false"}});
   const stop = () => {try {process.kill(-child.pid, "SIGTERM");} catch {}};
-  child.stderr.resume();
+  let diagnostic = "";
+  child.stderr.on("data", chunk => {diagnostic = (diagnostic + String(chunk)).slice(-16384);});
   const parse = jsonObjectStream(value => {
     const result = classifyTailEvent(value);
     if (!result) return;
@@ -96,6 +101,14 @@ async function main() {
   const killTimer = setTimeout(() => {try {process.kill(-child.pid, "SIGKILL");} catch {}}, 5000);
   await finished;
   clearTimeout(killTimer);
+  if (report.tail_exit_code && !report.positive_control) {
+    report.tail_error = /authentication|unauthorized|forbidden|permission|\b(?:401|403|10000)\b/i.test(diagnostic)
+      ? "tail_authorization_failed" : /unknown argument|unknown option|unexpected argument/i.test(diagnostic)
+        ? "tail_arguments_invalid" : /account.*(?:missing|required|specify)/i.test(diagnostic)
+          ? "tail_account_required" : "tail_connection_failed";
+  }
+  diagnostic = "";
+  report.elapsed_seconds = Math.round((Date.now() - started) / 1000);
   report.status = report.positive_control ? "observed" : "inconclusive_tail_unverified";
   report.observed_agent_requests = report.positive_control ? report.agent_requests : null;
   console.log(JSON.stringify(report, null, 2));
