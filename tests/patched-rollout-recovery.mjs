@@ -12,6 +12,8 @@ assert.equal(patchedRolloutEligible({target_version:'0.3.40'},{version:'0.3.42'}
 assert.equal(patchedRolloutEligible({target_version:'0.3.41'},{version:'0.3.42'},now),true);
 assert.equal(patchedRolloutEligible({target_version:'0.3.42'},{version:'0.3.42'},now),false);
 assert.equal(patchedRolloutEligible({target_version:'0.3.41'},{version:'0.3.43'},now),false);
+assert.equal(patchedRolloutEligible({target_version:'0.3.42'},{version:'0.3.43'},now),true);
+assert.equal(patchedRolloutEligible({target_version:'0.3.43'},{version:'0.3.43'},now),false);
 
 function fixture({status='online',seen=stamp(1000),command=null,reason='canary_command_failed'}={}) {
   const sql=new DatabaseSync(':memory:');

@@ -164,7 +164,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: agent/requirements.txt
       - name: Install agent dependencies
@@ -173,6 +173,8 @@ jobs:
         shell: pwsh
         run: |
           python -m py_compile agent/citadel_node_v1.py agent/citadel_node_v2.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/staged-self-test.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python agent/citadel_node_v2.py self-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

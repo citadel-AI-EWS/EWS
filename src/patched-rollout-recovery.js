@@ -3,7 +3,8 @@
 export function patchedRolloutEligible(rollout, release, now = Date.now()) {
   return now < Date.parse('2026-10-15T00:00:00Z') &&
     ((rollout?.target_version === '0.3.40' && release?.version === '0.3.41') ||
-      (['0.3.40','0.3.41'].includes(rollout?.target_version) && release?.version === '0.3.42'));
+      (['0.3.40','0.3.41'].includes(rollout?.target_version) && release?.version === '0.3.42') ||
+      (rollout?.target_version === '0.3.42' && release?.version === '0.3.43'));
 }
 
 export const RETIRE_PATCHED_ROLLOUT_SQL = `UPDATE agent_rollouts SET status='completed',updated_at=?
