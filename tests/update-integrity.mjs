@@ -8,7 +8,7 @@ const releaseBlock = source.match(/const LATEST_NODE_RELEASE = Object\.freeze\(\
 assert.ok(releaseBlock, "latest release declaration missing");
 
 const release = {
-  version: "0.3.43",
+  version: "0.3.44",
   files: ["citadel_node_v1.py", "citadel_node_v2.py", "windows_enterprise_probe.ps1",
     "CitadelSshConsole.cs", "configure_restricted_ssh.ps1"].map((path) => ({path}))
 };
@@ -22,7 +22,7 @@ assert.deepEqual(legacy031Bridge.files.map((file) => file.sha256), [
   "4a5638a410ca689141a9a4c81d4e2d109c8cf2904e62df50ec6753f4146f5b37",
   "18fe495f2a46882e5c6c0172d217898d7374177c04b391a34931061b36342b6d"
 ]);
-assert.equal(releaseForAgentVersion(release, "0.3.2-bridge.1").version, "0.3.43");
+assert.equal(releaseForAgentVersion(release, "0.3.2-bridge.1").version, "0.3.44");
 assert.deepEqual(releaseForAgentVersion(release, "0.3.2-bridge.1").files.map((file) => file.path),
   ["citadel_node_v1.py", "citadel_node_v2.py"]);
 assert.deepEqual(releaseForAgentVersion(release, "0.3.13").files.map((file) => file.path),
@@ -42,7 +42,7 @@ assert.match(source, /safeJson\(latestUpdate\.payload_json, \{\}\)\?\.version !=
 assert.match(source, /agent\.update\.bridge_continued/);
 
 const currentRelease = {
-  version: "0.3.43",
+  version: "0.3.44",
   files: [...releaseBlock[0].matchAll(/path: "([^"]+)",\s+url: "([^"]+)",\s+sha256: "([^"]+)"/g)]
     .map(([, path, url, sha256]) => ({ path, url, sha256 }))
 };

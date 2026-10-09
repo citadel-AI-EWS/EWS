@@ -27,19 +27,19 @@ async function main() {
   if(Date.now()>=Date.parse('2026-10-10T00:00:00Z')){console.log('{"status":"diagnostic_lease_expired"}');return;}
   const live=await fetch('https://citadel-ai.init1.workers.dev/api/v1/hub/nodes',{
     headers:{'user-agent':'Citadel-Audit-Verification/1.0','cache-control':'no-cache'},signal:AbortSignal.timeout(20000)});
-  if(!live.ok||(await live.json()).latest_agent_version!=='0.3.43') {
+  if(!live.ok||(await live.json()).latest_agent_version!=='0.3.44') {
     console.log('{"status":"awaiting_published_repair_release"}');return;
   }
   const candidate=(await query(`SELECT r.rollout_id,r.target_version,p.phase,p.pause_reason,n.node_id,n.agent_version,n.status
     FROM agent_rollouts r JOIN agent_rollout_policy p ON p.rollout_id=r.rollout_id
     JOIN nodes n ON n.node_id=p.canary_node_id
-    WHERE r.status='active' AND r.target_version='0.3.42' AND p.phase='paused' AND p.pause_reason='canary_command_failed'
+    WHERE r.status='active' AND r.target_version IN('0.3.42','0.3.43') AND p.phase='paused' AND p.pause_reason='canary_command_failed'
       AND n.status='online' AND datetime(n.last_seen_at)>=datetime('now','-5 minutes')
     ORDER BY datetime(r.created_at) DESC,r.rowid DESC LIMIT 1`)).results[0];
   if(!candidate){console.log('{"status":"no_live_failed_canary"}');return;}
   const version=String(candidate.agent_version).split('.').map(Number);
   if(version[0]!==0||version[1]!==3||version[2]<32){console.log('{"status":"console_not_supported"}');return;}
-  const retryId='command_audit_published_43_'+digest(candidate.rollout_id).slice(0,24);
+  const retryId='command_audit_published_44_'+digest(candidate.rollout_id).slice(0,24);
   let failed=(await query(`SELECT command_id,created_at,payload_json FROM commands WHERE node_id=? AND command_type='update' AND status='failed'
     AND command_id<>? ORDER BY datetime(created_at) DESC,rowid DESC LIMIT 1`,[candidate.node_id,retryId])).results[0];
   if(!failed){console.log('{"status":"failed_update_not_found"}');return;}
@@ -47,8 +47,8 @@ async function main() {
   if(!retry) {
     const block=fs.readFileSync('src/index.js','utf8').split('const LATEST_NODE_RELEASE =')[1].split('const LEGACY_031_BRIDGE_RELEASE')[0];
     const files=[...block.matchAll(/path: "([^"]+)",\s+url: "([^"]+)",\s+sha256: "([^"]+)"/g)].map(([,path,url,sha256])=>({path,url,sha256}));
-    const payload=releaseForAgentVersion({version:'0.3.43',files},candidate.agent_version);
-    if(payload.version!=='0.3.43'||!updatePayloadReadyForAgent(payload,candidate.agent_version))
+    const payload=releaseForAgentVersion({version:'0.3.44',files},candidate.agent_version);
+    if(payload.version!=='0.3.44'||!updatePayloadReadyForAgent(payload,candidate.agent_version))
       throw Error('diagnostic_release_pins_mismatch');
     const payloadJson=JSON.stringify(payload);
     const createdAt=new Date().toISOString();
@@ -77,7 +77,7 @@ async function main() {
   const acknowledgements=(await query("SELECT details_json FROM audit_events WHERE target_id=? AND action='command.acknowledged' ORDER BY created_at,rowid LIMIT 10",[failed.command_id])).results;
   const ackStatuses=acknowledgements.map(row=>{try{return JSON.parse(row.details_json).status;}catch{return null;}})
     .filter(x=>['accepted','completed','failed','cancelled'].includes(x));
-  const commandId='command_audit_published_43_logs_'+digest(candidate.rollout_id).slice(0,24);
+  const commandId='command_audit_published_44_logs_'+digest(candidate.rollout_id).slice(0,24);
   const existing=(await query('SELECT status FROM commands WHERE command_id=?',[commandId])).results[0];
   if(!existing) {
     const createdAt=new Date().toISOString(),payload='{"command":"agent-logs"}';
@@ -109,7 +109,7 @@ async function main() {
     try {
       const event=JSON.parse(line);seen++;
       const detail=event.details||event.data||event;
-      if(event.event==='agent_update_preflight_failed'&&event.version==='0.3.43')
+      if(event.event==='agent_update_preflight_failed'&&event.version==='0.3.44')
         preflight={exception_type:/^[A-Za-z]{1,64}$/.test(event.exception_type||'')?event.exception_type:null,
           source_locations:(event.source_locations||[]).filter(frame=>['citadel_node_v1.py','citadel_node_v2.py'].includes(frame.file)&&Number.isInteger(frame.line)&&/^[A-Za-z_]{1,64}$/.test(frame.function||''))};
       if((event.event||event.event_type)==='command_failed'&&detail.command_id===failed.command_id)

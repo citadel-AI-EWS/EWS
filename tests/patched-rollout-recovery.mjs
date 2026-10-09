@@ -4,6 +4,9 @@ import {patchedRolloutEligible,recoverPatchedRollout as recover} from '../src/pa
 
 const now=Date.parse('2026-10-08T19:00:00Z'), stamp=ago=>new Date(now-ago).toISOString();
 const recoverPatchedRollout=(...args)=>recover(...args,now);
+assert.equal(patchedRolloutEligible({target_version:'0.3.42'},{version:'0.3.44'},now),true);
+assert.equal(patchedRolloutEligible({target_version:'0.3.43'},{version:'0.3.44'},now),true);
+assert.equal(patchedRolloutEligible({target_version:'0.3.44'},{version:'0.3.44'},now),false);
 const release={version:'0.3.41',files:[]};
 assert.equal(patchedRolloutEligible({target_version:'0.3.40'},release,Date.parse('2026-10-08T19:00:00Z')),true);
 assert.equal(patchedRolloutEligible({target_version:'0.3.40'},release,Date.parse('2026-10-15T00:00:00Z')),false);

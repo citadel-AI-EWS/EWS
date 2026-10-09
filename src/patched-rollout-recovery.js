@@ -4,7 +4,8 @@ export function patchedRolloutEligible(rollout, release, now = Date.now()) {
   return now < Date.parse('2026-10-15T00:00:00Z') &&
     ((rollout?.target_version === '0.3.40' && release?.version === '0.3.41') ||
       (['0.3.40','0.3.41'].includes(rollout?.target_version) && release?.version === '0.3.42') ||
-      (rollout?.target_version === '0.3.42' && release?.version === '0.3.43'));
+      (rollout?.target_version === '0.3.42' && release?.version === '0.3.43') ||
+      (['0.3.42','0.3.43'].includes(rollout?.target_version) && release?.version === '0.3.44'));
 }
 
 export const RETIRE_PATCHED_ROLLOUT_SQL = `UPDATE agent_rollouts SET status='completed',updated_at=?
@@ -23,7 +24,8 @@ export const RETIRE_PATCHED_ROLLOUT_SQL = `UPDATE agent_rollouts SET status='com
           AND json_extract(CASE WHEN json_valid(a.details_json) THEN a.details_json ELSE '{}' END,'$.target_version')=child.target_version
           AND ((parent.target_version='0.3.40' AND child.target_version IN('0.3.41','0.3.42'))
             OR (parent.target_version='0.3.41' AND child.target_version='0.3.42')
-            OR (parent.target_version='0.3.42' AND child.target_version='0.3.43'))
+            OR (parent.target_version='0.3.42' AND child.target_version IN('0.3.43','0.3.44'))
+            OR (parent.target_version='0.3.43' AND child.target_version='0.3.44'))
       ) SELECT 1 FROM authorized_lineage l JOIN audit_events a ON a.target_id=l.rollout_id
         WHERE a.action='agent.rollout.started' AND a.actor_type='architect')
     AND EXISTS (SELECT 1 FROM agent_rollout_policy p WHERE p.rollout_id=agent_rollouts.rollout_id

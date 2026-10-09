@@ -174,6 +174,8 @@ jobs:
         run: |
           python -m py_compile agent/citadel_node_v1.py agent/citadel_node_v2.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/powershell-output.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/staged-self-test.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python agent/citadel_node_v2.py self-test
