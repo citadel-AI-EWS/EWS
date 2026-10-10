@@ -44,7 +44,9 @@ ERROR_EVENTS = {
     "command_failed",
     "command_failure_ack_failed",
     "ssh_relay_error",
+    "lmstudio_inference_probe_failed",
 }
+
 ALLOWED_EVENTS = {
     "agent_start",
     "agent_stop",
@@ -85,6 +87,9 @@ ALLOWED_EVENTS = {
     "hybrid_query_completed",
     "lmstudio_state_report_failed",
     "lmstudio_heartbeat_probe_failed",
+    "lmstudio_inference_probe_failed",
+    "lmstudio_uninstall_stop_warning",
+    "ssh_console_command_completed",
     "python_mode_calculation_fallback",
     "lmstudio_model_key_resolution_fallback",
     "command_failure_ack_failed",
