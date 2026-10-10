@@ -862,17 +862,40 @@ export async function googleDriveAllocateReportId(env) {
   return id;
 }
 
+export function nodeReportArchiveIndex(reportJson) {
+  // Categorize using allowlisted event codes, never user-controlled error text.
+  let parsed;
+  try {parsed = JSON.parse(reportJson);} catch {parsed = {};}
+  const batches = Array.isArray(parsed.batches) ? parsed.batches : [parsed];
+  const events = batches.flatMap(batch => Array.isArray(batch?.events) ? batch.events : []);
+  const sessionId = events.map(event => event?.details?.session_id)
+    .find(id => typeof id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(id)) || "legacy";
+  const errorTypes = [...new Set(events.filter(event => event?.level === "error" ||
+    /(?:_error|_failed|_rolled_back|_disconnected)$/.test(String(event?.event_type || "")))
+    .map(event => String(event.event_type || "").replace(/[^a-z0-9_]/g, "").slice(0, 64))
+    .filter(Boolean))].slice(0, 8);
+  return {session_id: sessionId, error_types: errorTypes,
+    headline: errorTypes[0] || "events"};
+}
+
 export async function googleDriveWriteNodeReport(env, report) {
   const token = await googleDriveAccessToken(env);
   const folderId = await ensureDriveChildFolder(env, token, googleDriveAiReportsFolderId(env),
     (report.node_name || report.node_id) + "__" + report.node_id);
+  const index = nodeReportArchiveIndex(report.report_json);
   const metadata = {
     id: report.file_id,
-    name: timestampedAiReportFileName("node_report", report.batch_id, new Date(report.created_at)),
+    name: timestampedAiReportFileName("node_report",
+      index.session_id + "__" + index.headline + "__" + report.batch_id.slice(0, 32),
+      new Date(report.created_at)),
     mimeType: "application/json",
     parents: [folderId],
+    description: index.error_types.length
+      ? "Error categories: " + index.error_types.join(", ")
+      : "CITADEL node session operational events",
     appProperties: {citadel_node_id: report.node_id, citadel_batch_id: report.batch_id,
-      citadel_sha256: report.sha256}
+      citadel_sha256: report.sha256, citadel_session_id: index.session_id,
+      citadel_error_categories: index.error_types.slice(0, 3).join(",")}
   };
   const boundary = "citadel-report-" + crypto.randomUUID();
   const body = "--" + boundary + "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n" +
