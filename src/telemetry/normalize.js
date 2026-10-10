@@ -12,6 +12,7 @@ export const ALLOWED_EVENT_TYPES = new Set([
   "agent_start",
   "agent_stop",
   "session_finished",
+  "log_interval_snapshot",
   "node_enrolled",
   "windows_sleep_inhibit",
   "cycle_error",
