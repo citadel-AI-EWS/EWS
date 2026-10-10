@@ -388,15 +388,24 @@ const agentEventBlock = agentSource.match(/ALLOWED_EVENTS = \{([\s\S]*?)\n\}/);
 assert.ok(agentEventBlock, "agent telemetry allow-list missing");
 const agentEventTypes = [...agentEventBlock[1].matchAll(/"([a-z_]+)"/g)].map((match) => match[1]);
 state.rate.clear();
-response = await signedPost({ events: agentEventTypes.map((eventType, index) => ({
+const allAgentEvents = agentEventTypes.map((eventType, index) => ({
   event_id: `agent_contract_${index}`,
   event_type: eventType,
   created_at: new Date().toISOString(),
   details: { command_id: "command_update_test", error: "updated agent self-test failed" }
-})) });
-assert.equal(response.status, 201, "every event shipped by the agent must be accepted in a signed batch");
-data = await response.json();
-assert.equal(data.received, agentEventTypes.length, "the whole batch must be acknowledged so the cursor can advance");
+}));
+// The agent intentionally caps transport batches at 50: validate *every*
+// allowed event across bounded signed requests without raising that limit.
+let acknowledged = 0;
+for (let offset = 0; offset < allAgentEvents.length; offset += 50) {
+  const chunk = allAgentEvents.slice(offset, offset + 50);
+  response = await signedPost({events: chunk});
+  assert.ok([200, 201].includes(response.status), "every agent event must be accepted");
+  data = await response.json();
+  assert.equal(data.received, chunk.length, "each accepted batch advances the cursor");
+  acknowledged += data.received;
+}
+assert.equal(acknowledged, agentEventTypes.length, "no allowed event was skipped");
 assert.ok(state.logs.some((event) => event.event_type === "command_failed" && event.details_json.includes("command_update_test")),
   "the update failure must survive routine-event filtering");
 
