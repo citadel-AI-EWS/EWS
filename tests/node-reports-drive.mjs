@@ -201,22 +201,26 @@ try {
       created_at: new Date().toISOString()},
     {...events[0], event_id: "node-process-finished", event_type: "session_finished",
       level: "info", created_at: new Date().toISOString(),
-      details: {session_id: "runtime-once-20261010", outcome: "completed"}}
+      details: {session_id: "runtime-once-20261010", outcome: "completed"}},
+    {...events[0], event_id: "node-30m-log", event_type: "log_interval_snapshot",
+      level: "info", created_at: new Date().toISOString(),
+      details: {session_id: "runtime-once-20261010", interval_seconds: 1800}}
   ];
-  assert.equal(splitJournalEvents(extraEvents).length, 5);
+  assert.equal(splitJournalEvents(extraEvents).length, 6);
   const journals = await enqueueNodeReports(env, "node_a15", extraEvents, "a15");
-  assert.equal(journals.batches, 5);
+  assert.equal(journals.batches, 6);
   let filesBefore = creates;
   for (let n = 0; n < 7; n++) {
     if (!sqlite.prepare("SELECT COUNT(*) AS count FROM node_report_outbox WHERE state='pending'").get().count) break;
     await drainNodeReports(env);
   }
-  assert.equal(creates - filesBefore, 5, "four dedicated journals and one routine archive");
+  assert.equal(creates - filesBefore, 6, "four session/error journals, one interval log and one routine archive");
   const newNames = [...fileNames.values()].filter(v =>
-    v.includes("SESSION_END") || v.includes("ERROR"));
+    v.includes("SESSION_END") || v.includes("ERROR") || v.includes("INTERVAL"));
   assert.ok(newNames.some(v => v.includes("hybrid_query_completed")));
   assert.ok(newNames.some(v => v.includes("agent_stop")));
   assert.ok(newNames.some(v => v.includes("SESSION_END__session_finished")));
+  assert.ok(newNames.some(v => v.includes("INTERVAL__log_interval_snapshot")));
   assert.ok(newNames.some(v => v.includes("cycle_error")));
   assert.ok(newNames.every(v => /^[0-9]{4}-[0-9]{2}-[0-9]{2}_/.test(v)));
   assert.ok(newNames.every(v => !v.includes("secret") && !v.includes("token")));
