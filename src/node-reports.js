@@ -1,5 +1,6 @@
 import {googleDriveNodeReportFingerprint, googleDriveAllocateReportId, googleDriveWriteNodeReport} from "./index.js";
 import {TelemetryError, sanitizeTelemetryValue, sha256Hex} from "./telemetry/common.js";
+import {verifyQueuedNodeReport} from "./telemetry/report-integrity.js";
 
 export const REPORT_LIMITS = Object.freeze({pending_bytes: 32 * 1024 * 1024,
   per_node_batches: 64, batch_bytes: 128 * 1024, drain_batches: 3, lease_ms: 180000,
@@ -175,8 +176,13 @@ export async function drainNodeReports(env, {now = Date.now(), limit = REPORT_LI
     }
     if (!row) break;
     try {
+      // Validate each original hashed batch as well as the aggregated bundle.
+      // Mismatches fail closed and retain the pending data for investigation.
+      // This is CPU-only verification, with no extra D1 read or write on
+      // the usual path when the bundle already has its digest.
+      const verifiedDigest = await verifyQueuedNodeReport(row);
       if (!row.sha256) {
-        row.sha256 = await sha256Hex(row.report_json);
+        row.sha256 = verifiedDigest;
         await env.DB.prepare(`UPDATE ${table} SET sha256=? WHERE batch_id=? AND lease_token=?`)
           .bind(row.sha256,row.batch_id,lease).run();
       }
