@@ -181,6 +181,7 @@ jobs:
           python agent/citadel_node_v2.py self-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/agent-resilience.py
+          python tests/node-relay-hardening.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/agent-quota-retry.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
