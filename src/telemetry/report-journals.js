@@ -1,6 +1,6 @@
 // Provider-neutral report classification. No credentials, network, or database access.
 const SESSION_END_TYPES = new Set([
-  "agent_stop", "agent_stop_requested", "hybrid_query_completed",
+  "agent_stop", "session_finished", "agent_stop_requested", "hybrid_query_completed",
   "command_completed", "command_cancelled",
   "ssh_browser_disconnected", "ssh_agent_disconnected", "ssh_relay_disconnected",
   "node_disconnected"
@@ -70,7 +70,7 @@ export const DEDICATED_JOURNAL_SQL = `(
   AND (
     json_extract(report_json,'$.events[0].level')='error'
     OR json_extract(report_json,'$.events[0].event_type') IN (
-      'agent_stop','agent_stop_requested','hybrid_query_completed',
+      'agent_stop','session_finished','agent_stop_requested','hybrid_query_completed',
       'command_completed','command_cancelled','ssh_browser_disconnected',
       'ssh_agent_disconnected','ssh_relay_disconnected','node_disconnected'
     )
