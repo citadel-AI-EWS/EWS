@@ -6,6 +6,7 @@ import {markStaleNodesOffline} from '../src/d1-guardian.js';
 import {classifyTailEvent, jsonObjectStream, tailFailureCategories} from "../scripts/agent_connectivity_evidence.mjs";
 import {ingestNodeLogs} from "../src/telemetry/ingest.js";
 import {sha256Hex} from "../src/telemetry/common.js";
+import {verifyQueuedNodeReport} from "../src/telemetry/report-integrity.js";
 
 const sqlite = new DatabaseSync(":memory:");
 sqlite.exec('PRAGMA foreign_keys=ON');
@@ -105,6 +106,18 @@ try {
   mode = "ok";
   assert.equal((await drainNodeReports(env, {now: delivery().next_attempt_at - 1})).delivered, 0);
   assert.equal(delivery().report_json, originalDeliveryBody, 'retry never changes an immutable bundle');
+  // A response can be lost AFTER Drive has accepted a file. Integrity must
+  // still be enforced before any resumed upload or readback on retry.
+  const tamperedDelivery = JSON.stringify({...JSON.parse(originalDeliveryBody), unexpected: "changed"});
+  sqlite.prepare("UPDATE node_report_deliveries SET report_json=? WHERE batch_id=?")
+    .run(tamperedDelivery, delivery().batch_id);
+  const digestRetry = await drainNodeReports(env, {now: delivery().next_attempt_at});
+  assert.equal(digestRetry.failed, 1);
+  assert.equal(delivery().last_error_code, "drive_report_integrity_mismatch");
+  assert.equal(creates, initialCreates + 1, "a tampered delivery was not uploaded");
+  assert.equal(row().report_json, originalBody, "original outbox survives integrity failure");
+  sqlite.prepare("UPDATE node_report_deliveries SET report_json=? WHERE batch_id=?")
+    .run(originalDeliveryBody, delivery().batch_id);
   assert.equal((await drainNodeReports(env, {now: delivery().next_attempt_at})).delivered, 1);
   assert.equal(creates, initialCreates + 1, "retry reuses the persisted file ID");
   assert.equal(row().report_json, "", "temporary body removed only after hash verification");
@@ -184,6 +197,30 @@ try {
     const report=JSON.parse(body);
     if(report.schema==='citadel-node-report/v2') assert.ok(report.batches.every(batch=>batch.node_id===report.node_id));
   }
+
+  // Guard against corruption BEFORE aggregation: the original batch ID is
+  // the SHA256 digest of its immutable JSON, so no extra D1 reads are needed.
+  const modified = await enqueueNodeReports(env, "node_a15", [{
+    ...events[0], event_id: "integrity-corrupt-member",
+    created_at: new Date().toISOString()
+  }]);
+  const originalMember = sqlite.prepare("SELECT report_json FROM node_report_outbox WHERE batch_id=?")
+    .get(modified.batch_id).report_json;
+  const poisonedMember = JSON.parse(originalMember);
+  poisonedMember.events[0].message = "tampered-report-content";
+  sqlite.prepare("UPDATE node_report_outbox SET report_json=? WHERE batch_id=?")
+    .run(JSON.stringify(poisonedMember), modified.batch_id);
+  const beforePoison = creates;
+  const poisonResult = await drainNodeReports(env);
+  assert.equal(poisonResult.failed, 1);
+  assert.equal(creates, beforePoison, "no corrupted member may reach Drive");
+  assert.equal(sqlite.prepare("SELECT state FROM node_report_outbox WHERE batch_id=?")
+    .get(modified.batch_id).state, "pending", "corrupted batch is retained, not erased");
+  const poisonError = sqlite.prepare("SELECT last_error_code FROM node_report_deliveries WHERE member_ids LIKE ?")
+    .get(`%${modified.batch_id}%`);
+  assert.equal(poisonError.last_error_code, "drive_report_integrity_mismatch");
+  await assert.rejects(verifyQueuedNodeReport({node_id: "node_a15", report_json: originalMember,
+    sha256: "0".repeat(64)}), error => error.code === "drive_report_integrity_mismatch");
 
   const privateTail = {event: {request: {url: "https://hub/api/v1/nodes/private-node/sync?token=secret",
     method: "POST", headers: {authorization: "secret"}}, response: {status: 401}}, outcome: "ok"};
