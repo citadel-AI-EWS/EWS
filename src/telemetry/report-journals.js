@@ -11,6 +11,7 @@ export function journalEventKind(event) {
   if (event?.level === "error" ||
       /(?:_failed|_error|_rolled_back|_rejected)$/.test(type)) return "ERROR";
   if (SESSION_END_TYPES.has(type)) return "SESSION_END";
+  if (type === "log_interval_snapshot") return "INTERVAL";
   return "LOG";
 }
 
@@ -39,6 +40,7 @@ export function nodeJournalTitle(events) {
   const type = String(event?.event_type || "event").slice(0, 80);
   return category === "ERROR" ? "Ошибка: " + type
     : category === "SESSION_END" ? "Завершение сессии: " + type
+    : category === "INTERVAL" ? "30-минутный лог: " + type
     : "Событие: " + type;
 }
 
@@ -70,7 +72,7 @@ export const DEDICATED_JOURNAL_SQL = `(
   AND (
     json_extract(report_json,'$.events[0].level')='error'
     OR json_extract(report_json,'$.events[0].event_type') IN (
-      'agent_stop','session_finished','agent_stop_requested','hybrid_query_completed',
+      'agent_stop','session_finished','log_interval_snapshot','agent_stop_requested','hybrid_query_completed',
       'command_completed','command_cancelled','ssh_browser_disconnected',
       'ssh_agent_disconnected','ssh_relay_disconnected','node_disconnected'
     )
