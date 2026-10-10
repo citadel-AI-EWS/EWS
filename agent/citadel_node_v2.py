@@ -233,6 +233,9 @@ class Agent(v1.Agent):
             return super().run(once=once)
         finally:
             self._ssh_relay_stop.set()
+            # v1 writes agent_stop during its cleanup. Make one bounded best-effort
+            # delivery attempt before exit; failed uploads retain the local cursor.
+            self.flush_telemetry()
 
     def submit_telemetry(self, payload: dict[str, Any]) -> None:
         node_id = self.require_node_id()
