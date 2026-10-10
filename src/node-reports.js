@@ -1,5 +1,6 @@
 import {googleDriveNodeReportFingerprint, googleDriveAllocateReportId, googleDriveWriteNodeReport} from "./index.js";
 import {TelemetryError, sanitizeTelemetryValue, sha256Hex} from "./telemetry/common.js";
+import {splitJournalEvents, nodeJournalTitle, DEDICATED_JOURNAL_SQL} from "./telemetry/report-journals.js";
 
 export const REPORT_LIMITS = Object.freeze({pending_bytes: 32 * 1024 * 1024,
   per_node_batches: 64, batch_bytes: 128 * 1024, drain_batches: 3, lease_ms: 180000,
@@ -57,28 +58,40 @@ export async function enqueueNodeReports(env, nodeId, events, nodeName = null) {
   if (!Array.isArray(events) || !events.length || events.length > 50) {
     throw new TelemetryError(400, "invalid_report_events");
   }
-  const safeEvents = events.map(({details_json, ...event}) => sanitizeTelemetryValue(event));
-  const reportJson = JSON.stringify({schema: "citadel-node-report/v1", node_id: nodeId, events: safeEvents});
-  const size = new TextEncoder().encode(reportJson).length;
-  if (size > REPORT_LIMITS.batch_bytes) throw new TelemetryError(413, "node_report_too_large");
-  const batchId = await sha256Hex(reportJson);
+  // Keep each error and each session close separate. Routine records remain
+  // bundled; this adds no extra D1 writes to normal healthy agent polling.
+  const batches = splitJournalEvents(events);
   await ensureNodeReportStorage(env);
-  // One atomic statement bounds temporary payload storage even when several
-  // agents enqueue concurrently. Duplicate retries remain acknowledged when
-  // the queue is full because their bytes have already been committed.
-  const result = await env.DB.prepare(`INSERT OR IGNORE INTO node_report_outbox
-    (batch_id, node_id, node_name, report_json, sha256, size_bytes, created_at)
-    SELECT ?, ?, ?, ?, ?, ?, ?
-    WHERE COALESCE((SELECT SUM(size_bytes) FROM node_report_outbox WHERE state = 'pending'), 0) + ? <= ?
-      AND (SELECT COUNT(*) FROM node_report_outbox WHERE node_id = ? AND state = 'pending') < ?
-  `).bind(batchId, nodeId, nodeName, reportJson, batchId, size, events[0].created_at || new Date().toISOString(),
-    size, REPORT_LIMITS.pending_bytes, nodeId, REPORT_LIMITS.per_node_batches).run();
-  if (!result.meta?.changes) {
-    const existing = await env.DB.prepare("SELECT state FROM node_report_outbox WHERE batch_id = ?").bind(batchId).first();
-    if (!existing) throw new TelemetryError(503, "node_report_queue_full", {"retry-after": "300"});
-    return {status: existing.state, batch_id: batchId, duplicate: true};
+  let duplicates = 0;
+  let last;
+  for (const partition of batches) {
+    const safeEvents = partition.map(({details_json, ...event}) => sanitizeTelemetryValue(event));
+    const reportJson = JSON.stringify({schema: "citadel-node-report/v1",
+      node_id: nodeId, title: nodeJournalTitle(safeEvents), events: safeEvents});
+    const size = new TextEncoder().encode(reportJson).length;
+    if (size > REPORT_LIMITS.batch_bytes) throw new TelemetryError(413, "node_report_too_large");
+    const batchId = await sha256Hex(reportJson);
+    // The local agent cursor is advanced only if EVERY partition is acknowledged.
+    // A partial failure replays the same content-addressed IDs after recovery.
+    const result = await env.DB.prepare(`INSERT OR IGNORE INTO node_report_outbox
+      (batch_id, node_id, node_name, report_json, sha256, size_bytes, created_at)
+      SELECT ?, ?, ?, ?, ?, ?, ?
+      WHERE COALESCE((SELECT SUM(size_bytes) FROM node_report_outbox WHERE state = 'pending'), 0) + ? <= ?
+        AND (SELECT COUNT(*) FROM node_report_outbox WHERE node_id = ? AND state = 'pending') < ?
+    `).bind(batchId, nodeId, nodeName, reportJson, batchId, size,
+      partition[0].created_at || new Date().toISOString(),
+      size, REPORT_LIMITS.pending_bytes, nodeId, REPORT_LIMITS.per_node_batches).run();
+    if (!result.meta?.changes) {
+      const existing = await env.DB.prepare("SELECT state FROM node_report_outbox WHERE batch_id = ?").bind(batchId).first();
+      if (!existing) throw new TelemetryError(503, "node_report_queue_full", {"retry-after": "300"});
+      duplicates += 1;
+      last = {status: existing.state, batch_id: batchId, duplicate: true};
+    } else {
+      last = {status: "queued", batch_id: batchId};
+    }
   }
-  return {status: "queued", batch_id: batchId};
+  return batches.length === 1 ? last
+    : {status: "queued", batches: batches.length, duplicates};
 }
 
 export async function enqueueControllerReport(env, nodeId, eventType, details, createdAt = new Date().toISOString(), nodeName = null, eventId = crypto.randomUUID()) {
@@ -87,7 +100,8 @@ export async function enqueueControllerReport(env, nodeId, eventType, details, c
   const event = sanitizeTelemetryValue({event_id: eventId, event_type: eventType,
     level: /failed|disconnect|error/.test(eventType) ? "warn" : "info",
     message: eventType, details, created_at: createdAt});
-  const reportJson = JSON.stringify({schema: 'citadel-node-report/v1', node_id: nodeId, events: [event]});
+  const reportJson = JSON.stringify({schema: 'citadel-node-report/v1', node_id: nodeId,
+    title: nodeJournalTitle([event]), events: [event]});
   const size = new TextEncoder().encode(reportJson).length;
   if (size > 8192) throw new TelemetryError(413, 'controller_report_too_large');
   const id = await sha256Hex(reportJson);
@@ -131,9 +145,11 @@ async function makeDelivery(env, now) {
       FROM (SELECT *,SUM(size_bytes) OVER (ORDER BY created_at,batch_id) AS bytes
         FROM (SELECT o.* FROM node_report_outbox AS o
           WHERE state='pending' AND drive_file_id IS NULL AND lease_until <= ?
+            AND NOT ${DEDICATED_JOURNAL_SQL}
             AND NOT EXISTS (SELECT 1 FROM node_report_members m WHERE m.batch_id=o.batch_id)
             AND node_id=(SELECT p.node_id FROM node_report_outbox p
               WHERE p.state='pending' AND p.drive_file_id IS NULL AND p.lease_until <= ?
+                AND NOT ${DEDICATED_JOURNAL_SQL.replaceAll('report_json', 'p.report_json')}
                 AND NOT EXISTS (SELECT 1 FROM node_report_members m WHERE m.batch_id=p.batch_id)
               ORDER BY p.created_at,p.batch_id LIMIT 1)
           ORDER BY created_at,batch_id LIMIT ?))
@@ -145,12 +161,13 @@ async function makeDelivery(env, now) {
   ]);
 }
 
-async function claimDelivery(env, table, now, lease, legacy = false) {
+async function claimDelivery(env, table, now, lease, legacy = false, dedicated = false) {
   return (await env.DB.prepare(`UPDATE ${table}
     SET lease_until=?,lease_token=?,attempts=attempts+1
     WHERE batch_id=(SELECT batch_id FROM ${table}
       WHERE state='pending' AND next_attempt_at <= ? AND lease_until <= ?
       ${legacy ? 'AND drive_file_id IS NOT NULL' : ''}
+      ${dedicated ? 'AND ' + DEDICATED_JOURNAL_SQL : ''}
       ORDER BY created_at,batch_id LIMIT 1) RETURNING *`)
     .bind(now+REPORT_LIMITS.lease_ms,lease,now,now).all()).results?.[0];
 }
@@ -165,6 +182,7 @@ export async function drainNodeReports(env, {now = Date.now(), limit = REPORT_LI
     // Finish pre-upgrade uploads with their original immutable body/file ID.
     let table = 'node_report_outbox';
     let row = await claimDelivery(env, table, claimNow, lease, true);
+    if (!row) row = await claimDelivery(env, table, claimNow, lease, false, true);
     if (!row) {
       table = 'node_report_deliveries';
       row = await claimDelivery(env, table, claimNow, lease);
