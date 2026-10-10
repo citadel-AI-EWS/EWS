@@ -481,7 +481,10 @@ class Agent(v1.Agent):
                             raise RuntimeError("ssh_relay_protocol_mismatch")
                         self.log.write("ssh_relay_connected")
                         delay = 2
-                        await self._ssh_relay_session(socket, node_id, port, client_key, known_hosts, asyncssh)
+                        await asyncio.wait_for(
+                            self._ssh_relay_session(socket, node_id, port, client_key, known_hosts, asyncssh),
+                            timeout=1800
+                        )
                 except Exception as error:
                     self.log.write("ssh_relay_disconnected", reason=type(error).__name__)
                     retry = ssh_handshake_retry_after(error)
@@ -498,59 +501,102 @@ class Agent(v1.Agent):
     async def _ssh_relay_session(self, socket, node_id, port, client_key, known_hosts, asyncssh) -> None:
         active = None
         reader = None
+        active_session_id = None
+
         async def stop():
-            nonlocal active, reader
-            if reader:
-                reader.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await reader
-                reader = None
-            if active:
-                connection, process = active
-                process.close()
-                connection.close()
-                await connection.wait_closed()
-                active = None
+            nonlocal active, reader, active_session_id
+            current_reader, reader = reader, None
+            current_active, active = active, None
+            active_session_id = None
+            if current_reader:
+                current_reader.cancel()
+                with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                    await asyncio.wait_for(current_reader, timeout=2.0)
+            if current_active:
+                connection, process = current_active
+                with contextlib.suppress(Exception):
+                    process.close()
+                with contextlib.suppress(Exception):
+                    connection.close()
+                with contextlib.suppress(asyncio.TimeoutError, Exception):
+                    await asyncio.wait_for(connection.wait_closed(), timeout=5.0)
 
         async def output_loop(process):
             try:
                 while chunk := await process.stdout.read(8192):
-                    await socket.send(chunk)
-                await socket.send(json.dumps({"type": "exit", "code": process.exit_status}))
-            except (asyncio.CancelledError, Exception):
+                    await asyncio.wait_for(socket.send(chunk), timeout=10.0)
+                await asyncio.wait_for(
+                    socket.send(json.dumps({"type": "exit", "code": process.exit_status})),
+                    timeout=10.0
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
                 return
 
         try:
             async for message in socket:
                 if isinstance(message, bytes):
                     if active and len(message) <= 8192:
-                        active[1].stdin.write(message)
+                        with contextlib.suppress(Exception):
+                            active[1].stdin.write(message)
+                    continue
+                if not isinstance(message, str) or len(message) > 8192:
                     continue
                 try:
                     command = json.loads(message)
                 except (ValueError, TypeError):
                     continue
-                if command.get("type") == "stop":
-                    await stop()
-                elif command.get("type") == "resize" and active:
+                if not isinstance(command, dict) or not isinstance(command.get("type"), str):
+                    continue
+                cmd_type = command["type"]
+                if cmd_type == "stop":
+                    # A delayed stop from an old ticket cannot terminate a new session.
+                    if active and command.get("session_id") == active_session_id:
+                        await stop()
+                elif cmd_type == "resize" and active:
                     cols, rows = command.get("cols"), command.get("rows")
-                    if isinstance(cols, int) and isinstance(rows, int) and 20 <= cols <= 300 and 5 <= rows <= 150:
-                        active[1].change_terminal_size(cols, rows)
-                elif command.get("type") == "start" and not active:
+                    if (type(cols) is int and type(rows) is int
+                            and 20 <= cols <= 300 and 5 <= rows <= 150):
+                        with contextlib.suppress(Exception):
+                            active[1].change_terminal_size(cols, rows)
+                elif cmd_type == "start" and not active:
                     expires = command.get("expires_at")
-                    if not isinstance(expires, int) or not 0 < expires - time.time() <= 1800:
+                    session_id = command.get("session_id")
+                    if (type(expires) is not int or not 0 < expires - time.time() <= 1800
+                            or not isinstance(session_id, str) or not 0 < len(session_id) <= 128):
                         continue
+                    connection = None
                     try:
-                        connection = await asyncssh.connect("127.0.0.1", port, username="citadel",
+                        connection = await asyncssh.connect(
+                            "127.0.0.1", port, username="citadel",
                             client_keys=[client_key], known_hosts=known_hosts,
-                            agent_path=None, connect_timeout=10)
-                        process = await connection.create_process(term_type="xterm", encoding=None)
+                            agent_path=None, connect_timeout=10
+                        )
+                        process = await asyncio.wait_for(
+                            connection.create_process(term_type="xterm", encoding=None),
+                            timeout=10.0
+                        )
                         active = (connection, process)
-                        await socket.send(json.dumps({"type": "ready", "node_id": node_id}))
+                        active_session_id = session_id
+                        await asyncio.wait_for(
+                            socket.send(json.dumps({"type": "ready", "node_id": node_id})),
+                            timeout=10.0
+                        )
                         reader = asyncio.create_task(output_loop(process))
                     except Exception:
-                        await socket.send(json.dumps({"type": "error", "code": "ssh_connection_failed"}))
-                        await stop()
+                        if active:
+                            await stop()
+                        elif connection:
+                            with contextlib.suppress(Exception):
+                                connection.close()
+                            with contextlib.suppress(asyncio.TimeoutError, Exception):
+                                await asyncio.wait_for(connection.wait_closed(), timeout=5.0)
+                        with contextlib.suppress(Exception):
+                            await asyncio.wait_for(
+                                socket.send(json.dumps({"type": "error", "code": "ssh_connection_failed"})),
+                                timeout=5.0
+                            )
         finally:
             await stop()
 
