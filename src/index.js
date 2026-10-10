@@ -12,6 +12,7 @@ import {recoverPatchedRollout} from './patched-rollout-recovery.js';
 import {replayFailureCode} from './replay-diagnostics.js';
 import {compactReplayConfigured, claimCompactReplay, ReplayStoreError} from './compact-replay.js';
 import {invokeSshRelay} from './ssh/availability.js';
+import {nodeJournalFileName} from './telemetry/report-journals.js';
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -868,7 +869,7 @@ export async function googleDriveWriteNodeReport(env, report) {
     (report.node_name || report.node_id) + "__" + report.node_id);
   const metadata = {
     id: report.file_id,
-    name: timestampedAiReportFileName("node_report", report.batch_id, new Date(report.created_at)),
+    name: nodeJournalFileName(report),
     mimeType: "application/json",
     parents: [folderId],
     appProperties: {citadel_node_id: report.node_id, citadel_batch_id: report.batch_id,
