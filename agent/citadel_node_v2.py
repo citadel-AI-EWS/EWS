@@ -169,6 +169,7 @@ class TelemetryCursor:
         start = self._offset()
         events: list[dict[str, Any]] = []
         end_offset = start
+        active_session: str | None = None
         with self.log_path.open("rb") as stream:
             stream.seek(start)
             while len(events) < MAX_BATCH_EVENTS:
@@ -182,6 +183,10 @@ class TelemetryCursor:
                 if event is None:
                     end_offset = candidate_end
                     continue
+                event_session = str(event["details"].get("session_id") or "legacy")
+                if events and event_session != active_session:
+                    # Never put two sessions into one upload batch.
+                    break
                 candidate = events + [event]
                 payload_size = len(v1.json_text({"events": candidate}).encode("utf-8"))
                 if payload_size > MAX_PAYLOAD_BYTES:
@@ -190,7 +195,11 @@ class TelemetryCursor:
                     end_offset = candidate_end
                     continue
                 events.append(event)
+                active_session = event_session
                 end_offset = candidate_end
+                if event["event_type"] == "session_finished":
+                    # Guarantees exactly one closing marker per batch.
+                    break
         return events, end_offset
 
     def flush(self, node_id: str, submit: Callable[[dict[str, Any]], Any]) -> int:
@@ -205,9 +214,22 @@ class TelemetryCursor:
         return len(events)
 
 
+class SessionJsonlLogger(v1.JsonlLogger):
+    """Attach a stable process-session ID to every local operational event."""
+
+    def __init__(self, path: Path, session_id: str) -> None:
+        super().__init__(path)
+        self.session_id = session_id
+
+    def write(self, event: str, **fields: Any) -> None:
+        fields.setdefault("session_id", self.session_id)
+        super().write(event, **fields)
+
+
 class Agent(v1.Agent):
     def __init__(self, config: v1.AgentConfig, config_path: Path | None = None) -> None:
         super().__init__(config, config_path)
+        self.log = SessionJsonlLogger(config.data_dir / "agent.jsonl", self.runtime_session_id)
         self.telemetry = TelemetryCursor(
             config.data_dir / "agent.jsonl",
             # Replay retained local history once for the archive-aware cursor,
@@ -224,10 +246,23 @@ class Agent(v1.Agent):
 
     def run(self, once: bool = False) -> int:
         self._ssh_relay_enabled = not once
+        # Separate runtime sessions, even when the old journal is replayed later.
+        with contextlib.suppress(OSError):
+            self.log.write("session_started", mode="once" if once else "run", version=VERSION)
+        outcome = "failed"
+        exit_code = None
         try:
-            return super().run(once=once)
+            exit_code = super().run(once=once)
+            outcome = "completed" if exit_code == 0 else "stopped"
+            return exit_code
         finally:
+            # Flush the closing marker independently of the normal control loop.
+            # A Drive outage never prevents agent/service shutdown.
+            with contextlib.suppress(OSError):
+                self.log.write("session_finished", outcome=outcome, exit_code=exit_code)
             self._ssh_relay_stop.set()
+            with contextlib.suppress(Exception):
+                self.flush_telemetry()
 
     def submit_telemetry(self, payload: dict[str, Any]) -> None:
         node_id = self.require_node_id()
@@ -471,6 +506,19 @@ def self_test() -> int:
             raise RuntimeError("telemetry self-test failed: severity mapping")
         if payloads[0]["events"][2]["event_type"] != "windows_sleep_inhibit":
             raise RuntimeError("telemetry self-test failed: sleep inhibit event dropped")
+        with log_path.open("a", encoding="utf-8") as stream:
+            for session in ("first", "second"):
+                stream.write(json.dumps({"ts": "2026-10-10T18:00:00+00:00",
+                    "event": "session_started", "session_id": session}) + "\n")
+                stream.write(json.dumps({"ts": "2026-10-10T18:00:01+00:00",
+                    "event": "session_finished", "session_id": session, "outcome": "completed"}) + "\n")
+        # The next two uploads must never collapse into the same session.
+        for expected in ("first", "second"):
+            batch, _ = cursor.next_batch("node_test")
+            if len(batch) != 2 or any(event["details"].get("session_id") != expected for event in batch):
+                raise RuntimeError("telemetry self-test failed: session boundary")
+            cursor.flush("node_test", payloads.append)
+
     print("CITADEL v2 telemetry SELF TEST: PASS")
     return 0
 
