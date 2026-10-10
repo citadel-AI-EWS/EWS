@@ -35,7 +35,8 @@ class NodeHardeningTests(unittest.TestCase):
         payloads = []
         self.assertEqual(self.cursor.flush("n", payloads.append), 0)
         self.assertEqual(payloads, [])
-        self.log.open("a", encoding="utf-8").write("\n")
+        with self.log.open("a", encoding="utf-8") as stream:
+            stream.write("\n")
         self.assertEqual(self.cursor.flush("n", payloads.append), 1)
         self.assertEqual(self.cursor.flush("n", payloads.append), 0)
 
