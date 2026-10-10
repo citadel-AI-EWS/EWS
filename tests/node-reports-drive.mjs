@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {DatabaseSync} from "node:sqlite";
-import {googleDriveNodeReportWriteTest, googleDriveNodeReportFingerprint} from "../src/index.js";
+import {googleDriveNodeReportWriteTest, googleDriveNodeReportFingerprint, nodeReportArchiveIndex} from "../src/index.js";
 import {enqueueNodeReports, enqueueControllerReport, drainNodeReports, nodeReportsEnabled, REPORT_LIMITS} from "../src/node-reports.js";
 import {markStaleNodesOffline} from '../src/d1-guardian.js';
 import {classifyTailEvent, jsonObjectStream, tailFailureCategories} from "../scripts/agent_connectivity_evidence.mjs";
@@ -110,6 +110,30 @@ try {
   assert.equal(row().report_json, "", "temporary body removed only after hash verification");
   assert.equal(row().size_bytes, 0);
   assert.equal((await enqueueNodeReports(env, "node_a15", events)).status, "delivered");
+  // Every runtime session must archive as a separate Drive object even when
+  // multiple sessions from the same node are waiting in the queue.
+  const uploadsBeforeSessions = creates;
+  for (const sid of ["session-alpha", "session-beta"]) {
+    const item = {...events[0], event_id: "finish-" + sid,
+      event_type: "session_finished", level: "info",
+      details: {session_id: sid, outcome: "completed"}};
+    await enqueueNodeReports(env, "node_a15", [item]);
+  }
+  const sessionDelivery = await drainNodeReports(env);
+  assert.equal(sessionDelivery.delivered, 2);
+  assert.equal(creates - uploadsBeforeSessions, 2,
+    "session isolation must not combine separate sessions into one Drive file");
+  const sessionUploads = [...files.values()].slice(-2).map(body => JSON.parse(body));
+  assert.deepEqual(new Set(sessionUploads.map(body => nodeReportArchiveIndex(JSON.stringify(body)).session_id)),
+    new Set(["session-alpha", "session-beta"]));
+  const errorIndex = nodeReportArchiveIndex(JSON.stringify({events: [
+    {event_type: "ssh_relay_error", level: "error", details: {session_id: "session-alpha",
+      error: "authorization=secret-value"}},
+    {event_type: "cycle_error", level: "error", details: {session_id: "session-alpha"}}]}));
+  assert.equal(errorIndex.headline, "ssh_relay_error");
+  assert.equal(errorIndex.error_types.includes("cycle_error"), true);
+  assert.ok(!JSON.stringify(errorIndex).includes("secret-value"));
+
   // Backpressure refuses to advance the agent cursor. Duplicates still pass.
   sqlite.prepare(`INSERT INTO node_report_outbox
     (batch_id,node_id,report_json,sha256,size_bytes,created_at) VALUES ('full','other','{}','hash',?,?)`)
