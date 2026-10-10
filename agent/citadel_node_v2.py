@@ -13,12 +13,15 @@ import contextlib
 import hashlib
 import json
 import os
+import random
+import signal
 import sys
 import tempfile
 import threading
 import time
 import traceback
 import urllib.parse
+import email.utils
 import uuid
 from pathlib import Path
 from typing import Any, Callable
@@ -98,31 +101,47 @@ ALLOWED_EVENTS = {
 MAX_BATCH_EVENTS = 50
 MAX_PAYLOAD_BYTES = 60 * 1024
 MAX_DETAILS_BYTES = 1200
+MAX_LOG_LINE_BYTES = 64 * 1024
+MAX_SKIP_LINE_BYTES = 4 * 1024 * 1024
+_SECURE_RANDOM = random.SystemRandom()
 
 
 class TelemetryCursor:
     def __init__(self, log_path: Path, cursor_path: Path) -> None:
         self.log_path = log_path
         self.cursor_path = cursor_path
+        self._lock = threading.RLock()
 
     def _offset(self) -> int:
-        state = v1.load_json(self.cursor_path, {}) or {}
-        try:
-            offset = max(0, int(state.get("offset", 0)))
-        except (TypeError, ValueError):
-            offset = 0
-        try:
-            if self.log_path.stat().st_size < offset:
+        with self._lock:
+            state = v1.load_json(self.cursor_path, {}) or {}
+            if not isinstance(state, dict):
+                state = {}
+            try:
+                offset = max(0, int(state.get("offset", 0)))
+            except (TypeError, ValueError, OverflowError):
+                offset = 0
+            try:
+                info = self.log_path.stat()
+            except FileNotFoundError:
                 return 0
-        except FileNotFoundError:
-            return 0
-        return offset
+            if (state.get("dev") is not None and state.get("ino") is not None
+                    and (state["dev"], state["ino"]) != (info.st_dev, info.st_ino)):
+                return 0
+            return offset if info.st_size >= offset else 0
 
-    def _save(self, offset: int) -> None:
-        v1.atomic_write(
-            self.cursor_path,
-            json.dumps({"offset": offset}, indent=2) + "\n",
-        )
+    def _save(self, offset: int, source: os.stat_result | None = None) -> None:
+        with self._lock:
+            current = self.log_path.stat()
+            if source is not None and (
+                (current.st_dev, current.st_ino) != (source.st_dev, source.st_ino)
+                or current.st_size < offset
+            ):
+                # The log rotated or shrank while a POST was in flight.
+                return
+            v1.atomic_write(self.cursor_path, json.dumps({
+                "offset": offset, "dev": current.st_dev, "ino": current.st_ino
+            }, indent=2) + "\n")
 
     @staticmethod
     def _event_id(node_id: str, offset: int, raw: bytes) -> str:
@@ -134,7 +153,7 @@ class TelemetryCursor:
     @staticmethod
     def _normalize(node_id: str, offset: int, raw: bytes) -> dict[str, Any] | None:
         try:
-            item = json.loads(raw.decode("utf-8"))
+            item = json.loads(raw.decode("utf-8", errors="replace"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             return None
         if not isinstance(item, dict):
@@ -163,46 +182,111 @@ class TelemetryCursor:
             "details": details,
         }
 
-    def next_batch(self, node_id: str) -> tuple[list[dict[str, Any]], int]:
-        if not self.log_path.exists():
-            return [], self._offset()
+    @staticmethod
+    def _skip_oversized(stream, first: bytes) -> bool:
+        if first.endswith(b"\n"):
+            return True
+        budget = MAX_SKIP_LINE_BYTES - len(first)
+        while budget > 0:
+            chunk = stream.readline(min(budget, MAX_LOG_LINE_BYTES))
+            if not chunk:
+                return False
+            if chunk.endswith(b"\n"):
+                return True
+            budget -= len(chunk)
+        raise ValueError("telemetry_line_exceeds_scan_limit")
+
+    def _next_batch(self, node_id: str) -> tuple[list[dict[str, Any]], int, os.stat_result | None]:
+        try:
+            info = self.log_path.stat()
+        except FileNotFoundError:
+            return [], 0, None
         start = self._offset()
         events: list[dict[str, Any]] = []
         end_offset = start
         with self.log_path.open("rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                raise OSError("telemetry_log_rotated_during_open")
             stream.seek(start)
             while len(events) < MAX_BATCH_EVENTS:
                 line_offset = stream.tell()
-                raw = stream.readline()
+                raw = stream.readline(MAX_LOG_LINE_BYTES + 1)
                 if not raw:
-                    end_offset = stream.tell()
                     break
+                if len(raw) > MAX_LOG_LINE_BYTES:
+                    if not self._skip_oversized(stream, raw):
+                        break
+                    end_offset = stream.tell()
+                    continue
+                if not raw.endswith(b"\n"):
+                    break  # never commit an unfinished JSONL record
                 candidate_end = stream.tell()
                 event = self._normalize(node_id, line_offset, raw)
                 if event is None:
                     end_offset = candidate_end
                     continue
                 candidate = events + [event]
-                payload_size = len(v1.json_text({"events": candidate}).encode("utf-8"))
-                if payload_size > MAX_PAYLOAD_BYTES:
+                if len(v1.json_text({"events": candidate}).encode("utf-8")) > MAX_PAYLOAD_BYTES:
                     if events:
                         break
                     end_offset = candidate_end
                     continue
                 events.append(event)
                 end_offset = candidate_end
-        return events, end_offset
+        return events, end_offset, info
+
+    def next_batch(self, node_id: str) -> tuple[list[dict[str, Any]], int]:
+        with self._lock:
+            events, end_offset, _ = self._next_batch(node_id)
+            return events, end_offset
 
     def flush(self, node_id: str, submit: Callable[[dict[str, Any]], Any]) -> int:
-        events, end_offset = self.next_batch(node_id)
-        current = self._offset()
-        if not events:
-            if end_offset != current:
-                self._save(end_offset)
-            return 0
-        submit({"events": events})
-        self._save(end_offset)
-        return len(events)
+        with self._lock:
+            events, end_offset, info = self._next_batch(node_id)
+            current = self._offset()
+            if not events:
+                if info is not None and end_offset != current:
+                    self._save(end_offset, info)
+                return 0
+            submit({"events": events})
+            # On failed cursor persistence, retry identical event IDs on next cycle.
+            # Never swallow an OSError here; controller deduplication is required.
+            self._save(end_offset, info)
+            return len(events)
+
+
+def ssh_handshake_retry_after(error: Exception) -> float:
+    """Handle websockets 16 InvalidStatus and legacy InvalidStatusCode."""
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    headers = getattr(response, "headers", None)
+    if status is None:
+        status = getattr(error, "status_code", None)
+        headers = getattr(error, "headers", None)
+    if status not in (429, 503) or headers is None:
+        return 0.0
+    try:
+        raw = headers.get("Retry-After")
+        if not isinstance(raw, str) or not raw.strip():
+            return 0.0
+        try:
+            seconds = float(raw)
+        except ValueError:
+            seconds = email.utils.parsedate_to_datetime(raw).timestamp() - time.time()
+        return seconds if 0 < seconds <= 86400 else 0.0
+    except (ValueError, TypeError, OverflowError, AttributeError):
+        return 0.0
+
+
+async def interruptible_relay_pause(stop_event: threading.Event, seconds: float) -> None:
+    """Avoid spawning blocking executor threads which delay asyncio shutdown."""
+    deadline = time.monotonic() + max(0.0, seconds)
+    while not stop_event.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(min(0.5, remaining))
 
 
 class Agent(v1.Agent):
