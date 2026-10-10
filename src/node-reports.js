@@ -136,9 +136,15 @@ async function makeDelivery(env, now) {
               WHERE p.state='pending' AND p.drive_file_id IS NULL AND p.lease_until <= ?
                 AND NOT EXISTS (SELECT 1 FROM node_report_members m WHERE m.batch_id=p.batch_id)
               ORDER BY p.created_at,p.batch_id LIMIT 1)
+            AND json_extract(o.report_json,'$.events[0].details.session_id') IS
+              (SELECT json_extract(p.report_json,'$.events[0].details.session_id')
+               FROM node_report_outbox p
+               WHERE p.state='pending' AND p.drive_file_id IS NULL AND p.lease_until <= ?
+                 AND NOT EXISTS (SELECT 1 FROM node_report_members m WHERE m.batch_id=p.batch_id)
+               ORDER BY p.created_at,p.batch_id LIMIT 1)
           ORDER BY created_at,batch_id LIMIT ?))
       WHERE bytes <= ? GROUP BY node_id`)
-      .bind(id,now,now,REPORT_LIMITS.bundle_batches,REPORT_LIMITS.bundle_bytes),
+      .bind(id,now,now,now,REPORT_LIMITS.bundle_batches,REPORT_LIMITS.bundle_bytes),
     env.DB.prepare(`INSERT INTO node_report_members(batch_id,delivery_id)
       SELECT value,? FROM node_report_deliveries,json_each(member_ids)
       WHERE node_report_deliveries.batch_id=?`).bind(id,id)
