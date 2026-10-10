@@ -50,6 +50,7 @@ ERROR_EVENTS = {
 ALLOWED_EVENTS = {
     "agent_start",
     "agent_stop",
+    "session_finished",
     "node_enrolled",
     "windows_sleep_inhibit",
     "cycle_error",
@@ -229,12 +230,20 @@ class Agent(v1.Agent):
 
     def run(self, once: bool = False) -> int:
         self._ssh_relay_enabled = not once
+        outcome = "failed"
+        exit_code = None
         try:
-            return super().run(once=once)
+            exit_code = super().run(once=once)
+            outcome = "completed" if exit_code == 0 else "stopped"
+            return exit_code
         finally:
+            # v1 does not emit agent_stop on a successful 'once' run or a
+            # raised cycle exception. Close every process session explicitly.
+            with contextlib.suppress(OSError):
+                self.log.write("session_finished", session_id=self.runtime_session_id,
+                               outcome=outcome, exit_code=exit_code)
             self._ssh_relay_stop.set()
-            # v1 writes agent_stop during its cleanup. Make one bounded best-effort
-            # delivery attempt before exit; failed uploads retain the local cursor.
+            # Failed uploads retain the original local log and archive cursor.
             self.flush_telemetry()
 
     def submit_telemetry(self, payload: dict[str, Any]) -> None:
