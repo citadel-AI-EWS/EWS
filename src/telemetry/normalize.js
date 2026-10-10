@@ -11,6 +11,7 @@ const ALLOWED_LEVELS = new Set(["debug", "info", "warn", "error"]);
 export const ALLOWED_EVENT_TYPES = new Set([
   "agent_start",
   "agent_stop",
+  "session_finished",
   "node_enrolled",
   "windows_sleep_inhibit",
   "cycle_error",
