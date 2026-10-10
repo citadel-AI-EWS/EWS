@@ -214,11 +214,11 @@ try {
   assert.ok(newNames.some(v => v.includes("hybrid_query_completed")));
   assert.ok(newNames.some(v => v.includes("agent_stop")));
   assert.ok(newNames.some(v => v.includes("cycle_error")));
-  assert.ok(newNames.every(v => /^\\d{4}-\\d{2}-\\d{2}_/.test(v)));
+  assert.ok(newNames.every(v => /^[0-9]{4}-[0-9]{2}-[0-9]{2}_/.test(v)));
   assert.ok(newNames.every(v => !v.includes("secret") && !v.includes("token")));
   assert.match(nodeJournalFileName({created_at: new Date().toISOString(),
     report_json: JSON.stringify({schema: "citadel-node-report/v1", events: extraEvents.slice(2, 3)}),
-    batch_id: "unique"}), /ERROR__cycle_error__unique\\.json$/);
+    batch_id: "unique"}), /ERROR__cycle_error__unique[.]json$/);
   // A second SSH browser close must produce a distinct independent report.
   await enqueueControllerReport(env, "node_a15", "ssh_browser_disconnected",
     {session_id: "ssh-test", reason: "browser_closed"}, new Date().toISOString(), "a15");
