@@ -32,7 +32,7 @@ label{display:block;margin:8px 0 6px;font-weight:700}input,select,button{width:1
 <div class="grid">
 <div><label for="nodeFilter">Node ID</label><select id="nodeFilter"><option value="" data-i18n="allNodes">все узлы</option></select></div>
 <div><label for="levelFilter" data-i18n="level">Уровень</label><select id="levelFilter"><option value="" data-i18n="all">все</option><option>debug</option><option>info</option><option>warn</option><option>error</option></select></div>
-<div><label for="typeFilter" data-i18n="type">Тип</label><select id="typeFilter"><option value="" data-i18n="all">все</option><option>agent_start</option><option>agent_stop</option><option>node_enrolled</option><option>cycle_error</option><option>resource_guard</option><option>assignment_rejected_local</option><option>result_submitted</option><option>result_queued</option><option>queued_results_flushed</option><option>command_signature_rejected</option><option>command_completed</option><option>command_failure_ack_failed</option><option>command_failed</option><option>system_reboot_scheduled</option><option>system_shutdown_scheduled</option></select></div>
+<div><label for="typeFilter" data-i18n="type">Тип</label><select id="typeFilter"><option value="" data-i18n="all">все</option><option>agent_start</option><option>agent_stop</option><option>log_interval_snapshot</option><option>node_enrolled</option><option>cycle_error</option><option>resource_guard</option><option>assignment_rejected_local</option><option>result_submitted</option><option>result_queued</option><option>queued_results_flushed</option><option>command_signature_rejected</option><option>command_completed</option><option>command_failure_ack_failed</option><option>command_failed</option><option>system_reboot_scheduled</option><option>system_shutdown_scheduled</option></select></div>
 </div>
 <div class="toolbar"><button id="refreshButton" type="button" data-i18n="refresh">Обновить</button><button id="moreButton" class="secondary" type="button" disabled data-i18n="more">Ещё</button><button id="logoutButton" class="secondary" type="button" data-i18n="logout">Выйти</button></div>
 </section>
@@ -54,13 +54,15 @@ function applyLanguage(next){lang=I18N[next]?next:"ru";localStorage.setItem("cit
 document.querySelectorAll("[data-lang]").forEach(b=>b.addEventListener("click",()=>applyLanguage(b.dataset.lang)));
 const loginCard=document.getElementById("loginCard"),browser=document.getElementById("browser"),tokenInput=document.getElementById("token"),loginButton=document.getElementById("loginButton"),refreshButton=document.getElementById("refreshButton"),moreButton=document.getElementById("moreButton"),logoutButton=document.getElementById("logoutButton"),nodeFilter=document.getElementById("nodeFilter"),levelFilter=document.getElementById("levelFilter"),typeFilter=document.getElementById("typeFilter"),eventsElement=document.getElementById("events"),statsElement=document.getElementById("stats"),statusElement=document.getElementById("status"),siteClock=document.getElementById("siteClock");
 let architectToken=sessionStorage.getItem("citadel-architect-token")||"",nextCursor=null;
+const LOG_REFRESH_INTERVAL_MS=30*60*1000;
+let lastLogsRefresh=0, refreshingLogs=false;
 function setStatus(message,kind=""){statusElement.textContent=message;statusElement.className=`status ${kind}`.trim()}
 function addText(parent,tag,text,className=""){const item=document.createElement(tag);item.textContent=text;if(className)item.className=className;parent.appendChild(item);return item}
 async function api(path){const response=await fetch(path,{headers:{authorization:`Bearer ${architectToken}`},cache:"no-store"});const data=await response.json().catch(()=>({error:"invalid_server_response"}));if(!response.ok)throw new Error(data.error||`HTTP ${response.status}`);return data}
 function queryPath(cursor=null){const params=new URLSearchParams({limit:"50"});if(nodeFilter.value)params.set("node_id",nodeFilter.value);if(levelFilter.value)params.set("level",levelFilter.value);if(typeFilter.value)params.set("event_type",typeFilter.value);if(cursor)params.set("cursor",cursor);return `/api/v1/architect/logs?${params}`}
 function eventLabel(type){
   const labels={
-    agent_start:"Agent запущен",agent_stop:"Agent остановлен",node_enrolled:"Нода зарегистрирована",
+    agent_start:"Agent запущен",agent_stop:"Agent остановлен",log_interval_snapshot:"Лог за 30 минут",node_enrolled:"Нода зарегистрирована",
     windows_sleep_inhibit:"Сон Windows заблокирован",cycle_error:"Ошибка рабочего цикла",
     resource_guard:"Защита ресурсов",assignment_rejected_local:"Задание отклонено локально",
     result_submitted:"Результат миссии отправлен",result_queued:"Результат сохранён в очередь",
@@ -85,7 +87,7 @@ function renderEvent(event){
 }
 
 async function loadStats(){const data=await api("/api/v1/architect/logs/stats");const s=data.stats||{};statsElement.textContent=`${tr("events")}: ${s.event_count||0} · ${tr("nodes")}: ${s.node_count||0} · ${tr("retention")}: ${s.retention_days||7} ${tr("days")} · ${tr("limit")}: ${s.per_node_event_cap||5000} ${tr("perNode")}`}
-async function loadLogs(append=false){setStatus(append?tr("loadingMore"):tr("loading"));const data=await api(queryPath(append?nextCursor:null));if(!append)eventsElement.replaceChildren();for(const event of data.logs||[])renderEvent(event);if(!eventsElement.children.length)addText(eventsElement,"p",tr("none"),"muted");nextCursor=data.next_cursor||null;moreButton.disabled=!nextCursor;setStatus(`${tr("shown")}: ${eventsElement.querySelectorAll(".event").length}.`,"good")}
+async function loadLogs(append=false){setStatus(append?tr("loadingMore"):tr("loading"));const data=await api(queryPath(append?nextCursor:null));if(!append)eventsElement.replaceChildren();for(const event of data.logs||[])renderEvent(event);if(!eventsElement.children.length)addText(eventsElement,"p",tr("none"),"muted");nextCursor=data.next_cursor||null;moreButton.disabled=!nextCursor;if(!append)lastLogsRefresh=Date.now();setStatus(`${tr("shown")}: ${eventsElement.querySelectorAll(".event").length}.`,"good")}
 function nodeDisplayName(node){return node.node_number?`CITADEL Node ${node.node_number}`:(node.hostname||node.node_id)}
 async function loadNodeOptions(){
   const selected=nodeFilter.value;
@@ -107,7 +109,10 @@ function updateSiteClock(){
 async function openBrowser(){await Promise.all([loadNodeOptions(),loadStats(),loadLogs(false)]);loginCard.classList.add("hidden");browser.classList.remove("hidden");sessionStorage.setItem("citadel-architect-token",architectToken)}
 function logout(message=tr("ended")){architectToken="";nextCursor=null;sessionStorage.removeItem("citadel-architect-token");browser.classList.add("hidden");loginCard.classList.remove("hidden");tokenInput.value="";eventsElement.replaceChildren();setStatus(message)}
 loginButton.addEventListener("click",async()=>{const token=tokenInput.value.trim();if(!token)return setStatus(tr("tokenRequired"),"bad");architectToken=token;loginButton.disabled=true;try{await openBrowser();tokenInput.value=""}catch(error){logout(`${tr("loginFailed")}: ${error.message}`);statusElement.classList.add("bad")}finally{loginButton.disabled=false}});
-refreshButton.addEventListener("click",async()=>{refreshButton.disabled=true;try{await Promise.all([loadStats(),loadLogs(false)])}catch(error){setStatus(`${tr("loadFailed")}: ${error.message}`,"bad")}finally{refreshButton.disabled=false}});
+async function refreshLogs(){if(refreshingLogs||!architectToken||browser.classList.contains("hidden"))return;refreshingLogs=true;refreshButton.disabled=true;try{await Promise.all([loadStats(),loadLogs(false)])}catch(error){setStatus(`${tr("loadFailed")}: ${error.message}`,"bad")}finally{refreshingLogs=false;refreshButton.disabled=false}}
+refreshButton.addEventListener("click",refreshLogs);
+setInterval(()=>{if(!document.hidden&&lastLogsRefresh&&Date.now()-lastLogsRefresh>=LOG_REFRESH_INTERVAL_MS)refreshLogs()},60*1000);
+document.addEventListener("visibilitychange",()=>{if(!document.hidden&&lastLogsRefresh&&Date.now()-lastLogsRefresh>=LOG_REFRESH_INTERVAL_MS)refreshLogs()});
 moreButton.addEventListener("click",async()=>{if(!nextCursor)return;moreButton.disabled=true;try{await loadLogs(true)}catch(error){setStatus(`${tr("moreFailed")}: ${error.message}`,"bad")}finally{moreButton.disabled=!nextCursor}});
 nodeFilter.addEventListener("change",()=>loadLogs(false).catch(error=>setStatus(`${tr("loadFailed")}: ${error.message}`,"bad")));
 levelFilter.addEventListener("change",()=>loadLogs(false).catch(error=>setStatus(`${tr("loadFailed")}: ${error.message}`,"bad")));

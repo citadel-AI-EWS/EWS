@@ -11,6 +11,8 @@ const ALLOWED_LEVELS = new Set(["debug", "info", "warn", "error"]);
 export const ALLOWED_EVENT_TYPES = new Set([
   "agent_start",
   "agent_stop",
+  "session_finished",
+  "log_interval_snapshot",
   "node_enrolled",
   "windows_sleep_inhibit",
   "cycle_error",
@@ -48,6 +50,9 @@ export const ALLOWED_EVENT_TYPES = new Set([
   "windows_sleep_hibernate_inhibit",
   "linux_sleep_hibernate_inhibit",
   "lmstudio_heartbeat_probe_failed",
+  "lmstudio_inference_probe_failed",
+  "lmstudio_uninstall_stop_warning",
+  "ssh_console_command_completed",
   "python_mode_calculation_fallback",
   "lmstudio_model_key_resolution_fallback",
   "command_failure_ack_failed",

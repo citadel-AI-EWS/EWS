@@ -25,7 +25,7 @@ from typing import Any, Callable
 
 import citadel_node_v1 as v1
 
-VERSION = "0.3.44"
+VERSION = "0.3.45"
 v1.VERSION = VERSION
 v1.USER_AGENT = f"CITADEL-EWS-Node/{VERSION}"
 
@@ -44,10 +44,14 @@ ERROR_EVENTS = {
     "command_failed",
     "command_failure_ack_failed",
     "ssh_relay_error",
+    "lmstudio_inference_probe_failed",
 }
+
 ALLOWED_EVENTS = {
     "agent_start",
     "agent_stop",
+    "session_finished",
+    "log_interval_snapshot",
     "node_enrolled",
     "windows_sleep_inhibit",
     "cycle_error",
@@ -85,6 +89,9 @@ ALLOWED_EVENTS = {
     "hybrid_query_completed",
     "lmstudio_state_report_failed",
     "lmstudio_heartbeat_probe_failed",
+    "lmstudio_inference_probe_failed",
+    "lmstudio_uninstall_stop_warning",
+    "ssh_console_command_completed",
     "python_mode_calculation_fallback",
     "lmstudio_model_key_resolution_fallback",
     "command_failure_ack_failed",
@@ -95,6 +102,7 @@ ALLOWED_EVENTS = {
     "ssh_relay_local_ready",
     "agent_update_noop",
 }
+LOG_INTERVAL_SECONDS = 30 * 60
 MAX_BATCH_EVENTS = 50
 MAX_PAYLOAD_BYTES = 60 * 1024
 MAX_DETAILS_BYTES = 1200
@@ -221,13 +229,56 @@ class Agent(v1.Agent):
         self._telemetry_retry_at = 0.0
         self._telemetry_backoff = 2.0
         self._ssh_retry_at = 0.0
+        self._log_interval_stop = threading.Event()
+        self._log_interval_thread: threading.Thread | None = None
+
+    def _write_log_interval_snapshot(self) -> None:
+        """A bounded 30-minute log marker even when there were no tasks."""
+        try:
+            log_bytes = self.telemetry.log_path.stat().st_size
+        except FileNotFoundError:
+            log_bytes = 0
+        try:
+            self.log.write("log_interval_snapshot",
+                           session_id=self.runtime_session_id,
+                           interval_seconds=LOG_INTERVAL_SECONDS,
+                           local_pending_bytes=max(0, log_bytes - self.telemetry._offset()))
+        except (OSError, ValueError):
+            # Observability must not bring down a working agent.
+            pass
+
+    def _log_interval_worker(self) -> None:
+        # Event.wait uses a monotonic clock, unlike wall-clock based scheduling.
+        while not self._log_interval_stop.wait(LOG_INTERVAL_SECONDS):
+            self._write_log_interval_snapshot()
 
     def run(self, once: bool = False) -> int:
         self._ssh_relay_enabled = not once
+        if not once:
+            self._log_interval_stop.clear()
+            self._log_interval_thread = threading.Thread(
+                target=self._log_interval_worker, name="citadel-30m-log", daemon=True
+            )
+            self._log_interval_thread.start()
+        outcome = "failed"
+        exit_code = None
         try:
-            return super().run(once=once)
+            exit_code = super().run(once=once)
+            outcome = "completed" if exit_code == 0 else "stopped"
+            return exit_code
         finally:
+            self._log_interval_stop.set()
+            if self._log_interval_thread is not None:
+                self._log_interval_thread.join(timeout=2)
+                self._log_interval_thread = None
+            # v1 does not emit agent_stop on a successful 'once' run or a
+            # raised cycle exception. Close every process session explicitly.
+            with contextlib.suppress(OSError):
+                self.log.write("session_finished", session_id=self.runtime_session_id,
+                               outcome=outcome, exit_code=exit_code)
             self._ssh_relay_stop.set()
+            # Failed uploads retain the original local log and archive cursor.
+            self.flush_telemetry()
 
     def submit_telemetry(self, payload: dict[str, Any]) -> None:
         node_id = self.require_node_id()
@@ -471,6 +522,12 @@ def self_test() -> int:
             raise RuntimeError("telemetry self-test failed: severity mapping")
         if payloads[0]["events"][2]["event_type"] != "windows_sleep_inhibit":
             raise RuntimeError("telemetry self-test failed: sleep inhibit event dropped")
+        v1.JsonlLogger(log_path).write("log_interval_snapshot", interval_seconds=LOG_INTERVAL_SECONDS)
+        interval_payloads: list[dict[str, Any]] = []
+        if cursor.flush("node_test", interval_payloads.append) != 1:
+            raise RuntimeError("telemetry self-test failed: 30 minute interval dropped")
+        if interval_payloads[0]["events"][0]["event_type"] != "log_interval_snapshot":
+            raise RuntimeError("telemetry self-test failed: interval event type")
     print("CITADEL v2 telemetry SELF TEST: PASS")
     return 0
 

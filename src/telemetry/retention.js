@@ -2,7 +2,7 @@
 const retained = new Set([
   'result_submitted', 'command_completed', 'command_cancelled', 'agent_updated',
   'agent_update_rolled_back', 'agent_update_manual_rollback',
-  'hybrid_query_completed', 'command_signature_rejected',
+  'hybrid_query_completed', 'log_interval_snapshot', 'command_signature_rejected',
   'assignment_rejected_local', 'command_failed'
 ]);
 export function keepOperationalEvent(event) {

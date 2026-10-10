@@ -27,7 +27,7 @@ async function main() {
   if(Date.now()>=Date.parse('2026-10-10T00:00:00Z')){console.log('{"status":"diagnostic_lease_expired"}');return;}
   const live=await fetch('https://citadel-ai.init1.workers.dev/api/v1/hub/nodes',{
     headers:{'user-agent':'Citadel-Audit-Verification/1.0','cache-control':'no-cache'},signal:AbortSignal.timeout(20000)});
-  if(!live.ok||(await live.json()).latest_agent_version!=='0.3.44') {
+  if(!live.ok||(await live.json()).latest_agent_version!=='0.3.45') {
     console.log('{"status":"awaiting_published_repair_release"}');return;
   }
   const candidate=(await query(`SELECT r.rollout_id,r.target_version,p.phase,p.pause_reason,n.node_id,n.agent_version,n.status
@@ -47,8 +47,8 @@ async function main() {
   if(!retry) {
     const block=fs.readFileSync('src/index.js','utf8').split('const LATEST_NODE_RELEASE =')[1].split('const LEGACY_031_BRIDGE_RELEASE')[0];
     const files=[...block.matchAll(/path: "([^"]+)",\s+url: "([^"]+)",\s+sha256: "([^"]+)"/g)].map(([,path,url,sha256])=>({path,url,sha256}));
-    const payload=releaseForAgentVersion({version:'0.3.44',files},candidate.agent_version);
-    if(payload.version!=='0.3.44'||!updatePayloadReadyForAgent(payload,candidate.agent_version))
+    const payload=releaseForAgentVersion({version:'0.3.45',files},candidate.agent_version);
+    if(payload.version!=='0.3.45'||!updatePayloadReadyForAgent(payload,candidate.agent_version))
       throw Error('diagnostic_release_pins_mismatch');
     const payloadJson=JSON.stringify(payload);
     const createdAt=new Date().toISOString();
@@ -109,7 +109,7 @@ async function main() {
     try {
       const event=JSON.parse(line);seen++;
       const detail=event.details||event.data||event;
-      if(event.event==='agent_update_preflight_failed'&&event.version==='0.3.44')
+      if(event.event==='agent_update_preflight_failed'&&event.version==='0.3.45')
         preflight={exception_type:/^[A-Za-z]{1,64}$/.test(event.exception_type||'')?event.exception_type:null,
           source_locations:(event.source_locations||[]).filter(frame=>['citadel_node_v1.py','citadel_node_v2.py'].includes(frame.file)&&Number.isInteger(frame.line)&&/^[A-Za-z_]{1,64}$/.test(frame.function||''))};
       if((event.event||event.event_type)==='command_failed'&&detail.command_id===failed.command_id)

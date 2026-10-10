@@ -12,6 +12,7 @@ import {recoverPatchedRollout} from './patched-rollout-recovery.js';
 import {replayFailureCode} from './replay-diagnostics.js';
 import {compactReplayConfigured, claimCompactReplay, ReplayStoreError} from './compact-replay.js';
 import {invokeSshRelay} from './ssh/availability.js';
+import {nodeJournalFileName} from './telemetry/report-journals.js';
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -54,17 +55,17 @@ const ALLOWED_ARCHITECT_COMMAND_TYPES = new Set(["pause", "resume", "update", "r
 const COMMAND_CONFIRMATIONS = Object.freeze({ system_reboot: "REBOOT", system_shutdown: "SHUTDOWN", lmstudio_uninstall: "REMOVE_LMSTUDIO" });
 const WAKE_PEER_MIN_AGENT_VERSION = "0.3.6";
 const LATEST_NODE_RELEASE = Object.freeze({
-  version: "0.3.44",
+  version: "0.3.45",
   files: [
     {
       path: "citadel_node_v1.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/78e8797d16e71d3b337aefb9a5ff9d3e54dd0eda/agent/citadel_node_v1.py",
-      sha256: "9148b2485cf8e4739f6feec6a3697235f69280edc66b45e064764bb6aff121f8"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/9436cb279d93dd0a525439dd89899e91e0987f1e/agent/citadel_node_v1.py",
+      sha256: "2a03ae1fd3a3066f3cdeafe24712e3fbfa79f0774f5536dd47b27c0391fc5aec"
     },
     {
       path: "citadel_node_v2.py",
-      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/78e8797d16e71d3b337aefb9a5ff9d3e54dd0eda/agent/citadel_node_v2.py",
-      sha256: "dc1c75c2cd5768150f312de5d0af26d431d53cd2824fead147173d4d52c4b914"
+      url: "https://raw.githubusercontent.com/citadel-AI-EWS/EWS/4e9c660d58b529e631ee49776355d37386877223/agent/citadel_node_v2.py",
+      sha256: "4108e9a097a3c8a3a8a95f5c7fe8f5901a48969e1484d140d59436b4d2f9ab36"
     },
     {
       path: "CitadelSshConsole.cs",
@@ -868,7 +869,7 @@ export async function googleDriveWriteNodeReport(env, report) {
     (report.node_name || report.node_id) + "__" + report.node_id);
   const metadata = {
     id: report.file_id,
-    name: timestampedAiReportFileName("node_report", report.batch_id, new Date(report.created_at)),
+    name: nodeJournalFileName(report),
     mimeType: "application/json",
     parents: [folderId],
     appProperties: {citadel_node_id: report.node_id, citadel_batch_id: report.batch_id,

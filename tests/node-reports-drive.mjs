@@ -6,6 +6,7 @@ import {markStaleNodesOffline} from '../src/d1-guardian.js';
 import {classifyTailEvent, jsonObjectStream, tailFailureCategories} from "../scripts/agent_connectivity_evidence.mjs";
 import {ingestNodeLogs} from "../src/telemetry/ingest.js";
 import {sha256Hex} from "../src/telemetry/common.js";
+import {splitJournalEvents, nodeJournalFileName} from "../src/telemetry/report-journals.js";
 
 const sqlite = new DatabaseSync(":memory:");
 sqlite.exec('PRAGMA foreign_keys=ON');
@@ -28,6 +29,7 @@ const DB = {prepare: statement, async batch(statements) {
 const env = {DB, GOOGLE_DRIVE_ACCESS_TOKEN: "fixture-only-token", GOOGLE_DRIVE_AI_REPORTS_FOLDER_ID: "root-folder"};
 const originalFetch = globalThis.fetch;
 const files = new Map();
+const fileNames = new Map();
 let nextId = 0, mode = "ok", creates = 0;
 globalThis.fetch = async (input, init = {}) => {
   const url = new URL(String(input));
@@ -51,6 +53,7 @@ globalThis.fetch = async (input, init = {}) => {
     if (files.has(meta.id)) return new Response(null, {status: 409});
     creates++;
     files.set(meta.id, body);
+    fileNames.set(meta.id, meta.name);
     if (mode === "lost") throw new Error("lost_response_with_secret_that_must_not_be_logged");
     return Response.json({id: meta.id});
   }
@@ -184,6 +187,53 @@ try {
     const report=JSON.parse(body);
     if(report.schema==='citadel-node-report/v2') assert.ok(report.batches.every(batch=>batch.node_id===report.node_id));
   }
+
+  // Every ended session and error is stored in its own immutable Drive file.
+  // Routine heartbeat/model metadata remains batched to keep D1 affordable.
+  const extraEvents = [
+    {...events[0], event_id: "node-routine-1", event_type: "lmstudio_model_loaded",
+      created_at: new Date().toISOString()},
+    {...events[0], event_id: "node-session-closed-1", event_type: "hybrid_query_completed",
+      created_at: new Date().toISOString(), details: {request_id: "query-20261010"}},
+    {...events[0], event_id: "node-error-1", event_type: "cycle_error", level: "error",
+      created_at: new Date().toISOString(), details: {reason: "test_timeout"}},
+    {...events[0], event_id: "node-session-closed-2", event_type: "agent_stop",
+      created_at: new Date().toISOString()},
+    {...events[0], event_id: "node-process-finished", event_type: "session_finished",
+      level: "info", created_at: new Date().toISOString(),
+      details: {session_id: "runtime-once-20261010", outcome: "completed"}},
+    {...events[0], event_id: "node-30m-log", event_type: "log_interval_snapshot",
+      level: "info", created_at: new Date().toISOString(),
+      details: {session_id: "runtime-once-20261010", interval_seconds: 1800}}
+  ];
+  assert.equal(splitJournalEvents(extraEvents).length, 6);
+  const journals = await enqueueNodeReports(env, "node_a15", extraEvents, "a15");
+  assert.equal(journals.batches, 6);
+  let filesBefore = creates;
+  for (let n = 0; n < 7; n++) {
+    if (!sqlite.prepare("SELECT COUNT(*) AS count FROM node_report_outbox WHERE state='pending'").get().count) break;
+    await drainNodeReports(env);
+  }
+  assert.equal(creates - filesBefore, 6, "four session/error journals, one interval log and one routine archive");
+  const newNames = [...fileNames.values()].filter(v =>
+    v.includes("SESSION_END") || v.includes("ERROR") || v.includes("INTERVAL"));
+  assert.ok(newNames.some(v => v.includes("hybrid_query_completed")));
+  assert.ok(newNames.some(v => v.includes("agent_stop")));
+  assert.ok(newNames.some(v => v.includes("SESSION_END__session_finished")));
+  assert.ok(newNames.some(v => v.includes("INTERVAL__log_interval_snapshot")));
+  assert.ok(newNames.some(v => v.includes("cycle_error")));
+  assert.ok(newNames.every(v => /^[0-9]{4}-[0-9]{2}-[0-9]{2}_/.test(v)));
+  assert.ok(newNames.every(v => !v.includes("secret") && !v.includes("token")));
+  assert.match(nodeJournalFileName({created_at: new Date().toISOString(),
+    report_json: JSON.stringify({schema: "citadel-node-report/v1", events: extraEvents.slice(2, 3)}),
+    batch_id: "unique"}), /ERROR__cycle_error__unique[.]json$/);
+  // A second SSH browser close must produce a distinct independent report.
+  await enqueueControllerReport(env, "node_a15", "ssh_browser_disconnected",
+    {session_id: "ssh-test", reason: "browser_closed"}, new Date().toISOString(), "a15");
+  filesBefore = creates;
+  await drainNodeReports(env);
+  assert.equal(creates - filesBefore, 1);
+  assert.ok([...fileNames.values()].some(v => v.includes("SESSION_END__ssh_browser_disconnected")));
 
   const privateTail = {event: {request: {url: "https://hub/api/v1/nodes/private-node/sync?token=secret",
     method: "POST", headers: {authorization: "secret"}}, response: {status: 401}}, outcome: "ok"};
