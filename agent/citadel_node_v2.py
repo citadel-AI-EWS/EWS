@@ -305,13 +305,35 @@ class Agent(v1.Agent):
         self._telemetry_retry_at = 0.0
         self._telemetry_backoff = 2.0
         self._ssh_retry_at = 0.0
+        self._lock = threading.Lock()
+
+    def _shutdown_signal(self, _signum: int, _frame: Any) -> None:
+        self._ssh_relay_stop.set()
+        # Let the v1 runner handle its standard KeyboardInterrupt cleanup.
+        raise KeyboardInterrupt
 
     def run(self, once: bool = False) -> int:
         self._ssh_relay_enabled = not once
+        old_handlers = []
+        if threading.current_thread() is threading.main_thread():
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    previous = signal.getsignal(sig)
+                    signal.signal(sig, self._shutdown_signal)
+                    old_handlers.append((sig, previous))
+                except (ValueError, OSError, RuntimeError):
+                    pass
         try:
             return super().run(once=once)
         finally:
             self._ssh_relay_stop.set()
+            if self._ssh_relay_thread and self._ssh_relay_thread.is_alive():
+                self._ssh_relay_thread.join(timeout=5.0)
+            if threading.current_thread() is threading.main_thread():
+                for sig, previous in old_handlers:
+                    with contextlib.suppress(ValueError, OSError, RuntimeError):
+                        if signal.getsignal(sig) == self._shutdown_signal:
+                            signal.signal(sig, previous)
 
     def submit_telemetry(self, payload: dict[str, Any]) -> None:
         node_id = self.require_node_id()
@@ -359,12 +381,18 @@ class Agent(v1.Agent):
 
     def _start_ssh_relay(self) -> None:
         node_id = self.identity.node_id
-        if not self.enrollment_confirmed or not node_id or self._ssh_relay_stop.is_set() or self.lifecycle_stop_requested() or self.stop_path.exists():
+        if (not self.enrollment_confirmed or not node_id or self._ssh_relay_stop.is_set()
+                or self.lifecycle_stop_requested() or self.stop_path.exists()):
             return
-        if self._ssh_relay_enabled and (not self._ssh_relay_thread or not self._ssh_relay_thread.is_alive()):
-            self._ssh_relay_thread = threading.Thread(target=self._ssh_relay_worker,
-                args=(node_id,), name="citadel-ssh-relay", daemon=True)
-            self._ssh_relay_thread.start()
+        with self._lock:
+            if self._ssh_relay_enabled and (
+                not self._ssh_relay_thread or not self._ssh_relay_thread.is_alive()
+            ):
+                self._ssh_relay_thread = threading.Thread(
+                    target=self._ssh_relay_worker, args=(node_id,),
+                    name="citadel-ssh-relay", daemon=True
+                )
+                self._ssh_relay_thread.start()
 
     def _ssh_relay_worker(self, node_id: str) -> None:
         try:
@@ -433,7 +461,7 @@ class Agent(v1.Agent):
             while not self._ssh_relay_stop.is_set():
                 quota_pause = max(self.api.retry_delay(),getattr(self, '_ssh_retry_at', 0.0)-time.monotonic())
                 if quota_pause:
-                    await asyncio.to_thread(self._ssh_relay_stop.wait, min(60, quota_pause))
+                    await interruptible_relay_pause(self._ssh_relay_stop, min(60, quota_pause))
                     continue
                 path = f"/api/v1/nodes/{node_id}/ssh/relay"
                 route = self.api.base_path + path
@@ -448,7 +476,7 @@ class Agent(v1.Agent):
                 try:
                     async with websockets.connect(url, additional_headers=headers,
                         subprotocols=["citadel-ssh-agent-v1"], max_size=8192,
-                        ping_interval=20, ping_timeout=20, open_timeout=15) as socket:
+                        ping_interval=20, ping_timeout=20, open_timeout=15, close_timeout=5) as socket:
                         if socket.subprotocol != "citadel-ssh-agent-v1":
                             raise RuntimeError("ssh_relay_protocol_mismatch")
                         self.log.write("ssh_relay_connected")
@@ -456,19 +484,16 @@ class Agent(v1.Agent):
                         await self._ssh_relay_session(socket, node_id, port, client_key, known_hosts, asyncssh)
                 except Exception as error:
                     self.log.write("ssh_relay_disconnected", reason=type(error).__name__)
-                    response = getattr(error, 'response', None)
-                    if getattr(response, 'status_code', 0) in {429, 503}:
-                        try:
-                            retry = float(response.headers.get('Retry-After', '0'))
-                            if 0 < retry <= 86400:
-                                self._ssh_retry_at = time.monotonic() + retry
-                        except (TypeError, ValueError, AttributeError):
-                            pass
-                await asyncio.to_thread(self._ssh_relay_stop.wait, delay)
+                    retry = ssh_handshake_retry_after(error)
+                    if retry > 0:
+                        self._ssh_retry_at = max(self._ssh_retry_at, time.monotonic() + retry)
+                jitter = 0.75 + _SECURE_RANDOM.random() * 0.5
+                await interruptible_relay_pause(self._ssh_relay_stop, min(60, delay * 2) * jitter)
                 delay = min(60, delay * 2)
         finally:
             server.close()
-            await server.wait_closed()
+            with contextlib.suppress(asyncio.TimeoutError, OSError):
+                await asyncio.wait_for(server.wait_closed(), timeout=5.0)
 
     async def _ssh_relay_session(self, socket, node_id, port, client_key, known_hosts, asyncssh) -> None:
         active = None
