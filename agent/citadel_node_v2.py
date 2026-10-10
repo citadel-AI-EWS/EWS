@@ -13,12 +13,15 @@ import contextlib
 import hashlib
 import json
 import os
+import random
+import signal
 import sys
 import tempfile
 import threading
 import time
 import traceback
 import urllib.parse
+import email.utils
 import uuid
 from pathlib import Path
 from typing import Any, Callable
@@ -98,31 +101,47 @@ ALLOWED_EVENTS = {
 MAX_BATCH_EVENTS = 50
 MAX_PAYLOAD_BYTES = 60 * 1024
 MAX_DETAILS_BYTES = 1200
+MAX_LOG_LINE_BYTES = 64 * 1024
+MAX_SKIP_LINE_BYTES = 4 * 1024 * 1024
+_SECURE_RANDOM = random.SystemRandom()
 
 
 class TelemetryCursor:
     def __init__(self, log_path: Path, cursor_path: Path) -> None:
         self.log_path = log_path
         self.cursor_path = cursor_path
+        self._lock = threading.RLock()
 
     def _offset(self) -> int:
-        state = v1.load_json(self.cursor_path, {}) or {}
-        try:
-            offset = max(0, int(state.get("offset", 0)))
-        except (TypeError, ValueError):
-            offset = 0
-        try:
-            if self.log_path.stat().st_size < offset:
+        with self._lock:
+            state = v1.load_json(self.cursor_path, {}) or {}
+            if not isinstance(state, dict):
+                state = {}
+            try:
+                offset = max(0, int(state.get("offset", 0)))
+            except (TypeError, ValueError, OverflowError):
+                offset = 0
+            try:
+                info = self.log_path.stat()
+            except FileNotFoundError:
                 return 0
-        except FileNotFoundError:
-            return 0
-        return offset
+            if (state.get("dev") is not None and state.get("ino") is not None
+                    and (state["dev"], state["ino"]) != (info.st_dev, info.st_ino)):
+                return 0
+            return offset if info.st_size >= offset else 0
 
-    def _save(self, offset: int) -> None:
-        v1.atomic_write(
-            self.cursor_path,
-            json.dumps({"offset": offset}, indent=2) + "\n",
-        )
+    def _save(self, offset: int, source: os.stat_result | None = None) -> None:
+        with self._lock:
+            current = self.log_path.stat()
+            if source is not None and (
+                (current.st_dev, current.st_ino) != (source.st_dev, source.st_ino)
+                or current.st_size < offset
+            ):
+                # The log rotated or shrank while a POST was in flight.
+                return
+            v1.atomic_write(self.cursor_path, json.dumps({
+                "offset": offset, "dev": current.st_dev, "ino": current.st_ino
+            }, indent=2) + "\n")
 
     @staticmethod
     def _event_id(node_id: str, offset: int, raw: bytes) -> str:
@@ -134,7 +153,7 @@ class TelemetryCursor:
     @staticmethod
     def _normalize(node_id: str, offset: int, raw: bytes) -> dict[str, Any] | None:
         try:
-            item = json.loads(raw.decode("utf-8"))
+            item = json.loads(raw.decode("utf-8", errors="replace"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             return None
         if not isinstance(item, dict):
@@ -163,46 +182,111 @@ class TelemetryCursor:
             "details": details,
         }
 
-    def next_batch(self, node_id: str) -> tuple[list[dict[str, Any]], int]:
-        if not self.log_path.exists():
-            return [], self._offset()
+    @staticmethod
+    def _skip_oversized(stream, first: bytes) -> bool:
+        if first.endswith(b"\n"):
+            return True
+        budget = MAX_SKIP_LINE_BYTES - len(first)
+        while budget > 0:
+            chunk = stream.readline(min(budget, MAX_LOG_LINE_BYTES))
+            if not chunk:
+                return False
+            if chunk.endswith(b"\n"):
+                return True
+            budget -= len(chunk)
+        raise ValueError("telemetry_line_exceeds_scan_limit")
+
+    def _next_batch(self, node_id: str) -> tuple[list[dict[str, Any]], int, os.stat_result | None]:
+        try:
+            info = self.log_path.stat()
+        except FileNotFoundError:
+            return [], 0, None
         start = self._offset()
         events: list[dict[str, Any]] = []
         end_offset = start
         with self.log_path.open("rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                raise OSError("telemetry_log_rotated_during_open")
             stream.seek(start)
             while len(events) < MAX_BATCH_EVENTS:
                 line_offset = stream.tell()
-                raw = stream.readline()
+                raw = stream.readline(MAX_LOG_LINE_BYTES + 1)
                 if not raw:
-                    end_offset = stream.tell()
                     break
+                if len(raw) > MAX_LOG_LINE_BYTES:
+                    if not self._skip_oversized(stream, raw):
+                        break
+                    end_offset = stream.tell()
+                    continue
+                if not raw.endswith(b"\n"):
+                    break  # never commit an unfinished JSONL record
                 candidate_end = stream.tell()
                 event = self._normalize(node_id, line_offset, raw)
                 if event is None:
                     end_offset = candidate_end
                     continue
                 candidate = events + [event]
-                payload_size = len(v1.json_text({"events": candidate}).encode("utf-8"))
-                if payload_size > MAX_PAYLOAD_BYTES:
+                if len(v1.json_text({"events": candidate}).encode("utf-8")) > MAX_PAYLOAD_BYTES:
                     if events:
                         break
                     end_offset = candidate_end
                     continue
                 events.append(event)
                 end_offset = candidate_end
-        return events, end_offset
+        return events, end_offset, info
+
+    def next_batch(self, node_id: str) -> tuple[list[dict[str, Any]], int]:
+        with self._lock:
+            events, end_offset, _ = self._next_batch(node_id)
+            return events, end_offset
 
     def flush(self, node_id: str, submit: Callable[[dict[str, Any]], Any]) -> int:
-        events, end_offset = self.next_batch(node_id)
-        current = self._offset()
-        if not events:
-            if end_offset != current:
-                self._save(end_offset)
-            return 0
-        submit({"events": events})
-        self._save(end_offset)
-        return len(events)
+        with self._lock:
+            events, end_offset, info = self._next_batch(node_id)
+            current = self._offset()
+            if not events:
+                if info is not None and end_offset != current:
+                    self._save(end_offset, info)
+                return 0
+            submit({"events": events})
+            # On failed cursor persistence, retry identical event IDs on next cycle.
+            # Never swallow an OSError here; controller deduplication is required.
+            self._save(end_offset, info)
+            return len(events)
+
+
+def ssh_handshake_retry_after(error: Exception) -> float:
+    """Handle websockets 16 InvalidStatus and legacy InvalidStatusCode."""
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    headers = getattr(response, "headers", None)
+    if status is None:
+        status = getattr(error, "status_code", None)
+        headers = getattr(error, "headers", None)
+    if status not in (429, 503) or headers is None:
+        return 0.0
+    try:
+        raw = headers.get("Retry-After")
+        if not isinstance(raw, str) or not raw.strip():
+            return 0.0
+        try:
+            seconds = float(raw)
+        except ValueError:
+            seconds = email.utils.parsedate_to_datetime(raw).timestamp() - time.time()
+        return seconds if 0 < seconds <= 86400 else 0.0
+    except (ValueError, TypeError, OverflowError, AttributeError):
+        return 0.0
+
+
+async def interruptible_relay_pause(stop_event: threading.Event, seconds: float) -> None:
+    """Avoid spawning blocking executor threads which delay asyncio shutdown."""
+    deadline = time.monotonic() + max(0.0, seconds)
+    while not stop_event.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(min(0.5, remaining))
 
 
 class Agent(v1.Agent):
@@ -221,13 +305,35 @@ class Agent(v1.Agent):
         self._telemetry_retry_at = 0.0
         self._telemetry_backoff = 2.0
         self._ssh_retry_at = 0.0
+        self._lock = threading.Lock()
+
+    def _shutdown_signal(self, _signum: int, _frame: Any) -> None:
+        self._ssh_relay_stop.set()
+        # Let the v1 runner handle its standard KeyboardInterrupt cleanup.
+        raise KeyboardInterrupt
 
     def run(self, once: bool = False) -> int:
         self._ssh_relay_enabled = not once
+        old_handlers = []
+        if threading.current_thread() is threading.main_thread():
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    previous = signal.getsignal(sig)
+                    signal.signal(sig, self._shutdown_signal)
+                    old_handlers.append((sig, previous))
+                except (ValueError, OSError, RuntimeError):
+                    pass
         try:
             return super().run(once=once)
         finally:
             self._ssh_relay_stop.set()
+            if self._ssh_relay_thread and self._ssh_relay_thread.is_alive():
+                self._ssh_relay_thread.join(timeout=5.0)
+            if threading.current_thread() is threading.main_thread():
+                for sig, previous in old_handlers:
+                    with contextlib.suppress(ValueError, OSError, RuntimeError):
+                        if signal.getsignal(sig) == self._shutdown_signal:
+                            signal.signal(sig, previous)
 
     def submit_telemetry(self, payload: dict[str, Any]) -> None:
         node_id = self.require_node_id()
@@ -275,12 +381,18 @@ class Agent(v1.Agent):
 
     def _start_ssh_relay(self) -> None:
         node_id = self.identity.node_id
-        if not self.enrollment_confirmed or not node_id or self._ssh_relay_stop.is_set() or self.lifecycle_stop_requested() or self.stop_path.exists():
+        if (not self.enrollment_confirmed or not node_id or self._ssh_relay_stop.is_set()
+                or self.lifecycle_stop_requested() or self.stop_path.exists()):
             return
-        if self._ssh_relay_enabled and (not self._ssh_relay_thread or not self._ssh_relay_thread.is_alive()):
-            self._ssh_relay_thread = threading.Thread(target=self._ssh_relay_worker,
-                args=(node_id,), name="citadel-ssh-relay", daemon=True)
-            self._ssh_relay_thread.start()
+        with self._lock:
+            if self._ssh_relay_enabled and (
+                not self._ssh_relay_thread or not self._ssh_relay_thread.is_alive()
+            ):
+                self._ssh_relay_thread = threading.Thread(
+                    target=self._ssh_relay_worker, args=(node_id,),
+                    name="citadel-ssh-relay", daemon=True
+                )
+                self._ssh_relay_thread.start()
 
     def _ssh_relay_worker(self, node_id: str) -> None:
         try:
@@ -349,7 +461,7 @@ class Agent(v1.Agent):
             while not self._ssh_relay_stop.is_set():
                 quota_pause = max(self.api.retry_delay(),getattr(self, '_ssh_retry_at', 0.0)-time.monotonic())
                 if quota_pause:
-                    await asyncio.to_thread(self._ssh_relay_stop.wait, min(60, quota_pause))
+                    await interruptible_relay_pause(self._ssh_relay_stop, min(60, quota_pause))
                     continue
                 path = f"/api/v1/nodes/{node_id}/ssh/relay"
                 route = self.api.base_path + path
@@ -364,84 +476,127 @@ class Agent(v1.Agent):
                 try:
                     async with websockets.connect(url, additional_headers=headers,
                         subprotocols=["citadel-ssh-agent-v1"], max_size=8192,
-                        ping_interval=20, ping_timeout=20, open_timeout=15) as socket:
+                        ping_interval=20, ping_timeout=20, open_timeout=15, close_timeout=5) as socket:
                         if socket.subprotocol != "citadel-ssh-agent-v1":
                             raise RuntimeError("ssh_relay_protocol_mismatch")
                         self.log.write("ssh_relay_connected")
                         delay = 2
-                        await self._ssh_relay_session(socket, node_id, port, client_key, known_hosts, asyncssh)
+                        await asyncio.wait_for(
+                            self._ssh_relay_session(socket, node_id, port, client_key, known_hosts, asyncssh),
+                            timeout=1800
+                        )
                 except Exception as error:
                     self.log.write("ssh_relay_disconnected", reason=type(error).__name__)
-                    response = getattr(error, 'response', None)
-                    if getattr(response, 'status_code', 0) in {429, 503}:
-                        try:
-                            retry = float(response.headers.get('Retry-After', '0'))
-                            if 0 < retry <= 86400:
-                                self._ssh_retry_at = time.monotonic() + retry
-                        except (TypeError, ValueError, AttributeError):
-                            pass
-                await asyncio.to_thread(self._ssh_relay_stop.wait, delay)
+                    retry = ssh_handshake_retry_after(error)
+                    if retry > 0:
+                        self._ssh_retry_at = max(self._ssh_retry_at, time.monotonic() + retry)
+                jitter = 0.75 + _SECURE_RANDOM.random() * 0.5
+                await interruptible_relay_pause(self._ssh_relay_stop, min(60, delay * 2) * jitter)
                 delay = min(60, delay * 2)
         finally:
             server.close()
-            await server.wait_closed()
+            with contextlib.suppress(asyncio.TimeoutError, OSError):
+                await asyncio.wait_for(server.wait_closed(), timeout=5.0)
 
     async def _ssh_relay_session(self, socket, node_id, port, client_key, known_hosts, asyncssh) -> None:
         active = None
         reader = None
+        active_session_id = None
+
         async def stop():
-            nonlocal active, reader
-            if reader:
-                reader.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await reader
-                reader = None
-            if active:
-                connection, process = active
-                process.close()
-                connection.close()
-                await connection.wait_closed()
-                active = None
+            nonlocal active, reader, active_session_id
+            current_reader, reader = reader, None
+            current_active, active = active, None
+            active_session_id = None
+            if current_reader:
+                current_reader.cancel()
+                with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                    await asyncio.wait_for(current_reader, timeout=2.0)
+            if current_active:
+                connection, process = current_active
+                with contextlib.suppress(Exception):
+                    process.close()
+                with contextlib.suppress(Exception):
+                    connection.close()
+                with contextlib.suppress(asyncio.TimeoutError, Exception):
+                    await asyncio.wait_for(connection.wait_closed(), timeout=5.0)
 
         async def output_loop(process):
             try:
                 while chunk := await process.stdout.read(8192):
-                    await socket.send(chunk)
-                await socket.send(json.dumps({"type": "exit", "code": process.exit_status}))
-            except (asyncio.CancelledError, Exception):
+                    await asyncio.wait_for(socket.send(chunk), timeout=10.0)
+                await asyncio.wait_for(
+                    socket.send(json.dumps({"type": "exit", "code": process.exit_status})),
+                    timeout=10.0
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
                 return
 
         try:
             async for message in socket:
                 if isinstance(message, bytes):
                     if active and len(message) <= 8192:
-                        active[1].stdin.write(message)
+                        with contextlib.suppress(Exception):
+                            active[1].stdin.write(message)
+                    continue
+                if not isinstance(message, str) or len(message) > 8192:
                     continue
                 try:
                     command = json.loads(message)
                 except (ValueError, TypeError):
                     continue
-                if command.get("type") == "stop":
-                    await stop()
-                elif command.get("type") == "resize" and active:
+                if not isinstance(command, dict) or not isinstance(command.get("type"), str):
+                    continue
+                cmd_type = command["type"]
+                if cmd_type == "stop":
+                    # A delayed stop from an old ticket cannot terminate a new session.
+                    if active and command.get("session_id") == active_session_id:
+                        await stop()
+                elif cmd_type == "resize" and active:
                     cols, rows = command.get("cols"), command.get("rows")
-                    if isinstance(cols, int) and isinstance(rows, int) and 20 <= cols <= 300 and 5 <= rows <= 150:
-                        active[1].change_terminal_size(cols, rows)
-                elif command.get("type") == "start" and not active:
+                    if (type(cols) is int and type(rows) is int
+                            and 20 <= cols <= 300 and 5 <= rows <= 150):
+                        with contextlib.suppress(Exception):
+                            active[1].change_terminal_size(cols, rows)
+                elif cmd_type == "start" and not active:
                     expires = command.get("expires_at")
-                    if not isinstance(expires, int) or not 0 < expires - time.time() <= 1800:
+                    session_id = command.get("session_id")
+                    if (type(expires) is not int or not 0 < expires - time.time() <= 1800
+                            or not isinstance(session_id, str) or not 0 < len(session_id) <= 128):
                         continue
+                    connection = None
                     try:
-                        connection = await asyncssh.connect("127.0.0.1", port, username="citadel",
+                        connection = await asyncssh.connect(
+                            "127.0.0.1", port, username="citadel",
                             client_keys=[client_key], known_hosts=known_hosts,
-                            agent_path=None, connect_timeout=10)
-                        process = await connection.create_process(term_type="xterm", encoding=None)
+                            agent_path=None, connect_timeout=10
+                        )
+                        process = await asyncio.wait_for(
+                            connection.create_process(term_type="xterm", encoding=None),
+                            timeout=10.0
+                        )
                         active = (connection, process)
-                        await socket.send(json.dumps({"type": "ready", "node_id": node_id}))
+                        active_session_id = session_id
+                        await asyncio.wait_for(
+                            socket.send(json.dumps({"type": "ready", "node_id": node_id})),
+                            timeout=10.0
+                        )
                         reader = asyncio.create_task(output_loop(process))
                     except Exception:
-                        await socket.send(json.dumps({"type": "error", "code": "ssh_connection_failed"}))
-                        await stop()
+                        if active:
+                            await stop()
+                        elif connection:
+                            with contextlib.suppress(Exception):
+                                connection.close()
+                            with contextlib.suppress(asyncio.TimeoutError, Exception):
+                                await asyncio.wait_for(connection.wait_closed(), timeout=5.0)
+                        with contextlib.suppress(Exception):
+                            await asyncio.wait_for(
+                                socket.send(json.dumps({"type": "error", "code": "ssh_connection_failed"})),
+                                timeout=5.0
+                            )
         finally:
             await stop()
 
