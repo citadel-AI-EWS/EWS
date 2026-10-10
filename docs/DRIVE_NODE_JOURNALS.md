@@ -13,13 +13,17 @@ record is assigned an offset-derived event ID; retries use the same ID.
 - `YYYY-MM-DD_HH-MM-SS__SESSION_END__hybrid_query_completed__<batch-id>.json`
 - `YYYY-MM-DD_HH-MM-SS__SESSION_END__ssh_browser_disconnected__<batch-id>.json`
 - `YYYY-MM-DD_HH-MM-SS__SESSION_END__agent_stop__<batch-id>.json`
+- `YYYY-MM-DD_HH-MM-SS__SESSION_END__session_finished__<batch-id>.json`
 - `YYYY-MM-DD_HH-MM-SS__ERROR__cycle_error__<batch-id>.json`
 - `YYYY-MM-DD_HH-MM-SS__LOG__node_events__<bundle-id>.json`
 
 Each individual error/close report contains a human-readable `title`.
 Healthy events are grouped into compact archives to avoid excessive writes
 and API calls. Every error and close event creates its own document, not a
-shared bundle. Operational metadata only: the restricted SSH console logs the
+shared bundle. The agent writes an explicit `session_finished` marker with its
+process session ID for both successful one-shot execution and exceptional exit.
+A sudden power loss cannot be logged until the next successful startup; already
+queued records are retried after reconnection. Operational metadata only: the restricted SSH console logs the
 command *identifier*, but secrets, credentials, raw console transcripts and
 full model prompts are **not** copied into these operational journals.
 
