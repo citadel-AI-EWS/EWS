@@ -16,6 +16,9 @@ record is assigned an offset-derived event ID; retries use the same ID.
 - `YYYY-MM-DD_HH-MM-SS__SESSION_END__session_finished__<batch-id>.json`
 - `YYYY-MM-DD_HH-MM-SS__ERROR__cycle_error__<batch-id>.json`
 - `YYYY-MM-DD_HH-MM-SS__LOG__node_events__<bundle-id>.json`
+- `YYYY-MM-DD_HH-MM-SS__INTERVAL__log_interval_snapshot__<batch-id>.json`
+
+A running node writes a small `log_interval_snapshot` marker every 1800 seconds (30 minutes), including its session ID and estimated locally pending journal bytes. This occurs even without new tasks; the timer uses a daemon thread and does not block the agent. Its event is visible in Architect Logs and archived as a dedicated INTERVAL JSON in the existing controller-relayed transport. While the Logs page is open and authenticated, it checks for new events automatically every 30 minutes; hidden or closed pages do not poll. The timer is not a guarantee of remote delivery while network or Drive authorization is unavailable.
 
 Each individual error/close report contains a human-readable `title`.
 Healthy events are grouped into compact archives to avoid excessive writes
@@ -73,3 +76,7 @@ Existing CI synchronization handles that after a successful write test.
    request and SSH browser close; check distinct files by node and category.
 5. Enable fleet rollout incrementally, monitor 503 backpressure and Drive
    pending/delivered states, without silently dropping unsent local logs.
+
+## Direct Google Drive transport not yet implemented
+
+The owner subsequently requested direct agent-to-Google-Drive uploads, without Cloudflare handling log bodies. This PR still uses the older controller-relayed pipeline for uploads; the 30-minute timer does not change its destination. A dedicated direct-upload implementation, safe per-node authorization and a real-node Drive write/readback canary are required before declaring that requirement delivered.
